@@ -158,6 +158,19 @@ class GeophysicsInvertInput(BaseModel):
         1.0, gt=0.0, le=10.0,
         description="Susceptibilidad máxima permitida (SI). Default 1.0. Subir para magnetita masiva.",
     )
+    # ── FASE 9C-2: Inversión Conjunta (Joint Inversion / Cross-Gradient) ──────
+    # Cuando el input trae A LA VEZ señal gravimétrica real (g≠0) y magnética
+    # (magnetic_nt≠0), el servicio rutea al Orquestador de Inversión Conjunta
+    # (Gauss-Newton alternado con continuation exponencial del peso cross-gradient).
+    # Estos dos parámetros controlan SOLO ese bucle; no afectan los motores aislados.
+    joint_max_iter: int = Field(
+        15, ge=1, le=100,
+        description="Iteraciones máximas del bucle alternado de inversión conjunta (Fase 9C-2).",
+    )
+    cross_lambda_max: float = Field(
+        1e4, ge=0.0,
+        description="Peso máximo del acoplamiento cross-gradient (continuation exponencial). Fase 9C-2.",
+    )
 
 
 class GeophysicsInvertResponse(BaseModel):

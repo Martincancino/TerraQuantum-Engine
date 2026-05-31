@@ -1775,11 +1775,20 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     project_id = params.project_id
     run_id = params.run_id
 
-    # ── FASE 9A: ruteo a motor magnético independiente ────────────────────────
-    # Si el input trae magnetic_nt, delega al motor magnético y retorna. El cuerpo
-    # gravimétrico de abajo NO se ejecuta y queda intacto bit a bit para inputs
-    # sin magnetic_nt (modo gravedad por defecto).
+    # ── FASE 9A / 9C-2: ruteo a motor magnético o a inversión conjunta ────────
+    # Si el input trae magnetic_nt:
+    #   • magnética CON señal gravimétrica real (g≠0)  → Inversión Conjunta (9C-2)
+    #   • magnética SIN señal gravimétrica (g=0 placeholder) → motor magnético aislado (9A)
+    # El cuerpo gravimétrico de abajo NO se ejecuta y queda intacto bit a bit para
+    # inputs sin magnetic_nt (modo gravedad por defecto).
     if getattr(params, "magnetic_nt", None):
+        mag = np.asarray(params.magnetic_nt, dtype=float)
+        g_arr = np.asarray([o.g for o in params.observations], dtype=float)
+        mag_has_signal = mag.size > 0 and not np.allclose(mag, 0.0)
+        grav_has_signal = g_arr.size > 0 and not np.allclose(g_arr, 0.0)
+        if mag_has_signal and grav_has_signal:
+            from services.joint_inversion import run_joint_inversion
+            return run_joint_inversion(params)
         return run_magnetic_inversion(params)
 
     def _update(status, progress, stage, message, metrics=None, error=None):
