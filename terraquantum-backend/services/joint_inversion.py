@@ -648,6 +648,23 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         _log.warning("geological_bodies_nonfatal", error=str(_cl_exc))
         report["anomalies_payload"] = []
 
+    # ── FASE 10 Parte 4: Interpretación Gemini ────────────────────────────────
+    from services.gemini_agent import request_gemini_interpretation  # noqa: PLC0415
+    try:
+        gemini_text = request_gemini_interpretation(report)
+        report["gemini_interpretation"] = gemini_text
+        _log.info("gemini_interpretation_done", chars=len(gemini_text))
+        print(f"[FASE 10-P4] Gemini: {len(gemini_text)} chars generados.")
+    except Exception as _gem_exc:
+        _log.warning("gemini_interpretation_nonfatal", error=str(_gem_exc))
+        report["gemini_interpretation"] = "Gemini interpretation unavailable."
+
+    # Escribe el report.json FINAL con anomalies_payload + gemini_interpretation.
+    try:
+        write_run_report_snapshot(params, report)
+    except Exception as _rpt_exc:
+        _log.warning("final_report_snapshot_nonfatal", error=str(_rpt_exc))
+
     misfit_combined = float(np.hypot(
         history[-1]["misfit_gravity_percent"], history[-1]["misfit_magnetic_percent"]
     ))

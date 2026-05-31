@@ -17,6 +17,7 @@ Esa integración se completará cuando las credenciales estén disponibles.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
@@ -209,23 +210,33 @@ def build_interpretation_prompt(report: dict) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Placeholder de llamada HTTP (se conectará cuando haya credenciales).
+# Llamada a la API de Gemini.
+# Requiere: pip install google-generativeai
 # ─────────────────────────────────────────────────────────────────────────────
-def request_gemini_interpretation(report: dict) -> dict:
-    """Punto de entrada para la llamada real a la API de Gemini.
+def request_gemini_interpretation(report: dict) -> str:
+    """Llama a Gemini 1.5 Pro y retorna el reporte de interpretación como string.
 
-    POR IMPLEMENTAR: cuando las credenciales (GEMINI_API_KEY) estén disponibles,
-    aquí se hará la llamada HTTP con ``system_prompt=SYSTEM_PROMPT`` y
-    ``user_prompt=build_interpretation_prompt(report)``.
-
-    Por ahora devuelve los prompts ensamblados para verificación/debugging.
+    Lee la clave desde la variable de entorno GEMINI_API_KEY.
+    Si no está configurada, retorna un mensaje de fallback amigable sin crashear.
     """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return "Gemini API key not configured. Mock report generated."
+
     user_prompt = build_interpretation_prompt(report)
-    return {
-        "status": "prompts_assembled_pending_credentials",
-        "system_prompt_chars": len(SYSTEM_PROMPT),
-        "user_prompt_chars": len(user_prompt),
-        "user_prompt_preview": user_prompt[:500] + "..." if len(user_prompt) > 500 else user_prompt,
-        "system_prompt": SYSTEM_PROMPT,
-        "user_prompt": user_prompt,
-    }
+
+    try:
+        import google.generativeai as genai  # noqa: PLC0415
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-pro",
+            system_instruction=SYSTEM_PROMPT,
+        )
+        response = model.generate_content(
+            user_prompt,
+            generation_config={"temperature": 0.1},
+        )
+        return response.text
+    except Exception as exc:
+        return f"Gemini API error: {exc}. Mock report generated."
