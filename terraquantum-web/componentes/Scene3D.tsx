@@ -20,7 +20,7 @@ import {
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import * as THREE from "three";
 import { useAppStore } from "../store/useAppStore";
-import type { VisualLayer, SliceAxis } from "../store/useAppStore";
+import type { VisualLayer, SliceAxis, ViewMode } from "../store/useAppStore";
 import { buildTerrainTextureProxyUrl } from "../lib/terraquantum/frontendApi";
 import { updateInstancedBuffers } from "../lib/terraQuantumGeology";
 import PostFX from "./viewport/PostFX";
@@ -560,6 +560,9 @@ function MineralComplex({
     blockModelDataMode, visualProfessionalMode,
   } = useAppStore();
   const percentileStats = useAppStore((s) => s.percentileStats);
+  // ── Fase 12: selectores granulares para evitar cascading renders ───────────────
+  const viewMode = useAppStore((s) => s.viewMode);
+  const jointThreshold = useAppStore((s) => s.jointThreshold);
 
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const lastVisibleCellCount = useRef(-1);
@@ -785,6 +788,9 @@ function MineralComplex({
       professionalScoreStats,
       visualLayer,
       sigma95,
+      // ── Fase 12 ──
+      viewMode,
+      jointThreshold,
     });
 
     // ── Frustum Culling: bounding sphere explícita ────────────────────────
@@ -840,6 +846,9 @@ function MineralComplex({
     setHighlightedCellCount,
     visualLayer,
     sigma95,
+    // ── Fase 12 ──
+    viewMode,
+    jointThreshold,
   ]);
 
   if (!model || count === 0) return null;

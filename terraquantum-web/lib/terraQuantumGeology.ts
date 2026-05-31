@@ -127,6 +127,11 @@ export interface UpdateInstancedBuffersParams {
   sigma95?: number;
   /** Capa visual activa. "uncertainty" activa el colormap Inferno sobre σ. */
   visualLayer?: string;
+  // ── Fase 12: Multi-Física ─────────────────────────────────────────
+  /** Modo de render multi-física. Default: 'density'. */
+  viewMode?: 'density' | 'susceptibility' | 'joint';
+  /** Umbral conjunto (0–1): voxels con joint_structural_score < umbral se ocultan. */
+  jointThreshold?: number;
 }
 
 // Densidad de roca país fallback. El backend provee el valor específico del sitio.
@@ -158,6 +163,18 @@ const INFERNO_STOPS: ColorStop[] = [
   [0.714, [0.937, 0.494, 0.122]],
   [0.857, [0.988, 0.749, 0.353]],
   [1.000, [0.988, 1.000, 0.643]],
+];
+
+// Turbo (Google) — para susceptibilidad magnética
+const TURBO_STOPS: ColorStop[] = [
+  [0.000, [0.188, 0.071, 0.231]],
+  [0.143, [0.153, 0.392, 0.945]],
+  [0.286, [0.090, 0.745, 0.812]],
+  [0.429, [0.188, 0.933, 0.353]],
+  [0.571, [0.686, 0.980, 0.082]],
+  [0.714, [0.996, 0.776, 0.082]],
+  [0.857, [0.957, 0.365, 0.004]],
+  [1.000, [0.478, 0.027, 0.000]],
 ];
 
 function sampleColormap(stops: ColorStop[], t: number): [number, number, number] {
@@ -313,6 +330,8 @@ export function updateInstancedBuffers({
   professionalScoreStats,
   sigma95,
   visualLayer,
+  viewMode = 'density',
+  jointThreshold = 0.6,
 }: UpdateInstancedBuffersParams): { visibleCount: number; highlightedCount: number } {
   const _r08_t0 = performance.now();
   const dummy = _dummy;
@@ -377,25 +396,49 @@ export function updateInstancedBuffers({
     if (!visible) { dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue; }
     visibleCount++;
 
-    // ── Color físico: Viridis (densidad) o Inferno (incertidumbre) ────────────
-    // σ posterior del vóxel actual (NaN si no se calculó compute_uncertainty).
-    const _sigmaRaw = Number(rawCell.posterior_std);
-    const _sigmaRatio = (Number.isFinite(_sigmaRaw) && effectiveSigma95 > 0)
-      ? Math.min(_sigmaRaw / effectiveSigma95, 1) : 0;
-
+    // ── Color físico: modo multi-física (Fase 12) ─────────────────────────
     let _r: number, _g: number, _b: number;
-    if (visualLayer === "uncertainty") {
-      // Inferno: oscuro = confianza alta, brillante = incertidumbre alta
-      [_r, _g, _b] = sampleColormap(INFERNO_STOPS, _sigmaRatio);
+
+    if (viewMode === 'susceptibility') {
+      // Campo: susceptibility_si (campo del backend tras Fase 12)
+      const chiRaw = Number((rawCell as Record<string, unknown>).susceptibility_si);
+      const epsilon = 1e-9;
+      // log10(chi + ε) — maneja asimetría de la magnetometría
+      const chiLog = Math.log10(Math.max(chiRaw, 0) + epsilon);
+      // Rango orientativo log10: [-9, -2] para rocas — se normaliza dinámicamente
+      // usando [-9, 0] como rango estándar (extensible con stats si disponible)
+      const chiNorm = clamp01((chiLog + 9) / 7);
+      [_r, _g, _b] = sampleColormap(TURBO_STOPS, chiNorm);
+
+    } else if (viewMode === 'joint') {
+      // Modo conjunto: color corporativo oro TerraQuantum + filtro por umbral
+      const jointScore = Number((rawCell as Record<string, unknown>).joint_structural_score);
+      if (!Number.isFinite(jointScore) || jointScore < jointThreshold) {
+        // Ocultar: escalar a cero en lugar de mover (evita artefactos de frustum)
+        dummy.scale.set(0, 0, 0);
+        dummy.position.set(rx_visual, ry_visual, rz_visual);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+        continue;
+      }
+      // Oro cian corporativo TerraQuantum
+      _r = 0.047; _g = 0.827; _b = 0.933; // #0BD3EE → cian TerraQuantum
+
     } else {
-      // Normalización física: u = (ρ − ρ_min) / (ρ_max − ρ_min)
-      const _u = clamp01((density - densityStats.densityMin) / _densityRange);
-      // Compresión suave aprobada: u' = log(1 + 4u) / log(5)
-      const _uPrime = Math.log(1 + 4 * _u) / Math.log(5);
-      [_r, _g, _b] = sampleColormap(VIRIDIS_STOPS, _uPrime);
-      // Opacidad por incertidumbre: α = 1 − 0.7·min(σ/σ_95, 1)
-      const _alpha = 1 - 0.7 * _sigmaRatio;
-      _r *= _alpha; _g *= _alpha; _b *= _alpha;
+      // viewMode === 'density' (default) — comportamiento original
+      const _sigmaRaw = Number(rawCell.posterior_std);
+      const _sigmaRatio = (Number.isFinite(_sigmaRaw) && effectiveSigma95 > 0)
+        ? Math.min(_sigmaRaw / effectiveSigma95, 1) : 0;
+
+      if (visualLayer === "uncertainty") {
+        [_r, _g, _b] = sampleColormap(INFERNO_STOPS, _sigmaRatio);
+      } else {
+        const _u = clamp01((density - densityStats.densityMin) / _densityRange);
+        const _uPrime = Math.log(1 + 4 * _u) / Math.log(5);
+        [_r, _g, _b] = sampleColormap(VIRIDIS_STOPS, _uPrime);
+        const _alpha = 1 - 0.7 * _sigmaRatio;
+        _r *= _alpha; _g *= _alpha; _b *= _alpha;
+      }
     }
 
     // Brillo DOI (proxy de sensibilidad — invariante de la capa activa)

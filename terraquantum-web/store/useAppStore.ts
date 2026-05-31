@@ -103,6 +103,10 @@ export type VisualLayer =
 
 export type SliceAxis = "x" | "y" | "z" | "none";
 
+// ── Fase 12: Render Multi-Física ─────────────────────────────────────────────
+/** Modo de visualización de la capa física activa en el InstancedMesh. */
+export type ViewMode = 'density' | 'susceptibility' | 'joint';
+
 export type BlockModelDataMode = "exploration" | "full" | "anomaly";
 
 export type VoxelTracePatch = {
@@ -302,6 +306,13 @@ export interface AppState {
     lastHeartbeat?: string | null;
   }) => void;
   resetPollingState: () => void;
+
+  // 13. RENDER SETTINGS — Fase 12 Multi-Física
+  // Aislado del blockModel y la cámara para evitar cascading renders.
+  viewMode: ViewMode;
+  setViewMode: (mode: ViewMode) => void;
+  jointThreshold: number;
+  setJointThreshold: (val: number) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -601,4 +612,10 @@ export const useAppStore = create<AppState>((set) => ({
       pollingProgress: 0,
       lastHeartbeat: null,
     }),
+
+  // 13. RENDER SETTINGS — Fase 12 Multi-Física
+  viewMode: 'density',
+  setViewMode: (mode) => set({ viewMode: mode }),
+  jointThreshold: 0.6,
+  setJointThreshold: (val) => set({ jointThreshold: Math.max(0, Math.min(1, val)) }),
 }));

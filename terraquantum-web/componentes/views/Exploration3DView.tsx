@@ -15,6 +15,7 @@ import CommandBar from "../workspace/CommandBar";
 import SidebarSection from "../workspace/SidebarSection";
 import Panel from "../workspace/Panel";
 import SliceControls from "../viewport/SliceControls";
+import MultiPhysicsControls from "../viewport/MultiPhysicsControls";
 import AnalyticsPanel from "../analytics/AnalyticsPanel";
 
 import { GravityObservation } from "../../lib/terraquantum/geophysicsSurvey";
@@ -899,6 +900,8 @@ export default function Exploration3DView() {
                   </Suspense>
                 </Canvas>
               )}
+              {/* ── Fase 12: Panel Multi-Física (overlay sobre el Canvas) ────────── */}
+              {show3D && model && <MultiPhysicsControls />}
             </div>
 
             {show3D && model && (
