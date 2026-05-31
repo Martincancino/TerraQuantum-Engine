@@ -1,0 +1,22 @@
+fastapi
+httpx>=0.27,<1
+uvicorn
+pydantic
+# Pin exacto (reproducibilidad determinística de la inversión LSQR):
+# numpy/scipy controlan el resultado numérico del solver; polars el block model.
+# Un bump de versión puede alterar la salida → se fija a la versión validada.
+numpy==2.4.4
+polars==1.40.0
+scipy==1.17.1
+trimesh
+networkx
+python-multipart
+PyMaxflow
+shapely
+earthengine-api>=0.1.400
+pyproj==3.7.2
+pytest==8.3.5
+pytest-cov==6.0.0
+structlog==24.4.0
+slowapi
+pyevtk>=1.5.0

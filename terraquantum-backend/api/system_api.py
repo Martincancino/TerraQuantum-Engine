@@ -1,0 +1,131 @@
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
+
+from core.config import (
+    APP_NAME,
+    APP_VERSION,
+    BACKEND_HOST,
+    BACKEND_PORT,
+    DATA_DIR,
+    PROJECTS_DIR,
+    TMP_DIR,
+    MODELS_DIR,
+    DEFAULT_BLOCK_MODEL_PATH,
+)
+from core.block_model_store import (
+    compare_project_runs,
+    export_project_run_zip,
+    get_project_run_detail,
+    list_project_runs,
+)
+
+
+router = APIRouter()
+
+
+@router.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "service": APP_NAME,
+        "version": APP_VERSION,
+    }
+
+
+@router.get("/system-status")
+async def system_status():
+    return {
+        "status": "ok",
+        "service": APP_NAME,
+        "version": APP_VERSION,
+        "host": BACKEND_HOST,
+        "port": BACKEND_PORT,
+        "paths": {
+            "data_dir": str(DATA_DIR),
+            "projects_dir": str(PROJECTS_DIR),
+            "tmp_dir": str(TMP_DIR),
+            "models_dir": str(MODELS_DIR),
+            "block_model": str(DEFAULT_BLOCK_MODEL_PATH),
+        },
+        "exists": {
+            "data_dir": DATA_DIR.exists(),
+            "projects_dir": PROJECTS_DIR.exists(),
+            "tmp_dir": TMP_DIR.exists(),
+            "models_dir": MODELS_DIR.exists(),
+            "block_model": DEFAULT_BLOCK_MODEL_PATH.exists(),
+        },
+    }
+
+
+@router.get("/project-runs")
+async def project_runs():
+    return list_project_runs()
+
+
+@router.get("/project-run-detail")
+async def project_run_detail(
+    project_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+):
+    if not project_id or not run_id:
+        raise HTTPException(
+            status_code=400,
+            detail="project_id y run_id son requeridos.",
+        )
+
+    try:
+        return get_project_run_detail(project_id, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/compare-runs")
+async def compare_runs(
+    base_project_id: Optional[str] = None,
+    base_run_id: Optional[str] = None,
+    compare_project_id: Optional[str] = None,
+    compare_run_id: Optional[str] = None,
+):
+    if not base_project_id or not base_run_id or not compare_project_id or not compare_run_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "base_project_id, base_run_id, compare_project_id y "
+                "compare_run_id son requeridos."
+            ),
+        )
+
+    try:
+        return compare_project_runs(
+            base_project_id=base_project_id,
+            base_run_id=base_run_id,
+            compare_project_id=compare_project_id,
+            compare_run_id=compare_run_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/export-run")
+async def export_run(
+    project_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+):
+    if not project_id or not run_id:
+        raise HTTPException(
+            status_code=400,
+            detail="project_id y run_id son requeridos.",
+        )
+
+    try:
+        zip_path = export_project_run_zip(project_id, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return FileResponse(
+        path=zip_path,
+        media_type="application/zip",
+        filename=zip_path.name,
+    )

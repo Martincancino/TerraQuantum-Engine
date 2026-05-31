@@ -1,0 +1,98 @@
+# -----------------------------
+# Secrets / environment
+# -----------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+*service_account*.json
+*gcp*.json
+*gee*.json
+*.secret
+secrets/
+credentials/
+.claude/
+
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# -----------------------------
+# Node / Next
+# -----------------------------
+node_modules/
+.next/
+out/
+dist/
+build/
+.turbo/
+.vercel/
+*.tsbuildinfo
+
+# -----------------------------
+# Local generated data
+# -----------------------------
+data/projects/
+**/data/projects/
+tmp/
+logs/
+*.log
+
+# -----------------------------
+# Databases / heavy generated outputs
+# -----------------------------
+*.parquet
+*.duckdb
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+
+# -----------------------------
+# 3D/generated artifacts
+# -----------------------------
+public/models/generated/
+**/public/models/generated/
+*.glb
+*.gltf
+*.obj
+*.fbx
+
+# -----------------------------
+# Local audit/export bundles
+# -----------------------------
+_audit_upload_*/
+
+# -----------------------------
+# OS/editor
+# -----------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# -----------------------------
+# Coverage/cache
+# -----------------------------
+coverage/
+htmlcov/
+.cache/
+playwright-report/
+test-results/

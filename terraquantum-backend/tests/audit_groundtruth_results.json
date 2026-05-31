@@ -1,0 +1,37 @@
+{
+  "audit": "groundtruth_analytic_sphere",
+  "timestamp_utc": "2026-05-29T02:09:15.370884+00:00",
+  "engine": "exploration/gravimetry.py (no reimplementation)",
+  "inverse_crime": false,
+  "geometry": {
+    "nx": 20,
+    "ny": 12,
+    "nz": 20,
+    "block_m": 25.0,
+    "sphere_center_m": [
+      250.0,
+      140.0,
+      250.0
+    ],
+    "sphere_radius_m": 70.0,
+    "contrast_t_m3": 0.6
+  },
+  "part_A_forward": {
+    "corr": 0.9999934095791927,
+    "rms_rel_pct": 4.987591515380489,
+    "max_rel_pct": 6.514522768770621,
+    "pass": true
+  },
+  "part_B_inversion": {
+    "lambda": 0.019306977288832496,
+    "snr_db": 30.45757490560675,
+    "misfit_pct": 0.006596260264420922,
+    "chi2_reduced": 95.72221500196272,
+    "depth_error_m": 57.185804203873744,
+    "horiz_error_m": 0.25969117323896507,
+    "mass_ratio": 1.770827019748778,
+    "shape_corr": 0.46710607582846786,
+    "pass": false
+  },
+  "overall_pass": false
+}

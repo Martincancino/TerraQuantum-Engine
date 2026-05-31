@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+
+  /* TerraQuantum — sistema científico (acento cian/azul eléctrico, no verdes) */
+  --tq-accent: #34d8f0;
+  --tq-accent-strong: #22d3ee;
+  --tq-graphite: #0b0c0e;
+  --tq-graphite-2: #121419;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* Tokens de color del workspace científico → utilidades text-accent/bg-accent/border-accent */
+  --color-accent: #34d8f0;
+  --color-accent-soft: #7fe6f6;
+  --color-graphite: #0b0c0e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #060708;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), "Segoe UI", system-ui, sans-serif;
+}
+
+/* ── Scrollbar científico (grafito fino, glow cian al hover) ───────────────── */
+.custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(52, 216, 240, 0.35);
+}
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+/* ── Microinteracción de entrada (usada en vistas) ───────────────────────── */
+@keyframes tqFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.animate-fadeIn { animation: tqFadeIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* ── Superficies premium del workspace ───────────────────────────────────── */
+.tq-panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 20, 25, 0.55);
+  backdrop-filter: blur(18px);
+}
+.tq-glow {
+  box-shadow: 0 0 24px rgba(52, 216, 240, 0.12);
+}
+/* Sutil retícula de fondo tipo instrumento científico */
+.tq-grid-bg {
+  background-image: radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.035) 1px, transparent 0);
+  background-size: 22px 22px;
+}

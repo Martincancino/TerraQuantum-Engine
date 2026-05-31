@@ -1,0 +1,11 @@
+station_id,x_m,y_m,z_m,g,unit,gravity_type
+ST01,100,0,100,0.0,mGal,bouguer_anomaly
+ST02,200,0,100,0.0,mGal,bouguer_anomaly
+ST03,300,0,100,0.0,mGal,bouguer_anomaly
+ST04,400,0,100,0.0,mGal,bouguer_anomaly
+ST05,500,0,100,0.0,mGal,bouguer_anomaly
+ST06,100,0,200,0.0,mGal,bouguer_anomaly
+ST07,200,0,200,0.0,mGal,bouguer_anomaly
+ST08,300,0,200,0.0,mGal,bouguer_anomaly
+ST09,400,0,200,0.0,mGal,bouguer_anomaly
+ST10,500,0,200,0.0,mGal,bouguer_anomaly

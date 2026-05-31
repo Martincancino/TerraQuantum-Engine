@@ -1,0 +1,134 @@
+[
+  {
+    "lambda_mag": 0.01,
+    "alpha_spatial": 1.0,
+    "misfit": 0.02416534324601063,
+    "dmax": 0.9592308303688335,
+    "depth_km": 10.292645019986416,
+    "off_km": 30.37676791160467,
+    "frac_clip": 0.0,
+    "nbody": 13,
+    "plausible": false
+  },
+  {
+    "lambda_mag": 0.01,
+    "alpha_spatial": 10.0,
+    "misfit": 0.2895961978006784,
+    "dmax": 1.3522044276933776,
+    "depth_km": 13.40670972312724,
+    "off_km": 54.370009486283664,
+    "frac_clip": 0.0,
+    "nbody": 20,
+    "plausible": false
+  },
+  {
+    "lambda_mag": 0.01,
+    "alpha_spatial": 50.0,
+    "misfit": 2.080005667907042,
+    "dmax": 0.9305539633978208,
+    "depth_km": 15.45065527532947,
+    "off_km": 25.687518882581003,
+    "frac_clip": 0.0,
+    "nbody": 68,
+    "plausible": false
+  },
+  {
+    "lambda_mag": 0.3,
+    "alpha_spatial": 1.0,
+    "misfit": 1.4669684126663847,
+    "dmax": 1.059819923706753,
+    "depth_km": 2.0000000000000004,
+    "off_km": 61.053628144903975,
+    "frac_clip": 0.0,
+    "nbody": 6,
+    "plausible": false
+  },
+  {
+    "lambda_mag": 0.3,
+    "alpha_spatial": 10.0,
+    "misfit": 1.6713268874783325,
+    "dmax": 0.5347739194981922,
+    "depth_km": 13.057206122955016,
+    "off_km": 14.535588855122672,
+    "frac_clip": 0.0,
+    "nbody": 127,
+    "plausible": true
+  },
+  {
+    "lambda_mag": 0.3,
+    "alpha_spatial": 50.0,
+    "misfit": 3.0136712351204236,
+    "dmax": 0.5915994184021605,
+    "depth_km": 14.580482200898299,
+    "off_km": 17.172520578808985,
+    "frac_clip": 0.0,
+    "nbody": 131,
+    "plausible": true
+  },
+  {
+    "lambda_mag": 1.0,
+    "alpha_spatial": 1.0,
+    "misfit": 7.313704032480027,
+    "dmax": 0.8994071379918482,
+    "depth_km": 7.51194842304853,
+    "off_km": 51.60443568396889,
+    "frac_clip": 0.0,
+    "nbody": 15,
+    "plausible": false
+  },
+  {
+    "lambda_mag": 1.0,
+    "alpha_spatial": 10.0,
+    "misfit": 7.388902721156754,
+    "dmax": 0.4908856219413731,
+    "depth_km": 12.882603264342155,
+    "off_km": 17.3793804652937,
+    "frac_clip": 0.0,
+    "nbody": 139,
+    "plausible": true
+  },
+  {
+    "lambda_mag": 1.0,
+    "alpha_spatial": 50.0,
+    "misfit": 7.969987042831275,
+    "dmax": 0.5074934884195401,
+    "depth_km": 14.424928949969228,
+    "off_km": 12.726904850487566,
+    "frac_clip": 0.0,
+    "nbody": 126,
+    "plausible": true
+  },
+  {
+    "lambda_mag": 3.0,
+    "alpha_spatial": 1.0,
+    "misfit": 21.99381760243719,
+    "dmax": 0.9084705616585977,
+    "depth_km": 2.0,
+    "off_km": 110.44746518770019,
+    "frac_clip": 0.0,
+    "nbody": 3,
+    "plausible": false
+  },
+  {
+    "lambda_mag": 3.0,
+    "alpha_spatial": 10.0,
+    "misfit": 22.011296217715174,
+    "dmax": 0.525029585508471,
+    "depth_km": 12.879970191194495,
+    "off_km": 18.10741881185487,
+    "frac_clip": 0.0,
+    "nbody": 77,
+    "plausible": true
+  },
+  {
+    "lambda_mag": 3.0,
+    "alpha_spatial": 50.0,
+    "misfit": 22.192967773295997,
+    "dmax": 0.4153425690333168,
+    "depth_km": 14.423191364878704,
+    "off_km": 16.575184148456295,
+    "frac_clip": 0.0,
+    "nbody": 137,
+    "plausible": true
+  }
+]

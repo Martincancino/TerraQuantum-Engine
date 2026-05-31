@@ -1,0 +1,11 @@
+station_id,x_m,y_m,z_m,g_raw,unit,gravity_type
+ST01,100,0,100,978000.1,mGal,absolute_gravity
+ST02,200,0,100,978000.12,mGal,absolute_gravity
+ST03,300,0,100,978000.15,mGal,absolute_gravity
+ST04,400,0,100,978000.2,mGal,absolute_gravity
+ST05,500,0,100,978000.18,mGal,absolute_gravity
+ST06,100,0,200,978000.08,mGal,absolute_gravity
+ST07,200,0,200,978000.1,mGal,absolute_gravity
+ST08,300,0,200,978000.16,mGal,absolute_gravity
+ST09,400,0,200,978000.22,mGal,absolute_gravity
+ST10,500,0,200,978000.17,mGal,absolute_gravity

@@ -1,0 +1,28 @@
+ASCII_input_file_header_separate "Geovu Header"
+create_format_from_data_file 0 0 char 0
+
+ASCII_data "Central Andes 1997 ASCII Gravity Data Format"
+station_id 1 7 long 0
+longitude 8 19 float 5
+latitude 20 30 float 5
+utm_east 31 39 float 0
+utm_north 40 48 float 0
+sea_level_elev_m 49 57 float 2
+obs_grav 58 68 float 2
+terr_corr_onshore_267 69 77 float 2
+mass_corr_offshore_164 78 86 float 2
+Free_air_anom 87 95 float 2
+Bouguer_anom 96 104 float 2
+
+binary_data "Central Andes 1997 binary Gravity Data Format"
+station_id 1 4 long 0
+longitude 5 8 long 5
+latitude 9 12 long 5
+utm_east 13 16 float 0
+utm_north 17 20 float 0
+sea_level_elev_m 21 24 float 2
+obs_grav 25 28 float 2
+terr_corr_onshore_267 29 32 float 2
+mass_corr_offshore_164 33 36 float 2
+Free_air_anom 37 40 float 2
+Bouguer_anom 41 44 float 2

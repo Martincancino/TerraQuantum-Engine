@@ -1,0 +1,11 @@
+station_id,x_m,y_m,z_m,g,unit,gravity_type
+ST01,100,0,100,0.0000012,m/s2,synthetic_demo
+ST02,200,0,100,0.0000015,m/s2,synthetic_demo
+ST03,300,0,100,0.0000018,m/s2,synthetic_demo
+ST04,400,0,100,0.0000022,m/s2,synthetic_demo
+ST05,500,0,100,0.0000028,m/s2,synthetic_demo
+ST06,100,0,200,0.0000014,m/s2,synthetic_demo
+ST07,200,0,200,0.0000017,m/s2,synthetic_demo
+ST08,300,0,200,0.0000021,m/s2,synthetic_demo
+ST09,400,0,200,0.0000025,m/s2,synthetic_demo
+ST10,500,0,200,0.0000030,m/s2,synthetic_demo

@@ -1,0 +1,24 @@
+{
+  "dataset_name": "South America: Andes Gravity Station Data (1997) / Central Andes Gravity 1997",
+  "source": "NOAA National Centers for Environmental Information (NCEI), legacy NGDC gravity archive",
+  "source_url": "https://www.ngdc.noaa.gov/mgg/gravity/1999/data/regional/andes97/",
+  "accessed_at": "2026-05-22",
+  "license_or_terms": "NCEI use constraints: cite the National Geophysical Data Center and the originator of the data. NCEI metadata reports Access Constraints: None and a NOAA/NCEI distribution liability notice.",
+  "raw_files": [
+    "raw/andes97.ast",
+    "raw/andes97.fmt",
+    "raw/andes97.hdr",
+    "raw/andes97.txt"
+  ],
+  "coordinate_system": "Geographic longitude/latitude in degrees used for TerraQuantum. NOAA also provides UTM east/north fields and notes a UTM reference meridian of -69 degrees.",
+  "gravity_field_used": "Bouguer_anom mapped to g_mgal with gravity_type=bouguer_anomaly",
+  "elevation_field_used": "sea_level_elev_m mapped to elevation_m",
+  "station_count_raw": 6151,
+  "station_count_normalized": 6151,
+  "bbox": {
+    "min_lat": -30.35278,
+    "max_lat": -20.05826,
+    "min_lon": -71.41385,
+    "max_lon": -63.862
+  }
+}

@@ -1,0 +1,11 @@
+station_id,x_m,y_m,z_m,g,unit,uncertainty,quality_flag,gravity_type
+ST01,100,0,100,0.12,mGal,0.01,OK,bouguer_anomaly
+ST02,200,0,100,0.15,mGal,0.012,OK,bouguer_anomaly
+ST03,300,0,100,0.18,mGal,0.009,OK,bouguer_anomaly
+ST04,400,0,100,0.22,mGal,0.015,OK,bouguer_anomaly
+ST05,500,0,100,0.28,mGal,0.02,WARNING,bouguer_anomaly
+ST06,100,0,200,0.14,mGal,0.01,OK,bouguer_anomaly
+ST07,200,0,200,0.17,mGal,0.01,OK,bouguer_anomaly
+ST08,300,0,200,0.21,mGal,0.008,OK,bouguer_anomaly
+ST09,400,0,200,0.25,mGal,0.011,OK,bouguer_anomaly
+ST10,500,0,200,0.30,mGal,0.01,OK,bouguer_anomaly

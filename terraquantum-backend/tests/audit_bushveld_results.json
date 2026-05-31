@@ -1,0 +1,31 @@
+{
+  "audit": "real_data_bushveld",
+  "dataset": "Zenodo 10.5281/zenodo.6511942 (CC-BY 4.0)",
+  "n_stations_real": 457,
+  "manual_preprocessing_NOT_in_engine": [
+    "lonlat->meters projection",
+    "regional-residual (poly2)",
+    "topography neglected (flat datum)"
+  ],
+  "residual_mgal": {
+    "min": -37.158702484412245,
+    "max": 85.3683898915357,
+    "std": 20.242882800736574
+  },
+  "mesh": {
+    "nx": 32,
+    "ny": 5,
+    "nz": 34,
+    "block_m": 4000.0
+  },
+  "best_fit": {
+    "lam": 0.3,
+    "misfit": 1.6713268874783325,
+    "cmx": 70718.15708090134,
+    "cmy": 13057.206122955016,
+    "cmz": 48542.9317605487,
+    "dmax": 0.5347739194981922
+  },
+  "sanity_horiz_offset_km": 14.535588855122672,
+  "sanity_depth_km": 13.057206122955016
+}
