@@ -3,7 +3,7 @@ FASE 9A — Motor de Inversión Magnética Independiente (induced-only).
 
 Motor AISLADO: no importa ni modifica gravimetry.py. Replica su solidez industrial
 (KDTree + matrices dispersas CSR, ThreadPool, caché de geometría, acondicionamiento
-Wd→Ws→Tikhonov, anclaje de sondajes con relajación del Laplaciano) pero con la física
+Wd→W_z⁻¹→Tikhonov, anclaje de sondajes con relajación del Laplaciano) pero con la física
 magnética: kernel dipolar de Intensidad Magnética Total (TMI) y susceptibilidad SI.
 
 ──────────────────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ Estabilidad numérica (garantiza cond(A) < 1e14 y que LSQR no diverja):
   • μ0 se cancela: sin constantes minúsculas/gigantes que arruinen la escala.
   • Factor angular [3cos²θ − 1] ∈ [−1, 2]: acotado.
   • Caída 1/r³ (más rápida que 1/r² de gravedad): matriz más dispersa y mejor
-    condicionada bajo el mismo cutoff_radius y el mismo column-scaling Ws.
+    condicionada bajo el mismo cutoff_radius y el cambio de variable W_z⁻¹.
   • El signo de r̂ (celda→sensor vs sensor→celda) es IRRELEVANTE: solo aparecen
     (f̂·r_vec)² y r² (potencias pares) y r⁵=|r|⁵. Reusamos dxv = x_cell − x_sensor.
 
@@ -273,15 +273,16 @@ class MagnetometryForward:
 class MagnetometryInversion:
     """
     INVERSE MODEL magnético: LSQR + regularización espacial Tikhonov 3D sobre la
-    SUSCEPTIBILIDAD (SI). Replica la lógica de acondicionamiento de gravimetry
-    (Wd → Ws → sistema aumentado) y el anclaje de sondajes con relajación del
-    Laplaciano, pero con física magnética:
+    SUSCEPTIBILIDAD (SI). Acondicionamiento de Li & Oldenburg
+    (Wd → cambio de variable W_z⁻¹ → sistema aumentado) y el anclaje de sondajes con
+    relajación del Laplaciano, pero con física magnética:
 
       - base_susc = 0.0           (la susceptibilidad ES el contraste)
       - bounds [susc_min, susc_max] con susc_min=0 (no-negatividad física)
-      - depth weighting β=1.5     (FASE 9B: β=3 sobre-compensa frente a la
-                                   regularización Tikhonov+Laplaciano ya presente y
-                                   hunde el pico; β=1.5 lo mantiene a profundidad real)
+      - depth weighting β=1.5     (FASE 9B-2: pre-condicionamiento algebraico de
+                                   Li & Oldenburg — W_z=diag((depth+z0)^(-β/2))
+                                   multiplica TODOS los bloques y el solver opera
+                                   sobre m̃=W_z·m, destransformando m=W_z^{-1}·m̃)
 
     Convención de memoria order='F'; índice plano = ix + nx·iy + nx·ny·iz.
     """
@@ -377,11 +378,14 @@ class MagnetometryInversion:
         # ── Data weighting ───────────────────────────────────────────────────
         noise_floor=0.02,
         noise_pct=0.02,
-        # ── Depth weighting (FASE 9B: β=1.5 calibrado) ───────────────────────
-        # β=3 (Li & Oldenburg 1996, magnetics) sobre-compensa AQUÍ porque ya hay
-        # regularización espacial (Tikhonov + Laplaciano 3D): el peso ~1/depth³
-        # empuja la masa hacia el fondo y hunde el pico (p.ej. y≈75 cuando la
-        # anomalía real está en y≈40). β=1.5 estabiliza sin sobre-profundizar.
+        # ── Depth weighting (FASE 9B-2: pre-condicionamiento algebraico) ─────
+        # Cambio de variable Li & Oldenburg: W_z=diag((depth+z0)^(-β/2)) multiplica
+        # TODOS los bloques (datos, smallness, Laplaciano); el solver opera sobre
+        # m̃=W_z·m y se destransforma m=W_z^{-1}·m̃. Diagnóstico 9B-2: con el kernel
+        # validado en test desnudo (recupera y≈40), el sesgo de profundidad venía de
+        # la pre-condición (column-scaling 1/‖col‖), NO del depth-weighting. β=1.5
+        # reparte la sensibilidad sin sobre-profundizar; suba hacia β=3 (clásico
+        # magnético) si el pico queda superficial.
         depth_beta: float = 1.5,
         # ── Anclaje por sondajes (boreholes) — susceptibilidad medida ────────
         # boreholes: array (n,5) [x_m, z_m, y_from_m, y_to_m, susc_SI] o None.
@@ -395,10 +399,11 @@ class MagnetometryInversion:
         solver_meta: Optional[dict] = None,
     ):
         """
-        LSQR + Tikhonov 3D sobre susceptibilidad. Mismo pipeline de acondicionamiento
-        que gravimetry: Wd (sigma adaptivo) → Ws (column scaling) → sistema aumentado
-        vstack([G_scaled, λ_spatial·L_scaled]) → smallness (damp o bloque diferencial
-        cuando hay anclajes).
+        LSQR + Tikhonov 3D sobre susceptibilidad. Pre-condicionamiento algebraico de
+        Li & Oldenburg: Wd (sigma adaptivo) → cambio de variable m̃=W_z·m con W_z⁻¹
+        multiplicando TODOS los bloques → sistema aumentado vstack([G_scaled,
+        λ_spatial·L_scaled]) → smallness (damp o bloque diferencial cuando hay
+        anclajes) → destransformación m=W_z⁻¹·m̃.
 
         Devuelve una tupla (longitud total_voxels, NaN en celdas de aire):
             susceptibility_full     : κ recuperada (SI), clip a [susc_min, susc_max].
@@ -512,12 +517,31 @@ class MagnetometryInversion:
         max_sens = float(np.max(_sensitivity)) if len(_sensitivity) > 0 else 0.0
         normalized_sensitivity_active = _sensitivity / max_sens if max_sens > 0 else np.zeros_like(_sensitivity)
 
-        # ── Column scaling Ws ────────────────────────────────────────────────
-        col_norms = np.maximum(np.sqrt(G_w.power(2).sum(axis=0)).A1, 1e-12)
-        Ws = sp.diags(1.0 / col_norms)
-        G_scaled = G_w @ Ws
+        # ── Depth Weighting como CAMBIO DE VARIABLE (Li & Oldenburg 1996) ────
+        # Pre-condicionamiento algebraico estricto. Definimos los pesos espaciales
+        #     W_z = diag( (depth + z0)^(-β/2) )
+        # y resolvemos para la variable transformada  m̃ = W_z · m,  de modo que
+        #     m = W_z^{-1} · m̃,   con   W_z^{-1} = diag( (depth + z0)^(+β/2) ).
+        # W_z^{-1} AMPLIFICA las columnas profundas de G (que el dipolo atenúa como
+        # 1/r³): reparte la sensibilidad con la profundidad y elimina el sesgo
+        # superficial del problema de norma mínima SIN empujar la masa al fondo.
+        # Debe multiplicar TODOS los bloques (datos, smallness, Laplaciano), por eso
+        # sustituye al antiguo column-scaling 1/‖col‖ que sobre-compensaba y hundía
+        # el pico (diagnóstico FASE 9B-2: con β=0 el pico igual se hundía → la culpa
+        # era esta pre-condición, no el depth-weighting en sí).
+        #
+        # z0 = 0.5·dy estabiliza el peso en la primera capa (Li & Oldenburg: z0 del
+        # orden de medio voxel, NO un valor grande arbitrario).
+        z0 = 0.5 * self.dy
+        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
+        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))   # (depth+z0)^{+β/2}
+        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)               # escala global ~1
+        Wz_inv = sp.diags(wz_inv_diag)
 
-        # ── Laplaciano reducido a celdas activas ─────────────────────────────
+        # ── Bloque de datos:  W_d · G · W_z^{-1} ─────────────────────────────
+        G_scaled = G_w @ Wz_inv
+
+        # ── Laplaciano reducido a celdas activas:  L · W_z^{-1} ──────────────
         L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
         L_active = L_full.tocsr()[active_cells, :][:, active_cells]
 
@@ -527,28 +551,19 @@ class MagnetometryInversion:
             _lap_row_scale[_anchor_active] = float(laplacian_relax_alpha)
             L_active = (sp.diags(_lap_row_scale) @ L_active).tocsr()
 
-        # ── Depth Weighting (FASE 9B: β=1.5, z0 ligado a la grilla) ──────────
-        # z0 es el desplazamiento que estabiliza el peso cerca de la superficie y
-        # evita la singularidad 1/depth^β en la primera capa. Formulación de Li &
-        # Oldenburg: z0 debe ser PEQUEÑO y del orden del tamaño de celda (medio
-        # voxel), NO un valor grande arbitrario. Aquí z0 = 0.5·dy.
-        z0 = 0.5 * self.dy
-        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
-        w_depth = (true_depth + z0) ** float(depth_beta)
-        w_reg = 1.0 / w_depth
-        w_reg = w_reg / np.mean(w_reg)
-        W_m = sp.diags(w_reg) @ L_active
-        L_scaled = W_m @ Ws
+        L_scaled = L_active @ Wz_inv
 
         # ── Sistema aumentado ────────────────────────────────────────────────
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
 
         # RHS de regularización: 0, salvo desplazamiento hacia el valor del sondaje
-        # en las filas ancladas (igual que gravedad con m_ref por celda).
+        # en las filas ancladas. El bloque opera sobre m̃ (= λ_spatial·L_active·m al
+        # destransformar), por lo que el objetivo L·m_ref se expresa en el modelo
+        # físico m usando L_active (sin W_z^{-1}).
         if _has_anchors:
             m_ref_sol = np.zeros(n_active, dtype=np.float64)
             m_ref_sol[_anchor_active] = _anchor_value_active[_anchor_active]
-            d_reg = lambda_spatial * (W_m @ m_ref_sol)
+            d_reg = lambda_spatial * (L_active @ m_ref_sol)
         else:
             d_reg = np.zeros(n_active, dtype=np.float64)
 
@@ -560,12 +575,16 @@ class MagnetometryInversion:
             f"lambda_mag={lambda_mag:.2e} | lambda_spatial={lambda_spatial:.2e} | depth_beta={depth_beta}"
         )
 
-        # Smallness: damp uniforme, o bloque diferencial cuando hay anclajes
-        # (κ·λ_mag en celdas ancladas, apuntando al valor del sondaje).
+        # Smallness:  λ_s · W_s · W_z^{-1} · m̃ ≈ λ_s · W_s · m_target.
+        #   • Sin anclajes: smallness uniforme vía `damp` sobre m̃. Como m̃ = W_z·m,
+        #     el término damp²·‖m̃‖² = damp²·‖W_z·m‖² ES la smallness con depth
+        #     weighting de Li & Oldenburg (celdas profundas penalizadas menos).
+        #   • Con anclajes: bloque diferencial (κ·λ_mag en celdas ancladas) que opera
+        #     sobre m̃ pero apunta al valor del sondaje en el modelo físico m.
         if _has_anchors:
             _w_small = np.full(n_active, float(lambda_mag), dtype=np.float64)
             _w_small = np.where(_anchor_active, float(anchor_kappa) * float(lambda_mag), _w_small)
-            _small_block = sp.diags(_w_small) @ Ws
+            _small_block = sp.diags(_w_small) @ Wz_inv
             _small_target = np.zeros(n_active, dtype=np.float64)
             _small_target[_anchor_active] = _anchor_value_active[_anchor_active]
             _d_small = _w_small * _small_target
@@ -577,7 +596,8 @@ class MagnetometryInversion:
 
         m_tilde = result[0]
         _acond = float(result[6])
-        susc_contrast_active = Ws @ m_tilde
+        # Destransformación Li & Oldenburg: m = W_z^{-1} · m̃ (susceptibilidad real).
+        susc_contrast_active = Wz_inv @ m_tilde
 
         if len(susc_contrast_active) != n_active:
             raise RuntimeError("LSQR devolvió un vector de susceptibilidad con tamaño incorrecto.")
@@ -658,7 +678,9 @@ class MagnetometryInversion:
 
 if __name__ == "__main__":
     # ── Self-test sintético (round-trip): valida cond(A) sano + recuperación ──
-    NX, NY, NZ = 12, 8, 12
+    # FASE 9B-2: grilla PROFUNDA (y hasta 195) para que un hundimiento del pico
+    # sea detectable. La anomalía está en y=40; el pico DEBE recuperarse cerca.
+    NX, NY, NZ = 12, 20, 12
     BLOCK = 10.0
     INC, DEC, B0 = -30.0, 2.0, 23500.0
 
@@ -675,7 +697,7 @@ if __name__ == "__main__":
     sensor_coords = np.column_stack([sx.ravel(), np.zeros(sx.size), sz.ravel()])
     print(f"[MAG TEST] {len(sensor_coords)} sensores | grilla {NX}x{NY}x{NZ}")
 
-    forward = MagnetometryForward(BLOCK, BLOCK, BLOCK, cutoff_radius=200.0,
+    forward = MagnetometryForward(BLOCK, BLOCK, BLOCK, cutoff_radius=300.0,
                                   inclination_deg=INC, declination_deg=DEC, field_intensity_nt=B0)
 
     # Anomalia de susceptibilidad enterrada (k=0.1 SI en una esfera)
@@ -703,6 +725,20 @@ if __name__ == "__main__":
     print(f"[MAG TEST] Misfit: {misfit:.3f}% | chi2_final={meta['chi2_final']:.4f}")
     print(f"[MAG TEST] k recuperada max: {susc_est_clean.max():.4f} SI "
           f"@ (x={x_c[peak_idx]:.0f}, y={y_c[peak_idx]:.0f}, z={z_c[peak_idx]:.0f})")
+
+    # Profundidad del PICO (cantidad interpretable) + fracción de masa somera.
+    # El centroide se reporta como diagnóstico, pero NO se usa como criterio: en un
+    # problema sub-determinado (n_obs << n_cells) la cola difusa lo sesga aunque el
+    # pico esté bien ubicado. El bug 9B-2 (pico hundido a y≈130) se detecta por el
+    # PICO, no por el centroide.
+    _w = susc_est_clean
+    y_centroid = float(np.average(y_c, weights=_w)) if _w.sum() > 0 else float("nan")
+    frac_shallow = float(_w[y_c <= 70.0].sum() / max(_w.sum(), 1e-12))
     print(f"[MAG TEST] Centro verdadero del blob: (60, 40, 60) | "
+          f"centroide y (diag) = {y_centroid:.1f} | masa somera (y<=70) = {frac_shallow:.1%} | "
           f"saturacion bounds: {meta['sat_fraction']:.1%}")
+    y_peak = float(y_c[peak_idx])
+    y_ok = (abs(y_peak - 40.0) <= 25.0) and (y_peak <= 70.0) and (frac_shallow >= 0.45)
+    print(f"[MAG TEST] Pico en y={y_peak:.0f} (real=40, NO hundido a y>=100): "
+          f"{'PASS' if y_ok else 'FAIL — revisar pre-condicion W_z'}")
     print("-" * 70)
