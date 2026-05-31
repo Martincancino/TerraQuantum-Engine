@@ -33,11 +33,12 @@ NO se calcula física nueva aquí: se orquestan los dos motores existentes
 from typing import Optional
 
 import numpy as np
+import polars as pl
 import scipy.sparse as sp
 from fastapi import HTTPException
 
-from core.config import ensure_runtime_dirs
-from core.block_model_store import update_run_status
+from core.config import DEFAULT_BLOCK_MODEL_PATH, ensure_runtime_dirs
+from core.block_model_store import get_run_block_model_reference, update_run_status
 from core.logging import get_logger
 from exploration.geophysics_math import build_gradient_operators
 from exploration.gravimetry import GravimetryForward, GravimetryInversion
@@ -197,6 +198,72 @@ def _extract_boreholes(params: GeophysicsInvertInput):
     g_arr = np.asarray(g_rows, dtype=np.float64) if g_rows else None
     m_arr = np.asarray(m_rows, dtype=np.float64) if m_rows else None
     return g_arr, m_arr
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Persistencia Parquet (Fase 10 - Parte 2: cierre del Transport Gap).
+# ─────────────────────────────────────────────────────────────────────────────
+_RUN_JOINT_FILENAME = "block_model_joint.parquet"
+
+
+def _persist_joint_parquet(
+    params: GeophysicsInvertInput,
+    x_c: np.ndarray,
+    y_c: np.ndarray,
+    z_c: np.ndarray,
+    m_rho: np.ndarray,
+    rho_contrast: np.ndarray,
+    m_chi: np.ndarray,
+    combined: np.ndarray,
+    kept_idx: np.ndarray,
+) -> str:
+    """Escribe el bloque conjunto en Parquet y devuelve la ruta del archivo.
+
+    Columnas exportadas (contrato Fase 10):
+        x_c, y_c, z_c          — coordenadas de centro del vóxel (m)
+        x_m, y_m, z_m          — alias estándar para el frontend
+        density_t_m3            — densidad absoluta recuperada
+        density_contrast_t_m3  — contraste respecto a densidad base
+        susceptibility_si       — susceptibilidad magnética recuperada
+        joint_structural_score  — score combinado normalizado ρ+χ ∈ [0,1]
+
+    Solo se persisten los vóxeles en ``kept_idx`` (zona anómala filtrada).
+    Se escribe también a ``DEFAULT_BLOCK_MODEL_PATH`` como ruta legacy para
+    que el frontend pueda cargarlo sin necesitar project_id/run_id.
+    """
+    x_kept = x_c[kept_idx]
+    y_kept = y_c[kept_idx]
+    z_kept = z_c[kept_idx]
+    rho_kept = m_rho[kept_idx]
+    contrast_kept = rho_contrast[kept_idx]
+    chi_kept = m_chi[kept_idx]
+    score_kept = combined[kept_idx]
+
+    df = pl.DataFrame({
+        "x_c": x_kept.tolist(),
+        "y_c": y_kept.tolist(),
+        "z_c": z_kept.tolist(),
+        "x_m": x_kept.tolist(),
+        "y_m": y_kept.tolist(),
+        "z_m": z_kept.tolist(),
+        "density_t_m3": rho_kept.tolist(),
+        "density_contrast_t_m3": contrast_kept.tolist(),
+        "susceptibility_si": chi_kept.tolist(),
+        "joint_structural_score": score_kept.tolist(),
+    })
+
+    joint_ref = get_run_block_model_reference(
+        project_id=params.project_id,
+        run_id=params.run_id,
+        filename=_RUN_JOINT_FILENAME,
+    )
+    joint_ref.path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(str(joint_ref.path))
+
+    DEFAULT_BLOCK_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(str(DEFAULT_BLOCK_MODEL_PATH))
+
+    return str(joint_ref.path)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -535,6 +602,20 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         write_run_report_snapshot(params, report)
     except Exception as _exc:
         _log.warning("joint_report_snapshot_nonfatal", error=str(_exc))
+
+    # ── FASE 10 Parte 2: Cierre del Transport Gap — persistir Parquet ────────
+    joint_parquet_path: str | None = None
+    try:
+        joint_parquet_path = _persist_joint_parquet(
+            params=params,
+            x_c=x_c, y_c=y_c, z_c=z_c,
+            m_rho=m_rho, rho_contrast=rho_contrast, m_chi=m_chi,
+            combined=combined, kept_idx=kept_idx,
+        )
+        report["joint_parquet_path"] = joint_parquet_path
+        _log.info("joint_parquet_written", path=joint_parquet_path, voxels=len(kept_idx))
+    except Exception as _pq_exc:
+        _log.warning("joint_parquet_nonfatal", error=str(_pq_exc))
 
     misfit_combined = float(np.hypot(
         history[-1]["misfit_gravity_percent"], history[-1]["misfit_magnetic_percent"]
