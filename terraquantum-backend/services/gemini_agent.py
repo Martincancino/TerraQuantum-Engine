@@ -16,7 +16,36 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, List, Literal
+
+from pydantic import BaseModel, ValidationError
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Modelos Pydantic — contrato de salida del agente (validación estructural).
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AnomalyInterpretation(BaseModel):
+    id: str
+    description: str
+    density_mean: float
+    susceptibility_mean: float
+    volume_m3: float
+    priority: Literal["HIGH", "MEDIUM", "LOW"]
+
+
+class ExplorationGeophysicalInterpretationReport(BaseModel):
+    executive_summary: str
+    anomalies: List[AnomalyInterpretation]
+    overall_assessment: str
+    limitations: str
+
+
+# Palabras prohibidas por compliance SEC/JORC (case-insensitive).
+# Si alguna aparece en el JSON validado se descarta la respuesta y se retorna fallback.
+_BANNED_WORDS: List[str] = [
+    "reserve", "resource", "grade", "npv", "irr", "tonnage", "economic value",
+]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -42,6 +71,10 @@ of spatial correlation between the two physical properties.
 6. Keep each text field under 300 words.
 7. The "limitations" field must note the inherent non-uniqueness of potential \
 field inversions.
+8. FORBIDDEN WORDS (NEVER use, not even in passing): "reserve", "resource", \
+"grade", "NPV", "IRR", "tonnage", "economic value". These terms imply \
+regulatory-standard resource estimation (JORC/NI 43-101), which this report \
+is NOT.
 
 OUTPUT FORMAT — MANDATORY:
 You MUST return a single, valid JSON object with exactly these four keys:
@@ -285,8 +318,9 @@ def request_gemini_interpretation(report: dict) -> dict:
             "limitations": "",
         }
 
+    # ── Capa 1: parseo JSON ───────────────────────────────────────────────────
     try:
-        return json.loads(raw_text)
+        parsed_json = json.loads(raw_text)
     except json.JSONDecodeError:
         return {
             "error": "Failed to parse interpretation",
@@ -296,3 +330,32 @@ def request_gemini_interpretation(report: dict) -> dict:
             "overall_assessment": "",
             "limitations": "",
         }
+
+    # ── Capa 2: validación estructural Pydantic ───────────────────────────────
+    try:
+        validated = ExplorationGeophysicalInterpretationReport(**parsed_json)
+        validated_data = validated.model_dump()
+    except (ValidationError, TypeError, Exception) as exc:
+        return {
+            "error": f"Validation/Compliance failed: {exc}",
+            "raw": str(parsed_json)[:2000],
+            "executive_summary": "",
+            "anomalies": [],
+            "overall_assessment": "",
+            "limitations": "",
+        }
+
+    # ── Capa 3: compliance — banned words (SEC/JORC) ──────────────────────────
+    json_lower = json.dumps(validated_data).lower()
+    for word in _BANNED_WORDS:
+        if word in json_lower:
+            return {
+                "error": f"Validation/Compliance failed: banned word detected: '{word}'",
+                "raw": json.dumps(validated_data)[:2000],
+                "executive_summary": "",
+                "anomalies": [],
+                "overall_assessment": "",
+                "limitations": "",
+            }
+
+    return validated_data
