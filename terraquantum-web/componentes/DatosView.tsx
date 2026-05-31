@@ -1,6 +1,6 @@
 // components/DatosView.tsx
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAppStore, type GeoReportInfo, type ActiveRunState } from "../store/useAppStore";
 import type { JsonValue } from "./datos/types";
 import {
@@ -21,6 +21,9 @@ import {
   getProjectRunDetail,
 } from "../lib/terraquantum/frontendApi";
 import type { FavorabilityResult } from "./datos/favorability_types";
+import GeophysicalInterpretationSection, {
+  type GeminiInterpretation,
+} from "@/componentes/interpretation/GeophysicalInterpretationSection";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -263,6 +266,12 @@ export default function DatosView() {
     setTimeout(() => { window.print(); setIsExportingPDF(false); }, 1200);
   };
 
+  const geminiInterpretation = useMemo<GeminiInterpretation | null>(() => {
+    const gi = asRecord(report?.gemini_interpretation);
+    if (!gi || typeof gi.error === "string") return null;
+    return gi as unknown as GeminiInterpretation;
+  }, [report?.gemini_interpretation]);
+
   // ── Estado: sin corrida activa ────────────────────────────────────────────
   const hasActiveRun = activeRun.status === "ready" && activeRun.projectId && activeRun.runId;
 
@@ -444,6 +453,11 @@ export default function DatosView() {
               </div>
             </div>
           </Section>
+        )}
+
+        {/* ── Interpretación Gemini ── */}
+        {geminiInterpretation && (
+          <GeophysicalInterpretationSection interpretation={geminiInterpretation} />
         )}
 
         {/* ── Datos de la corrida activa ── */}
