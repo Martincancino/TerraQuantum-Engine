@@ -10,13 +10,11 @@ NOTA DE COMPLIANCE:
     PROHIBIDAS en todo prompt generado por este módulo. El reporte es una
     interpretación geofísica cualitativa, no una estimación de recursos conforme
     a ningún estándar regulatorio de la industria minera.
-
-Este módulo solo construye strings. NO realiza llamadas HTTP a la API de Gemini.
-Esa integración se completará cuando las credenciales estén disponibles.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -41,18 +39,34 @@ data — no invented values.
 "anomalous zones", not as ore bodies.
 5. Highlight structural coupling (E_norm) and centroid separation as evidence \
 of spatial correlation between the two physical properties.
-6. Keep the report under 600 words. Use structured sections.
-7. End with a "Limitations and Next Steps" section noting the inherent \
-non-uniqueness of potential field inversions.
+6. Keep each text field under 300 words.
+7. The "limitations" field must note the inherent non-uniqueness of potential \
+field inversions.
 
-OUTPUT FORMAT:
-## 1. Survey Overview
-## 2. Inversion Convergence Summary
-## 3. Gravity Anomaly Interpretation
-## 4. Magnetic Susceptibility Interpretation
-## 5. Joint Structural Coupling Assessment
-## 6. Priority Geophysical Targets
-## 7. Limitations and Next Steps
+OUTPUT FORMAT — MANDATORY:
+You MUST return a single, valid JSON object with exactly these four keys:
+{
+  "executive_summary": "<string — overall survey context and key findings>",
+  "anomalies": [
+    {
+      "id": "<anomaly_id string>",
+      "description": "<geophysical interpretation of this body>",
+      "density_mean": <number>,
+      "susceptibility_mean": <number>,
+      "volume_m3": <number>,
+      "priority": "<HIGH | MEDIUM | LOW>"
+    }
+  ],
+  "overall_assessment": "<string — convergence quality, coupling strength, \
+exploration implications>",
+  "limitations": "<string — non-uniqueness, depth resolution, data gaps>"
+}
+
+CRITICAL OUTPUT CONSTRAINTS:
+- Output ONLY the raw JSON object. No markdown code fences (```json), \
+no explanatory text before or after, no comments inside the JSON.
+- Every string value must be in English.
+- If no discrete anomalies are present, return an empty array for "anomalies".
 """
 
 
@@ -200,10 +214,11 @@ def build_interpretation_prompt(report: dict) -> str:
         "=== END OF NUMERICAL SUMMARY ===",
         "",
         "Based on the above, generate the Exploration Geophysical Interpretation "
-        "Report following the format defined in your instructions. "
-        "Use the DISCRETE GEOLOGICAL BODIES section as the primary basis for section "
-        "'## 6. Priority Geophysical Targets'. "
-        "Do not invent any numerical values not present in this summary.",
+        "Report following the JSON format defined in your instructions. "
+        "Use the DISCRETE GEOLOGICAL BODIES section as the primary basis for the "
+        "'anomalies' array. "
+        "Do not invent any numerical values not present in this summary. "
+        "Return ONLY the raw JSON object — no markdown, no prose outside the JSON.",
     ]
 
     return "\n".join(lines)
@@ -213,15 +228,38 @@ def build_interpretation_prompt(report: dict) -> str:
 # Llamada a la API de Gemini.
 # Requiere: pip install google-generativeai
 # ─────────────────────────────────────────────────────────────────────────────
-def request_gemini_interpretation(report: dict) -> str:
-    """Llama a Gemini 1.5 Pro y retorna el reporte de interpretación como string.
+
+_GENERATION_CONFIG = {
+    "temperature": 0.05,
+    "top_p": 0.8,
+    "top_k": 20,
+    "response_mime_type": "application/json",
+}
+
+_FALLBACK_NO_KEY: dict = {
+    "executive_summary": "Gemini API key not configured.",
+    "anomalies": [],
+    "overall_assessment": "N/A — API key missing.",
+    "limitations": "N/A",
+}
+
+
+def request_gemini_interpretation(report: dict) -> dict:
+    """Llama a Gemini 1.5 Pro y retorna el reporte de interpretación como dict.
 
     Lee la clave desde la variable de entorno GEMINI_API_KEY.
-    Si no está configurada, retorna un mensaje de fallback amigable sin crashear.
+    Si no está configurada, retorna un dict de fallback sin crashear.
+
+    Returns
+    -------
+    dict
+        Diccionario con claves: executive_summary, anomalies,
+        overall_assessment, limitations.
+        En caso de error incluye además la clave "error".
     """
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return "Gemini API key not configured. Mock report generated."
+        return _FALLBACK_NO_KEY
 
     user_prompt = build_interpretation_prompt(report)
 
@@ -235,8 +273,26 @@ def request_gemini_interpretation(report: dict) -> str:
         )
         response = model.generate_content(
             user_prompt,
-            generation_config={"temperature": 0.1},
+            generation_config=_GENERATION_CONFIG,
         )
-        return response.text
+        raw_text = response.text
     except Exception as exc:
-        return f"Gemini API error: {exc}. Mock report generated."
+        return {
+            "error": f"Gemini API error: {exc}",
+            "executive_summary": "",
+            "anomalies": [],
+            "overall_assessment": "",
+            "limitations": "",
+        }
+
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        return {
+            "error": "Failed to parse interpretation",
+            "raw": raw_text[:2000],
+            "executive_summary": "",
+            "anomalies": [],
+            "overall_assessment": "",
+            "limitations": "",
+        }
