@@ -1576,9 +1576,211 @@ def _run_lsqr_with_heartbeat(
     return result
 
 
+def run_magnetic_inversion(params: GeophysicsInvertInput):
+    """
+    FASE 9A — Orquestación del motor magnético INDEPENDIENTE.
+
+    Activado por run_geophysics_inversion cuando params.magnetic_nt está presente.
+    Construye la grilla core, arma el kernel dipolar TMI y resuelve la inversión de
+    SUSCEPTIBILIDAD (SI). NO toca el pipeline gravimétrico ni fabrica densidad/ley.
+    Motor aislado: sin Joint Inversion, sin Cross-Gradient (Fase 9A).
+
+    Las coordenadas vienen de `observations` (x_m,y_m,z_m); el campo `g` se IGNORA
+    en este modo. El dato invertido es params.magnetic_nt (anomalía TMI, nT).
+    """
+    from exploration.magnetometry import MagnetometryForward, MagnetometryInversion
+
+    project_id = params.project_id
+    run_id = params.run_id
+
+    def _update(status, progress, stage, message, metrics=None, error=None):
+        if project_id and run_id:
+            try:
+                update_run_status(project_id, run_id, status, progress, stage, message, metrics, error)
+            except Exception:
+                pass
+
+    _log.info("magnetic_inversion_start", project_id=project_id, run_id=run_id)
+    ensure_runtime_dirs()
+    _update("running", 0.0, "loading_data", "Validando input magnético (Fase 9A)...")
+
+    # ── Validación del input magnético (independiente de la gravimétrica) ─────
+    obs = params.observations
+    mag = np.asarray(params.magnetic_nt, dtype=float)
+    if len(mag) != len(obs):
+        raise HTTPException(
+            status_code=422,
+            detail=f"magnetic_nt (len={len(mag)}) debe tener el mismo largo que observations (len={len(obs)}).",
+        )
+    if not np.isfinite(mag).all():
+        raise HTTPException(status_code=422, detail="magnetic_nt contiene valores no finitos (NaN/Inf).")
+    if np.allclose(mag, 0.0):
+        raise HTTPException(status_code=422, detail="magnetic_nt es todo ~0: no hay señal magnética para invertir.")
+    if params.susc_max <= params.susc_min:
+        raise HTTPException(status_code=422, detail="susc_max debe ser mayor que susc_min.")
+
+    total_voxels = params.nx * params.ny * params.nz
+    if total_voxels > 200_000:
+        raise HTTPException(status_code=422, detail=f"Modelo demasiado grande (nx*ny*nz>200000): {total_voxels} voxels.")
+    if params.cutoff_radius < params.block_size:
+        raise HTTPException(status_code=422, detail="cutoff_radius no puede ser menor que block_size.")
+
+    nx, ny, nz, dx = params.nx, params.ny, params.nz, params.block_size
+    ix, iy, iz, x_c, y_c, z_c = build_voxel_grid(params)
+
+    sensor_coords = np.array([[o.x_m, o.y_m, o.z_m] for o in obs], dtype=float)
+    if not np.isfinite(sensor_coords).all():
+        raise HTTPException(status_code=422, detail="Coordenadas de sensores con NaN/Inf.")
+
+    _update("running", 0.2, "building_kernel", "Construyendo kernel dipolar TMI...")
+    forward = MagnetometryForward(
+        dx, dx, dx,
+        cutoff_radius=params.cutoff_radius,
+        inclination_deg=params.inclination_deg,
+        declination_deg=params.declination_deg,
+        field_intensity_nt=params.field_intensity_nt,
+    )
+    inversor = MagnetometryInversion(nx, ny, nz, dx)
+
+    # ── Anclaje por sondajes (FASE 9B): el motor magnético lee ESTRICTAMENTE
+    # susceptibility_si. Los intervalos sin susceptibilidad (None) se SALTAN: un
+    # sondaje netamente gravimétrico no aporta restricción magnética. Validado
+    # contra bounds. ──
+    boreholes_arr = None
+    _bh_list = getattr(params, "boreholes", None) or []
+    if _bh_list:
+        _rows = []
+        for _i, _bh in enumerate(_bh_list):
+            _susc = _bh.susceptibility_si
+            if _susc is None:
+                continue  # intervalo sin susceptibilidad → no ancla la inversión magnética
+            if _susc < params.susc_min or _susc > params.susc_max:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Susceptibilidad de sondaje fuera de bounds (intervalo {_i}: {_susc} SI "
+                        f"no en [{params.susc_min}, {params.susc_max}] SI)."
+                    ),
+                )
+            _rows.append([_bh.x_m, _bh.z_m, _bh.y_from_m, _bh.y_to_m, _susc])
+        if _rows:
+            boreholes_arr = np.asarray(_rows, dtype=np.float64)
+
+    _update("running", 0.4, "solving_lsqr", "Resolviendo inversión magnética LSQR + Tikhonov...")
+    solver_meta = {}
+    susc_full, score_full, misfit_percent, sens_full = inversor.solve_magnetic_inversion_lsqr(
+        d_observed=mag,
+        y_c=y_c,
+        lambda_mag=(params.lambda_mag if params.lambda_mag > 0 else 1e-4),
+        alpha_spatial=params.alpha_spatial,
+        topography_elevations=None,
+        sensor_coords=sensor_coords,
+        x_c=x_c,
+        z_c=z_c,
+        forward_model=forward,
+        susc_min=params.susc_min,
+        susc_max=params.susc_max,
+        boreholes=boreholes_arr,
+        solver_meta=solver_meta,
+    )
+
+    _update("running", 0.85, "building_payload", "Construyendo payload de susceptibilidad...")
+
+    # ── Voxels de susceptibilidad (honestos: sin densidad/ley/tonelaje fabricado) ──
+    susc_clean = np.nan_to_num(susc_full, nan=0.0)
+    is_active = np.isfinite(susc_full)
+    smax = float(np.max(susc_clean)) if susc_clean.size else 0.0
+    susc_cutoff = max(1e-6, 0.01 * smax)   # 1% del máximo recuperado o piso 1e-6
+    order = np.argsort(-susc_clean)
+    voxels = []
+    for j in order:
+        if not is_active[j]:
+            continue
+        s = float(susc_full[j])
+        if s < susc_cutoff:
+            break   # orden descendente → el resto queda bajo cutoff
+        voxels.append({
+            "ix": int(ix[j]), "iy": int(iy[j]), "iz": int(iz[j]),
+            "x_m": float(x_c[j]), "y_m": float(y_c[j]), "z_m": float(z_c[j]),
+            "susceptibility": s,
+            "relative_target_score": float(score_full[j]) if np.isfinite(score_full[j]) else None,
+            "sensitivity_proxy": float(sens_full[j]) if np.isfinite(sens_full[j]) else None,
+            "is_active": True,
+        })
+        if len(voxels) >= 5000:
+            break
+
+    best_target = None
+    if voxels:
+        _b = voxels[0]
+        best_target = {
+            "x_m": _b["x_m"], "y_m": _b["y_m"], "z_m": _b["z_m"],
+            "susceptibility": _b["susceptibility"],
+            "relative_target_score": _b["relative_target_score"],
+        }
+
+    report = {
+        "method": "magnetic_dipole_tmi_phase9a",
+        "engine": "MagnetometryInversion (magnetización inducida, sin remanencia)",
+        "is_joint_inversion": False,
+        "field": {
+            "inclination_deg": params.inclination_deg,
+            "declination_deg": params.declination_deg,
+            "field_intensity_nt": params.field_intensity_nt,
+            "field_unit_vector_xyz": solver_meta.get("field_unit_vector"),
+            "axis_convention": "x=Norte, z=Este, y=profundidad(+abajo)",
+        },
+        "susceptibility_bounds_si": [params.susc_min, params.susc_max],
+        "solver": {
+            "cond_A": solver_meta.get("acond"),
+            "chi2_final": solver_meta.get("chi2_final"),
+            "misfit_percent": misfit_percent,
+            "depth_beta": solver_meta.get("depth_beta"),
+            "n_active": solver_meta.get("n_active"),
+            "saturation_fraction": solver_meta.get("sat_fraction"),
+            "n_sat_lower": solver_meta.get("n_sat_lower"),
+            "n_sat_upper": solver_meta.get("n_sat_upper"),
+            "n_anchored_voxels": solver_meta.get("n_anchored_voxels"),
+        },
+        "observation_count": int(len(mag)),
+        "tmi_min_nt": float(np.min(mag)),
+        "tmi_max_nt": float(np.max(mag)),
+        "anomaly_voxels": len(voxels),
+        "disclaimer": (
+            "Motor magnético aislado (Fase 9A). La susceptibilidad NO es densidad; "
+            "no se emite ley ni tonelaje. Resolución en profundidad limitada (campo potencial)."
+        ),
+    }
+
+    try:
+        write_run_report_snapshot(params, report)
+    except Exception as _exc:
+        _log.warning("magnetic_report_snapshot_nonfatal", error=str(_exc))
+
+    _update(
+        "done", 1.0, "completed", "Inversión magnética completada (Fase 9A).",
+        metrics={"misfit_error_percent": misfit_percent, "cond_A": solver_meta.get("acond"),
+                 "anomaly_voxels": len(voxels)},
+    )
+
+    return {
+        "voxels": voxels,
+        "best_target": best_target,
+        "report": report,
+        "misfit_error_percent": misfit_percent,
+    }
+
+
 def run_geophysics_inversion(params: GeophysicsInvertInput):
     project_id = params.project_id
     run_id = params.run_id
+
+    # ── FASE 9A: ruteo a motor magnético independiente ────────────────────────
+    # Si el input trae magnetic_nt, delega al motor magnético y retorna. El cuerpo
+    # gravimétrico de abajo NO se ejecuta y queda intacto bit a bit para inputs
+    # sin magnetic_nt (modo gravedad por defecto).
+    if getattr(params, "magnetic_nt", None):
+        return run_magnetic_inversion(params)
 
     def _update(status, progress, stage, message, metrics=None, error=None):
         if project_id and run_id:
@@ -1605,6 +1807,10 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     if _bh_list:
         _bh_rows = []
         for _i, _bh in enumerate(_bh_list):
+            # FASE 9B: lectura segura. Un intervalo netamente magnético (density_t_m3
+            # None) no aporta restricción de densidad → se salta sin error.
+            if _bh.density_t_m3 is None:
+                continue
             if _bh.density_t_m3 < params.density_min or _bh.density_t_m3 > params.density_max:
                 raise HTTPException(
                     status_code=422,
@@ -1615,7 +1821,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
                     ),
                 )
             _bh_rows.append([_bh.x_m, _bh.z_m, _bh.y_from_m, _bh.y_to_m, _bh.density_t_m3])
-        boreholes_arr = np.asarray(_bh_rows, dtype=np.float64)
+        if _bh_rows:
+            boreholes_arr = np.asarray(_bh_rows, dtype=np.float64)
 
     _update("running", 0.05, "loading_data", "Input validado. Construyendo grilla y sensores...")
 

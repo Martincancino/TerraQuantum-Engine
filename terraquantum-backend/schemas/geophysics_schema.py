@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Any, Dict, List, Optional
 
 
@@ -21,11 +21,36 @@ class BoreholeInterval(BaseModel):
     # La arquitectura (lista de intervalos independientes) está pensada para admitir
     # en el futuro polilíneas 3D (sondajes desviados) sin romper el contrato de la API:
     # bastaría con extender este modelo a un par de puntos extremos por segmento.
+    #
+    # FASE 9B — Limpieza semántica: un intervalo puede aportar propiedad GRAVIMÉTRICA
+    # (density_t_m3) y/o MAGNÉTICA (susceptibility_si). Ambos son opcionales por
+    # separado, pero el model_validator exige que al menos uno tenga dato (no se
+    # admiten intervalos vacíos). El motor gravimétrico lee density_t_m3 y salta los
+    # intervalos sin densidad; el motor magnético lee susceptibility_si y salta los
+    # intervalos sin susceptibilidad. Así un mismo sondaje sirve a ambas físicas sin
+    # reinterpretar un campo como otro.
     x_m: float = Field(..., description="Coordenada local X del sondaje (m)")
     z_m: float = Field(..., description="Coordenada local Z del sondaje (m)")
     y_from_m: float = Field(..., description="Profundidad inicial del intervalo (m, + hacia abajo)")
     y_to_m: float = Field(..., description="Profundidad final del intervalo (m, + hacia abajo)")
-    density_t_m3: float = Field(..., gt=0.0, description="Densidad medida del intervalo (t/m³)")
+    density_t_m3: Optional[float] = Field(
+        default=None, gt=0.0,
+        description="Densidad medida del intervalo (t/m³). Opcional: ancla la inversión gravimétrica.",
+    )
+    susceptibility_si: Optional[float] = Field(
+        default=None, ge=0.0,
+        description="Susceptibilidad magnética medida (SI, adimensional). Opcional: ancla la inversión magnética.",
+    )
+
+    @model_validator(mode="after")
+    def _require_at_least_one_property(self):
+        """Evita intervalos vacíos: al menos density_t_m3 o susceptibility_si con dato."""
+        if self.density_t_m3 is None and self.susceptibility_si is None:
+            raise ValueError(
+                "Cada intervalo de sondaje debe declarar al menos una propiedad medida: "
+                "density_t_m3 (gravimetría) y/o susceptibility_si (magnetometría)."
+            )
+        return self
 
 
 class GeophysicsInvertInput(BaseModel):
@@ -96,6 +121,42 @@ class GeophysicsInvertInput(BaseModel):
     boreholes: Optional[List[BoreholeInterval]] = Field(
         default=[],
         description="Intervalos de sondaje (densidad medida) que anclan la inversión. Solo verticales por ahora.",
+    )
+    # ── FASE 9A: Magnetometría — motor independiente (magnetización inducida) ──
+    # magnetic_nt: anomalía de Intensidad Magnética Total (TMI) en nanoTesla, UNA
+    # por observación, PARALELA a `observations` (que aporta x_m, y_m, z_m). Cuando
+    # se provee y su largo == len(observations), el servicio rutea a
+    # solve_magnetic_inversion_lsqr e IGNORA el campo `g` de las observaciones
+    # (envíe g=0.0 como placeholder). None → modo gravimétrico 100% intacto.
+    # NO se mezcla con gravedad en este input: es un motor aislado (Fase 9A, sin Joint).
+    magnetic_nt: Optional[List[float]] = Field(
+        default=None,
+        description="Anomalía TMI por observación (nT), paralela a observations. Si se provee activa el motor magnético (Fase 9A) e ignora g.",
+    )
+    # Parámetros del campo geomagnético inducido (defaults razonables para Chile).
+    # Convención de ejes del backend: x=Norte, z=Este, y=profundidad (+ hacia abajo).
+    inclination_deg: float = Field(
+        -30.0, ge=-90.0, le=90.0,
+        description="Inclinación del campo inducido (°, + hacia abajo). Default -30 (hemisferio sur).",
+    )
+    declination_deg: float = Field(
+        2.0, ge=-180.0, le=180.0,
+        description="Declinación del campo inducido (°, + al Este desde el Norte). Default 2.",
+    )
+    field_intensity_nt: float = Field(
+        23500.0, gt=0.0, le=70000.0,
+        description="Intensidad del campo geomagnético B0 (nT). Default 23500 (norte de Chile).",
+    )
+    # Bounds de susceptibilidad magnética (SI, adimensional). susc_min=0 impone
+    # no-negatividad física de la magnetización inducida. Para magnetita masiva,
+    # cromita o BIF subir susc_max (la susceptibilidad real puede superar 1.0 SI).
+    susc_min: float = Field(
+        0.0, ge=0.0, le=10.0,
+        description="Susceptibilidad mínima permitida (SI). Default 0.0 (no-negatividad física).",
+    )
+    susc_max: float = Field(
+        1.0, gt=0.0, le=10.0,
+        description="Susceptibilidad máxima permitida (SI). Default 1.0. Subir para magnetita masiva.",
     )
 
 
