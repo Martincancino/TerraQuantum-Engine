@@ -42,17 +42,6 @@ interface SceneCell {
   [key: string]: number | boolean | null | undefined;
 }
 
-interface ExplorationDensityStats {
-  densities: number[];
-  supportScores: number[];
-  visualValues: number[];
-  visualMin: number;
-  visualMax: number;
-  densityMin: number;
-  densityMax: number;
-  visibleDensityFloor: number;
-}
-
 interface ProfessionalScoreStats {
   p2: number;
   p5: number;
@@ -92,15 +81,6 @@ interface BackendPercentileStats {
 
 // Densidad de roca país de referencia (granodiorita). El backend debe proveer el valor específico del sitio.
 const DENSITY_COUNTRY_ROCK_FALLBACK_T_M3 = 2.75;
-const GEO_COLORS = {
-  hidden:     new THREE.Color(0x000000),
-  interest:   new THREE.Color(0xc8a020),
-  high:       new THREE.Color(0xd46b15),
-  extreme:    new THREE.Color(0xb53020),
-  debug_cold: new THREE.Color(0x001f5c),
-  debug_hot:  new THREE.Color(0xc0392b),
-};
-
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
 }
@@ -355,38 +335,6 @@ function getProfessionalScoreStats(
   };
 }
 
-interface VoxelVisualConfig {
-  color: THREE.Color;
-  scale: number;
-}
-
-// Called only when effectiveProfessionalMode=true (already false for degenerate models).
-function getGeologicalVoxelConfig(
-  score: number,
-  stats: ProfessionalScoreStats
-): VoxelVisualConfig {
-  const { threshold, highThreshold, extremeThreshold = 1 } = stats;
-
-  if (score < threshold) {
-    return { color: GEO_COLORS.hidden, scale: 0 };
-  }
-  if (score < highThreshold) {
-    return { color: GEO_COLORS.interest, scale: 0.82 };
-  }
-  if (score < extremeThreshold) {
-    return { color: GEO_COLORS.high, scale: 0.95 };
-  }
-  return { color: GEO_COLORS.extreme, scale: 1.08 };
-}
-
-// Los cortes son filtros visuales. No modifican el block model ni la inversión.
-function getCellAxisPosition(cell: SceneCell, axis: SliceAxis): number {
-  if (axis === "none") return 0;
-  if (axis === "y") return getCellNumber(cell, ["y", "cy"], 0);
-  if (axis === "z") return getCellNumber(cell, ["z", "cz"], 0);
-  return getCellNumber(cell, ["x", "cx"], 0);
-}
-
 interface ModelBounds {
   minX: number; maxX: number;
   minY: number; maxY: number;
@@ -400,7 +348,6 @@ interface ModelBounds {
 function computeClippingPlanes(
   sliceAxis: SliceAxis,
   slicePosition: number,
-  _sliceThickness: number,   // reservado; ya no se usa (half-space, no slab)
   modelBounds: ModelBounds | null
 ): THREE.Plane[] {
   if (sliceAxis === "none" || !modelBounds) return [];
@@ -447,43 +394,12 @@ function getQuantileFromSorted(sorted: number[], q: number) {
   return sorted[index] ?? 0;
 }
 
-function normalizeDensity(density: number, stats: ExplorationDensityStats) {
-  const range = stats.densityMax - stats.densityMin;
-
-  if (range <= 0.000001) return 0.5;
-
-  return clamp01((density - stats.densityMin) / range);
-}
-
 function getExplorationSupportScore(cell: SceneCell, densityRatio: number) {
   const probability = clamp01(getVoxelTargetScore(cell));
   const visualScore = clamp01(getCellNumber(cell, ["visual_score"], densityRatio));
   const densityAnomalyScore = clamp01(getVoxelDensityAnomalyScore(cell));
 
   return Math.max(probability * 0.45, visualScore * 0.45, densityAnomalyScore * 0.10);
-}
-
-function isExplorationCellVisible(
-  density: number,
-  supportScore: number,
-  stats: ExplorationDensityStats
-) {
-  const densityRange = stats.densityMax - stats.densityMin;
-
-  if (densityRange <= 0.000001) return Number.isFinite(density);
-
-  // Esto es visualización interpretativa del modelo, no cambio físico del backend.
-  return density >= stats.visibleDensityFloor && supportScore >= 0.25;
-}
-
-function passesDensityFilter(
-  density: number,
-  minRaw: number | null,
-  maxRaw: number | null
-): boolean {
-  if (minRaw !== null && density < minRaw) return false;
-  if (maxRaw !== null && density > maxRaw) return false;
-  return true;
 }
 
 // Envolvente visual aproximada del cuerpo anómalo. No modifica el modelo físico ni confirma mineral.
@@ -1335,7 +1251,6 @@ export default function Scene3D() {
     visualProfessionalMode,
     sliceAxis,
     slicePosition,
-    sliceThickness,
   } = useAppStore();
 
   const hasElevationData = useAppStore((s) => s.hasElevationData);
@@ -1407,10 +1322,9 @@ export default function Scene3D() {
       computeClippingPlanes(
         sliceAxis,
         slicePosition,
-        Math.max(sliceThickness, model?.cellSize ?? 0),
         modelBounds
       ),
-    [sliceAxis, slicePosition, sliceThickness, modelBounds, model]
+    [sliceAxis, slicePosition, modelBounds]
   );
   const modelMaxExtent = model
     ? Math.max(

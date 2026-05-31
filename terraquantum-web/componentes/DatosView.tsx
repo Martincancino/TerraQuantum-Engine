@@ -186,10 +186,12 @@ export default function DatosView() {
     if (report) return;
 
     let isMounted = true;
-    setIsAutoLoading(true);
-    setAutoError(null);
 
-    getProjectRunDetail(activeRun.projectId, activeRun.runId).then((result) => {
+    const loadReport = async () => {
+      setIsAutoLoading(true);
+      setAutoError(null);
+
+      const result = await getProjectRunDetail(activeRun.projectId!, activeRun.runId!);
       if (!isMounted) return;
       if (!result.ok || !result.data) {
         setAutoError(result.error || "No se pudo cargar el reporte de la corrida activa.");
@@ -205,7 +207,9 @@ export default function DatosView() {
       }
       setReport(buildDatosReportFromRunDetail(detail, persistedReport));
       setIsAutoLoading(false);
-    });
+    };
+
+    loadReport();
 
     return () => { isMounted = false; };
   }, [activeRun.projectId, activeRun.runId, activeRun.status, report, setReport]);
@@ -217,13 +221,15 @@ export default function DatosView() {
       setFavorabilityGate(null, null);
       return;
     }
-    setFavorabilityResult(null);
-    setFavorabilityGate(null, null);
-    setFavError(null);
-    setIsFavLoading(true);
-
     let isMounted = true;
-    getFavorability(activeRun.projectId, activeRun.runId).then((result) => {
+
+    const loadFavorability = async () => {
+      setFavorabilityResult(null);
+      setFavorabilityGate(null, null);
+      setFavError(null);
+      setIsFavLoading(true);
+
+      const result = await getFavorability(activeRun.projectId!, activeRun.runId!);
       if (!isMounted) return;
       if (result.ok && result.data) {
         const fav = result.data as FavorabilityResult;
@@ -236,7 +242,9 @@ export default function DatosView() {
           : result.error ?? "Error cargando favorabilidad.");
       }
       setIsFavLoading(false);
-    });
+    };
+
+    loadFavorability();
 
     return () => { isMounted = false; };
   }, [activeRun.projectId, activeRun.runId, activeRun.status, setFavorabilityGate, setFavorabilityResult]);

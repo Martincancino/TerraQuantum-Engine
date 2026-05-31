@@ -306,7 +306,6 @@ export function updateInstancedBuffers({
   cellSizeZ,
   sliceAxis,
   slicePosition,
-  sliceThickness,
   showOnlySlice,
   elevationEnabled,
   refElev,
