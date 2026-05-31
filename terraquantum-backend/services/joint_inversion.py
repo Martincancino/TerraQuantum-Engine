@@ -40,6 +40,7 @@ from fastapi import HTTPException
 from core.config import DEFAULT_BLOCK_MODEL_PATH, ensure_runtime_dirs
 from core.block_model_store import get_run_block_model_reference, update_run_status
 from core.logging import get_logger
+from exploration.clustering import extract_geological_bodies
 from exploration.geophysics_math import build_gradient_operators
 from exploration.gravimetry import GravimetryForward, GravimetryInversion
 from exploration.magnetometry import MagnetometryForward, MagnetometryInversion
@@ -617,6 +618,36 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     except Exception as _pq_exc:
         _log.warning("joint_parquet_nonfatal", error=str(_pq_exc))
 
+    # ── FASE 10 Parte 3: Clustering — extracción de cuerpos geológicos ───────
+    # Llama al módulo de clustering sobre el campo COMPLETO (nC vóxeles) para
+    # obtener anomalías discretas compactas listas para el prompt de Gemini.
+    anomalies_payload: list = []
+    try:
+        anomalies_payload = extract_geological_bodies(
+            x=x_c, y=y_c, z=z_c,
+            density=m_rho,
+            susceptibility=m_chi,
+            dx=dx, dy=dx, dz=dx,
+            threshold=0.45,
+            min_voxels=3,
+        )
+        report["anomalies_payload"] = anomalies_payload
+        _log.info("geological_bodies_extracted", n_bodies=len(anomalies_payload))
+        print(f"[FASE 10-P3] Cuerpos geológicos detectados: {len(anomalies_payload)}")
+        for a in anomalies_payload:
+            print(
+                f"  {a['anomaly_id']}: {a['voxel_count']} vóxeles | "
+                f"vol={a['volume_m3']:.0f} m³ | "
+                f"centroide=({a['centroid']['x_m']:.0f}, {a['centroid']['y_m']:.0f}, "
+                f"{a['centroid']['z_m']:.0f}) m | "
+                f"ρ_mean={a['density_mean']:.3f} t/m³ | "
+                f"χ_mean={a['susceptibility_mean']:.5f} SI | "
+                f"corr(ρ,χ)={a['density_susceptibility_correlation']}"
+            )
+    except Exception as _cl_exc:
+        _log.warning("geological_bodies_nonfatal", error=str(_cl_exc))
+        report["anomalies_payload"] = []
+
     misfit_combined = float(np.hypot(
         history[-1]["misfit_gravity_percent"], history[-1]["misfit_magnetic_percent"]
     ))
@@ -626,6 +657,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             "E_norm_final": history[-1]["E_norm"],
             "iterations_done": int(n_iter_done),
             "anomaly_voxels": len(voxels),
+            "n_geological_bodies": len(anomalies_payload),
             "max_cross_block_nnz": int(max_block_nnz),
         },
     )
@@ -746,10 +778,35 @@ def _self_test() -> None:
     assert len(result["voxels"]) > 0, "El bloque conjunto no debe quedar vacío."
     for v in result["voxels"][:5]:
         assert "density_t_m3" in v and "susceptibility_si" in v
+
+    # ── Aserciones de clustering (Fase 10-P3) ────────────────────────────────
+    bodies = rep.get("anomalies_payload", [])
+    assert isinstance(bodies, list), "anomalies_payload debe ser una lista."
+    assert len(bodies) >= 1, (
+        f"Se esperaba >= 1 cuerpo geológico detectado; se obtuvo {len(bodies)}. "
+        "Revisar threshold o datos sintéticos."
+    )
+    for body in bodies:
+        assert "anomaly_id" in body
+        assert body["voxel_count"] >= 1  # función ya aplica min_voxels internamente
+        assert body["volume_m3"] > 0
+        assert "centroid" in body and "x_m" in body["centroid"]
+        assert np.isfinite(body["density_mean"])
+        assert np.isfinite(body["susceptibility_mean"])
+
     print("-" * 78)
+    print(f"  Cuerpos geologicos detectados: {len(bodies)}")
+    for body in bodies:
+        print(
+            f"    {body['anomaly_id']}: {body['voxel_count']} vox | "
+            f"vol={body['volume_m3']:.0f} m3 | "
+            f"centroide=({body['centroid']['x_m']:.0f}, {body['centroid']['y_m']:.0f}, "
+            f"{body['centroid']['z_m']:.0f}) m | "
+            f"rho_mean={body['density_mean']:.3f} | chi_mean={body['susceptibility_mean']:.5f}"
+        )
     _trend = "BAJO (mejor acoplamiento estructural)" if E_last <= E_first else "subio"
     print(f"  E_norm warm-up={E_first:.6f} -> final={E_last:.6f} ({_trend})")
-    print("RESULT: ALL OK - el orquestador termino limpiamente, sin explotar por RAM.")
+    print("RESULT: ALL OK - clustering y orquestador terminaron limpiamente.")
 
 
 if __name__ == "__main__":

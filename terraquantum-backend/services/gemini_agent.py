@@ -77,6 +77,34 @@ def _centroid_line(label: str, centroid: dict | None) -> str:
     return f"  {label}: x={x} m, y={y} m, z={z} m (total weight={w})"
 
 
+def _format_anomalies(anomalies: list | None) -> list[str]:
+    """Convierte anomalies_payload en líneas de texto legibles para el prompt."""
+    if not anomalies:
+        return ["  (no discrete geological bodies detected above threshold)"]
+    lines = []
+    for a in anomalies:
+        aid = a.get("anomaly_id", "?")
+        nvox = a.get("voxel_count", "?")
+        vol = _fmt(a.get("volume_m3"), decimals=0)
+        c = a.get("centroid", {})
+        cx = _fmt(c.get("x_m"), decimals=0)
+        cy = _fmt(c.get("y_m"), decimals=0)
+        cz = _fmt(c.get("z_m"), decimals=0)
+        rho_mean = _fmt(a.get("density_mean"), decimals=3)
+        rho_max = _fmt(a.get("density_max"), decimals=3)
+        chi_mean = _fmt(a.get("susceptibility_mean"), decimals=5)
+        chi_max = _fmt(a.get("susceptibility_max"), decimals=5)
+        corr = _fmt(a.get("density_susceptibility_correlation"), decimals=3)
+        lines.append(
+            f"  [{aid}] {nvox} voxels | vol={vol} m³ | "
+            f"centroid=({cx}, {cy}, {cz}) m | "
+            f"ρ={rho_mean}/{rho_max} t/m³ (mean/max) | "
+            f"χ={chi_mean}/{chi_max} SI (mean/max) | "
+            f"corr(ρ,χ)={corr}"
+        )
+    return lines
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Ensamblado del prompt de usuario (user turn enviado a la API).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,6 +162,8 @@ def build_interpretation_prompt(report: dict) -> str:
 
     n_obs = report.get("observation_count", "?")
     n_vox = report.get("anomaly_voxels", "?")
+    anomalies = report.get("anomalies_payload", None)
+    anomaly_lines = _format_anomalies(anomalies)
 
     lines = [
         "=== JOINT INVERSION STRUCTURED SUMMARY (input for interpretation) ===",
@@ -160,10 +190,18 @@ def build_interpretation_prompt(report: dict) -> str:
         _centroid_line("Susceptibility anomaly centroid", centroid_susc),
         f"  Centroid separation (ρ vs χ): {separation} m",
         "",
+        "--- DISCRETE GEOLOGICAL BODIES (physical clustering, threshold I_joint>0.6) ---",
+        f"  Total bodies detected: {len(anomalies) if anomalies else 0}",
+        *anomaly_lines,
+        "  [Each body: voxel count, volume, centroid, density/susceptibility stats,",
+        "   Pearson corr(ρ,χ) within the body — all from inversion output, no extrapolation]",
+        "",
         "=== END OF NUMERICAL SUMMARY ===",
         "",
         "Based on the above, generate the Exploration Geophysical Interpretation "
         "Report following the format defined in your instructions. "
+        "Use the DISCRETE GEOLOGICAL BODIES section as the primary basis for section "
+        "'## 6. Priority Geophysical Targets'. "
         "Do not invent any numerical values not present in this summary.",
     ]
 
