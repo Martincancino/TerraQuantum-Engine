@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Any, Dict, List, Optional
 
 
@@ -173,8 +173,43 @@ class GeophysicsInvertInput(BaseModel):
     )
 
 
+class GeophysicsVoxel(BaseModel):
+    """Contrato explícito de un vóxel de salida (gravimétrico, magnético o CONJUNTO).
+
+    FASE 10 — Capa de transporte. Cada propiedad física es OPCIONAL por separado
+    para que un MISMO array de vóxeles pueda serializar densidad (gravimetría),
+    susceptibilidad (magnetometría) o AMBAS a la vez (inversión conjunta Fase 9C-2)
+    sin disparar 422. No se calcula física aquí: solo se declara la forma del payload.
+
+    `extra="allow"` conserva los campos enriquecidos del payload gravimétrico
+    (density_proxy_index, posterior_std, doi_raw, sensitivity_proxy, …) sin tener que
+    enumerarlos, de modo que el contrato es retrocompatible bit a bit con la salida
+    actual del motor gravimétrico mientras admite explícitamente los campos del joint.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    ix: Optional[int] = None
+    iy: Optional[int] = None
+    iz: Optional[int] = None
+    x_m: Optional[float] = None
+    y_m: Optional[float] = None
+    z_m: Optional[float] = None
+    # Gravimetría: densidad absoluta y/o contraste (t/m³). Ambas opcionales.
+    density: Optional[float] = None
+    density_t_m3: Optional[float] = None
+    density_contrast_t_m3: Optional[float] = None
+    # Magnetometría / joint: susceptibilidad magnética recuperada (SI, adimensional).
+    susceptibility_si: Optional[float] = None
+    # Inversión conjunta (Fase 9C-2): score estructural combinado ρ+χ normalizado.
+    joint_structural_score: Optional[float] = None
+    is_active: Optional[bool] = None
+
+
 class GeophysicsInvertResponse(BaseModel):
-    voxels: List[Dict[str, Any]] = Field(default_factory=list)
+    # voxels tipado como GeophysicsVoxel (con extra="allow") para que el array
+    # transporte densidad y susceptibilidad SIMULTÁNEAMENTE sin romper validación.
+    voxels: List[GeophysicsVoxel] = Field(default_factory=list)
     best_target: Optional[Dict[str, Any]] = None
     report: Dict[str, Any] = Field(default_factory=dict)
     misfit_error_percent: Optional[float] = None

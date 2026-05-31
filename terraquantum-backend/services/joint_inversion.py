@@ -142,6 +142,26 @@ def _rel_change(m_new, m_old):
     return float(np.linalg.norm(m_new - m_old)) / denom
 
 
+def _weighted_centroid(x_c, y_c, z_c, weights):
+    """Centro de masa espacial ponderado de un campo ya recuperado (NO es física nueva).
+
+    Promedio de las coordenadas de celda ponderado por ``weights`` (exceso de densidad
+    para el centroide de masa; susceptibilidad para el de χ). Es un estadístico DESCRIPTIVO
+    sobre el modelo ya invertido, calculado solo para empaquetar evidencia numérica en el
+    reporte. Devuelve None si el peso total es ~0 (campo plano → centroide indefinido).
+    """
+    w = np.clip(np.asarray(weights, dtype=np.float64), 0.0, None)
+    total = float(np.sum(w))
+    if total <= _RATIO_EPS:
+        return None
+    return {
+        "x_m": float(np.sum(w * x_c) / total),
+        "y_m": float(np.sum(w * y_c) / total),
+        "z_m": float(np.sum(w * z_c) / total),
+        "total_weight": round(total, 6),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Extracción de anclajes de sondajes (idéntica semántica a los motores aislados).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -434,6 +454,37 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             "joint_structural_score": b["joint_structural_score"],
         }
 
+    # ── Métricas conjuntas (Fase 10): evidencia numérica de convergencia ─────
+    # Centroide de masa: ponderado por el EXCESO de densidad (mass excess, contraste≥0).
+    # Centroide de susceptibilidad: ponderado por χ (≥0 por bound). La separación entre
+    # ambos cuantifica el desfase estructural ρ↔χ que el cross-gradient intenta alinear.
+    centroid_mass = _weighted_centroid(x_c, y_c, z_c, np.clip(rho_contrast, 0.0, None))
+    centroid_susc = _weighted_centroid(x_c, y_c, z_c, m_chi)
+    centroid_separation_m = None
+    if centroid_mass is not None and centroid_susc is not None:
+        centroid_separation_m = float(np.sqrt(
+            (centroid_mass["x_m"] - centroid_susc["x_m"]) ** 2 +
+            (centroid_mass["y_m"] - centroid_susc["y_m"]) ** 2 +
+            (centroid_mass["z_m"] - centroid_susc["z_m"]) ** 2
+        ))
+
+    joint_metrics = {
+        "E_norm_final": history[-1]["E_norm"],
+        "E_norm_l2_global_final": history[-1]["E_norm_l2_global"],
+        "iterations_done": int(n_iter_done),
+        "stop_reason": stop_reason,
+        "centroid_mass_m": centroid_mass,
+        "centroid_susceptibility_m": centroid_susc,
+        "centroid_separation_m": round(centroid_separation_m, 4) if centroid_separation_m is not None else None,
+        "note": (
+            "E_norm_final = disimilitud estructural cellwise en [0,1] (0 = gradientes de ρ y "
+            "χ alineados → misma estructura). centroid_mass_m pondera por exceso de densidad; "
+            "centroid_susceptibility_m pondera por susceptibilidad. centroid_separation_m (m) "
+            "es el desfase espacial ρ↔χ. Estadísticos descriptivos del modelo ya invertido; "
+            "no imponen relación petrofísica ni emiten ley/tonelaje."
+        ),
+    }
+
     report = {
         "method": "joint_inversion_cross_gradient_phase9c2",
         "engine": "Alternating Gauss-Newton + exponential continuation (Gallardo–Meju cross-gradient)",
@@ -466,6 +517,8 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             "misfit_gravity_percent": history[-1]["misfit_gravity_percent"],
             "misfit_magnetic_percent": history[-1]["misfit_magnetic_percent"],
         },
+        # Resumen estadístico conjunto que consumen Gemini y el frontend (Fase 10).
+        "joint_metrics": joint_metrics,
         "density_bounds_t_m3": [params.density_min, params.density_max],
         "susceptibility_bounds_si": [params.susc_min, params.susc_max],
         "observation_count": int(len(obs)),
