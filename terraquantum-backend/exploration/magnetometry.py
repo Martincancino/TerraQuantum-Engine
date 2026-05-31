@@ -397,6 +397,15 @@ class MagnetometryInversion:
         laplacian_relax_alpha: float = 0.2,
         # ── OUT: diagnósticos numéricos ──────────────────────────────────────
         solver_meta: Optional[dict] = None,
+        # ── FASE 9C-1: Inversión Conjunta (cross-gradient) ───────────────────
+        # extra_reg_blocks: lista de matrices sparse (k_i, n_active) en ESPACIO
+        # FÍSICO del modelo; el motor las escala internamente con Wz_inv y las apila
+        # en G_aug. extra_reg_rhs: lista de RHS (k_i,) por bloque (None → ceros).
+        # m_ref: modelo de referencia (warm-start) para el término de suavidad
+        # L·(m − m_ref); longitud total_voxels o n_active. Backward-compatible.
+        extra_reg_blocks: Optional[list] = None,
+        extra_reg_rhs: Optional[list] = None,
+        m_ref: Optional[np.ndarray] = None,
     ):
         """
         LSQR + Tikhonov 3D sobre susceptibilidad. Pre-condicionamiento algebraico de
@@ -560,15 +569,61 @@ class MagnetometryInversion:
         # en las filas ancladas. El bloque opera sobre m̃ (= λ_spatial·L_active·m al
         # destransformar), por lo que el objetivo L·m_ref se expresa en el modelo
         # físico m usando L_active (sin W_z^{-1}).
-        if _has_anchors:
-            m_ref_sol = np.zeros(n_active, dtype=np.float64)
-            m_ref_sol[_anchor_active] = _anchor_value_active[_anchor_active]
-            d_reg = lambda_spatial * (L_active @ m_ref_sol)
+        # FASE 9C-1: modelo de referencia m_ref (warm-start). El término de suavidad
+        # penaliza L·(m − m_ref); m_ref se acepta en grilla completa o en celdas
+        # activas. Los anclajes de sondaje, si existen, lo sobre-escriben por celda.
+        if m_ref is None:
+            m_ref_sol = None
         else:
+            m_ref = np.asarray(m_ref, dtype=np.float64)
+            if m_ref.shape[0] == self.total_voxels:
+                m_ref_sol = m_ref[active_cells].copy()
+            elif m_ref.shape[0] == n_active:
+                m_ref_sol = m_ref.copy()
+            else:
+                raise ValueError(
+                    f"m_ref debe tener longitud {self.total_voxels} (grilla completa) "
+                    f"o {n_active} (celdas activas), got {m_ref.shape[0]}."
+                )
+            if not np.isfinite(m_ref_sol).all():
+                raise ValueError("m_ref contiene NaN o Inf.")
+
+        if _has_anchors:
+            if m_ref_sol is None:
+                m_ref_sol = np.zeros(n_active, dtype=np.float64)
+            m_ref_sol[_anchor_active] = _anchor_value_active[_anchor_active]
+
+        if m_ref_sol is None:
             d_reg = np.zeros(n_active, dtype=np.float64)
+        else:
+            d_reg = lambda_spatial * (L_active @ m_ref_sol)
 
         G_aug = sp.vstack([G_scaled, lambda_spatial * L_scaled]).tocsr()
         d_aug = np.concatenate([d_w, d_reg])
+
+        # ── FASE 9C-1: inyección de regularización externa (cross-gradient) ───
+        # Los bloques llegan en ESPACIO FÍSICO del modelo (m); el solver trabaja en
+        # la variable m̃ con m = Wz_inv·m̃, de modo que cada bloque B se convierte vía
+        # B·Wz_inv (igual que L_scaled = L_active·Wz_inv). El RHS se apila tal cual.
+        # Las columnas (n_active) deben conformar con el modelo.
+        if extra_reg_blocks:
+            _xg_mats = [G_aug]
+            _xg_rhs  = [d_aug]
+            for _bi, _blk in enumerate(extra_reg_blocks):
+                _blk = sp.csr_matrix(_blk)
+                if _blk.shape[1] != Wz_inv.shape[0]:
+                    raise ValueError(
+                        f"extra_reg_blocks[{_bi}] tiene {_blk.shape[1]} columnas; "
+                        f"se esperaban {Wz_inv.shape[0]} (celdas activas)."
+                    )
+                _xg_mats.append(_blk @ Wz_inv)
+                if extra_reg_rhs is not None and _bi < len(extra_reg_rhs):
+                    _xg_rhs.append(np.asarray(extra_reg_rhs[_bi], dtype=np.float64).ravel())
+                else:
+                    _xg_rhs.append(np.zeros(_blk.shape[0], dtype=np.float64))
+            G_aug = sp.vstack(_xg_mats).tocsr()
+            d_aug = np.concatenate(_xg_rhs)
+            print(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
 
         print(
             f"[MAG INVERSIÓN] Ejecutando LSQR. "

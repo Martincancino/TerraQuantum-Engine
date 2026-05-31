@@ -943,6 +943,16 @@ class GravimetryInversion:
         # ── OUT: dict mutable donde el solver escribe diagnósticos numéricos ──
         # Si no es None, escribe: acond, chi2_final, n_sat_lower, n_sat_upper.
         solver_meta: Optional[dict] = None,
+        # ── FASE 9C-1: Inversión Conjunta (cross-gradient) ───────────────────
+        # extra_reg_blocks: lista de matrices sparse (k_i, n_modelo) en ESPACIO
+        # FÍSICO del modelo activo; el motor las escala internamente con Ws y las
+        # apila en G_aug. extra_reg_rhs: lista de vectores RHS (k_i,) por bloque
+        # (None → ceros). prune_observable_domain=False desactiva la poda R-05
+        # para que G conserve el tamaño completo de la malla activa y los bloques
+        # externos (dimensionados a n_active) sean conformables.
+        extra_reg_blocks: Optional[list] = None,
+        extra_reg_rhs: Optional[list] = None,
+        prune_observable_domain: bool = True,
     ):
         """
         LSQR + Tikhonov 3D. Motor HPC F0.2 EXCLUSIVO.
@@ -1102,7 +1112,13 @@ class GravimetryInversion:
         # saturación espuria en density_min (confirmado auditoría R-05).
         _col_sens_r05  = np.asarray(G_active.power(2).sum(axis=0)).ravel()
         _sens_thr_r05  = 1e-6 * max(float(np.max(_col_sens_r05)), 1e-30)
-        _obs_in_active = _col_sens_r05 > _sens_thr_r05    # (n_active,)
+        if prune_observable_domain:
+            _obs_in_active = _col_sens_r05 > _sens_thr_r05    # (n_active,)
+        else:
+            # FASE 9C-1: poda desactivada (inversión conjunta). Toda celda activa se
+            # considera observable, de modo que el modelo conserva el tamaño completo
+            # de la malla activa y los bloques cross-gradient (sized a n_active) conforman.
+            _obs_in_active = np.ones(n_active, dtype=bool)
         _dead_in_active = ~_obs_in_active
         _n_obs_domain   = int(np.sum(_obs_in_active))
         _n_dead         = n_active - _n_obs_domain
@@ -1259,6 +1275,32 @@ class GravimetryInversion:
 
         G_aug = sp.vstack([G_scaled, lambda_spatial * L_scaled]).tocsr()
         d_aug = np.concatenate([d_w, d_reg])
+
+        # ── FASE 9C-1: inyección de regularización externa (cross-gradient) ───
+        # Los bloques llegan en ESPACIO FÍSICO del modelo (m); el solver trabaja en
+        # la variable escalada m_tilde con m = Ws·m_tilde, de modo que cada bloque B
+        # se convierte vía B·Ws (igual que L_scaled = W_m·Ws). El RHS se apila tal
+        # cual (vive en el espacio de residual del bloque). Requiere
+        # prune_observable_domain=False para que las columnas (n_active) conformen.
+        if extra_reg_blocks:
+            _xg_mats = [G_aug]
+            _xg_rhs  = [d_aug]
+            for _bi, _blk in enumerate(extra_reg_blocks):
+                _blk = sp.csr_matrix(_blk)
+                if _blk.shape[1] != Ws.shape[0]:
+                    raise ValueError(
+                        f"extra_reg_blocks[{_bi}] tiene {_blk.shape[1]} columnas; "
+                        f"se esperaban {Ws.shape[0]} (modelo activo). "
+                        f"¿Olvidaste prune_observable_domain=False?"
+                    )
+                _xg_mats.append(_blk @ Ws)
+                if extra_reg_rhs is not None and _bi < len(extra_reg_rhs):
+                    _xg_rhs.append(np.asarray(extra_reg_rhs[_bi], dtype=np.float64).ravel())
+                else:
+                    _xg_rhs.append(np.zeros(_blk.shape[0], dtype=np.float64))
+            G_aug = sp.vstack(_xg_mats).tocsr()
+            d_aug = np.concatenate(_xg_rhs)
+            print(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
 
         print(
             f"[INVERSIÓN F0.2] Ejecutando LSQR. "
