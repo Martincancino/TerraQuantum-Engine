@@ -8,6 +8,7 @@ export default function NavBar() {
   // Lista centralizada de tu menú
   const menuItems = [
     "inicio",
+    "ia geológica",
     "figura 3D",
     "Datos",
     "Historial",

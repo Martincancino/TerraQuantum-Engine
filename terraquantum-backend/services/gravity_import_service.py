@@ -250,389 +250,400 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
         return _build_error_result(path.name, errors_list, warnings_list)
         
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            if not reader.fieldnames:
-                errors_list.append("Empty file or missing headers")
-                return _build_error_result(path.name, errors_list, warnings_list)
+        import pandas as pd
+        df = pd.read_csv(path, sep=r'[,;]', engine='python', encoding='utf-8', on_bad_lines='skip')
+        
+        if df.empty and len(df.columns) == 0:
+            errors_list.append("Empty file or missing headers")
+            return _build_error_result(path.name, errors_list, warnings_list)
+        
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        df = df.fillna("")
+        
+        headers = [normalize_header_name(str(h)) for h in df.columns if h]
+        
+        reader = []
+        for row in df.to_dict(orient='records'):
+            clean_row = {}
+            for orig_h, clean_h in zip(df.columns, headers):
+                clean_row[clean_h] = str(row[orig_h])
+            reader.append(clean_row)
             
-            headers = [normalize_header_name(h) for h in reader.fieldnames if h]
-            reader.fieldnames = headers
-            headers_lower = [h.lower() for h in headers]
+        headers_lower = [h.lower() for h in headers]
 
-            if "unit" not in headers_lower:
-                errors_list.append("Missing required column: unit")
+        if "unit" not in headers_lower:
+            errors_list.append("Missing required column: unit")
 
-            # R3.5-K — station_id is optional; auto-generate if column absent
-            _sid_idx = next(
-                (i for i, h in enumerate(headers_lower) if h == "station_id"), None
+        # R3.5-K — station_id is optional; auto-generate if column absent
+        _sid_idx = next(
+            (i for i, h in enumerate(headers_lower) if h == "station_id"), None
+        )
+        _station_id_original_col: "str | None" = (
+            headers[_sid_idx] if _sid_idx is not None else None
+        )
+        if _station_id_original_col is None:
+            warnings_list.append(
+                "No se encontró station_id; se generaron IDs automáticos por orden de fila."
             )
-            _station_id_original_col: "str | None" = (
-                headers[_sid_idx] if _sid_idx is not None else None
-            )
-            if _station_id_original_col is None:
-                warnings_list.append(
-                    "No se encontró station_id; se generaron IDs automáticos por orden de fila."
+
+        coord_map = _resolve_coordinate_columns(headers_lower, headers)
+        if coord_map["coord_type"] is None:
+            errors_list.extend(coord_map["errors"])
+        else:
+            warnings_list.extend(coord_map["warnings"])
+        
+        gravity_col = choose_gravity_column(headers)
+        if not gravity_col:
+            errors_list.append("Missing gravity column (g, gravity_anomaly, g_corrected, or g_raw)")
+        elif gravity_col.lower() == "g_raw" and not allow_g_raw:
+            errors_list.append("Only g_raw is present but allow_g_raw is False")
+        
+        if strict and "gravity_type" not in headers:
+            errors_list.append("Missing required column: gravity_type (strict mode)")
+            
+        if errors_list:
+            return _build_error_result(path.name, errors_list, warnings_list)
+            
+        observations = []
+        raw_gravity_values = []
+        dup_coords_log = []
+        seen_coords = set()
+        exact_duplicate_count = 0
+        row_count = 0
+        valid_rows = 0
+        rejected_rows = 0
+        
+        first_unit = None
+        first_gravity_type = None
+        first_utm_zone: "str | None" = None
+        
+        has_uncertainty = "uncertainty" in headers
+        has_timestamp = "timestamp" in headers
+        has_instrument_id = "instrument_id" in headers
+        has_quality_flag = "quality_flag" in headers
+        
+        if not has_uncertainty:
+            warnings_list.append("Missing recommended column: uncertainty")
+        if not has_timestamp:
+            warnings_list.append("Missing professional column: timestamp")
+        if not has_instrument_id:
+            warnings_list.append("Missing professional column: instrument_id")
+        if not has_quality_flag:
+            warnings_list.append("Missing recommended column: quality_flag")
+            
+        if gravity_col and gravity_col.lower() in ("gravity_anomaly", "g_corrected"):
+            if "lat" not in headers or "lon" not in headers:
+                warnings_list.append("Professional format but missing lat/lon")
+                
+        if gravity_col and gravity_col.lower() == "g_corrected":
+            warnings_list.append("Using g_corrected instead of gravity_anomaly")
+        if gravity_col and gravity_col.lower() == "g_raw" and allow_g_raw:
+            warnings_list.append("Using g_raw. Data might lack geological reliability.")
+
+        # R3.5-I-FIX1: Build professional column map for value-presence detection
+        _all_prof_aliases = (
+            ELEVATION_ALIASES | UNCERTAINTY_ALIASES | INSTRUMENT_ALIASES | CORRECTION_ALIASES
+        )
+        _prof_col_map: dict[str, str] = {}
+        for _i, _hl in enumerate(headers_lower):
+            if _hl in _all_prof_aliases:
+                _prof_col_map[_hl] = headers[_i]
+        _prof_col_values: dict[str, list[str]] = {col: [] for col in _prof_col_map}
+
+        for row_num, row in enumerate(reader, start=2):
+            row_count += 1
+            # R3.5-I-FIX1: Collect raw professional column values before validation
+            for _col_lower, _col_orig in _prof_col_map.items():
+                _prof_col_values[_col_lower].append(
+                    str(row.get(_col_orig, "") or "").strip()
                 )
-
-            coord_map = _resolve_coordinate_columns(headers_lower, headers)
-            if coord_map["coord_type"] is None:
-                errors_list.extend(coord_map["errors"])
-            else:
-                warnings_list.extend(coord_map["warnings"])
-            
-            gravity_col = choose_gravity_column(headers)
-            if not gravity_col:
-                errors_list.append("Missing gravity column (g, gravity_anomaly, g_corrected, or g_raw)")
-            elif gravity_col.lower() == "g_raw" and not allow_g_raw:
-                errors_list.append("Only g_raw is present but allow_g_raw is False")
-            
-            if strict and "gravity_type" not in headers:
-                errors_list.append("Missing required column: gravity_type (strict mode)")
-                
-            if errors_list:
-                return _build_error_result(path.name, errors_list, warnings_list)
-                
-            observations = []
-            raw_gravity_values = []
-            dup_coords_log = []
-            seen_coords = set()
-            exact_duplicate_count = 0
-            row_count = 0
-            valid_rows = 0
-            rejected_rows = 0
-            
-            first_unit = None
-            first_gravity_type = None
-            first_utm_zone: "str | None" = None
-            
-            has_uncertainty = "uncertainty" in headers
-            has_timestamp = "timestamp" in headers
-            has_instrument_id = "instrument_id" in headers
-            has_quality_flag = "quality_flag" in headers
-            
-            if not has_uncertainty:
-                warnings_list.append("Missing recommended column: uncertainty")
-            if not has_timestamp:
-                warnings_list.append("Missing professional column: timestamp")
-            if not has_instrument_id:
-                warnings_list.append("Missing professional column: instrument_id")
-            if not has_quality_flag:
-                warnings_list.append("Missing recommended column: quality_flag")
-                
-            if gravity_col and gravity_col.lower() in ("gravity_anomaly", "g_corrected"):
-                if "lat" not in headers or "lon" not in headers:
-                    warnings_list.append("Professional format but missing lat/lon")
-                    
-            if gravity_col and gravity_col.lower() == "g_corrected":
-                warnings_list.append("Using g_corrected instead of gravity_anomaly")
-            if gravity_col and gravity_col.lower() == "g_raw" and allow_g_raw:
-                warnings_list.append("Using g_raw. Data might lack geological reliability.")
-
-            # R3.5-I-FIX1: Build professional column map for value-presence detection
-            _all_prof_aliases = (
-                ELEVATION_ALIASES | UNCERTAINTY_ALIASES | INSTRUMENT_ALIASES | CORRECTION_ALIASES
-            )
-            _prof_col_map: dict[str, str] = {}
-            for _i, _hl in enumerate(headers_lower):
-                if _hl in _all_prof_aliases:
-                    _prof_col_map[_hl] = headers[_i]
-            _prof_col_values: dict[str, list[str]] = {col: [] for col in _prof_col_map}
-
-            for row_num, row in enumerate(reader, start=2):
-                row_count += 1
-                # R3.5-I-FIX1: Collect raw professional column values before validation
-                for _col_lower, _col_orig in _prof_col_map.items():
-                    _prof_col_values[_col_lower].append(
-                        str(row.get(_col_orig, "") or "").strip()
-                    )
-                try:
-                    # R3.5-K — use existing column or fall back to auto-generated ID
-                    if _station_id_original_col:
-                        station_id = row.get(_station_id_original_col, "").strip()
-                        if not station_id:
-                            station_id = f"ST_{row_count:06d}"
-                    else:
+            try:
+                # R3.5-K — use existing column or fall back to auto-generated ID
+                if _station_id_original_col:
+                    station_id = row.get(_station_id_original_col, "").strip()
+                    if not station_id:
                         station_id = f"ST_{row_count:06d}"
+                else:
+                    station_id = f"ST_{row_count:06d}"
+                    
+                unit = row.get("unit", "").strip()
+                if not unit:
+                    raise ValueError(f"Row {row_num}: Empty unit")
+                if unit not in ALLOWED_UNITS:
+                    raise ValueError(f"Row {row_num}: Unsupported unit: {unit}")
+                if first_unit is None:
+                    first_unit = unit
+                elif unit != first_unit:
+                    raise ValueError("Mixed units are not allowed in TerraQuantum Gravity CSV v1")
+                
+                g_type = row.get("gravity_type", "").strip()
+                if strict and not g_type:
+                    raise ValueError(f"Row {row_num}: gravity_type cannot be empty in strict mode")
+                if g_type:
+                    if g_type not in ALLOWED_GRAVITY_TYPES:
+                        raise ValueError(f"Row {row_num}: Unsupported gravity_type: {g_type}")
+                    if first_gravity_type is None:
+                        first_gravity_type = g_type
+                        if g_type == "synthetic_demo":
+                            warnings_list.append("Data is marked as synthetic_demo")
+                    elif g_type != first_gravity_type:
+                        raise ValueError(f"Row {row_num}: Mixed gravity_type values are not allowed")
                         
-                    unit = row.get("unit", "").strip()
-                    if not unit:
-                        raise ValueError(f"Row {row_num}: Empty unit")
-                    if unit not in ALLOWED_UNITS:
-                        raise ValueError(f"Row {row_num}: Unsupported unit: {unit}")
-                    if first_unit is None:
-                        first_unit = unit
-                    elif unit != first_unit:
-                        raise ValueError("Mixed units are not allowed in TerraQuantum Gravity CSV v1")
-                    
-                    g_type = row.get("gravity_type", "").strip()
-                    if strict and not g_type:
-                        raise ValueError(f"Row {row_num}: gravity_type cannot be empty in strict mode")
-                    if g_type:
-                        if g_type not in ALLOWED_GRAVITY_TYPES:
-                            raise ValueError(f"Row {row_num}: Unsupported gravity_type: {g_type}")
-                        if first_gravity_type is None:
-                            first_gravity_type = g_type
-                            if g_type == "synthetic_demo":
-                                warnings_list.append("Data is marked as synthetic_demo")
-                        elif g_type != first_gravity_type:
-                            raise ValueError(f"Row {row_num}: Mixed gravity_type values are not allowed")
-                            
-                    raw_x = row.get(coord_map["x_col"], "").strip() if coord_map["x_col"] else ""
-                    if not raw_x:
-                        raise ValueError(
-                            f"Row {row_num}: Empty/missing x coordinate "
-                            f"(column '{coord_map['x_col']}')"
-                        )
-                    x = parse_float(raw_x, coord_map["x_col"] or "x", row_num)
-
-                    raw_z = row.get(coord_map["z_col"], "").strip() if coord_map["z_col"] else ""
-                    if not raw_z:
-                        raise ValueError(
-                            f"Row {row_num}: Empty/missing z coordinate "
-                            f"(column '{coord_map['z_col']}')"
-                        )
-                    z = parse_float(raw_z, coord_map["z_col"] or "z", row_num)
-
-                    # F2.0 — Hard Reject: coordenadas geográficas imposibles (lat/lon invertidos)
-                    if coord_map["coord_type"] == "latlon":
-                        if abs(z) > 90 or abs(x) > 180:
-                            raise ValueError(
-                                f"Row {row_num}: Coordenadas imposibles. "
-                                "Posible inversión de Latitud y Longitud."
-                            )
-
-                    if coord_map["y_col"]:
-                        raw_y = row.get(coord_map["y_col"], "").strip()
-                        y = parse_float(raw_y, coord_map["y_col"], row_num) if raw_y else 0.0
-                    else:
-                        y = 0.0
-
-                    if coord_map["utm_zone_col"] and first_utm_zone is None:
-                        first_utm_zone = row.get(coord_map["utm_zone_col"], "").strip() or None
-                    
-                    coord_tuple = (x, y, z)
-                    if coord_tuple in seen_coords:
-                        exact_duplicate_count += 1
-                        rejected_rows += 1
-                        if len(dup_coords_log) < 3:
-                            dup_coords_log.append(
-                                {
-                                    "row_number": row_num,
-                                    "coordinates": {
-                                        "x_m": x,
-                                        "y_m": y,
-                                        "z_m": z,
-                                    },
-                                }
-                            )
-                        continue
-                    seen_coords.add(coord_tuple)
-                    
-                    g_val = parse_float(row.get(gravity_col, ""), gravity_col, row_num)
-                    g_converted = convert_to_ms2(g_val, unit)
-                    
-                    obs = GravityObservation(x_m=x, y_m=y, z_m=z, g=g_converted)
-                    observations.append(obs)
-                    raw_gravity_values.append(g_val)
-                    valid_rows += 1
-                except ValueError as e:
-                    errors_list.append(str(e))
-                    rejected_rows += 1
-            
-            csv_analysis = analyze_csv_observations(
-                observations=observations,
-                declared_unit=first_unit,
-                raw_gravity_values=raw_gravity_values,
-                exact_duplicate_count=exact_duplicate_count,
-                exact_duplicate_examples=dup_coords_log,
-                warnings=warnings_list,
-                column_names=headers,
-                professional_column_values=_prof_col_values if _prof_col_map else None,
-            )
-            if first_utm_zone:
-                csv_analysis.coordinate_system.utm_zone = first_utm_zone
-            warnings_list = list(csv_analysis.warnings)
-            observations, coordinate_transform = transform_coordinates(
-                observations,
-                csv_analysis.coordinate_system,
-            )
-            if coord_map.get("raw_cols"):
-                coordinate_transform.origin_input_coordinates["raw_coord_cols"] = (
-                    coord_map["raw_cols"]
-                )
-            auto_grid = compute_auto_grid(
-                x_extent_m=coordinate_transform.x_extent_m,
-                z_extent_m=coordinate_transform.z_extent_m,
-                observation_count=csv_analysis.observation_count,
-                quality_label=csv_analysis.quality_label,
-            )
-            csv_analysis.coordinate_transform = coordinate_transform
-            csv_analysis.auto_grid = auto_grid
-            warnings_list = list(
-                dict.fromkeys(
-                    warnings_list
-                    + coordinate_transform.warnings
-                    + auto_grid.warnings
-                )
-            )
-            csv_analysis.warnings = warnings_list
-            conversion_applied = first_unit not in ("m/s2", "m/sÂ²") if first_unit else False
-            is_demo = first_gravity_type == "synthetic_demo"
-
-            if errors_list:
-                return _build_error_result(
-                    path.name,
-                    errors_list,
-                    warnings_list,
-                    csv_analysis=csv_analysis,
-                    row_count=row_count,
-                    valid_rows=valid_rows,
-                    rejected_rows=rejected_rows,
-                    unit_original=first_unit,
-                    gravity_column_used=gravity_col,
-                    gravity_type=first_gravity_type,
-                    conversion_applied=conversion_applied,
-                    is_demo=is_demo,
-                    coordinate_transform=coordinate_transform,
-                    auto_grid=auto_grid,
-                )
-                
-            if valid_rows < 10:
-                errors_list.append("Less than 10 valid observations")
-                return _build_error_result(
-                    path.name,
-                    errors_list,
-                    warnings_list,
-                    csv_analysis=csv_analysis,
-                    row_count=row_count,
-                    valid_rows=valid_rows,
-                    rejected_rows=rejected_rows,
-                    unit_original=first_unit,
-                    gravity_column_used=gravity_col,
-                    gravity_type=first_gravity_type,
-                    conversion_applied=conversion_applied,
-                    is_demo=is_demo,
-                    coordinate_transform=coordinate_transform,
-                    auto_grid=auto_grid,
-                )
-                
-            if all(math.isclose(obs.g, 0.0, abs_tol=1e-15) for obs in observations):
-                errors_list.append("All normalized gravity values are zero or near zero")
-                return _build_error_result(
-                    path.name,
-                    errors_list,
-                    warnings_list,
-                    csv_analysis=csv_analysis,
-                    row_count=row_count,
-                    valid_rows=valid_rows,
-                    rejected_rows=rejected_rows,
-                    unit_original=first_unit,
-                    gravity_column_used=gravity_col,
-                    gravity_type=first_gravity_type,
-                    conversion_applied=conversion_applied,
-                    is_demo=is_demo,
-                    coordinate_transform=coordinate_transform,
-                    auto_grid=auto_grid,
-                )
-                
-            xs = [o.x_m for o in observations]
-            zs = [o.z_m for o in observations]
-            span_x = max(xs) - min(xs)
-            span_z = max(zs) - min(zs)
-            if span_x < 1.0 and span_z < 1.0:
-                warnings_list.append("Low spatial coverage: span_x and span_z are very low")
-
-            # F2.0 — Spatial near-duplicate check en coordenadas métricas (post-transformación)
-            if len(observations) >= 2:
-                _coords_m = np.array([[o.x_m, o.y_m, o.z_m] for o in observations])
-                if _cKDTree(_coords_m).query_pairs(r=0.1):
-                    warnings_list.append(
-                        "Estaciones duplicadas o espaciamiento degenerado detectado."
+                raw_x = row.get(coord_map["x_col"], "").strip() if coord_map["x_col"] else ""
+                if not raw_x:
+                    raise ValueError(
+                        f"Row {row_num}: Empty/missing x coordinate "
+                        f"(column '{coord_map['x_col']}')"
                     )
+                x = parse_float(raw_x, coord_map["x_col"] or "x", row_num)
 
-            gs = [o.g for o in observations]
-            g_range = max(gs) - min(gs)
-            if g_range < 1e-12:
-                warnings_list.append("Low dynamic range: gravity variance is almost zero")
+                raw_z = row.get(coord_map["z_col"], "").strip() if coord_map["z_col"] else ""
+                if not raw_z:
+                    raise ValueError(
+                        f"Row {row_num}: Empty/missing z coordinate "
+                        f"(column '{coord_map['z_col']}')"
+                    )
+                z = parse_float(raw_z, coord_map["z_col"] or "z", row_num)
 
-            # ---- QC FÍSICO DURO (Fase 2) ----
-            g_mgal = np.array([obs.g for obs in observations]) * 1e5
-            if np.any(np.isnan(g_mgal)) or np.any(np.isinf(g_mgal)):
-                errors_list.append(
-                    "Datos corruptos: se detectaron valores NaN o Infinitos en la columna de gravedad"
-                )
-                return _build_error_result(
-                    path.name, errors_list, warnings_list,
-                    csv_analysis=csv_analysis, row_count=row_count, valid_rows=valid_rows,
-                    rejected_rows=rejected_rows, unit_original=first_unit,
-                    gravity_column_used=gravity_col, gravity_type=first_gravity_type,
-                    conversion_applied=conversion_applied, is_demo=is_demo,
-                    coordinate_transform=coordinate_transform, auto_grid=auto_grid,
-                )
-            if np.std(g_mgal) < 1e-6:
-                errors_list.append(
-                    "Varianza casi cero detectada. Los datos no contienen anomalías medibles"
-                )
-                return _build_error_result(
-                    path.name, errors_list, warnings_list,
-                    csv_analysis=csv_analysis, row_count=row_count, valid_rows=valid_rows,
-                    rejected_rows=rejected_rows, unit_original=first_unit,
-                    gravity_column_used=gravity_col, gravity_type=first_gravity_type,
-                    conversion_applied=conversion_applied, is_demo=is_demo,
-                    coordinate_transform=coordinate_transform, auto_grid=auto_grid,
-                )
-            if np.any(np.abs(g_mgal) > 1000.0):
-                errors_list.append(
-                    "Anomalía supera los 1000 mGal. Se requiere Anomalía de Bouguer o Residual, no Gravedad Absoluta"
-                )
-                return _build_error_result(
-                    path.name, errors_list, warnings_list,
-                    csv_analysis=csv_analysis, row_count=row_count, valid_rows=valid_rows,
-                    rejected_rows=rejected_rows, unit_original=first_unit,
-                    gravity_column_used=gravity_col, gravity_type=first_gravity_type,
-                    conversion_applied=conversion_applied, is_demo=is_demo,
-                    coordinate_transform=coordinate_transform, auto_grid=auto_grid,
-                )
-            if np.any(np.abs(g_mgal) > 100.0):
-                warnings_list.append(
-                    "Large gravity anomaly detected (>100 mGal). Verify Bouguer/residual correction."
-                )
+                # F2.0 — Hard Reject: coordenadas geográficas imposibles (lat/lon invertidos)
+                if coord_map["coord_type"] == "latlon":
+                    if abs(z) > 90 or abs(x) > 180:
+                        raise ValueError(
+                            f"Row {row_num}: Coordenadas imposibles. "
+                            "Posible inversión de Latitud y Longitud."
+                        )
 
-            if len(warnings_list) != len(csv_analysis.warnings):
-                warnings_list = list(dict.fromkeys(warnings_list))
-                csv_analysis.warnings = warnings_list
-            
-            meta = GravityImportMetadata(
-                source_file=path.name,
-                schema_version="TerraQuantum Gravity CSV v1",
-                unit_original=first_unit,
-                unit_internal="m/s²",
-                gravity_column_used=gravity_col,
-                gravity_type=first_gravity_type,
-                conversion_applied=conversion_applied,
+                if coord_map["y_col"]:
+                    raw_y = row.get(coord_map["y_col"], "").strip()
+                    y = parse_float(raw_y, coord_map["y_col"], row_num) if raw_y else 0.0
+                else:
+                    y = 0.0
+
+                if coord_map["utm_zone_col"] and first_utm_zone is None:
+                    first_utm_zone = row.get(coord_map["utm_zone_col"], "").strip() or None
+                
+                coord_tuple = (x, y, z)
+                if coord_tuple in seen_coords:
+                    exact_duplicate_count += 1
+                    rejected_rows += 1
+                    if len(dup_coords_log) < 3:
+                        dup_coords_log.append(
+                            {
+                                "row_number": row_num,
+                                "coordinates": {
+                                    "x_m": x,
+                                    "y_m": y,
+                                    "z_m": z,
+                                },
+                            }
+                        )
+                    continue
+                seen_coords.add(coord_tuple)
+                
+                g_val = parse_float(row.get(gravity_col, ""), gravity_col, row_num)
+                g_converted = convert_to_ms2(g_val, unit)
+                
+                obs = GravityObservation(x_m=x, y_m=y, z_m=z, g=g_converted)
+                observations.append(obs)
+                raw_gravity_values.append(g_val)
+                valid_rows += 1
+            except ValueError as e:
+                errors_list.append(str(e))
+                rejected_rows += 1
+        
+        csv_analysis = analyze_csv_observations(
+            observations=observations,
+            declared_unit=first_unit,
+            raw_gravity_values=raw_gravity_values,
+            exact_duplicate_count=exact_duplicate_count,
+            exact_duplicate_examples=dup_coords_log,
+            warnings=warnings_list,
+            column_names=headers,
+            professional_column_values=_prof_col_values if _prof_col_map else None,
+        )
+        if first_utm_zone:
+            csv_analysis.coordinate_system.utm_zone = first_utm_zone
+        warnings_list = list(csv_analysis.warnings)
+        observations, coordinate_transform = transform_coordinates(
+            observations,
+            csv_analysis.coordinate_system,
+        )
+        if coord_map.get("raw_cols"):
+            coordinate_transform.origin_input_coordinates["raw_coord_cols"] = (
+                coord_map["raw_cols"]
+            )
+        auto_grid = compute_auto_grid(
+            x_extent_m=coordinate_transform.x_extent_m,
+            z_extent_m=coordinate_transform.z_extent_m,
+            observation_count=csv_analysis.observation_count,
+            quality_label=csv_analysis.quality_label,
+        )
+        csv_analysis.coordinate_transform = coordinate_transform
+        csv_analysis.auto_grid = auto_grid
+        warnings_list = list(
+            dict.fromkeys(
+                warnings_list
+                + coordinate_transform.warnings
+                + auto_grid.warnings
+            )
+        )
+        csv_analysis.warnings = warnings_list
+        conversion_applied = first_unit not in ("m/s2", "m/sÂ²") if first_unit else False
+        is_demo = first_gravity_type == "synthetic_demo"
+
+        if errors_list:
+            return _build_error_result(
+                path.name,
+                errors_list,
+                warnings_list,
+                csv_analysis=csv_analysis,
                 row_count=row_count,
                 valid_rows=valid_rows,
                 rejected_rows=rejected_rows,
-                warnings=warnings_list,
-                errors=errors_list,
+                unit_original=first_unit,
+                gravity_column_used=gravity_col,
+                gravity_type=first_gravity_type,
+                conversion_applied=conversion_applied,
                 is_demo=is_demo,
-                csv_analysis=csv_analysis,
                 coordinate_transform=coordinate_transform,
-                auto_grid=auto_grid
+                auto_grid=auto_grid,
             )
             
-            return GravityImportResult(
-                status="ok",
-                observations=observations,
-                import_metadata=meta,
-                warnings=warnings_list,
-                errors=errors_list,
+        if valid_rows < 10:
+            errors_list.append("Less than 10 valid observations")
+            return _build_error_result(
+                path.name,
+                errors_list,
+                warnings_list,
                 csv_analysis=csv_analysis,
+                row_count=row_count,
+                valid_rows=valid_rows,
+                rejected_rows=rejected_rows,
+                unit_original=first_unit,
+                gravity_column_used=gravity_col,
+                gravity_type=first_gravity_type,
+                conversion_applied=conversion_applied,
+                is_demo=is_demo,
                 coordinate_transform=coordinate_transform,
-                auto_grid=auto_grid
+                auto_grid=auto_grid,
             )
             
+        if all(math.isclose(obs.g, 0.0, abs_tol=1e-15) for obs in observations):
+            errors_list.append("All normalized gravity values are zero or near zero")
+            return _build_error_result(
+                path.name,
+                errors_list,
+                warnings_list,
+                csv_analysis=csv_analysis,
+                row_count=row_count,
+                valid_rows=valid_rows,
+                rejected_rows=rejected_rows,
+                unit_original=first_unit,
+                gravity_column_used=gravity_col,
+                gravity_type=first_gravity_type,
+                conversion_applied=conversion_applied,
+                is_demo=is_demo,
+                coordinate_transform=coordinate_transform,
+                auto_grid=auto_grid,
+            )
+            
+        xs = [o.x_m for o in observations]
+        zs = [o.z_m for o in observations]
+        span_x = max(xs) - min(xs)
+        span_z = max(zs) - min(zs)
+        if span_x < 1.0 and span_z < 1.0:
+            warnings_list.append("Low spatial coverage: span_x and span_z are very low")
+
+        # F2.0 — Spatial near-duplicate check en coordenadas métricas (post-transformación)
+        if len(observations) >= 2:
+            _coords_m = np.array([[o.x_m, o.y_m, o.z_m] for o in observations])
+            if _cKDTree(_coords_m).query_pairs(r=0.1):
+                warnings_list.append(
+                    "Estaciones duplicadas o espaciamiento degenerado detectado."
+                )
+
+        gs = [o.g for o in observations]
+        g_range = max(gs) - min(gs)
+        if g_range < 1e-12:
+            warnings_list.append("Low dynamic range: gravity variance is almost zero")
+
+        # ---- QC FÍSICO DURO (Fase 2) ----
+        g_mgal = np.array([obs.g for obs in observations]) * 1e5
+        if np.any(np.isnan(g_mgal)) or np.any(np.isinf(g_mgal)):
+            errors_list.append(
+                "Datos corruptos: se detectaron valores NaN o Infinitos en la columna de gravedad"
+            )
+            return _build_error_result(
+                path.name, errors_list, warnings_list,
+                csv_analysis=csv_analysis, row_count=row_count, valid_rows=valid_rows,
+                rejected_rows=rejected_rows, unit_original=first_unit,
+                gravity_column_used=gravity_col, gravity_type=first_gravity_type,
+                conversion_applied=conversion_applied, is_demo=is_demo,
+                coordinate_transform=coordinate_transform, auto_grid=auto_grid,
+            )
+        if np.std(g_mgal) < 1e-6:
+            errors_list.append(
+                "Varianza casi cero detectada. Los datos no contienen anomalías medibles"
+            )
+            return _build_error_result(
+                path.name, errors_list, warnings_list,
+                csv_analysis=csv_analysis, row_count=row_count, valid_rows=valid_rows,
+                rejected_rows=rejected_rows, unit_original=first_unit,
+                gravity_column_used=gravity_col, gravity_type=first_gravity_type,
+                conversion_applied=conversion_applied, is_demo=is_demo,
+                coordinate_transform=coordinate_transform, auto_grid=auto_grid,
+            )
+        if np.any(np.abs(g_mgal) > 1000.0):
+            errors_list.append(
+                "Anomalía supera los 1000 mGal. Se requiere Anomalía de Bouguer o Residual, no Gravedad Absoluta"
+            )
+            return _build_error_result(
+                path.name, errors_list, warnings_list,
+                csv_analysis=csv_analysis, row_count=row_count, valid_rows=valid_rows,
+                rejected_rows=rejected_rows, unit_original=first_unit,
+                gravity_column_used=gravity_col, gravity_type=first_gravity_type,
+                conversion_applied=conversion_applied, is_demo=is_demo,
+                coordinate_transform=coordinate_transform, auto_grid=auto_grid,
+            )
+        if np.any(np.abs(g_mgal) > 100.0):
+            warnings_list.append(
+                "Large gravity anomaly detected (>100 mGal). Verify Bouguer/residual correction."
+            )
+
+        if len(warnings_list) != len(csv_analysis.warnings):
+            warnings_list = list(dict.fromkeys(warnings_list))
+            csv_analysis.warnings = warnings_list
+        
+        meta = GravityImportMetadata(
+            source_file=path.name,
+            schema_version="TerraQuantum Gravity CSV v1",
+            unit_original=first_unit,
+            unit_internal="m/s²",
+            gravity_column_used=gravity_col,
+            gravity_type=first_gravity_type,
+            conversion_applied=conversion_applied,
+            row_count=row_count,
+            valid_rows=valid_rows,
+            rejected_rows=rejected_rows,
+            warnings=warnings_list,
+            errors=errors_list,
+            is_demo=is_demo,
+            csv_analysis=csv_analysis,
+            coordinate_transform=coordinate_transform,
+            auto_grid=auto_grid
+        )
+        
+        return GravityImportResult(
+            status="ok",
+            observations=observations,
+            import_metadata=meta,
+            warnings=warnings_list,
+            errors=errors_list,
+            csv_analysis=csv_analysis,
+            coordinate_transform=coordinate_transform,
+            auto_grid=auto_grid
+        )
+        
     except Exception as e:
         errors_list.append(f"File parsing error: {str(e)}")
         return _build_error_result(path.name, errors_list, warnings_list)

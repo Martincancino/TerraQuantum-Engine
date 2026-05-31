@@ -308,17 +308,27 @@ function buildVoxelModelFromBackend(data: unknown): BackendVoxelModel | null {
 }
 
 export default function GravityCsvPreviewPanel() {
-  const [file, setFile] = useState<File | null>(null);
+  const {
+    fileGravimetry, setFileGravimetry,
+    fileMagnetometry, setFileMagnetometry,
+    latNorth, setLatNorth,
+    latSouth, setLatSouth,
+    lonEast, setLonEast,
+    lonWest, setLonWest,
+    gravityPreviewResult: result, setGravityPreviewResult: setResult,
+    gravityInvertResult: invertResult, setGravityInvertResult: setInvertResult
+  } = useAppStore();
+
+  const file = fileGravimetry; // Retrocompatibilidad para endpoints que solo toman 'file'
+
   const [strict, setStrict] = useState(true);
   const [allowGRaw, setAllowGRaw] = useState(false);
   const [previewLimit, setPreviewLimit] = useState(20);
 
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<GravityImportPreviewResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [invertLoading, setInvertLoading] = useState(false);
-  const [invertResult, setInvertResult] = useState<GravityCsvInvertResponse | null>(null);
   const [invertErrorMsg, setInvertErrorMsg] = useState<string | null>(null);
 
   const [loading3D, setLoading3D] = useState(false);
@@ -347,8 +357,7 @@ export default function GravityCsvPreviewPanel() {
   const setGeorefState = useAppStore(state => state.setGeorefState);
 
   const [selectedProfileId, setSelectedProfileId] = useState<InversionProfileId>("quick_check");
-  const [userLat, setUserLat] = useState<string>("-22.28");
-  const [userLon, setUserLon] = useState<string>("-68.89");
+  // Se han eliminado userLat y userLon en favor del Bounding Box en Zustand
   const [geoError, setGeoError] = useState<string | null>(null);
 
   const [invertPayloadBase] = useState<Omit<GravityCsvInvertPayload, "nx" | "ny" | "nz" | "blockSize" | "depth" | "lat" | "lon">>({
@@ -399,29 +408,36 @@ export default function GravityCsvPreviewPanel() {
   // ---------------------------------------------------------------------------
 
   const validateCoords = (): string | null => {
-    const latText = userLat.trim();
-    const lonText = userLon.trim();
-
-    if (!latText && !lonText) return null;
-
-    if (latText) {
-      const lat = Number(latText);
-      if (!Number.isFinite(lat)) return "Latitud inválida. Usa grados decimales.";
-      if (lat < -90 || lat > 90) return "Latitud fuera de rango. Debe estar entre -90 y 90.";
+    const fields = [
+      { name: "Latitud Norte", val: latNorth },
+      { name: "Latitud Sur", val: latSouth },
+      { name: "Longitud Este", val: lonEast },
+      { name: "Longitud Oeste", val: lonWest }
+    ];
+    
+    let hasAny = false;
+    for (const f of fields) {
+      if (f.val.trim()) hasAny = true;
     }
-
-    if (lonText) {
-      const lon = Number(lonText);
-      if (!Number.isFinite(lon)) return "Longitud inválida. Usa grados decimales.";
-      if (lon < -180 || lon > 180) return "Longitud fuera de rango. Debe estar entre -180 y 180.";
+    if (!hasAny) return null; // Coordenadas opcionales si no se ingresa ninguna
+    
+    for (const f of fields) {
+      if (!f.val.trim()) return `Falta ${f.name} para el Bounding Box.`;
+      const num = Number(f.val.trim());
+      if (!Number.isFinite(num)) return `${f.name} inválida. Usa grados decimales.`;
+      if (f.name.includes("Latitud") && (num < -90 || num > 90)) return `${f.name} fuera de rango.`;
+      if (f.name.includes("Longitud") && (num < -180 || num > 180)) return `${f.name} fuera de rango.`;
     }
+    
+    if (Number(latSouth) >= Number(latNorth)) return "Latitud Sur debe ser menor a Latitud Norte.";
+    if (Number(lonWest) >= Number(lonEast)) return "Longitud Oeste debe ser menor a Longitud Este.";
 
     return null;
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileGravimetryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      setFile(e.target.files[0]);
+      setFileGravimetry(e.target.files[0]);
       setResult(null);
       setErrorMsg(null);
       setInvertResult(null);
@@ -435,6 +451,13 @@ export default function GravityCsvPreviewPanel() {
       setAcknowledgeRegionalScale(false);
       setRegionalGateError(null);
       clearActiveRun();
+    }
+  };
+
+  const handleFileMagnetometryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      setFileMagnetometry(e.target.files[0]);
+      // En el futuro: lógica para validar magnetometría
     }
   };
 
@@ -590,8 +613,8 @@ export default function GravityCsvPreviewPanel() {
     const payloadWithFlags = {
       ...invertPayloadBase,
       projectId,
-      lat: userLat.trim() || "-22.28",
-      lon: userLon.trim() || "-68.89",
+      lat: latNorth.trim() || "-22.28", // Fallback temp mientras no cambia backend
+      lon: lonWest.trim() || "-68.89",
       nx: selectedProfile.nx,
       ny: selectedProfile.ny,
       nz: selectedProfile.nz,
@@ -1129,14 +1152,25 @@ export default function GravityCsvPreviewPanel() {
   return (
     <div className="w-full min-w-0 max-w-full overflow-hidden border border-neutral-800 bg-black/50 p-3 rounded-xl shrink-0">
       <div className="flex flex-col gap-3 mb-4 min-w-0">
-        <div className="w-full min-w-0">
-          <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-2">Archivo CSV</label>
-          <input
-            type="file"
-            accept=".csv"
-            onChange={handleFileChange}
-            className="w-full max-w-full min-w-0 overflow-hidden text-xs text-neutral-400 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-neutral-800 file:text-[#C2D8C4] hover:file:bg-neutral-700"
-          />
+        <div className="w-full min-w-0 flex flex-col gap-3">
+          <div>
+            <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-2">CSV Gravimetría</label>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={handleFileGravimetryChange}
+              className="w-full max-w-full min-w-0 overflow-hidden text-xs text-neutral-400 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-neutral-800 file:text-[#C2D8C4] hover:file:bg-neutral-700"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-2">CSV Magnetometría</label>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={handleFileMagnetometryChange}
+              className="w-full max-w-full min-w-0 overflow-hidden text-xs text-neutral-400 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-neutral-800 file:text-purple-400 hover:file:bg-neutral-700"
+            />
+          </div>
         </div>
         
         <div className="flex flex-col gap-2 justify-center min-w-0">
@@ -1195,7 +1229,7 @@ export default function GravityCsvPreviewPanel() {
           
           {result.errors && result.errors.length > 0 && (
             <ul className="list-disc list-inside text-xs text-red-300 font-mono mt-2 space-y-1">
-              {result.errors.map((err, i) => <li key={i}>{err}</li>)}
+              {result.errors.map((err: string, i: number) => <li key={i}>{err}</li>)}
             </ul>
           )}
           
@@ -1203,7 +1237,7 @@ export default function GravityCsvPreviewPanel() {
             <div className="mt-4">
               <p className="text-[10px] uppercase text-yellow-500 tracking-widest mb-1">Warnings:</p>
               <ul className="list-disc list-inside text-xs text-yellow-500/80 font-mono">
-                {result.warnings.map((warn, i) => <li key={i}>{warn}</li>)}
+                {result.warnings.map((warn: string, i: number) => <li key={i}>{warn}</li>)}
               </ul>
             </div>
           )}
@@ -1264,7 +1298,7 @@ export default function GravityCsvPreviewPanel() {
                 <div className="mb-4 p-3 border border-yellow-600/30 bg-yellow-600/10 rounded">
                   <p className="text-[10px] uppercase text-yellow-500 tracking-widest mb-1 font-bold">Warnings completos:</p>
                   <ul className="list-disc list-inside text-[10px] text-yellow-500/90 font-mono">
-                    {result.warnings.map((warn, i) => <li key={i}>{warn}</li>)}
+                    {result.warnings.map((warn: string, i: number) => <li key={i}>{warn}</li>)}
                   </ul>
                 </div>
               )}
@@ -1285,7 +1319,7 @@ export default function GravityCsvPreviewPanel() {
                         </tr>
                       </thead>
                       <tbody className="text-neutral-300">
-                        {result.observationsPreview.map((obs, idx) => (
+                        {result.observationsPreview.map((obs: Record<string, any>, idx: number) => (
                           <tr key={idx} className="border-b border-neutral-900/50 hover:bg-neutral-900/30">
                             <td className="p-2">{obs.x_m}</td>
                             <td className="p-2">{obs.y_m}</td>
@@ -1305,36 +1339,68 @@ export default function GravityCsvPreviewPanel() {
             <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-3">
               Geolocalización (coordenadas de referencia)
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div className="min-w-0">
                 <label className="block text-[9px] uppercase text-neutral-600 tracking-widest mb-1">
-                  Latitud
+                  Latitud Norte
                 </label>
                 <input
                   type="number"
                   step="any"
-                  value={userLat}
+                  value={latNorth}
                   onChange={(e) => {
-                    setUserLat(e.target.value);
+                    setLatNorth(e.target.value);
                     setGeoError(null);
                   }}
-                  placeholder="-22.28"
+                  placeholder="-22.20"
                   className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2 text-sm text-white outline-none focus:border-[#C2D8C4]"
                 />
               </div>
               <div className="min-w-0">
                 <label className="block text-[9px] uppercase text-neutral-600 tracking-widest mb-1">
-                  Longitud
+                  Latitud Sur
                 </label>
                 <input
                   type="number"
                   step="any"
-                  value={userLon}
+                  value={latSouth}
                   onChange={(e) => {
-                    setUserLon(e.target.value);
+                    setLatSouth(e.target.value);
                     setGeoError(null);
                   }}
-                  placeholder="-68.89"
+                  placeholder="-22.35"
+                  className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2 text-sm text-white outline-none focus:border-[#C2D8C4]"
+                />
+              </div>
+              <div className="min-w-0">
+                <label className="block text-[9px] uppercase text-neutral-600 tracking-widest mb-1">
+                  Longitud Este
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={lonEast}
+                  onChange={(e) => {
+                    setLonEast(e.target.value);
+                    setGeoError(null);
+                  }}
+                  placeholder="-68.80"
+                  className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2 text-sm text-white outline-none focus:border-[#C2D8C4]"
+                />
+              </div>
+              <div className="min-w-0">
+                <label className="block text-[9px] uppercase text-neutral-600 tracking-widest mb-1">
+                  Longitud Oeste
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={lonWest}
+                  onChange={(e) => {
+                    setLonWest(e.target.value);
+                    setGeoError(null);
+                  }}
+                  placeholder="-69.00"
                   className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2 text-sm text-white outline-none focus:border-[#C2D8C4]"
                 />
               </div>
@@ -1361,7 +1427,7 @@ export default function GravityCsvPreviewPanel() {
                   <span className="text-[8px] uppercase tracking-widest text-neutral-500 font-bold">Georreferenciación</span>
                   <span className="font-bold tracking-widest uppercase text-[10px]">{label}</span>
                   <span className="text-neutral-300 text-[9px] mt-0.5">{explanation}</span>
-                  {visibleWarnings.map((w, i) => (
+                  {visibleWarnings.map((w: string, i: number) => (
                     <span key={i} className="text-neutral-500 text-[8px]">⚠ {w}</span>
                   ))}
                   {hiddenCount > 0 && (
@@ -1545,7 +1611,7 @@ export default function GravityCsvPreviewPanel() {
                   <div className="mb-2">
                     <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Campos faltantes:</p>
                     <ul className="list-disc list-inside text-[10px] text-red-400 font-mono">
-                      {spatialGateError.missing_fields.map((f, i) => <li key={i}>{f}</li>)}
+                      {spatialGateError.missing_fields.map((f: string, i: number) => <li key={i}>{f}</li>)}
                     </ul>
                   </div>
                 )}
@@ -1556,7 +1622,7 @@ export default function GravityCsvPreviewPanel() {
                   <div className="mt-2">
                     <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Salidas bloqueadas:</p>
                     <ul className="list-disc list-inside text-[10px] text-red-400/70 font-mono">
-                      {spatialGateError.blocked_outputs.map((o, i) => <li key={i}>{o}</li>)}
+                      {spatialGateError.blocked_outputs.map((o: string, i: number) => <li key={i}>{o}</li>)}
                     </ul>
                   </div>
                 )}
@@ -1564,7 +1630,7 @@ export default function GravityCsvPreviewPanel() {
                   <div className="mt-2">
                     <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Salidas permitidas:</p>
                     <ul className="list-disc list-inside text-[10px] text-green-400/70 font-mono">
-                      {spatialGateError.allowed_outputs.map((o, i) => <li key={i}>{o}</li>)}
+                      {spatialGateError.allowed_outputs.map((o: string, i: number) => <li key={i}>{o}</li>)}
                     </ul>
                   </div>
                 )}
@@ -1594,7 +1660,7 @@ export default function GravityCsvPreviewPanel() {
                   <div className="mb-2">
                     <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Razones de bloqueo:</p>
                     <ul className="list-disc list-inside text-[10px] text-red-400 font-mono">
-                      {regionalGateError.blocked_reasons.map((r, i) => <li key={i}>{r}</li>)}
+                      {regionalGateError.blocked_reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}
                     </ul>
                   </div>
                 )}
@@ -1602,7 +1668,7 @@ export default function GravityCsvPreviewPanel() {
                   <div className="mb-2">
                     <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Advertencias:</p>
                     <ul className="list-disc list-inside text-[10px] text-yellow-400/80 font-mono">
-                      {regionalGateError.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                      {regionalGateError.warnings.map((w: string, i: number) => <li key={i}>{w}</li>)}
                     </ul>
                   </div>
                 )}
@@ -1610,7 +1676,7 @@ export default function GravityCsvPreviewPanel() {
                   <div className="mt-2">
                     <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Salidas permitidas:</p>
                     <ul className="list-disc list-inside text-[10px] text-green-400/70 font-mono">
-                      {regionalGateError.allowed_outputs.map((o, i) => <li key={i}>{o}</li>)}
+                      {regionalGateError.allowed_outputs.map((o: string, i: number) => <li key={i}>{o}</li>)}
                     </ul>
                   </div>
                 )}
@@ -1629,14 +1695,14 @@ export default function GravityCsvPreviewPanel() {
                 </div>
                 {invertResult.errors && invertResult.errors.length > 0 && (
                   <ul className="list-disc list-inside text-xs text-red-300 font-mono mt-2 space-y-1">
-                    {invertResult.errors.map((err, i) => <li key={i}>{err}</li>)}
+                    {invertResult.errors.map((err: string, i: number) => <li key={i}>{err}</li>)}
                   </ul>
                 )}
                 {invertResult.warnings && invertResult.warnings.length > 0 && (
                   <div className="mt-4">
                     <p className="text-[10px] uppercase text-yellow-500 tracking-widest mb-1">Warnings:</p>
                     <ul className="list-disc list-inside text-xs text-yellow-500/80 font-mono">
-                      {invertResult.warnings.map((warn, i) => <li key={i}>{warn}</li>)}
+                      {invertResult.warnings.map((warn: string, i: number) => <li key={i}>{warn}</li>)}
                     </ul>
                   </div>
                 )}
@@ -1672,7 +1738,7 @@ export default function GravityCsvPreviewPanel() {
                       <span className="text-[8px] uppercase tracking-widest text-neutral-500 font-bold">Georreferenciación</span>
                       <span className="font-bold tracking-widest uppercase text-[10px]">{label}</span>
                       <span className="text-neutral-300 text-[9px] mt-0.5">{explanation}</span>
-                      {visibleWarnings.map((w, i) => (
+                      {visibleWarnings.map((w: string, i: number) => (
                         <span key={i} className="text-neutral-500 text-[8px]">⚠ {w}</span>
                       ))}
                       {hiddenCount > 0 && (
@@ -1706,7 +1772,7 @@ export default function GravityCsvPreviewPanel() {
                       {sr.rationale && <p className="text-[9px] text-neutral-400 font-mono italic mt-1">{sr.rationale}</p>}
                       {sr.warnings && sr.warnings.length > 0 && (
                         <ul className="list-disc list-inside text-[9px] text-yellow-400/70 font-mono mt-1">
-                          {sr.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                          {sr.warnings.map((w: string, i: number) => <li key={i}>{w}</li>)}
                         </ul>
                       )}
                     </div>
@@ -1726,7 +1792,7 @@ export default function GravityCsvPreviewPanel() {
                       {rsp.rationale && <p className="text-[9px] text-neutral-400 font-mono italic mt-1">{rsp.rationale}</p>}
                       {rsp.warnings && rsp.warnings.length > 0 && (
                         <ul className="list-disc list-inside text-[9px] text-yellow-400/70 font-mono mt-1">
-                          {rsp.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                          {rsp.warnings.map((w: string, i: number) => <li key={i}>{w}</li>)}
                         </ul>
                       )}
                     </div>
@@ -1798,24 +1864,13 @@ export default function GravityCsvPreviewPanel() {
                               <div className="mb-4 p-3 border border-yellow-600/30 bg-yellow-600/10 rounded">
                                 <p className="text-[9px] uppercase tracking-widest text-yellow-500 mb-1 font-bold">Warnings de Inversión:</p>
                                 <ul className="list-disc list-inside text-[10px] text-yellow-500/90 font-mono">
-                                  {invertResult.warnings.map((warn, i) => <li key={i}>{warn}</li>)}
+                                  {invertResult.warnings.map((warn: string, i: number) => <li key={i}>{warn}</li>)}
                                 </ul>
                               </div>
                             )}
 
                             {renderInversionSummary(invertResult.inversionResult)}
 
-                            <details className="mt-4 border-t border-neutral-800 pt-3">
-                              <summary className="text-neutral-500 mb-1 cursor-pointer text-[9px] uppercase tracking-widest hover:text-[#C2D8C4] transition-colors focus:outline-none">
-                                Ver detalle json completo
-                              </summary>
-                              <pre className="text-[9px] text-neutral-400 overflow-x-auto whitespace-pre-wrap break-words mt-2 p-2 bg-black/60 rounded border border-neutral-900 max-w-full">
-                                {JSON.stringify(invertResult.inversionResult, (k: string, v: unknown) => 
-                                  (k === "data" || k === "residualMap" || k === "residualSamples") && Array.isArray(v) 
-                                  ? `[Array de ${v.length} elementos]` 
-                                  : v, 2)}
-                              </pre>
-                            </details>
                           </details>
 
                           <div className="mt-4 border-t border-neutral-800 pt-4 flex flex-col gap-3">

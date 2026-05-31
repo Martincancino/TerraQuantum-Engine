@@ -260,6 +260,24 @@ export interface AppState {
   favorabilityResult: FavorabilityResult | null;
   setFavorabilityResult: (result: FavorabilityResult | null) => void;
 
+  // 5.5 DATASET & INVERSIÓN (PERSISTENCIA CSV Y BBOX)
+  fileGravimetry: File | null;
+  setFileGravimetry: (file: File | null) => void;
+  fileMagnetometry: File | null;
+  setFileMagnetometry: (file: File | null) => void;
+  latNorth: string;
+  setLatNorth: (val: string) => void;
+  latSouth: string;
+  setLatSouth: (val: string) => void;
+  lonEast: string;
+  setLonEast: (val: string) => void;
+  lonWest: string;
+  setLonWest: (val: string) => void;
+  gravityPreviewResult: any | null;
+  setGravityPreviewResult: (res: any | null) => void;
+  gravityInvertResult: any | null;
+  setGravityInvertResult: (res: any | null) => void;
+
   // 9. GEOREF (R1-FE-2) + CRS (R2-FE)
   projectFootprint: ProjectFootprint | null;
   georefConfidence: GeorefConfidence | string | null;
@@ -542,6 +560,24 @@ export const useAppStore = create<AppState>((set) => ({
   setReport: (rep) => set({ report: rep }),
   favorabilityResult: null,
   setFavorabilityResult: (result) => set({ favorabilityResult: result }),
+
+  // 5.5 DATASET & INVERSIÓN (PERSISTENCIA CSV Y BBOX)
+  fileGravimetry: null,
+  setFileGravimetry: (file) => set({ fileGravimetry: file }),
+  fileMagnetometry: null,
+  setFileMagnetometry: (file) => set({ fileMagnetometry: file }),
+  latNorth: "",
+  setLatNorth: (val) => set({ latNorth: val }),
+  latSouth: "",
+  setLatSouth: (val) => set({ latSouth: val }),
+  lonEast: "",
+  setLonEast: (val) => set({ lonEast: val }),
+  lonWest: "",
+  setLonWest: (val) => set({ lonWest: val }),
+  gravityPreviewResult: null,
+  setGravityPreviewResult: (res) => set({ gravityPreviewResult: res }),
+  gravityInvertResult: null,
+  setGravityInvertResult: (res) => set({ gravityInvertResult: res }),
 
   // 9. GEOREF (R1-FE-2) + CRS (R2-FE)
   projectFootprint: null,

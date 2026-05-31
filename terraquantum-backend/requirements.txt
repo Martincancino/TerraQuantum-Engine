@@ -20,3 +20,4 @@ pytest-cov==6.0.0
 structlog==24.4.0
 slowapi
 pyevtk>=1.5.0
+google-generativeai

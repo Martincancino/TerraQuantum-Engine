@@ -19,6 +19,7 @@ from api.terrain_api import router as terrain_router
 from api.favorability_api import router as favorability_router
 from api.spectral_api import router as spectral_router
 from api.export_api import router as export_router
+from api.chat_api import router as chat_router
 
 from core.config import (
     APP_TITLE,
@@ -62,6 +63,7 @@ app.include_router(terrain_router)
 app.include_router(favorability_router)
 app.include_router(spectral_router)
 app.include_router(export_router)
+app.include_router(chat_router)
 
 # ── Routers económicos — ocultos del OpenAPI en producción ───────────────────
 # ENABLE_ECONOMIC_FEATURES=true para activar en entornos con opt-in explícito.

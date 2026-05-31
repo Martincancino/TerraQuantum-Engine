@@ -343,8 +343,38 @@ export function updateInstancedBuffers({
 
   // σ_95 para normalizar incertidumbre (proviene del reporte o fallback=1).
   const effectiveSigma95: number = (sigma95 !== undefined && sigma95 > 0) ? sigma95 : 1;
-  // Rango físico de densidad para normalización Viridis.
-  const _densityRange = Math.max(densityStats.densityMax - densityStats.densityMin, 1e-9);
+
+  // ── Fase 12: Dynamic min/max para normalización real ──────────────────────
+  let dynChiMin = Infinity;
+  let dynChiMax = -Infinity;
+  let dynDensMin = Infinity;
+  let dynDensMax = -Infinity;
+
+  if (viewMode === 'susceptibility' || viewMode === 'density') {
+    for (let i = 0; i < cells.length; i++) {
+      const rawCell = cells[i] as Record<string, unknown>;
+      if (rawCell.is_active === false || rawCell.is_active === 0 || rawCell.density === null || rawCell.rho === null) continue;
+      
+      if (viewMode === 'susceptibility') {
+        const chiRaw = Number(rawCell.susceptibility_si);
+        if (Number.isFinite(chiRaw)) {
+          const chiLog = Math.log10(Math.max(chiRaw, 0) + 1e-9);
+          if (chiLog < dynChiMin) dynChiMin = chiLog;
+          if (chiLog > dynChiMax) dynChiMax = chiLog;
+        }
+      } else if (viewMode === 'density') {
+        const density = getVoxelModeledDensity(cells[i] as SceneCell);
+        if (density < dynDensMin) dynDensMin = density;
+        if (density > dynDensMax) dynDensMax = density;
+      }
+    }
+  }
+
+  // Prevenir rangos degenerados
+  if (dynChiMax <= dynChiMin) { dynChiMin = -9; dynChiMax = 0; }
+  if (dynDensMax <= dynDensMin) { dynDensMin = densityStats.densityMin; dynDensMax = densityStats.densityMax; }
+  const _dynChiRange = dynChiMax - dynChiMin;
+  const _dynDensRange = Math.max(dynDensMax - dynDensMin, 1e-9);
 
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i] as SceneCell;
@@ -403,16 +433,14 @@ export function updateInstancedBuffers({
       // Campo: susceptibility_si (campo del backend tras Fase 12)
       const chiRaw = Number((rawCell as Record<string, unknown>).susceptibility_si);
       const epsilon = 1e-9;
-      // log10(chi + ε) — maneja asimetría de la magnetometría
       const chiLog = Math.log10(Math.max(chiRaw, 0) + epsilon);
-      // Rango orientativo log10: [-9, -2] para rocas — se normaliza dinámicamente
-      // usando [-9, 0] como rango estándar (extensible con stats si disponible)
-      const chiNorm = clamp01((chiLog + 9) / 7);
+      const chiNorm = clamp01((chiLog - dynChiMin) / _dynChiRange);
       [_r, _g, _b] = sampleColormap(TURBO_STOPS, chiNorm);
 
     } else if (viewMode === 'joint') {
       // Modo conjunto: color corporativo oro TerraQuantum + filtro por umbral
-      const jointScore = Number((rawCell as Record<string, unknown>).joint_structural_score);
+      const jointRaw = (rawCell as Record<string, unknown>).joint_structural_score;
+      const jointScore = (jointRaw !== undefined && jointRaw !== null) ? Number(jointRaw) : 1.0;
       if (!Number.isFinite(jointScore) || jointScore < jointThreshold) {
         // Ocultar: escalar a cero en lugar de mover (evita artefactos de frustum)
         dummy.scale.set(0, 0, 0);
@@ -433,7 +461,7 @@ export function updateInstancedBuffers({
       if (visualLayer === "uncertainty") {
         [_r, _g, _b] = sampleColormap(INFERNO_STOPS, _sigmaRatio);
       } else {
-        const _u = clamp01((density - densityStats.densityMin) / _densityRange);
+        const _u = clamp01((density - dynDensMin) / _dynDensRange);
         const _uPrime = Math.log(1 + 4 * _u) / Math.log(5);
         [_r, _g, _b] = sampleColormap(VIRIDIS_STOPS, _uPrime);
         const _alpha = 1 - 0.7 * _sigmaRatio;
