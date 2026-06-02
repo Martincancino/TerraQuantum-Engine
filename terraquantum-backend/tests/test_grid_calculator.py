@@ -33,9 +33,11 @@ def test_geophysics_invert_input_accepts_regional_auto_grid_depth():
     assert params.depth == 30_000
 
 
-def test_geophysics_invert_input_rejects_depth_above_auto_grid_cap():
-    with pytest.raises(ValidationError):
-        _invert_input(100_001)
+def test_geophysics_invert_input_accepts_regional_depth():
+    # HITO 5 Fase 1.5: el cap de 100km se elevó a 1000km para soportar inversión regional.
+    # depth=250000m (250km, escala Bushveld) debe pasar sin ValidationError.
+    params = _invert_input(250_000)
+    assert params.depth == 250_000
 
 
 def test_hvc_like_grid_matches_expected_scale():

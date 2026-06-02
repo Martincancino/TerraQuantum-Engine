@@ -56,7 +56,7 @@ class BoreholeInterval(BaseModel):
 class GeophysicsInvertInput(BaseModel):
     project_id: Optional[str] = None
     run_id: Optional[str] = None
-    depth: int = Field(..., gt=0, le=100000, description="Profundidad objetivo metros: 1-100000")
+    depth: int = Field(..., gt=0, le=1_000_000, description="Profundidad objetivo metros: 1-1000000 (escala regional)")
     nir: int = Field(..., ge=0, le=100, description="Índice NIR satélite: 0-100")
     fe: int = Field(..., ge=0, le=100, description="Índice Fe satélite: 0-100")
     region: str
