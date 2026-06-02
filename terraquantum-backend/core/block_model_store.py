@@ -35,7 +35,8 @@ PROJECT_META_FILENAME = "project_meta.json"
 
 RUN_VTK_FILENAME = "block_model_core.vtr"   # FASE 10: Exportación VTK industrial
 RUN_MANIFEST_FILENAME = "run_manifest.json"  # HITO 2: Provenance audit trail
-RUN_JOINT_BLOCK_MODEL_FILENAME = "block_model_joint.parquet"  # HITO 1: schema joint v3.0
+RUN_JOINT_BLOCK_MODEL_FILENAME = "block_model_joint.parquet"        # HITO 1: schema joint v3.0
+RUN_MAGNETIC_BLOCK_MODEL_FILENAME = "block_model_magnetic.parquet"  # HITO 1: schema magnetic v3.0
 
 RUN_EXPORT_FILENAMES = (
     RUN_BLOCK_MODEL_FILENAME,
@@ -52,6 +53,7 @@ RUN_EXPORT_FILENAMES = (
     RUN_VTK_FILENAME,
     RUN_MANIFEST_FILENAME,
     RUN_JOINT_BLOCK_MODEL_FILENAME,
+    RUN_MAGNETIC_BLOCK_MODEL_FILENAME,
 )
 
 
@@ -279,6 +281,8 @@ def get_run_files_status(run_dir: Path) -> dict:
         "block_model": (run_dir / RUN_BLOCK_MODEL_FILENAME).exists(),
         "block_model_anomaly": (run_dir / RUN_ANOMALY_FILENAME).exists(),
         "block_model_focusing": (run_dir / RUN_FOCUSING_FILENAME).exists(),
+        "block_model_magnetic": (run_dir / RUN_MAGNETIC_BLOCK_MODEL_FILENAME).exists(),
+        "block_model_joint": (run_dir / RUN_JOINT_BLOCK_MODEL_FILENAME).exists(),
         "inputs": (run_dir / RUN_INPUTS_FILENAME).exists(),
         "observations": (run_dir / RUN_OBSERVATIONS_FILENAME).exists(),
         "report": (run_dir / RUN_REPORT_FILENAME).exists(),

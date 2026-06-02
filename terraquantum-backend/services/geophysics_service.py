@@ -10,6 +10,7 @@ import numpy as np
 import polars as pl
 
 from core.block_model_store import (
+    RUN_MAGNETIC_BLOCK_MODEL_FILENAME,
     RUN_SOURCE_GRAVITY_FILENAME,
     get_run_anomaly_reference,
     get_run_block_model_reference,
@@ -1767,6 +1768,57 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     except Exception as _exc:
         _log.warning("magnetic_report_snapshot_nonfatal", error=str(_exc))
 
+    # ── HITO 1: Persistencia Parquet magnético (schema v3.0) ─────────────────
+    # Columnas exportadas: coordenadas, susceptibility_si, run_type="magnetic",
+    # schema_version="v3.0". Solo se persiste cuando hay project_id/run_id válidos
+    # (is_legacy=False). NUNCA escribe a DEFAULT_BLOCK_MODEL_PATH.
+    try:
+        _nC_mag = len(x_c)
+        _susc_safe = np.nan_to_num(susc_full, nan=0.0)
+        _active_mag = np.isfinite(susc_full)
+
+        _df_mag = pl.DataFrame({
+            "x_c": x_c.astype(float).tolist(),
+            "y_c": y_c.astype(float).tolist(),
+            "z_c": z_c.astype(float).tolist(),
+            "x_m": x_c.astype(float).tolist(),
+            "y_m": y_c.astype(float).tolist(),
+            "z_m": z_c.astype(float).tolist(),
+            "x": x_c.astype(float).tolist(),
+            "y": y_c.astype(float).tolist(),
+            "z": z_c.astype(float).tolist(),
+            "ix": ix.astype(int).tolist(),
+            "iy": iy.astype(int).tolist(),
+            "iz": iz.astype(int).tolist(),
+            "susceptibility_si": _susc_safe.astype(float).tolist(),
+            "relative_target_score": score_full.astype(float).tolist(),
+            "sensitivity_proxy": sens_full.astype(float).tolist(),
+            "is_active": _active_mag.tolist(),
+            "run_type": ["magnetic"] * _nC_mag,
+            "schema_version": ["v3.0"] * _nC_mag,
+        })
+
+        _mag_ref = get_run_block_model_reference(
+            project_id=params.project_id,
+            run_id=params.run_id,
+            filename=RUN_MAGNETIC_BLOCK_MODEL_FILENAME,
+        )
+        if not _mag_ref.is_legacy:
+            _mag_ref.path.parent.mkdir(parents=True, exist_ok=True)
+            _df_mag.write_parquet(str(_mag_ref.path))
+            _mag_path = str(_mag_ref.path)
+            _mag_val = validate_parquet_schema(_mag_ref.path, expected_run_type="magnetic")
+            if not _mag_val["valid"]:
+                _log.warning(
+                    "magnetic_parquet_schema_invalid",
+                    run=getattr(params, "run_id", "unknown"),
+                    errors=_mag_val["errors"],
+                )
+            report["magnetic_parquet_path"] = _mag_path
+            _log.info("magnetic_parquet_written", path=_mag_path, voxels=_nC_mag)
+    except Exception as _mag_pq_exc:
+        _log.warning("magnetic_parquet_nonfatal", error=str(_mag_pq_exc))
+
     _update(
         "done", 1.0, "completed", "Inversión magnética completada (Fase 9A).",
         metrics={"misfit_error_percent": misfit_percent, "cond_A": solver_meta.get("acond"),
@@ -2627,10 +2679,10 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     df_full.write_parquet(str(block_model_ref.path))
     _grav_schema_result = validate_parquet_schema(block_model_ref.path, expected_run_type="gravity")
     if not _grav_schema_result["valid"]:
-        logger.warning(
-            "gravity_parquet_schema_invalid run=%s errors=%s",
-            params.run_id,
-            _grav_schema_result["errors"],
+        _log.warning(
+            "gravity_parquet_schema_invalid",
+            run=params.run_id,
+            errors=_grav_schema_result["errors"],
         )
 
     anomaly_ref = get_run_anomaly_reference(
