@@ -33,7 +33,7 @@ CORS_ORIGINS: list[str] = [origin.strip() for origin in _cors_raw.split(",") if 
 
 CSV_MAX_BYTES: int = int(os.getenv("CSV_MAX_BYTES", "10485760"))
 
-GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash")
+GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-3.1-pro")
 
 # HITO 5: Solver con bounds (B-06). Env var USE_BOUNDED_SOLVER=false fuerza LSQR+clip (rollback).
 USE_BOUNDED_SOLVER: bool = os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false"

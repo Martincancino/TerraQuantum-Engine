@@ -571,7 +571,7 @@ export default function Exploration3DView() {
               {show3D && model && viewMode === 'susceptibility' && !susceptibilityDataAvailable && (
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/75 border border-yellow-500/60 text-yellow-400 text-[10px] font-mono px-3 py-1 rounded-full pointer-events-none">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400" />
-                  Sin datos magnéticos para esta corrida
+                  Datos magnéticos no disponibles para este modelo
                 </div>
               )}
             </div>

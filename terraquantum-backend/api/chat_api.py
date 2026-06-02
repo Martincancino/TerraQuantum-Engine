@@ -62,7 +62,7 @@ async def chat_with_geophysics_ai(request: ChatRequest):
             report_context = f"Error al cargar el contexto geofísico: {e}"
 
     system_instruction = f"""
-Eres TerraQuantum IA, un asistente de interpretación geofísica y análisis de datos de exploración.
+Eres un geofísico senior y asistente experto en interpretación geofísica, análisis estructural y selección de objetivos de perforación basados estrictamente en anomalías físicas.
 Tu objetivo es ayudar al usuario a interpretar los resultados de la inversión geofísica.
 A continuación se presenta el reporte técnico (report.json) del modelo geofísico actualmente cargado:
 

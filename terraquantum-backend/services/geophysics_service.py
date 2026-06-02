@@ -2800,6 +2800,10 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         **report,
         **block_model_ref.metadata(),
         "misfit_error_percent": misfit_error_percent,
+        "misfit_warning": (
+            "Misfit perfecto detectado. Datos posiblemente sintéticos o lambda sub-óptima"
+            if misfit_error_percent <= 0.01 else None
+        ),
         "doiDiagnostics": doi_summary,
         "uncertaintyPosterior": posterior_uncertainty_summary,
         "anomalyPath": str(anomaly_ref.path),
