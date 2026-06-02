@@ -233,6 +233,11 @@ export interface AppState {
   setBlockModelDataMode: (mode: BlockModelDataMode) => void;
   isBlockModelLoading: boolean;
   setIsBlockModelLoading: (loading: boolean) => void;
+  // HITO 6: true mientras el WebWorker construye los buffers de geometría masiva.
+  // Distinto de isBlockModelLoading (carga de API): este cubre el procesamiento
+  // off-thread de InstancedMesh para modelos > LOD_WORKER_THRESHOLD.
+  isWorkerProcessing: boolean;
+  setIsWorkerProcessing: (processing: boolean) => void;
   setVoxelTrace: (trace: VoxelTracePatch) => void;
 
   // 3d. ENVOLVENTE VISUAL (Fase 7.3)
@@ -518,6 +523,8 @@ export const useAppStore = create<AppState>((set) => ({
   setBlockModelDataMode: (mode) => set({ blockModelDataMode: mode }),
   isBlockModelLoading: false,
   setIsBlockModelLoading: (loading) => set({ isBlockModelLoading: loading }),
+  isWorkerProcessing: false,
+  setIsWorkerProcessing: (processing) => set({ isWorkerProcessing: processing }),
   setVoxelTrace: (trace) =>
     set((state) => ({
       totalVoxels:

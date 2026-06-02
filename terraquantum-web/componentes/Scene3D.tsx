@@ -562,6 +562,7 @@ function MineralComplex({
     setHighlightedCellCount, setSelectedVoxel,
     blockModelDataMode, visualProfessionalMode,
     setSusceptibilityDataAvailable,
+    setIsWorkerProcessing,
   } = useAppStore();
   const percentileStats = useAppStore((s) => s.percentileStats);
   // ── Fase 12: selectores granulares para evitar cascading renders ───────────────
@@ -615,8 +616,10 @@ function MineralComplex({
     return () => {
       w.terminate();
       workerRef.current = null;
+      // Limpiar el overlay si el componente se desmonta a mitad de un cálculo.
+      setIsWorkerProcessing(false);
     };
-  }, []); // montar/desmontar una sola vez
+  }, [setIsWorkerProcessing]); // montar/desmontar una sola vez
   // ────────────────────────────────────────────────────────────────────────────
 
   const modelRecord = asRecord(model);
@@ -888,11 +891,17 @@ function MineralComplex({
   // Se dispara con los mismos deps que useLayoutEffect. Para count <= umbral
   // el retorno temprano garantiza que no hace nada (lo maneja el path síncrono).
   useEffect(() => {
-    if (count <= LOD_WORKER_THRESHOLD) return;
+    // Modelos pequeños usan el path síncrono: garantizar que el overlay quede apagado.
+    if (count <= LOD_WORKER_THRESHOLD) {
+      setIsWorkerProcessing(false);
+      return;
+    }
     const worker = workerRef.current;
     const mesh = meshRef.current;
     if (!worker || !mesh || !model || count === 0) return;
 
+    // Overlay no-bloqueante: el hilo principal sigue interactivo mientras el worker calcula.
+    setIsWorkerProcessing(true);
     const reqId = ++pendingReqRef.current;
     worker.postMessage({
       reqId,
@@ -971,6 +980,8 @@ function MineralComplex({
       if (viewMode === 'susceptibility') {
         setSusceptibilityDataAvailable(sa);
       }
+      // Geometría inyectada en GPU: apagar el overlay de procesamiento.
+      setIsWorkerProcessing(false);
     };
 
     worker.addEventListener('message', handleMsg);
@@ -982,6 +993,7 @@ function MineralComplex({
     sliceAxis, slicePosition, sliceThickness, showOnlySlice,
     effectiveProfessionalMode, professionalScoreStats, elevationVisualState,
     setVisibleCellCount, setHighlightedCellCount, setSusceptibilityDataAvailable,
+    setIsWorkerProcessing,
     visualLayer, sigma95, viewMode, jointThreshold,
   ]);
   // ────────────────────────────────────────────────────────────────────────────

@@ -273,7 +273,16 @@ export default function Exploration3DView() {
   const loadedVoxelCount = returnedVoxels ?? (Array.isArray(model?.cells) ? model.cells.length : 0);
   const percentileStats = useAppStore((s) => s.percentileStats);
   const viewMode = useAppStore((s) => s.viewMode);
+  const isWorkerProcessing = useAppStore((s) => s.isWorkerProcessing);
   const susceptibilityDataAvailable = useAppStore((s) => s.susceptibilityDataAvailable);
+
+  // Etiqueta legible del objeto físico en cálculo (HITO 6 overlay).
+  const viewModeLabel =
+    viewMode === "susceptibility"
+      ? "Susceptibilidad"
+      : viewMode === "joint"
+      ? "Conjunto (Joint)"
+      : "Densidad";
   const modelStatsRecord = asRecord(model);
   const scoreStatsRecord =
     asRecord(modelStatsRecord?.scoreStats) ??
@@ -564,6 +573,25 @@ export default function Exploration3DView() {
                     <Scene3D />
                   </Suspense>
                 </Canvas>
+              )}
+              {/* ── HITO 6: overlay no-bloqueante mientras el WebWorker construye ──
+                   la geometría masiva (150k–500k vóxeles). pointer-events-none:
+                   la cámara/OrbitControls siguen interactivos por debajo. */}
+              {show3D && model && isWorkerProcessing && (
+                <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
+                  <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
+                  <div className="relative flex flex-col items-center gap-4 px-8 py-6 rounded-2xl border border-cyan-400/25 bg-[#05070a]/85 shadow-[0_8px_40px_rgba(0,0,0,0.6)]">
+                    <span className="h-10 w-10 rounded-full border-2 border-cyan-400/25 border-t-[#22d3ee] animate-spin" />
+                    <div className="flex flex-col items-center gap-1">
+                      <span className="text-[10px] font-mono uppercase tracking-[0.22em] text-[#22d3ee]">
+                        Procesando geometría masiva en GPU
+                      </span>
+                      <span className="text-[9px] font-mono tracking-[0.14em] text-white/55">
+                        Objeto: {viewModeLabel}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               )}
               {/* ── Fase 12: Panel Multi-Física (overlay sobre el Canvas) ────────── */}
               {show3D && model && <MultiPhysicsControls />}
