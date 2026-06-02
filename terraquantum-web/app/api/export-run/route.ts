@@ -40,11 +40,13 @@ export async function GET(req: NextRequest) {
     });
 
     const backendUrl = buildBackendUrl(`/export-run?${backendParams.toString()}`);
+    const apiKey = process.env.TQ_API_KEY ?? "";
     const res = await fetch(backendUrl, {
       method: "GET",
       cache: "no-store",
       headers: {
         accept: "application/zip",
+        ...(apiKey ? { "X-TQ-API-Key": apiKey } : {}),
       },
     });
 

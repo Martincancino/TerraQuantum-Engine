@@ -1,11 +1,16 @@
+import hashlib
 import json
+import os
+import subprocess
 import threading
+from datetime import datetime, timezone
 from enum import Enum
 
 import numpy as np
 import polars as pl
 
 from core.block_model_store import (
+    RUN_SOURCE_GRAVITY_FILENAME,
     get_run_anomaly_reference,
     get_run_block_model_reference,
     get_run_favorability_path,
@@ -13,7 +18,10 @@ from core.block_model_store import (
     get_run_inputs_path,
     get_run_observations_path,
     get_run_report_path,
+    sha256_file,
     update_run_status,
+    validate_parquet_schema,
+    write_run_manifest,
 )
 from core.config import DEFAULT_BLOCK_MODEL_PATH, ensure_runtime_dirs
 from exploration.focusing import run_focusing
@@ -1305,8 +1313,10 @@ def build_geophysics_report(
         "derivadas del modelo gravimétrico; no representan ley mineral confirmada ni reserva."
     )
     jorc_disclaimer = (
-        "Geophysical inversion does not constitute mineral resource estimation "
-        "under JORC or NI 43-101 standards."
+        "Este informe es una interpretación geofísica preliminar y no constituye "
+        "una estimación de recursos minerales bajo NI 43-101 o JORC 2012. "
+        "No ha sido revisado por un Qualified Person ni Competent Person. "
+        "Requiere validación profesional independiente antes de cualquier uso regulatorio o de inversión."
     )
     ts = technical_summary or {}
     ud = uncertainty_diagnostics or {}
@@ -1772,12 +1782,6 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
 
 
 def run_geophysics_inversion(params: GeophysicsInvertInput):
-    # Forzar la ejecución del cálculo de incertidumbre (Hutchinson UQ)
-    try:
-        object.__setattr__(params, "compute_uncertainty", True)
-    except Exception:
-        pass
-
     project_id = params.project_id
     run_id = params.run_id
 
@@ -1805,6 +1809,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
                 pass
 
     _log.info("inversion_start", project_id=project_id, run_id=run_id)
+    _inversion_start_utc = datetime.now(timezone.utc)
 
     ensure_runtime_dirs()
 
@@ -1906,6 +1911,35 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     _padding_mask_r02 = ~is_core
     _kappa = 1e5
 
+    # ── HITO 5 (B-05): Topografía activa desde sensor_elevations_masl ──────────
+    # Se calcula ANTES del lambda scan para que todos los solvers (lambda, UQ, DOI)
+    # usen la misma máscara de aire topográfica. Datum = sensor más alto (y=0).
+    _topography_elevations_padded = None
+    _topography_used = "flat"
+    _sensor_elevs = getattr(params, "sensor_elevations_masl", None)
+    if _sensor_elevs is not None and len(_sensor_elevs) == len(params.observations):
+        try:
+            from scipy.spatial import cKDTree as _cKDTree
+            _elev_arr = np.asarray(_sensor_elevs, dtype=np.float64)
+            _max_elev = float(np.max(_elev_arr))
+            _surface_depths = _max_elev - _elev_arr  # profundidad desde el punto más alto
+            _sx = sensor_coords[:, 0]
+            _sz = sensor_coords[:, 2]
+            _tree = _cKDTree(np.column_stack([_sx, _sz]))
+            _, _nearest_idx = _tree.query(np.column_stack([x_c_full, z_c_full]))
+            _topography_elevations_padded = _surface_depths[_nearest_idx]
+            _topography_used = "from_sensor_elevations_masl"
+            _log.info(
+                "topography_activated",
+                max_elev_masl=round(float(_max_elev), 1),
+                surface_depth_range_m=[round(float(_surface_depths.min()), 1),
+                                       round(float(_surface_depths.max()), 1)],
+            )
+        except Exception as _topo_exc:
+            _log.warning("topography_activation_nonfatal", error=str(_topo_exc))
+            _topography_elevations_padded = None
+            _topography_used = "flat_fallback"
+
     # ── R-A2: Selección automática de lambda vía chi²-target ─────────────────
     # Se activa cuando auto_lambda=True o lambda_mag==0 (sentinel de auto-selección).
     _lambda_mag = params.lambda_mag
@@ -1925,7 +1959,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
                 chi2_target=1.0,
                 cond_max=1e12,
                 alpha_spatial=params.alpha_spatial,
-                topography_elevations=None,
+                topography_elevations=_topography_elevations_padded,
                 hx=hx, hy=hy, hz=hz,
                 padding_mask=_padding_mask_r02,
                 padding_kappa=_kappa,
@@ -1960,7 +1994,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             recommendation="Si el resultado es rugoso, aumentar alpha_spatial.",
         )
 
-    # ── Solver LSQR sobre grilla completa (Core + Padding) ───────────────────
+    # ── Solver sobre grilla completa (Core + Padding) ─────────────────────────
     _solver_meta = {}   # recibe acond, chi2_final, saturación del solver
     est_density_full, probability_full, misfit_percent, sensitivity_full = _run_lsqr_with_heartbeat(
         inversor=inversor_padded,
@@ -1975,7 +2009,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         sensor_coords=sensor_coords,
         x_c=x_c_full,
         z_c=z_c_full,
-        topography_elevations=None,     # F0.8: None = topografía plana (todos activos)
+        topography_elevations=_topography_elevations_padded,  # HITO 5: activo si MASL provisto
         hx=hx, hy=hy, hz=hz,           # F0.9: Laplaciano no-uniforme
         density_min=params.density_min, # P2: bound petrofísico configurable desde API
         density_max=params.density_max,
@@ -1985,37 +2019,11 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         solver_meta=_solver_meta,       # OUT: acond, chi2_final, sat_*
     )
 
-    # Inyectar ruido gaussiano si el misfit es perfecto (0.00%) para forzar el ajuste de la Curva L
     if float(misfit_percent) <= 0.01:
-        _log.info("Misfit perfecto detectado (<= 0.01%). Inyectando ruido gaussiano para forzar convergencia real LSQR.")
-        g_std = float(np.std(g_observed))
-        noise_std = 0.05 * g_std if g_std > 0 else 0.01
-        noise = np.random.normal(0, noise_std, len(g_observed))
-        g_observed = g_observed + noise
-        
-        # Volver a correr con los datos ruidosos
-        _solver_meta.clear()
-        est_density_full, probability_full, misfit_percent, sensitivity_full = _run_lsqr_with_heartbeat(
-            inversor=inversor_padded,
-            g_observed=g_observed,
-            kernel_sparse=None,
-            y_c=y_c_full,
-            lambda_mag=_lambda_mag,
-            alpha_spatial=params.alpha_spatial,
-            project_id=project_id,
-            run_id=run_id,
-            forward_model=forward,
-            sensor_coords=sensor_coords,
-            x_c=x_c_full,
-            z_c=z_c_full,
-            topography_elevations=None,
-            hx=hx, hy=hy, hz=hz,
-            density_min=params.density_min,
-            density_max=params.density_max,
-            padding_mask=_padding_mask_r02,
-            padding_kappa=_kappa,
-            boreholes=boreholes_arr,
-            solver_meta=_solver_meta,
+        _log.warning(
+            "misfit_perfecto_detectado",
+            misfit_percent=misfit_percent,
+            note="Posible datos sintéticos o lambda sub-óptima. Las observaciones NO son modificadas.",
         )
 
     # ── F0.9: Descartar Padding — solo celdas Core al frontend ───────────────
@@ -2349,7 +2357,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
                 g_observed, y_c_full, forward, sensor_coords, x_c_full, z_c_full,
                 lambda_mag=_lambda_mag,   # FIX P0: usar lambda auto-seleccionado, no params.lambda_mag
                 alpha_spatial=params.alpha_spatial,
-                topography_elevations=None,
+                topography_elevations=_topography_elevations_padded,
                 hx=hx, hy=hy, hz=hz,
             )
             posterior_std = _std_full[is_core]
@@ -2388,7 +2396,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             sensor_coords=sensor_coords,
             x_c=x_c_full,
             z_c=z_c_full,
-            topography_elevations=None,
+            topography_elevations=_topography_elevations_padded,
             hx=hx, hy=hy, hz=hz,
             m_ref=m_ref2,                  # Inversión 2: referencia 0.1
             density_min=params.density_min,
@@ -2515,6 +2523,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         msx_max   = max(float(np.max(focus_result.m_best)), 1e-9)
         msx_score = np.clip(focus_result.m_best / msx_max, 0.0, 1.0)
 
+        _n_focus = len(x_c)
         df_focusing = pl.DataFrame({
             "x":                     x_c.astype(float),
             "y":                     y_c.astype(float),
@@ -2524,8 +2533,10 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             "iz":                    iz.astype(int),
             "msx_score":             msx_score.astype(float),
             "msx_density_candidate": focus_result.m_best.astype(float),
-            "scale_status":          [focus_result.scale_status] * len(x_c),
-            "use_mode":              [focus_result.use_mode] * len(x_c),
+            "scale_status":          [focus_result.scale_status] * _n_focus,
+            "use_mode":              [focus_result.use_mode] * _n_focus,
+            "run_type":              ["gravity"] * _n_focus,
+            "schema_version":        ["v3.0"] * _n_focus,
         })
 
         focusing_ref  = get_run_focusing_reference(
@@ -2596,6 +2607,12 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         pl.Series("posterior_std", posterior_std.astype(float))
     )
 
+    n_full = len(df_full)
+    df_full = df_full.with_columns([
+        pl.Series("run_type", ["gravity"] * n_full),
+        pl.Series("schema_version", ["v3.0"] * n_full),
+    ])
+
     df_anomaly = build_anomaly_dataframe(
         df_full=df_full,
         cutoff_density=cutoff_density,
@@ -2608,6 +2625,13 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     block_model_ref.path.parent.mkdir(parents=True, exist_ok=True)
     _update("running", 0.90, "postprocessing", "Exportando block model y generando reportes...")
     df_full.write_parquet(str(block_model_ref.path))
+    _grav_schema_result = validate_parquet_schema(block_model_ref.path, expected_run_type="gravity")
+    if not _grav_schema_result["valid"]:
+        logger.warning(
+            "gravity_parquet_schema_invalid run=%s errors=%s",
+            params.run_id,
+            _grav_schema_result["errors"],
+        )
 
     anomaly_ref = get_run_anomaly_reference(
         project_id=params.project_id,
@@ -2615,6 +2639,51 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     )
     anomaly_ref.path.parent.mkdir(parents=True, exist_ok=True)
     df_anomaly.write_parquet(str(anomaly_ref.path))
+
+    # ── HITO 2: Run Manifest (provenance audit trail) ─────────────────────────
+    try:
+        def _git_hash_short() -> str:
+            try:
+                return subprocess.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    stderr=subprocess.DEVNULL, timeout=2,
+                ).decode().strip()
+            except Exception:
+                return "unknown"
+
+        _run_dir_manifest = block_model_ref.path.parent
+        _csv_path_manifest = _run_dir_manifest / RUN_SOURCE_GRAVITY_FILENAME
+        write_run_manifest(_run_dir_manifest, {
+            "schema_version": "v3.0",
+            "run_type": "gravity",
+            "code_version": _git_hash_short(),
+            "rng_seed": None,
+            "timestamp_utc_start": _inversion_start_utc.isoformat(),
+            "timestamp_utc_end": datetime.now(timezone.utc).isoformat(),
+            "sha256_parquet": sha256_file(block_model_ref.path),
+            "sha256_csv": sha256_file(_csv_path_manifest) if _csv_path_manifest.exists() else None,
+            "inversion_params": {
+                "nx": params.nx, "ny": params.ny, "nz": params.nz,
+                "block_size": params.block_size,
+                "lambda_mag": params.lambda_mag,
+                "alpha_spatial": params.alpha_spatial,
+                "cutoff_radius": params.cutoff_radius,
+                "depth": getattr(params, "depth", None),
+                "enable_focusing": getattr(params, "enable_focusing", False),
+            },
+            "solver_stats": {
+                "acond": _solver_meta.get("acond"),
+                "chi2_final": _solver_meta.get("chi2_final"),
+                "n_sat_lower": _solver_meta.get("n_sat_lower"),
+                "n_sat_upper": _solver_meta.get("n_sat_upper"),
+                "n_sat_total": _solver_meta.get("n_sat_total"),
+                "n_active": _solver_meta.get("n_active"),
+                "misfit_error_percent": misfit_error_percent,
+            },
+        })
+    except Exception as _mfst_exc:
+        _log.warning("run_manifest_nonfatal", error=str(_mfst_exc))
+    # ── Fin HITO 2 ────────────────────────────────────────────────────────────
 
     # ── FASE 10: Exportación Industrial VTK (.vtr) ────────────────────────────
     # Non-fatal: si pyevtk no está instalado, vtr_path = None y se omite en el report.
@@ -2792,6 +2861,9 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
                 "asignadas density=base_density=2.60 t/m3 en la reconstruccion."
             ),
         },
+        # ── HITO 5: Topografía y solver bound-constrained ─────────────────────────
+        "topography_used": _topography_used,
+        "bounded_solver_active": os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false",
         # ── R-06: Auditoría de impacto físico del padding saturado ───────────────
         "r06_padding_saturation_audit": r06_padding_saturation_audit,
         # ── FASE 10: VTK export ────────────────────────────────────────────────

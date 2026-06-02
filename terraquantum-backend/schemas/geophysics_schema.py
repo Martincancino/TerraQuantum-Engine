@@ -171,6 +171,16 @@ class GeophysicsInvertInput(BaseModel):
         1e4, ge=0.0,
         description="Peso máximo del acoplamiento cross-gradient (continuation exponencial). Fase 9C-2.",
     )
+    # ── HITO 5 (B-05): Topografía activa ────────────────────────────────────────
+    # Elevación MASL de cada sensor de gravedad (m s.n.m.), paralelo a `observations`.
+    # Si se provee con la misma longitud que observations, el solver activa la máscara
+    # topográfica: vóxeles sobre la superficie son "aire" y quedan excluidos.
+    # None → topografía plana (comportamiento histórico, y_datum=0 para todos).
+    sensor_elevations_masl: Optional[List[float]] = Field(
+        default=None,
+        description="Elevación MASL de cada sensor (m s.n.m.), paralelo a observations. "
+                    "Activa máscara topográfica en el solver. None = terreno plano.",
+    )
 
 
 class GeophysicsVoxel(BaseModel):
@@ -189,6 +199,10 @@ class GeophysicsVoxel(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    # Schema v3.0 — campos obligatorios en Parquet pero opcionales en JSON
+    run_type: Optional[str] = None        # "gravity" | "magnetic" | "joint"
+    schema_version: Optional[str] = None  # "v3.0"
+
     ix: Optional[int] = None
     iy: Optional[int] = None
     iz: Optional[int] = None
@@ -199,8 +213,10 @@ class GeophysicsVoxel(BaseModel):
     density: Optional[float] = None
     density_t_m3: Optional[float] = None
     density_contrast_t_m3: Optional[float] = None
+    density_anomaly_score: Optional[float] = None
     # Magnetometría / joint: susceptibilidad magnética recuperada (SI, adimensional).
     susceptibility_si: Optional[float] = None
+    susceptibility_score: Optional[float] = None
     # Inversión conjunta (Fase 9C-2): score estructural combinado ρ+χ normalizado.
     joint_structural_score: Optional[float] = None
     is_active: Optional[bool] = None

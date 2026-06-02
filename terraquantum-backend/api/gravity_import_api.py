@@ -865,6 +865,17 @@ async def invert_gravity_csv(
                     "required_action": "Corregir parámetros de entrada antes de ejecutar la inversión.",
                 },
             ) from exc
+        except Exception as exc:
+            import traceback as _tb
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "INVERSION_RUNTIME_ERROR",
+                    "message": str(exc),
+                    "type": type(exc).__name__,
+                    "traceback": _tb.format_exc()[-2000:],
+                },
+            ) from exc
 
         # --- Georef computation ---
         # lat_value, lon_value, project_meta_warning, spatial_readiness_invert
@@ -1115,6 +1126,17 @@ async def invert_gravity_csv(
         if project_meta_warning:
             all_warnings.append(project_meta_warning)
 
+        # Strip voxels from the HTTP response — they are already persisted to parquet
+        # and the frontend loads them via the /block-model API. Sending 100k+ voxels
+        # as JSON would produce a 50-100 MB payload that kills the Next.js proxy.
+        _inversion_dict = (
+            model_to_dict(inversion_result)
+            if hasattr(inversion_result, "model_dump") or hasattr(inversion_result, "dict")
+            else inversion_result
+        )
+        if isinstance(_inversion_dict, dict):
+            _inversion_dict = {k: v for k, v in _inversion_dict.items() if k != "voxels"}
+
         return {
             "status": "done",
             "stage": "inversion",
@@ -1143,7 +1165,7 @@ async def invert_gravity_csv(
             "legacy_frontend_params": legacy_frontend_params,
             "warnings": all_warnings,
             "errors": [],
-            "inversionResult": model_to_dict(inversion_result) if hasattr(inversion_result, "model_dump") or hasattr(inversion_result, "dict") else inversion_result,
+            "inversionResult": _inversion_dict,
             "importPersistence": {
                 "persisted": persisted,
                 "sourceGravityPath": source_csv_path_str,

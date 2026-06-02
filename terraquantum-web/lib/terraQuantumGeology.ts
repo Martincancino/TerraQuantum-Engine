@@ -137,6 +137,9 @@ export interface UpdateInstancedBuffersParams {
 // Densidad de roca país fallback. El backend provee el valor específico del sitio.
 const DENSITY_COUNTRY_ROCK_FALLBACK_T_M3 = 2.75;
 
+// Color neutro gris para vóxeles sin datos (e.g. susceptibilidad ausente en corrida gravity-only)
+const NEUTRAL_GRAY: [number, number, number] = [0.5, 0.5, 0.5];
+
 // ── Colormaps científicos (sin d3) ────────────────────────────────────────────
 // Implementación directa de Viridis e Inferno (matplotlib/colorcet).
 // Cada stop es [t, [r, g, b]] con valores normalizados [0,1].
@@ -332,11 +335,12 @@ export function updateInstancedBuffers({
   visualLayer,
   viewMode = 'density',
   jointThreshold = 0.6,
-}: UpdateInstancedBuffersParams): { visibleCount: number; highlightedCount: number } {
+}: UpdateInstancedBuffersParams): { visibleCount: number; highlightedCount: number; susceptibilityAvailable: boolean } {
   const _r08_t0 = performance.now();
   const dummy = _dummy;
   let visibleCount = 0;
   let highlightedCount = 0;
+  let susceptibilityFoundCount = 0;
   const rdx = (cellSizeX !== undefined ? cellSizeX : cellSize) * voxelScale;
   const rdy = (cellSizeY !== undefined ? cellSizeY : cellSize) * voxelScale;
   const rdz = (cellSizeZ !== undefined ? cellSizeZ : cellSize) * voxelScale;
@@ -432,15 +436,32 @@ export function updateInstancedBuffers({
     if (viewMode === 'susceptibility') {
       // Campo: susceptibility_si (campo del backend tras Fase 12)
       const chiRaw = Number((rawCell as Record<string, unknown>).susceptibility_si);
-      const epsilon = 1e-9;
-      const chiLog = Math.log10(Math.max(chiRaw, 0) + epsilon);
-      const chiNorm = clamp01((chiLog - dynChiMin) / _dynChiRange);
-      [_r, _g, _b] = sampleColormap(TURBO_STOPS, chiNorm);
+      if (!Number.isFinite(chiRaw)) {
+        // Corrida gravity-only: susceptibilidad ausente — gris neutro en vez de NaN→garbage color
+        [_r, _g, _b] = NEUTRAL_GRAY;
+      } else {
+        susceptibilityFoundCount++;
+        const epsilon = 1e-9;
+        const chiLog = Math.log10(Math.max(chiRaw, 0) + epsilon);
+        const chiNorm = clamp01((chiLog - dynChiMin) / _dynChiRange);
+        [_r, _g, _b] = sampleColormap(TURBO_STOPS, chiNorm);
+      }
 
     } else if (viewMode === 'joint') {
-      // Modo conjunto: color corporativo oro TerraQuantum + filtro por umbral
+      // Modo conjunto: color corporativo cian TerraQuantum + filtro por umbral.
+      // IMPORTANT: if joint_structural_score is absent (gravity-only run), hide the
+      // voxel. The previous default of 1.0 caused all voxels to appear with cyan
+      // color even when no joint data exists, making a gravity-only inversion look
+      // like a joint result. Absence of the field = no joint data = hide.
       const jointRaw = (rawCell as Record<string, unknown>).joint_structural_score;
-      const jointScore = (jointRaw !== undefined && jointRaw !== null) ? Number(jointRaw) : 1.0;
+      if (jointRaw === undefined || jointRaw === null) {
+        dummy.scale.set(0, 0, 0);
+        dummy.position.set(rx_visual, ry_visual, rz_visual);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+        continue;
+      }
+      const jointScore = Number(jointRaw);
       if (!Number.isFinite(jointScore) || jointScore < jointThreshold) {
         // Ocultar: escalar a cero en lugar de mover (evita artefactos de frustum)
         dummy.scale.set(0, 0, 0);
@@ -449,8 +470,8 @@ export function updateInstancedBuffers({
         mesh.setMatrixAt(i, dummy.matrix);
         continue;
       }
-      // Oro cian corporativo TerraQuantum
-      _r = 0.047; _g = 0.827; _b = 0.933; // #0BD3EE → cian TerraQuantum
+      // Cian corporativo TerraQuantum
+      _r = 0.047; _g = 0.827; _b = 0.933; // #0BD3EE
 
     } else {
       // viewMode === 'density' (default) — comportamiento original
@@ -486,5 +507,5 @@ export function updateInstancedBuffers({
     ` | total=${(_r08_gpu_end - _r08_t0).toFixed(1)}ms`
   );
   console.log("Vóxeles visibles tras filtro:", visibleCount);
-  return { visibleCount, highlightedCount };
+  return { visibleCount, highlightedCount, susceptibilityAvailable: susceptibilityFoundCount > 0 };
 }

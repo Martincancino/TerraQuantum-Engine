@@ -547,6 +547,13 @@ class MagnetometryInversion:
         wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)               # escala global ~1
         Wz_inv = sp.diags(wz_inv_diag)
 
+        # ── HITO 5 — Bounds en espacio escalado m_tilde ──────────────────────────
+        # susc = Wz_inv @ m_tilde (wz_inv_diag_i * m_tilde_i)
+        # → m_tilde_i = susc_i / wz_inv_diag_i
+        # Los bounds físicos [susc_min, susc_max] se transforman al espacio m_tilde.
+        _lb_tilde_m = float(susc_min) / np.maximum(wz_inv_diag, 1e-12)
+        _ub_tilde_m = float(susc_max) / np.maximum(wz_inv_diag, 1e-12)
+
         # ── Bloque de datos:  W_d · G · W_z^{-1} ─────────────────────────────
         G_scaled = G_w @ Wz_inv
 
@@ -636,6 +643,7 @@ class MagnetometryInversion:
         #     weighting de Li & Oldenburg (celdas profundas penalizadas menos).
         #   • Con anclajes: bloque diferencial (κ·λ_mag en celdas ancladas) que opera
         #     sobre m̃ pero apunta al valor del sondaje en el modelo físico m.
+        from core.config import USE_BOUNDED_SOLVER as _USE_BC_M
         if _has_anchors:
             _w_small = np.full(n_active, float(lambda_mag), dtype=np.float64)
             _w_small = np.where(_anchor_active, float(anchor_kappa) * float(lambda_mag), _w_small)
@@ -645,12 +653,38 @@ class MagnetometryInversion:
             _d_small = _w_small * _small_target
             A_sys = sp.vstack([G_aug, _small_block]).tocsr()
             b_sys = np.concatenate([d_aug, _d_small])
-            result = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
+            if _USE_BC_M:
+                from scipy.optimize import lsq_linear as _lsq_linear_m
+                _bc_m = _lsq_linear_m(
+                    A_sys, b_sys,
+                    bounds=(_lb_tilde_m, _ub_tilde_m),
+                    method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
+                )
+                m_tilde = _bc_m.x
+                _acond = float('nan')
+                print("[MAG/ANCLA] lsq_linear (bound-constrained, TRF+LSQR) finalizado.")
+            else:
+                result = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
+                m_tilde = result[0]
+                _acond = float(result[6])
         else:
-            result = lsqr(G_aug, d_aug, damp=float(lambda_mag), iter_lim=500, atol=1e-8, btol=1e-8, show=False)
+            if _USE_BC_M:
+                from scipy.optimize import lsq_linear as _lsq_linear_m
+                _eye_lam_m = sp.eye(n_active, format='csr', dtype=np.float64) * float(lambda_mag)
+                _A_bc_m = sp.vstack([G_aug, _eye_lam_m]).tocsr()
+                _b_bc_m = np.concatenate([d_aug, np.zeros(n_active, dtype=np.float64)])
+                _bc_m = _lsq_linear_m(
+                    _A_bc_m, _b_bc_m,
+                    bounds=(_lb_tilde_m, _ub_tilde_m),
+                    method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
+                )
+                m_tilde = _bc_m.x
+                _acond = float('nan')
+            else:
+                result = lsqr(G_aug, d_aug, damp=float(lambda_mag), iter_lim=500, atol=1e-8, btol=1e-8, show=False)
+                m_tilde = result[0]
+                _acond = float(result[6])
 
-        m_tilde = result[0]
-        _acond = float(result[6])
         # Destransformación Li & Oldenburg: m = W_z^{-1} · m̃ (susceptibilidad real).
         susc_contrast_active = Wz_inv @ m_tilde
 

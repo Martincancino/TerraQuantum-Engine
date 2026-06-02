@@ -73,6 +73,9 @@ def ensure_visual_columns(df: pl.DataFrame) -> pl.DataFrame:
     if "density" not in df.columns:
         if "rho" in df.columns:
             df = df.with_columns(pl.col("rho").alias("density"))
+        elif "density_t_m3" in df.columns:
+            # Joint schema: density_t_m3 is the absolute density — use it as the canonical density column.
+            df = df.with_columns(pl.col("density_t_m3").alias("density"))
         else:
             df = df.with_columns(pl.lit(2.6).alias("density"))
 
@@ -715,6 +718,13 @@ def build_block_model_response(
             "dem_source": row.get("dem_source"),
             "dem_sample_method": row.get("dem_sample_method"),
             "spatial_reference_warning": row.get("spatial_reference_warning"),
+            # Multi-physics fields (magnetic + joint schema v3.0)
+            "susceptibility_si": sanitize_nan_value(row.get("susceptibility_si")),
+            "joint_structural_score": sanitize_nan_value(row.get("joint_structural_score")),
+            "density_t_m3": sanitize_nan_value(row.get("density_t_m3")),
+            "density_contrast_t_m3": sanitize_nan_value(row.get("density_contrast_t_m3")),
+            "run_type": row.get("run_type"),
+            "schema_version": row.get("schema_version"),
         }
 
         if mode_clean == "economic":
@@ -776,6 +786,12 @@ _ARROW_SCALAR_FLOAT_COLS = ("density", "probability", "visual_score")
 _ARROW_INT_COLS = ("ix", "iy", "iz")
 _ARROW_OPTIONAL_COLS = ("professional_score", "economic_score")
 _ARROW_R3_COLS = ("lat", "lon", "voxel_elevation_masl", "surface_elevation_masl")
+_ARROW_MULTIPHYSICS_COLS = (
+    "susceptibility_si",
+    "joint_structural_score",
+    "density_t_m3",
+    "density_contrast_t_m3",
+)
 
 
 def build_block_model_arrow_bytes(
@@ -885,12 +901,16 @@ def build_block_model_arrow_bytes(
             if col in df.columns:
                 select_cols.append(col)
 
+    for col in _ARROW_MULTIPHYSICS_COLS:
+        if col in df.columns:
+            select_cols.append(col)
+
     available = [c for c in select_cols if c in df.columns]
     df = df.select(available)
 
     # Castear tipos para reducir payload (~14× vs JSON)
     cast_exprs = []
-    for col in (*_ARROW_COORD_COLS, *_ARROW_SCALAR_FLOAT_COLS):
+    for col in (*_ARROW_COORD_COLS, *_ARROW_SCALAR_FLOAT_COLS, *_ARROW_MULTIPHYSICS_COLS):
         if col in df.columns and df[col].dtype != pl.Float32:
             cast_exprs.append(pl.col(col).cast(pl.Float32))
     for col in _ARROW_INT_COLS:

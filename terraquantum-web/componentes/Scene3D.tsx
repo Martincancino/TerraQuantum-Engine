@@ -543,6 +543,9 @@ function HostVolume({
   );
 }
 
+// HITO 6: por encima de este umbral se usa el WebWorker para no bloquear el hilo principal.
+const LOD_WORKER_THRESHOLD = 50_000;
+
 function MineralComplex({
   elevationVisualState,
   clippingPlanes,
@@ -558,6 +561,7 @@ function MineralComplex({
     sliceAxis, slicePosition, sliceThickness, showOnlySlice, setVisibleCellCount,
     setHighlightedCellCount, setSelectedVoxel,
     blockModelDataMode, visualProfessionalMode,
+    setSusceptibilityDataAvailable,
   } = useAppStore();
   const percentileStats = useAppStore((s) => s.percentileStats);
   // ── Fase 12: selectores granulares para evitar cascading renders ───────────────
@@ -570,6 +574,9 @@ function MineralComplex({
   // Captura el mesh actual antes de que cambie el count (nuevo modelo).
   // Se usa para liberar los buffers GPU de la malla anterior.
   const meshToDisposeRef = useRef<THREE.InstancedMesh | null>(null);
+  // ── HITO 6: WebWorker para modelos grandes ────────────────────────────────
+  const workerRef = useRef<Worker | null>(null);
+  const pendingReqRef = useRef(0);
 
   const count = model && model.cells ? model.cells.length : 0;
 
@@ -597,6 +604,19 @@ function MineralComplex({
       meshToDisposeRef.current = null;
     };
   }, [count]); // re-corre cuando count cambia (nuevo modelo) o al desmontar
+  // ────────────────────────────────────────────────────────────────────────────
+
+  // ── HITO 6: ciclo de vida del WebWorker ─────────────────────────────────────
+  useEffect(() => {
+    const w = new Worker(
+      new URL('../workers/voxelBufferBuilder.worker.ts', import.meta.url)
+    );
+    workerRef.current = w;
+    return () => {
+      w.terminate();
+      workerRef.current = null;
+    };
+  }, []); // montar/desmontar una sola vez
   // ────────────────────────────────────────────────────────────────────────────
 
   const modelRecord = asRecord(model);
@@ -760,7 +780,16 @@ function MineralComplex({
     const mesh = meshRef.current;
     if (!mesh || !model || count === 0) return;
 
-    const { visibleCount, highlightedCount } = updateInstancedBuffers({
+    // ── HITO 6: modelos grandes → ocultar todo mientras el worker calcula ─────
+    if (count > LOD_WORKER_THRESHOLD) {
+      // Zero-out rápido (memset): oculta todas las instancias sin bloquear el hilo.
+      (mesh.instanceMatrix.array as Float32Array).fill(0);
+      mesh.instanceMatrix.needsUpdate = true;
+      return;
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const { visibleCount, highlightedCount, susceptibilityAvailable } = updateInstancedBuffers({
       mesh,
       cells: model.cells,
       cellSize: model.cellSize || 10,
@@ -821,6 +850,9 @@ function MineralComplex({
       lastHighlightedCellCount.current = highlightedCount;
       setHighlightedCellCount(highlightedCount);
     }
+    if (viewMode === 'susceptibility') {
+      setSusceptibilityDataAvailable(susceptibilityAvailable);
+    }
   }, [
     model,
     count,
@@ -844,12 +876,115 @@ function MineralComplex({
     elevationVisualState,
     setVisibleCellCount,
     setHighlightedCellCount,
+    setSusceptibilityDataAvailable,
     visualLayer,
     sigma95,
     // ── Fase 12 ──
     viewMode,
     jointThreshold,
   ]);
+
+  // ── HITO 6: path asíncrono para modelos grandes (worker) ─────────────────────
+  // Se dispara con los mismos deps que useLayoutEffect. Para count <= umbral
+  // el retorno temprano garantiza que no hace nada (lo maneja el path síncrono).
+  useEffect(() => {
+    if (count <= LOD_WORKER_THRESHOLD) return;
+    const worker = workerRef.current;
+    const mesh = meshRef.current;
+    if (!worker || !mesh || !model || count === 0) return;
+
+    const reqId = ++pendingReqRef.current;
+    worker.postMessage({
+      reqId,
+      cells: model.cells,
+      cellSize: model.cellSize || 10,
+      cellSizeX: voxelCellSizes.dx,
+      cellSizeY: voxelCellSizes.dy,
+      cellSizeZ: voxelCellSizes.dz,
+      isExplorationMode,
+      isFullDataMode,
+      isAnomalyDataMode,
+      effectiveProfessionalMode,
+      minTargetScore,
+      minAnomalyIntensity,
+      minDensityAnomalyScore,
+      minDensityRaw,
+      maxDensityRaw,
+      voxelScale,
+      sliceAxis,
+      slicePosition,
+      sliceThickness,
+      showOnlySlice,
+      elevationEnabled: elevationVisualState.enabled,
+      refElev: elevationVisualState.refElev,
+      densityStats,
+      professionalScoreStats,
+      visualLayer,
+      sigma95,
+      viewMode,
+      jointThreshold,
+    });
+
+    const handleMsg = (e: MessageEvent<{
+      reqId: number;
+      matricesF32: Float32Array;
+      colorsF32: Float32Array;
+      visibleCount: number;
+      highlightedCount: number;
+      susceptibilityAvailable: boolean;
+    }>) => {
+      if (!e.data || e.data.reqId !== reqId) return;
+      worker.removeEventListener('message', handleMsg);
+
+      const m = meshRef.current;
+      if (!m) return;
+
+      const { matricesF32, colorsF32, visibleCount: vc, highlightedCount: hc, susceptibilityAvailable: sa } = e.data;
+
+      (m.instanceMatrix.array as Float32Array).set(matricesF32);
+      m.instanceMatrix.needsUpdate = true;
+
+      if (!m.instanceColor) {
+        m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(colorsF32), 3);
+      } else {
+        (m.instanceColor.array as Float32Array).set(colorsF32);
+      }
+      m.instanceColor.needsUpdate = true;
+
+      // Bounding sphere explícita para frustum culling correcto
+      if (!m.geometry.boundingSphere) m.geometry.boundingSphere = new THREE.Sphere();
+      m.geometry.boundingSphere.center.set(0, 0, 0);
+      m.geometry.boundingSphere.radius = Math.sqrt(
+        Math.pow((model?.domainL || 200) / 2, 2) +
+        Math.pow((model?.domainH || 200) / 2, 2) +
+        Math.pow((model?.domainW || 200) / 2, 2)
+      ) * 1.05;
+
+      if (vc !== lastVisibleCellCount.current) {
+        lastVisibleCellCount.current = vc;
+        setVisibleCellCount(vc);
+      }
+      if (hc !== lastHighlightedCellCount.current) {
+        lastHighlightedCellCount.current = hc;
+        setHighlightedCellCount(hc);
+      }
+      if (viewMode === 'susceptibility') {
+        setSusceptibilityDataAvailable(sa);
+      }
+    };
+
+    worker.addEventListener('message', handleMsg);
+    return () => worker.removeEventListener('message', handleMsg);
+  }, [
+    model, count, isExplorationMode, isFullDataMode, isAnomalyDataMode,
+    densityStats, voxelCellSizes, minTargetScore, minAnomalyIntensity,
+    minDensityAnomalyScore, minDensityRaw, maxDensityRaw, voxelScale,
+    sliceAxis, slicePosition, sliceThickness, showOnlySlice,
+    effectiveProfessionalMode, professionalScoreStats, elevationVisualState,
+    setVisibleCellCount, setHighlightedCellCount, setSusceptibilityDataAvailable,
+    visualLayer, sigma95, viewMode, jointThreshold,
+  ]);
+  // ────────────────────────────────────────────────────────────────────────────
 
   if (!model || count === 0) return null;
 

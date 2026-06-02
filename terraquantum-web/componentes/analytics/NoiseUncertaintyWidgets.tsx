@@ -23,6 +23,7 @@ import {
   tooltipStyle,
   type Tone,
 } from "./analyticsShared";
+import { classifyUncertaintyValues } from "../../lib/terraquantum/qaStatus";
 
 // ─── Ruido / SNR ──────────────────────────────────────────────────────────────
 export function NoiseSnrWidget({
@@ -104,17 +105,31 @@ export function UncertaintyPosteriorWidget({
     .map((c) => Number(c.posterior_std))
     .filter((v) => Number.isFinite(v));
 
-  const dataMax = sigmaValues.length > 0 ? Math.max(...sigmaValues) : 0;
-  const hi = dataMax > 0 ? dataMax : maxV ?? 1;
-  const bins = buildHistogram(sigmaValues, 22, [0, hi]);
+  // QA gating: block display when no valid uncertainty data exists.
+  // All-zero sigma is scientifically indistinguishable from "not computed"
+  // — showing a uniform dark histogram would imply precise zero uncertainty,
+  // which is only possible for an exact forward problem (not a real inversion).
+  const sigmaQa = classifyUncertaintyValues(sigmaValues);
 
-  if (!computed && sigmaValues.length === 0 && p50 === null) {
+  const backendSaysNotComputed = !computed && p50 === null && sigmaValues.length === 0;
+
+  if (backendSaysNotComputed || sigmaQa.status === "NOT_AVAILABLE") {
+    const reason = backendSaysNotComputed
+      ? "σ posterior no calculada en esta corrida (compute_uncertainty desactivado)."
+      : sigmaQa.reason;
     return (
-      <EmptyState>
-        σ posterior no calculada en esta corrida (compute_uncertainty desactivado).
-      </EmptyState>
+      <div className="space-y-1.5">
+        <EmptyState>{reason}</EmptyState>
+        <p className="text-[8px] font-mono text-white/30 leading-tight">
+          Estado: No disponible para esta corrida
+        </p>
+      </div>
     );
   }
+
+  const dataMax = sigmaValues.length > 0 ? Math.max(...sigmaValues) : 0;
+  const hi = dataMax > 0 ? dataMax : (maxV ?? 1);
+  const bins = buildHistogram(sigmaValues, 22, [0, hi]);
 
   return (
     <div className="space-y-2.5">

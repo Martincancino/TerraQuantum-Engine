@@ -13,6 +13,7 @@ import {
 import { runGeophysicsSensitivitySweep } from "../../lib/terraquantum/frontendApi";
 import type { SensitivitySweepCase } from "../../lib/terraquantum/frontendApi";
 import { numOf, fmtSci, fmtNum, EmptyState, axisProps, tooltipStyle } from "./analyticsShared";
+import { classifyLCurvePoints } from "../../lib/terraquantum/qaStatus";
 
 type SweepState = "idle" | "loading" | "done" | "error";
 
@@ -36,7 +37,6 @@ export default function LCurveWidget({
 
   const canRun = Boolean(inputs) && observations.length >= 10;
 
-  // El React Compiler memoiza estos derivados; sin useMemo manual.
   const points = cases
     .map((c) => ({
       lambda_mag: Number(c.lambda_mag),
@@ -65,6 +65,9 @@ export default function LCurveWidget({
 
   const bestY = best ? Number(best.normalized_rmse ?? best.residual_rmse) : null;
   const bestX = best ? Number(best.lambda_mag) : null;
+
+  // QA: detect flat L-curve after sweep completes
+  const lcurveQa = state === "done" ? classifyLCurvePoints(points) : null;
 
   async function runSweep() {
     if (!canRun || !inputs) return;
@@ -129,6 +132,15 @@ export default function LCurveWidget({
         <p className="text-[9px] text-red-400 font-mono leading-tight">⚠ {errorMsg}</p>
       )}
 
+      {/* QA: flat-curve warning shown below the button row, before the chart */}
+      {lcurveQa && lcurveQa.status === "WARN" && (
+        <div className="rounded-md border border-yellow-500/30 bg-yellow-500/5 px-2.5 py-1.5">
+          <p className="text-[8px] font-mono text-yellow-400 leading-tight">
+            ⚠ λ heurístico — {lcurveQa.reason}
+          </p>
+        </div>
+      )}
+
       {state === "done" && points.length > 0 && domains && (
         <>
           <div className="h-[170px] w-full">
@@ -185,6 +197,9 @@ export default function LCurveWidget({
               <span className="text-[#4ade80]">● λ óptima</span> ={" "}
               {fmtSci(Number(best.lambda_mag))} · NRMSE{" "}
               {fmtNum(Number(best.normalized_rmse ?? best.residual_rmse), 4)} · {best.fit_level ?? "—"}
+              {lcurveQa && lcurveQa.status === "WARN" && (
+                <span className="text-yellow-400 ml-1">(heurístico)</span>
+              )}
             </div>
           )}
           {recommendation && (

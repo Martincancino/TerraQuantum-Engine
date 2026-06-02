@@ -34,6 +34,8 @@ RUN_GRAVITY_IMPORT_METADATA_FILENAME = "gravity_import_metadata.json"
 PROJECT_META_FILENAME = "project_meta.json"
 
 RUN_VTK_FILENAME = "block_model_core.vtr"   # FASE 10: Exportación VTK industrial
+RUN_MANIFEST_FILENAME = "run_manifest.json"  # HITO 2: Provenance audit trail
+RUN_JOINT_BLOCK_MODEL_FILENAME = "block_model_joint.parquet"  # HITO 1: schema joint v3.0
 
 RUN_EXPORT_FILENAMES = (
     RUN_BLOCK_MODEL_FILENAME,
@@ -48,6 +50,8 @@ RUN_EXPORT_FILENAMES = (
     RUN_SOURCE_GRAVITY_FILENAME,
     RUN_GRAVITY_IMPORT_METADATA_FILENAME,
     RUN_VTK_FILENAME,
+    RUN_MANIFEST_FILENAME,
+    RUN_JOINT_BLOCK_MODEL_FILENAME,
 )
 
 
@@ -283,6 +287,7 @@ def get_run_files_status(run_dir: Path) -> dict:
         "schedule": (run_dir / RUN_SCHEDULE_FILENAME).exists(),
         "source_gravity": (run_dir / RUN_SOURCE_GRAVITY_FILENAME).exists(),
         "gravity_import_metadata": (run_dir / RUN_GRAVITY_IMPORT_METADATA_FILENAME).exists(),
+        "run_manifest": (run_dir / RUN_MANIFEST_FILENAME).exists(),
     }
 
 
@@ -632,6 +637,103 @@ def update_run_status(
         os.fsync(f.fileno())
 
     os.replace(str(tmp_path), str(path))
+
+
+_PARQUET_SCHEMA_VERSION = "v3.0"
+
+_REQUIRED_COLUMNS_ALL = {"run_type", "schema_version"}
+
+_REQUIRED_COLUMNS_BY_RUN_TYPE = {
+    "gravity": {"x", "y", "z", "density"},
+    "magnetic": {"x_m", "y_m", "z_m", "susceptibility_si"},
+    "joint": {"x_m", "y_m", "z_m", "density_t_m3", "susceptibility_si"},
+}
+
+_VALID_RUN_TYPES = frozenset(_REQUIRED_COLUMNS_BY_RUN_TYPE.keys())
+
+
+def validate_parquet_schema(path: Path, expected_run_type: Optional[str] = None) -> dict:
+    """Valida que un Parquet cumple el contrato de schema v3.0.
+
+    Retorna un dict con ``valid`` (bool), ``run_type`` leído del archivo,
+    ``schema_version`` leído, y ``errors`` (lista de strings vacía si todo OK).
+
+    No lanza excepciones — el llamador decide qué hacer con ``valid=False``.
+    """
+    errors = []
+
+    try:
+        import polars as pl
+        df = pl.read_parquet(str(path), n_rows=1)
+    except Exception as exc:
+        return {"valid": False, "run_type": None, "schema_version": None, "errors": [f"read_error: {exc}"]}
+
+    columns = set(df.columns)
+
+    missing_required = _REQUIRED_COLUMNS_ALL - columns
+    if missing_required:
+        errors.append(f"missing_columns: {sorted(missing_required)}")
+
+    run_type_val = None
+    schema_version_val = None
+
+    if "run_type" in columns:
+        try:
+            run_type_val = df["run_type"][0]
+        except Exception:
+            pass
+
+    if "schema_version" in columns:
+        try:
+            schema_version_val = df["schema_version"][0]
+        except Exception:
+            pass
+
+    if schema_version_val and schema_version_val != _PARQUET_SCHEMA_VERSION:
+        errors.append(f"schema_version_mismatch: got={schema_version_val}, expected={_PARQUET_SCHEMA_VERSION}")
+
+    if run_type_val and run_type_val not in _VALID_RUN_TYPES:
+        errors.append(f"invalid_run_type: {run_type_val}")
+
+    effective_run_type = expected_run_type or run_type_val
+    if effective_run_type in _REQUIRED_COLUMNS_BY_RUN_TYPE:
+        missing_typed = _REQUIRED_COLUMNS_BY_RUN_TYPE[effective_run_type] - columns
+        if missing_typed:
+            errors.append(f"missing_{effective_run_type}_columns: {sorted(missing_typed)}")
+
+    return {
+        "valid": len(errors) == 0,
+        "run_type": run_type_val,
+        "schema_version": schema_version_val,
+        "errors": errors,
+    }
+
+
+def sha256_file(path: Path) -> str:
+    """SHA-256 hex digest de un archivo en disco. Lectura en chunks para archivos grandes."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_run_manifest(run_dir: Path, manifest: dict) -> Path:
+    """Escribe run_manifest.json de forma atómica (write tmp → os.replace).
+
+    Si el write falla el caller debe capturar la excepción — el manifest es
+    adición non-fatal y no debe bloquear el resultado de la inversión.
+    """
+    path = run_dir / RUN_MANIFEST_FILENAME
+    run_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    tmp_path.replace(path)
+    return path
 
 
 def resolve_mine_design_block_model_reference(

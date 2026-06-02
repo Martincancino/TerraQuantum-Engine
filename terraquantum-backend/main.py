@@ -6,6 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from api.async_api import router as async_router
+from api.keys_api import router as keys_router
+from api.metrics_api import router as metrics_router
 from api.system_api import router as system_router
 from api.geophysics_api import router as geophysics_router
 from api.block_model_api import router as block_model_router
@@ -32,7 +35,10 @@ from core.config import (
     ensure_runtime_dirs,
 )
 from core.gee_client import init_gee
+from core.metrics import PrometheusMiddleware
+from core.observability import init_tracing, instrument_app
 from core.rate_limit import limiter
+from middleware.api_key_middleware import ApiKeyMiddleware
 
 # Feature flags — default 'false' en producción para cumplir compliance JORC/NI 43-101.
 # Activar explícitamente en entornos de desarrollo o demo con opt-in del usuario.
@@ -44,6 +50,7 @@ _ENABLE_FOCUSING = os.environ.get("ENABLE_FOCUSING", "false").lower() == "true"
 
 ensure_runtime_dirs()
 init_gee()
+init_tracing()
 
 app = FastAPI(
     title=APP_TITLE,
@@ -53,6 +60,9 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── Routers siempre activos (núcleo geofísico + datos) ───────────────────────
+app.include_router(async_router)
+app.include_router(keys_router)
+app.include_router(metrics_router)
 app.include_router(system_router)
 app.include_router(geophysics_router)
 app.include_router(block_model_router)
@@ -74,13 +84,26 @@ if _ENABLE_ECONOMIC:
     app.include_router(scenario_sweep_router)
     app.include_router(mine_method_router)
 
+# Middleware order matters: last add_middleware = outermost layer.
+# Stack: CORS (outer) → ApiKey → Prometheus (inner) → routes.
+# Prometheus is innermost so it measures authenticated request latency only.
+app.add_middleware(PrometheusMiddleware)
+app.add_middleware(ApiKeyMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-    allow_headers=["Content-Type", "Accept", "Authorization"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Content-Type",
+        "Accept",
+        "Authorization",
+        "X-TQ-API-Key",
+        "X-TQ-Master-Key",
+    ],
 )
+
+instrument_app(app)
 
 app.mount(
     MODELS_ROUTE_PREFIX,

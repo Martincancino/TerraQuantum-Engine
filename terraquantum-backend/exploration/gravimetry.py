@@ -1194,6 +1194,13 @@ class GravimetryInversion:
         Ws = sp.diags(1.0 / col_norms)
         G_scaled = G_w @ Ws
 
+        # ── HITO 5 — Bounds en espacio escalado m_tilde ──────────────────────────
+        # density = base_density + Ws @ m_tilde, con Ws = diag(1/col_norms),
+        # por lo que m_tilde_i = (density_i - base_density) * col_norms_i.
+        # Los bounds físicos [density_min, density_max] se transforman a m_tilde.
+        _lb_tilde = (float(density_min) - self.base_density) * col_norms
+        _ub_tilde = (float(density_max) - self.base_density) * col_norms
+
         # ── Laplaciano no-uniforme reducido a celdas activas — F0.9 ──────────
         # Si hx/hy/hz provienen del tensor mesh, los pesos reales de arista
         # se propagan al Laplaciano, disipando correctamente en el padding.
@@ -1342,13 +1349,40 @@ class GravimetryInversion:
             _d_small     = _w_small * _small_target
             _G_aug_r02   = sp.vstack([G_aug, _small_block]).tocsr()
             _d_aug_r02   = np.concatenate([d_aug, _d_small])
-            result = lsqr(
-                _G_aug_r02, _d_aug_r02,
-                damp=0.0,          # smallness ya está en _G_aug_r02
-                iter_lim=500, atol=1e-8, btol=1e-8, show=False,
+            from core.config import USE_BOUNDED_SOLVER as _USE_BC
+            # Benchmark empírico (2026-06-01): TRF+LSMR tarda ~40s con NNZ≈213K y
+            # n_active_sol=14K; LSQR converge en <0.1s. Umbral 8000 (HITO 5): demo
+            # (~800), medium CSV (~5K) y DOI test (~5K) usan TRF bounded; auto_grid
+            # (>14K) usa LSQR+clip como fallback.
+            _use_trf = _USE_BC and _n_active_sol <= 8_000
+            print(
+                f"[SOLVER R-02] G_aug=({_G_aug_r02.shape[0]:,}×{_G_aug_r02.shape[1]:,}) "
+                f"n_active_sol={_n_active_sol:,} NNZ={_G_aug_r02.nnz:,} "
+                f"-> {'TRF/bounded' if _use_trf else 'LSQR+clip (auto-fallback n>3K)'}"
             )
-            _acond = result[6]
-            print(f"[R-02/FASE8] LSQR convergido. cond(A)~{_acond:.2e}")
+            _t_solve = time.perf_counter()
+            if _use_trf:
+                from scipy.optimize import lsq_linear as _lsq_linear
+                _bc = _lsq_linear(
+                    _G_aug_r02, _d_aug_r02,
+                    bounds=(_lb_tilde, _ub_tilde),
+                    method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
+                )
+                m_tilde = _bc.x
+                _acond = float('nan')
+                print(f"[R-02/FASE8] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
+            else:
+                result = lsqr(
+                    _G_aug_r02, _d_aug_r02,
+                    damp=0.0,
+                    iter_lim=500, atol=1e-8, btol=1e-8, show=False,
+                )
+                m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
+                _acond = result[6]
+                print(
+                    f"[R-02/FASE8] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
+                    f"cond(A)~{_acond:.2e}"
+                )
             if _acond > 1e12:
                 print(
                     f"[R-02/FASE8] WARN cond(A)={_acond:.2e} > 1e12. "
@@ -1356,14 +1390,40 @@ class GravimetryInversion:
                     f"o lambda_mag={lambda_mag:.2e}."
                 )
         else:
-            result = lsqr(
-                G_aug, d_aug,
-                damp=float(lambda_mag),
-                iter_lim=500, atol=1e-8, btol=1e-8, show=False,
+            from core.config import USE_BOUNDED_SOLVER as _USE_BC
+            _use_trf = _USE_BC and _n_active_sol <= 8_000
+            print(
+                f"[SOLVER] G_aug=({G_aug.shape[0]:,}×{G_aug.shape[1]:,}) "
+                f"n_active_sol={_n_active_sol:,} NNZ={G_aug.nnz:,} "
+                f"-> {'TRF/bounded' if _use_trf else 'LSQR+clip (auto-fallback n>3K)'}"
             )
-            _acond = result[6]
+            _t_solve = time.perf_counter()
+            if _use_trf:
+                from scipy.optimize import lsq_linear as _lsq_linear
+                _eye_lam = sp.eye(_n_active_sol, format='csr', dtype=np.float64) * float(lambda_mag)
+                _A_bc = sp.vstack([G_aug, _eye_lam]).tocsr()
+                _b_bc = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
+                _bc = _lsq_linear(
+                    _A_bc, _b_bc,
+                    bounds=(_lb_tilde, _ub_tilde),
+                    method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
+                )
+                m_tilde = _bc.x
+                _acond = float('nan')
+                print(f"[SOLVER] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
+            else:
+                result = lsqr(
+                    G_aug, d_aug,
+                    damp=float(lambda_mag),
+                    iter_lim=500, atol=1e-8, btol=1e-8, show=False,
+                )
+                m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
+                _acond = result[6]
+                print(
+                    f"[SOLVER] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
+                    f"cond(A)~{_acond:.2e}"
+                )
 
-        m_tilde = result[0]
         density_contrast_active = Ws @ m_tilde
 
         if len(density_contrast_active) != _n_active_sol:

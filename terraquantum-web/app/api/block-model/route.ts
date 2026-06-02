@@ -33,10 +33,14 @@ export async function GET(req: NextRequest) {
     const timeout = setTimeout(() => controller.abort(), 90_000);
 
     try {
+      const apiKey = process.env.TQ_API_KEY ?? "";
       const res = await fetch(backendUrl, {
         method: "GET",
         cache: "no-store",
-        headers: { accept: "application/vnd.apache.arrow.stream" },
+        headers: {
+          accept: "application/vnd.apache.arrow.stream",
+          ...(apiKey ? { "X-TQ-API-Key": apiKey } : {}),
+        },
         signal: controller.signal,
       });
 

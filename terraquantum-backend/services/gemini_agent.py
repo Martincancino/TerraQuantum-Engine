@@ -20,6 +20,8 @@ from typing import Any, List, Literal
 
 from pydantic import BaseModel, ValidationError
 
+from core.config import GEMINI_MODEL_NAME
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Modelos Pydantic — contrato de salida del agente (validación estructural).
@@ -301,7 +303,7 @@ def request_gemini_interpretation(report: dict) -> dict:
 
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-pro",
+            model_name=GEMINI_MODEL_NAME,
             system_instruction=SYSTEM_PROMPT,
         )
         response = model.generate_content(
@@ -358,4 +360,10 @@ def request_gemini_interpretation(report: dict) -> dict:
                 "limitations": "",
             }
 
+    validated_data["regulatory_disclaimer"] = (
+        "Este informe es una interpretación geofísica preliminar y no constituye "
+        "una estimación de recursos minerales bajo NI 43-101 o JORC 2012. "
+        "No ha sido revisado por un Qualified Person ni Competent Person. "
+        "Requiere validación profesional independiente antes de cualquier uso regulatorio o de inversión."
+    )
     return validated_data

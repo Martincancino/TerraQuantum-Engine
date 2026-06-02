@@ -605,6 +605,36 @@ export async function getExplorationBlockModelForRun(
   return finalizeBlockModelResult(result, request.mode);
 }
 
+// ─── Arrow IPC block model transport (QW-6) ──────────────────────────────────
+// Usa fetchBlockModelArrowForRun (implementación completa con TypedArrays, ya
+// definida más abajo) cuando limit > 5000. Fallback a JSON si Arrow falla.
+
+export async function getExplorationBlockModelForRunWithArrow(
+  projectId: string,
+  runId: string,
+  modeOrLimit: BlockModelDataMode | number = "exploration",
+  limit = 5000,
+): Promise<FrontendApiResult<BlockModelResponse>> {
+  const request = resolveBlockModelRequestArgs(modeOrLimit, limit);
+
+  if (request.limit > 5000) {
+    const arrowResult = await fetchBlockModelArrowForRun(projectId, runId, request.mode);
+    if (arrowResult.ok) {
+      console.log(`[QW-6] ${arrowResult.data?.returnedVoxels ?? 0} vóxeles via Arrow IPC`);
+      return arrowResult;
+    }
+    console.warn("[QW-6] Arrow falló, fallback a JSON:", arrowResult.error);
+  }
+
+  const result = await fetchInternalJson<JsonValue>({
+    path: `/api/block-model?mode=${encodeURIComponent(request.mode)}&limit=${encodeURIComponent(String(request.limit))}&project_id=${encodeURIComponent(projectId)}&run_id=${encodeURIComponent(runId)}`,
+    method: "GET",
+    timeoutMs: 120_000,
+  });
+
+  return finalizeBlockModelResult(result, request.mode);
+}
+
 export async function getTerrainData(projectId: string) {
   return fetchInternalJson<TerrainResponse>({
     path: `/api/terrain?project_id=${encodeURIComponent(projectId)}`,
@@ -670,10 +700,14 @@ export async function deleteRun(
   runId: string
 ): Promise<{ ok: boolean; error: string | null }> {
   const url = `${BACKEND_PUBLIC_URL}/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`;
+  const _apiKey = process.env.NEXT_PUBLIC_TQ_API_KEY ?? "";
   try {
     const res = await fetch(url, {
       method: "DELETE",
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        ...(_apiKey ? { "X-TQ-API-Key": _apiKey } : {}),
+      },
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -1029,6 +1063,7 @@ export async function fetchProjectFootprint(
   projectId: string
 ): Promise<FrontendApiResult<ProjectFootprintResponse>> {
   const url = `${BACKEND_PUBLIC_URL}/projects/${encodeURIComponent(projectId)}/footprint`;
+  const _apiKey = process.env.NEXT_PUBLIC_TQ_API_KEY ?? "";
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 15_000);
 
@@ -1036,7 +1071,10 @@ export async function fetchProjectFootprint(
     const res = await fetch(url, {
       method: "GET",
       cache: "no-store",
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        ...(_apiKey ? { "X-TQ-API-Key": _apiKey } : {}),
+      },
       signal: controller.signal,
     });
 
@@ -1143,6 +1181,12 @@ async function _buildBlockModelResponseFromArrow(
   const lats = hasCol("lat") ? getF32("lat") : null;
   const lons = hasCol("lon") ? getF32("lon") : null;
 
+  // Columnas multi-física (schema v3.0 — magnetic + joint)
+  const susceptibilitySi = hasCol("susceptibility_si") ? getF32("susceptibility_si") : null;
+  const jointStructuralScores = hasCol("joint_structural_score") ? getF32("joint_structural_score") : null;
+  const densityT = hasCol("density_t_m3") ? getF32("density_t_m3") : null;
+  const densityContrast = hasCol("density_contrast_t_m3") ? getF32("density_contrast_t_m3") : null;
+
   // Bounds para domainL/H/W — single pass
   let xMin = Infinity, xMax = -Infinity;
   let yMin = Infinity, yMax = -Infinity;
@@ -1181,6 +1225,10 @@ async function _buildBlockModelResponseFromArrow(
     if (surfaceElevs) cell.surface_elevation_masl = surfaceElevs[i];
     if (lats) cell.lat = lats[i];
     if (lons) cell.lon = lons[i];
+    if (susceptibilitySi) cell.susceptibility_si = susceptibilitySi[i];
+    if (jointStructuralScores) cell.joint_structural_score = jointStructuralScores[i];
+    if (densityT) cell.density_t_m3 = densityT[i];
+    if (densityContrast) cell.density_contrast_t_m3 = densityContrast[i];
     cells[i] = cell;
   }
   const _r08_cells_end = performance.now();

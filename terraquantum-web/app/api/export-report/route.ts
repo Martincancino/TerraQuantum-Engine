@@ -42,11 +42,13 @@ export async function GET(req: NextRequest) {
     });
 
     const backendUrl = buildBackendUrl(`/export-report?${backendParams.toString()}`);
+    const apiKey = process.env.TQ_API_KEY ?? "";
     const res = await fetch(backendUrl, {
       method: "GET",
       cache: "no-store",
       headers: {
         accept: "text/html",
+        ...(apiKey ? { "X-TQ-API-Key": apiKey } : {}),
       },
     });
 

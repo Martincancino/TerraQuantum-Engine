@@ -33,6 +33,34 @@ CORS_ORIGINS: list[str] = [origin.strip() for origin in _cors_raw.split(",") if 
 
 CSV_MAX_BYTES: int = int(os.getenv("CSV_MAX_BYTES", "10485760"))
 
+GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash")
+
+# HITO 5: Solver con bounds (B-06). Env var USE_BOUNDED_SOLVER=false fuerza LSQR+clip (rollback).
+USE_BOUNDED_SOLVER: bool = os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false"
+
+# HITO 7: Cloud storage abstraction.
+# STORAGE_BACKEND env var is read by core/storage.py at import time.
+# Valid values: "local" (default), "s3", "gcs".
+
+# HITO 7: Celery async workers.
+# Default points at a local Redis instance (docker run -d -p 6379:6379 redis:7-alpine).
+CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+
+# HITO 7: Observability — OpenTelemetry + Prometheus.
+# OTEL_ENABLED=false (default) → zero overhead; set true to activate tracing.
+# OTEL_EXPORTER_OTLP_ENDPOINT: omit for console exporter (dev), set for Jaeger/Tempo (prod).
+OTEL_ENABLED: bool = os.getenv("OTEL_ENABLED", "false").lower() == "true"
+OTEL_SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "terraquantum-backend")
+OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+# HITO 7: Auth middleware (B-11).
+# Default OFF para desarrollo local. En producción: TQ_AUTH_ENABLED=true + crear keys.
+# TQ_MASTER_KEY es requerido para gestionar API keys via /api/keys/.
+TQ_AUTH_ENABLED: bool = os.getenv("TQ_AUTH_ENABLED", "false").lower() != "false"
+TQ_MASTER_KEY: str = os.getenv("TQ_MASTER_KEY", "")
+TQ_API_KEYS_DB: Path = DATA_DIR / "api_keys.db"
+
 
 def ensure_runtime_dirs():
     DATA_DIR.mkdir(parents=True, exist_ok=True)

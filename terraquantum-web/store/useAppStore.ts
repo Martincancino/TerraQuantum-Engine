@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { TerrainResponse, VoxelMineralModel } from '../lib/terraQuantumGeology';
 import type { FavorabilityResult } from '../componentes/datos/favorability_types';
-import type { GeorefConfidence, ProjectFootprint, CrsInfo, ElevationRange, PercentileStats } from '../lib/terraquantum/frontendApi';
+import type { GeorefConfidence, ProjectFootprint, CrsInfo, ElevationRange, PercentileStats, GravityImportPreviewResponse, GravityCsvInvertResponse } from '../lib/terraquantum/frontendApi';
 
 // Tipos mínimos para campos que antes eran any[]
 export interface HeatmapPoint {
@@ -109,6 +109,31 @@ export type ViewMode = 'density' | 'susceptibility' | 'joint';
 
 export type BlockModelDataMode = "exploration" | "full" | "anomaly";
 
+/** Schema v3.0 — contrato unificado de vóxel de bloque para gravity / magnetic / joint.
+ *  Espejo TypeScript de GeophysicsVoxel (schemas/geophysics_schema.py).
+ */
+export interface UnifiedVoxelCell {
+  run_type?: 'gravity' | 'magnetic' | 'joint';
+  schema_version?: string;
+  // Coordenadas (aliases según el run path)
+  x_m?: number; x?: number;
+  y_m?: number; y?: number;
+  z_m?: number; z?: number;
+  // Gravity
+  density?: number;
+  density_t_m3?: number;
+  density_contrast_t_m3?: number;
+  density_anomaly_score?: number;
+  // Magnetic / joint
+  susceptibility_si?: number;
+  susceptibility_score?: number;
+  joint_structural_score?: number;
+  // Uncertainty / DOI
+  posterior_std?: number;
+  doi_raw?: number;
+  [key: string]: number | string | boolean | null | undefined;
+}
+
 export type VoxelTracePatch = {
   totalVoxels?: number | null;
   storedVoxels?: number | null;
@@ -197,6 +222,8 @@ export interface AppState {
   setVisibleCellCount: (n: number) => void;
   highlightedCellCount: number;
   setHighlightedCellCount: (n: number) => void;
+  susceptibilityDataAvailable: boolean;
+  setSusceptibilityDataAvailable: (val: boolean) => void;
   totalVoxels: number | null;
   storedVoxels: number | null;
   anomalyVoxels: number | null;
@@ -273,10 +300,10 @@ export interface AppState {
   setLonEast: (val: string) => void;
   lonWest: string;
   setLonWest: (val: string) => void;
-  gravityPreviewResult: any | null;
-  setGravityPreviewResult: (res: any | null) => void;
-  gravityInvertResult: any | null;
-  setGravityInvertResult: (res: any | null) => void;
+  gravityPreviewResult: GravityImportPreviewResponse | null;
+  setGravityPreviewResult: (res: GravityImportPreviewResponse | null) => void;
+  gravityInvertResult: GravityCsvInvertResponse | null;
+  setGravityInvertResult: (res: GravityCsvInvertResponse | null) => void;
 
   // 9. GEOREF (R1-FE-2) + CRS (R2-FE)
   projectFootprint: ProjectFootprint | null;
@@ -480,6 +507,8 @@ export const useAppStore = create<AppState>((set) => ({
   setVisibleCellCount: (n) => set({ visibleCellCount: n }),
   highlightedCellCount: 0,
   setHighlightedCellCount: (n) => set({ highlightedCellCount: n }),
+  susceptibilityDataAvailable: true,
+  setSusceptibilityDataAvailable: (val) => set({ susceptibilityDataAvailable: val }),
   totalVoxels: null,
   storedVoxels: null,
   anomalyVoxels: null,

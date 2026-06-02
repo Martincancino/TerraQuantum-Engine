@@ -30,6 +30,8 @@ NO se calcula física nueva aquí: se orquestan los dos motores existentes
 (GravimetryInversion / MagnetometryInversion) y los operadores de geophysics_math.
 """
 
+import subprocess
+from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
@@ -37,8 +39,15 @@ import polars as pl
 import scipy.sparse as sp
 from fastapi import HTTPException
 
-from core.config import DEFAULT_BLOCK_MODEL_PATH, ensure_runtime_dirs
-from core.block_model_store import get_run_block_model_reference, update_run_status
+from core.config import ensure_runtime_dirs
+from core.block_model_store import (
+    RUN_SOURCE_GRAVITY_FILENAME,
+    get_run_block_model_reference,
+    sha256_file,
+    update_run_status,
+    validate_parquet_schema,
+    write_run_manifest,
+)
 from core.logging import get_logger
 from exploration.clustering import extract_geological_bodies
 from exploration.geophysics_math import build_gradient_operators
@@ -220,17 +229,18 @@ def _persist_joint_parquet(
 ) -> str:
     """Escribe el bloque conjunto en Parquet y devuelve la ruta del archivo.
 
-    Columnas exportadas (contrato Fase 10):
+    Columnas exportadas (schema v3.0):
         x_c, y_c, z_c          — coordenadas de centro del vóxel (m)
         x_m, y_m, z_m          — alias estándar para el frontend
         density_t_m3            — densidad absoluta recuperada
         density_contrast_t_m3  — contraste respecto a densidad base
         susceptibility_si       — susceptibilidad magnética recuperada
         joint_structural_score  — score combinado normalizado ρ+χ ∈ [0,1]
+        run_type                — "joint" (schema v3.0)
+        schema_version          — "v3.0"
 
     Solo se persisten los vóxeles en ``kept_idx`` (zona anómala filtrada).
-    Se escribe también a ``DEFAULT_BLOCK_MODEL_PATH`` como ruta legacy para
-    que el frontend pueda cargarlo sin necesitar project_id/run_id.
+    NUNCA sobreescribe DEFAULT_BLOCK_MODEL_PATH (B-10 fix, HITO 1).
     """
     x_kept = x_c[kept_idx]
     y_kept = y_c[kept_idx]
@@ -240,6 +250,7 @@ def _persist_joint_parquet(
     chi_kept = m_chi[kept_idx]
     score_kept = combined[kept_idx]
 
+    n = len(x_kept)
     df = pl.DataFrame({
         "x_c": x_kept.tolist(),
         "y_c": y_kept.tolist(),
@@ -247,10 +258,17 @@ def _persist_joint_parquet(
         "x_m": x_kept.tolist(),
         "y_m": y_kept.tolist(),
         "z_m": z_kept.tolist(),
+        # Aliases required by block_model_service.get_index_columns() and ensure_visual_columns()
+        "x": x_kept.tolist(),
+        "y": y_kept.tolist(),
+        "z": z_kept.tolist(),
+        "density": rho_kept.tolist(),
         "density_t_m3": rho_kept.tolist(),
         "density_contrast_t_m3": contrast_kept.tolist(),
         "susceptibility_si": chi_kept.tolist(),
         "joint_structural_score": score_kept.tolist(),
+        "run_type": ["joint"] * n,
+        "schema_version": ["v3.0"] * n,
     })
 
     joint_ref = get_run_block_model_reference(
@@ -261,8 +279,14 @@ def _persist_joint_parquet(
     joint_ref.path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(str(joint_ref.path))
 
-    DEFAULT_BLOCK_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(str(DEFAULT_BLOCK_MODEL_PATH))
+    validation = validate_parquet_schema(joint_ref.path, expected_run_type="joint")
+    if not validation["valid"]:
+        import logging as _log_mod
+        _log_mod.getLogger(__name__).warning(
+            "joint_parquet_schema_invalid run=%s errors=%s",
+            getattr(params, "run_id", "unknown"),
+            validation["errors"],
+        )
 
     return str(joint_ref.path)
 
@@ -290,6 +314,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
                 pass
 
     _log.info("joint_inversion_start", project_id=project_id, run_id=run_id)
+    _joint_start_utc = datetime.now(timezone.utc)
     ensure_runtime_dirs()
     _update("running", 0.0, "loading_data", "Validando input de inversión conjunta (Fase 9C-2)...")
 
@@ -617,6 +642,55 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         _log.info("joint_parquet_written", path=joint_parquet_path, voxels=len(kept_idx))
     except Exception as _pq_exc:
         _log.warning("joint_parquet_nonfatal", error=str(_pq_exc))
+
+    # ── HITO 2: Run Manifest joint (provenance audit trail) ───────────────────
+    try:
+        from pathlib import Path as _Path
+
+        def _git_hash_short() -> str:
+            try:
+                return subprocess.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    stderr=subprocess.DEVNULL, timeout=2,
+                ).decode().strip()
+            except Exception:
+                return "unknown"
+
+        _joint_ref = get_run_block_model_reference(
+            project_id=params.project_id, run_id=params.run_id
+        )
+        _joint_run_dir = _joint_ref.path.parent
+        _csv_path_joint = _joint_run_dir / RUN_SOURCE_GRAVITY_FILENAME
+        _last_hist = history[-1] if history else {}
+        write_run_manifest(_joint_run_dir, {
+            "schema_version": "v3.0",
+            "run_type": "joint",
+            "code_version": _git_hash_short(),
+            "rng_seed": None,
+            "timestamp_utc_start": _joint_start_utc.isoformat(),
+            "timestamp_utc_end": datetime.now(timezone.utc).isoformat(),
+            "sha256_parquet": sha256_file(_Path(joint_parquet_path)) if joint_parquet_path else None,
+            "sha256_csv": sha256_file(_csv_path_joint) if _csv_path_joint.exists() else None,
+            "inversion_params": {
+                "nx": params.nx, "ny": params.ny, "nz": params.nz,
+                "block_size": params.block_size,
+                "lambda_mag": params.lambda_mag,
+                "alpha_spatial": params.alpha_spatial,
+                "cutoff_radius": params.cutoff_radius,
+                "joint_max_iter": getattr(params, "joint_max_iter", None),
+                "cross_lambda_max": getattr(params, "cross_lambda_max", None),
+            },
+            "solver_stats": {
+                "iterations_done": int(n_iter_done),
+                "E_norm_final": float(_last_hist.get("E_norm", float("nan"))),
+                "misfit_gravity_percent": float(_last_hist.get("misfit_gravity_percent", float("nan"))),
+                "misfit_magnetic_percent": float(_last_hist.get("misfit_magnetic_percent", float("nan"))),
+                "n_geological_bodies": None,
+            },
+        })
+    except Exception as _jmfst_exc:
+        _log.warning("joint_run_manifest_nonfatal", error=str(_jmfst_exc))
+    # ── Fin HITO 2 ────────────────────────────────────────────────────────────
 
     # ── FASE 10 Parte 3: Clustering — extracción de cuerpos geológicos ───────
     # Llama al módulo de clustering sobre el campo COMPLETO (nC vóxeles) para

@@ -6,7 +6,6 @@ import { useAppStore } from "../../store/useAppStore";
 import { VoxelMineralModel } from "../../lib/terraQuantumGeology";
 
 import Scene3D from "../Scene3D";
-import BackendStatusBadge from "../huds/BackendStatusBadge";
 import GravityCsvPreviewPanel from "../GravityCsvPreviewPanel";
 import InversionQualityBadge from "../InversionQualityBadge";
 import WorkspaceLayout from "../workspace/WorkspaceLayout";
@@ -26,7 +25,7 @@ import {
   findDemoHighlightVoxel,
 } from "../../lib/terraquantum/geophysicsModel";
 import {
-  getExplorationBlockModelForRun,
+  getExplorationBlockModelForRunWithArrow,
   getTerrainData,
   runGeophysicsInvert,
   getGeophysicsStatus,
@@ -273,6 +272,8 @@ export default function Exploration3DView() {
   ];
   const loadedVoxelCount = returnedVoxels ?? (Array.isArray(model?.cells) ? model.cells.length : 0);
   const percentileStats = useAppStore((s) => s.percentileStats);
+  const viewMode = useAppStore((s) => s.viewMode);
+  const susceptibilityDataAvailable = useAppStore((s) => s.susceptibilityDataAvailable);
   const modelStatsRecord = asRecord(model);
   const scoreStatsRecord =
     asRecord(modelStatsRecord?.scoreStats) ??
@@ -378,7 +379,7 @@ export default function Exploration3DView() {
       setIsBlockModelLoading(true);
 
       try {
-        const blockResult = await getExplorationBlockModelForRun(
+        const blockResult = await getExplorationBlockModelForRunWithArrow(
           activeRun.projectId as string,
           activeRun.runId as string,
           blockModelDataMode,
@@ -524,8 +525,6 @@ export default function Exploration3DView() {
         viewport={
           <div className="h-full min-h-0 border border-white/10 rounded-3xl overflow-hidden bg-[#050505] relative shadow-[0_0_50px_rgba(0,0,0,0.5)] flex flex-col tq-grid-bg">
             <div className="flex-grow relative min-w-0 min-h-0 overflow-hidden">
-              <BackendStatusBadge />
-
               {!show3D || !model ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-neutral-600 text-[10px] tracking-[0.28em] uppercase text-center">
                   <span className="break-words">Esperando inversión gravimétrica</span>
@@ -568,6 +567,13 @@ export default function Exploration3DView() {
               )}
               {/* ── Fase 12: Panel Multi-Física (overlay sobre el Canvas) ────────── */}
               {show3D && model && <MultiPhysicsControls />}
+              {/* Badge: datos magnéticos no disponibles para la corrida actual */}
+              {show3D && model && viewMode === 'susceptibility' && !susceptibilityDataAvailable && (
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/75 border border-yellow-500/60 text-yellow-400 text-[10px] font-mono px-3 py-1 rounded-full pointer-events-none">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                  Sin datos magnéticos para esta corrida
+                </div>
+              )}
             </div>
 
             {show3D && model && (

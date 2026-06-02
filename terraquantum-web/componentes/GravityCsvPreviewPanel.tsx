@@ -122,37 +122,8 @@ function mapPriorityClassLabel(value: string | null | undefined): string {
   return v || "N/A";
 }
 
-type InversionProfileId = "quick_check" | "csv_medium" | "industrial_demo_v1";
-
-const INVERSION_PROFILES = {
-  quick_check: {
-    label: "Control rápido",
-    description: "Perfil mínimo para validar flujo y QA/QC. No apto para diseño mina.",
-    nx: 4,
-    ny: 4,
-    nz: 4,
-    blockSize: 10,
-    depth: 20,
-  },
-  csv_medium: {
-    label: "Malla media CSV",
-    description: "Perfil equilibrado: resolución suficiente para ver variación espacial real del CSV. Apto para revisión de targeting.",
-    nx: 16,
-    ny: 12,
-    nz: 16,
-    blockSize: 20,
-    depth: 150,
-  },
-  industrial_demo_v1: {
-    label: "Demo industrial v1",
-    description: "Perfil de mayor resolución para demo sintética conceptual.",
-    nx: 32,
-    ny: 20,
-    nz: 32,
-    blockSize: 25,
-    depth: 250,
-  },
-} as const;
+// Parámetros legacy enviados al backend; el backend los ignora y usa auto_grid del CSV.
+const LEGACY_INVERSION_PARAMS = { nx: 32, ny: 20, nz: 32, blockSize: 25, depth: 500 } as const;
 
 function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -356,7 +327,6 @@ export default function GravityCsvPreviewPanel() {
   const clearActiveRun = useAppStore(state => state.clearActiveRun);
   const setGeorefState = useAppStore(state => state.setGeorefState);
 
-  const [selectedProfileId, setSelectedProfileId] = useState<InversionProfileId>("quick_check");
   // Se han eliminado userLat y userLon en favor del Bounding Box en Zustand
   const [geoError, setGeoError] = useState<string | null>(null);
 
@@ -608,18 +578,16 @@ export default function GravityCsvPreviewPanel() {
       observationsSummary: buildObservationsSummary(result),
     });
 
-    const selectedProfile = INVERSION_PROFILES[selectedProfileId];
-
     const payloadWithFlags = {
       ...invertPayloadBase,
       projectId,
       lat: latNorth.trim() || "-22.28", // Fallback temp mientras no cambia backend
       lon: lonWest.trim() || "-68.89",
-      nx: selectedProfile.nx,
-      ny: selectedProfile.ny,
-      nz: selectedProfile.nz,
-      blockSize: selectedProfile.blockSize,
-      depth: selectedProfile.depth,
+      nx: LEGACY_INVERSION_PARAMS.nx,
+      ny: LEGACY_INVERSION_PARAMS.ny,
+      nz: LEGACY_INVERSION_PARAMS.nz,
+      blockSize: LEGACY_INVERSION_PARAMS.blockSize,
+      depth: LEGACY_INVERSION_PARAMS.depth,
       runId,
       strict,
       allowGRaw,
@@ -643,6 +611,13 @@ export default function GravityCsvPreviewPanel() {
         if (isJsonObject(detail) && detail.error === "REGIONAL_SCALE_PREFLIGHT") {
           setRegionalGateError(detail as unknown as RegionalScaleGateError);
           setActiveRun({ source: "csv", status: "error", error: "REGIONAL_SCALE_PREFLIGHT" });
+          return;
+        }
+        if (isJsonObject(detail) && detail.error === "INVERSION_RUNTIME_ERROR") {
+          const msg = String((detail.message as string) || "Error interno del motor de inversión.");
+          const errType = String((detail.type as string) || "Error");
+          setInvertErrorMsg(`[${errType}] ${msg}`);
+          setActiveRun({ source: "csv", status: "error", error: msg });
           return;
         }
       }
@@ -1319,7 +1294,7 @@ export default function GravityCsvPreviewPanel() {
                         </tr>
                       </thead>
                       <tbody className="text-neutral-300">
-                        {result.observationsPreview.map((obs: Record<string, any>, idx: number) => (
+                        {result.observationsPreview.map((obs, idx) => (
                           <tr key={idx} className="border-b border-neutral-900/50 hover:bg-neutral-900/30">
                             <td className="p-2">{obs.x_m}</td>
                             <td className="p-2">{obs.y_m}</td>
@@ -1490,61 +1465,9 @@ export default function GravityCsvPreviewPanel() {
 
           {/* ── SECCIÓN DE INVERSIÓN ── */}
           <div className="mt-8 border-t border-neutral-800 pt-6">
-            <h4 className="text-[12px] uppercase tracking-[0.2em] text-[#C2D8C4] font-bold mb-2">
-              Ejecutar inversión desde CSV validado
+            <h4 className="text-[12px] uppercase tracking-[0.2em] text-[#C2D8C4] font-bold mb-6">
+              Inversión 3D
             </h4>
-            <p className="text-[10px] text-neutral-400 mb-4 font-mono">
-              Se reenviará el CSV completo al backend. No se usará solo la tabla de preview.
-            </p>
-
-            <div className="mb-6 p-4 border border-neutral-800 bg-black/40 rounded">
-              <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-2">Perfil de inversión</label>
-              <select
-                value={selectedProfileId}
-                onChange={(e) => setSelectedProfileId(e.target.value as InversionProfileId)}
-                className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2 text-sm text-white mb-3"
-              >
-                {(Object.entries(INVERSION_PROFILES) as [InversionProfileId, typeof INVERSION_PROFILES[InversionProfileId]][]).map(([id, profile]) => (
-                  <option key={id} value={id}>{profile.label}</option>
-                ))}
-              </select>
-              
-              <div className="text-[10px] text-neutral-400 font-mono space-y-1 bg-neutral-900/50 p-3 rounded border border-neutral-800/50">
-                <p className="text-white mb-2">{INVERSION_PROFILES[selectedProfileId].description}</p>
-                <p><span className="text-neutral-500">Grilla:</span> {INVERSION_PROFILES[selectedProfileId].nx} × {INVERSION_PROFILES[selectedProfileId].ny} × {INVERSION_PROFILES[selectedProfileId].nz}</p>
-                <p><span className="text-neutral-500">Total vóxeles:</span> {INVERSION_PROFILES[selectedProfileId].nx * INVERSION_PROFILES[selectedProfileId].ny * INVERSION_PROFILES[selectedProfileId].nz}</p>
-                <p><span className="text-neutral-500">Tamaño de bloque:</span> {INVERSION_PROFILES[selectedProfileId].blockSize} m</p>
-                <p><span className="text-neutral-500">Profundidad máx:</span> {INVERSION_PROFILES[selectedProfileId].ny * INVERSION_PROFILES[selectedProfileId].blockSize} m</p>
-              </div>
-
-              {selectedProfileId === "quick_check" && (
-                <div className="mt-3 p-2 border border-yellow-600/30 bg-yellow-600/10 text-yellow-500 text-[10px] font-mono rounded">
-                  Perfil QA/QC mínimo (4×4×4 = 64 bloques, 40m profundidad). El CSV sí se usa, pero la resolución es tan baja que el resultado visual parece uniforme. Para ver variación espacial real del CSV, usa &quot;Demo industrial v1&quot;.
-                </div>
-              )}
-              {selectedProfileId === "industrial_demo_v1" && (
-                <div className="mt-3 p-2 border border-purple-500/30 bg-purple-500/10 text-purple-400 text-[10px] font-mono rounded">
-                  Perfil preparado para dataset demo sintético de mayor resolución.
-                </div>
-              )}
-
-              <div className="mt-4 pt-4 border-t border-neutral-800">
-                <div className="p-3 border border-[#C2D8C4]/30 bg-[#C2D8C4]/10 rounded text-[10px] font-mono">
-                  <p className="text-[#C2D8C4] uppercase tracking-widest font-bold mb-2">
-                    MS-x Focusing
-                  </p>
-                  <p className="text-neutral-300">
-                    Siempre activo por politica del sistema.
-                  </p>
-                  <p className="mt-2 text-neutral-500">
-                    Resultado no es densidad física. Solo para análisis exploratoria avanzada. No reemplaza el modelo LSQR base.
-                  </p>
-                  <p className="mt-2 text-neutral-500">
-                    No estima recursos minerales ni representa una promesa geologica.
-                  </p>
-                </div>
-              </div>
-            </div>
 
             <div className="flex flex-col gap-4 mb-6">
               <button

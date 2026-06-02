@@ -43,12 +43,14 @@ export async function fetchBackendJson(options: {
   const backendUrl = buildBackendUrl(path);
 
   try {
+    const apiKey = process.env.TQ_API_KEY ?? "";
     const res = await fetch(backendUrl, {
       method,
       cache: "no-store",
       headers: {
         accept: "application/json",
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(apiKey ? { "X-TQ-API-Key": apiKey } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal,

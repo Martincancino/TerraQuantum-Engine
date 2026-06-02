@@ -642,12 +642,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.block_model_store import (
+    RUN_BLOCK_MODEL_FILENAME,
+    RUN_SOURCE_GRAVITY_FILENAME,
+    RUN_VTK_FILENAME,
     clean_trace_context,
     get_run_dir,
     get_run_inputs_path,
     get_run_report_path,
-    RUN_VTK_FILENAME,
-    RUN_BLOCK_MODEL_FILENAME,
+    sha256_file,
 )
 from core.config import APP_VERSION
 
@@ -735,6 +737,19 @@ def _build_bundle_manifest(
 ) -> dict[str, Any]:
     fit_diag = (report or {}).get("fitDiagnostics") or {}
     ts = report.get("technicalSummary") or {} if report else {}
+
+    _run_dir_bm = get_run_dir(pid, rid)
+    _parquet_path_bm = _run_dir_bm / RUN_BLOCK_MODEL_FILENAME
+    _csv_path_bm = _run_dir_bm / RUN_SOURCE_GRAVITY_FILENAME
+    try:
+        _sha256_parquet = sha256_file(_parquet_path_bm) if _parquet_path_bm.exists() else None
+    except Exception:
+        _sha256_parquet = None
+    try:
+        _sha256_csv = sha256_file(_csv_path_bm) if _csv_path_bm.exists() else None
+    except Exception:
+        _sha256_csv = None
+
     return {
         "schema_version": "11.0",
         "generated_utc": datetime.now(timezone.utc).isoformat(),
@@ -743,6 +758,8 @@ def _build_bundle_manifest(
         "run_id": rid,
         "config_hash": f"SHA256[:{cfg_hash}]",
         "config_hash_raw": cfg_hash,
+        "sha256_parquet": _sha256_parquet,
+        "sha256_csv": _sha256_csv,
         "audit_keys_used": _AUDIT_KEYS,
         "inversion_params": {k: inputs.get(k) for k in _AUDIT_KEYS if k in inputs},
         "grid": {

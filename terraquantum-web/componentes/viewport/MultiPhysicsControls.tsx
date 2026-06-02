@@ -1,9 +1,10 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { ViewMode } from "../../store/useAppStore";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState } from "react";
+import { classifyViewModeAvailability } from "../../lib/terraquantum/qaStatus";
 
 // ── Descriptores de cada modo de visualización ───────────────────────────────
 const VIEW_MODES: {
@@ -57,9 +58,43 @@ export default function MultiPhysicsControls() {
 
   const [collapsed, setCollapsed] = useState(false);
 
+  // Compute data availability per mode from model cells.
+  // Uses .some() → exits on first match, O(n) worst case but fast in practice.
+  // Memoized on model so it doesn't recompute on every render.
+  const cells = useMemo(
+    () => (model?.cells ?? []) as Array<Record<string, unknown>>,
+    [model]
+  );
+  const susceptibilityQa = useMemo(
+    () => classifyViewModeAvailability("susceptibility", cells),
+    [cells]
+  );
+  const jointQa = useMemo(
+    () => classifyViewModeAvailability("joint", cells),
+    [cells]
+  );
+
   if (!model) return null;
 
   const active = VIEW_MODES.find((m) => m.id === viewMode) ?? VIEW_MODES[0];
+
+  function modeQa(id: ViewMode) {
+    if (id === "susceptibility") return susceptibilityQa;
+    if (id === "joint") return jointQa;
+    return null;
+  }
+
+  function handleSetViewMode(id: ViewMode) {
+    const qa = modeQa(id);
+    // Allow switching even when data is absent — the rendering already handles
+    // absence gracefully (gray for susceptibility, hidden for joint after the
+    // joint-default-1.0 bug fix). The badge below makes the state explicit.
+    setViewMode(id);
+    // Log for debugging in case a QA gate triggers unexpectedly
+    if (qa && qa.status === "FAIL") {
+      console.info(`[QA] viewMode='${id}' activado sin datos: ${qa.reason}`);
+    }
+  }
 
   return (
     <motion.div
@@ -118,33 +153,57 @@ export default function MultiPhysicsControls() {
                   <div className="grid grid-cols-3 gap-1">
                     {VIEW_MODES.map((m) => {
                       const isActive = viewMode === m.id;
+                      const qa = modeQa(m.id);
+                      const isUnavailable = qa !== null && qa.status === "FAIL";
+
                       return (
-                        <button
-                          key={m.id}
-                          id={`multiphysics-btn-${m.id}`}
-                          type="button"
-                          onClick={() => setViewMode(m.id)}
-                          title={m.description}
-                          className="relative flex flex-col items-center justify-center gap-0.5 py-2 rounded-lg border transition-all duration-150"
-                          style={{
-                            borderColor: isActive ? m.accentColor + "70" : "rgba(255,255,255,0.08)",
-                            background: isActive
-                              ? `${m.accentColor}18`
-                              : "rgba(255,255,255,0.02)",
-                            color: isActive ? m.accentColor : "rgba(255,255,255,0.4)",
-                            boxShadow: isActive
-                              ? `0 0 12px ${m.accentColor}28`
-                              : "none",
-                          }}
-                        >
-                          <span className="text-[12px] leading-none">{m.icon}</span>
-                          <span className="text-[7.5px] font-mono tracking-wider leading-none">
-                            {m.shortLabel}
-                          </span>
-                        </button>
+                        <div key={m.id} className="flex flex-col items-center gap-0.5">
+                          <button
+                            id={`multiphysics-btn-${m.id}`}
+                            type="button"
+                            onClick={() => handleSetViewMode(m.id)}
+                            title={isUnavailable ? qa.reason : m.description}
+                            className="relative w-full flex flex-col items-center justify-center gap-0.5 py-2 rounded-lg border transition-all duration-150"
+                            style={{
+                              borderColor: isUnavailable
+                                ? "rgba(239,68,68,0.35)"
+                                : isActive
+                                ? m.accentColor + "70"
+                                : "rgba(255,255,255,0.08)",
+                              background: isUnavailable
+                                ? "rgba(239,68,68,0.06)"
+                                : isActive
+                                ? `${m.accentColor}18`
+                                : "rgba(255,255,255,0.02)",
+                              color: isUnavailable
+                                ? "rgba(239,68,68,0.55)"
+                                : isActive
+                                ? m.accentColor
+                                : "rgba(255,255,255,0.4)",
+                              boxShadow: isActive && !isUnavailable
+                                ? `0 0 12px ${m.accentColor}28`
+                                : "none",
+                            }}
+                          >
+                            <span className="text-[12px] leading-none">{m.icon}</span>
+                            <span className="text-[7.5px] font-mono tracking-wider leading-none">
+                              {m.shortLabel}
+                            </span>
+                          </button>
+                          {/* QA unavailability indicator below button */}
+                          {isUnavailable && (
+                            <span
+                              className="text-[6px] font-mono text-red-400/70 leading-none tracking-wider"
+                              title={qa.reason}
+                            >
+                              sin datos
+                            </span>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
+
                   {/* Descripción del modo activo */}
                   <p
                     className="text-[7px] font-mono leading-relaxed"
@@ -152,6 +211,19 @@ export default function MultiPhysicsControls() {
                   >
                     {active.description}
                   </p>
+
+                  {/* QA notice when active mode has no data */}
+                  {(() => {
+                    const activeQa = modeQa(viewMode);
+                    if (!activeQa || activeQa.status !== "FAIL") return null;
+                    return (
+                      <div className="rounded border border-red-500/25 bg-red-500/5 px-2 py-1">
+                        <p className="text-[7px] font-mono text-red-400/80 leading-tight">
+                          ⚠ {activeQa.reason}
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* ── Slider de umbral conjunto ─────────────────────── */}

@@ -6,6 +6,22 @@ import google.generativeai as genai
 
 from core.block_model_store import get_run_report_path
 from core.logging import get_logger
+from core.config import GEMINI_MODEL_NAME
+
+# Palabras prohibidas por compliance JORC/NI-43-101 — misma lista que gemini_agent.py
+_BANNED_WORDS = [
+    "reserve", "resource", "grade", "npv", "irr", "tonnage", "economic value",
+]
+
+def _apply_compliance_filter(text: str) -> str:
+    text_lower = text.lower()
+    for word in _BANNED_WORDS:
+        if word in text_lower:
+            return (
+                "[Respuesta redactada por guardrails de compliance JORC/NI-43-101. "
+                "Este asistente no puede emitir estimaciones de recursos o valores económicos.]"
+            )
+    return text
 
 router = APIRouter(prefix="/api/chat", tags=["AI Chat"])
 _log = get_logger(__name__)
@@ -46,16 +62,22 @@ async def chat_with_geophysics_ai(request: ChatRequest):
             report_context = f"Error al cargar el contexto geofísico: {e}"
 
     system_instruction = f"""
-Eres TerraQuantum IA, un asistente B2B especializado en geofísica y estimación de recursos minerales.
-Tu objetivo es ayudar al usuario a interpretar los resultados de la inversión geofísica y tomar decisiones.
+Eres TerraQuantum IA, un asistente de interpretación geofísica y análisis de datos de exploración.
+Tu objetivo es ayudar al usuario a interpretar los resultados de la inversión geofísica.
 A continuación se presenta el reporte técnico (report.json) del modelo geofísico actualmente cargado:
 
 --- CONTEXTO DEL MODELO GEOFÍSICO ---
 {report_context}
 -------------------------------------
 
-Responde a las preguntas del usuario utilizando esta información. Si te preguntan sobre el misfit, DOI, 
+Responde a las preguntas del usuario utilizando esta información. Si te preguntan sobre el misfit, DOI,
 o incertidumbre, refiere a los datos de este reporte.
+
+REGLAS ESTRICTAS:
+1. NUNCA uses las palabras "reservas", "recursos minerales", "ley", "NPV", "TIR", "tonelaje" ni "valor económico".
+2. Describe anomalías como "zonas anómalas" o "targets geofísicos", no como cuerpos mineralizados.
+3. Toda afirmación cuantitativa debe provenir exclusivamente del reporte adjunto.
+4. Este reporte es una interpretación geofísica cualitativa, NO una estimación de recursos bajo JORC ni NI-43-101.
     """.strip()
     
     # Construir historial para Gemini
@@ -69,14 +91,15 @@ o incertidumbre, refiere a los datos de este reporte.
 
     try:
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-pro",
+            model_name=GEMINI_MODEL_NAME,
             system_instruction=system_instruction
         )
-        
+
         chat = model.start_chat(history=formatted_messages)
         response = chat.send_message(last_user_message)
-        
-        return {"response": response.text}
+
+        filtered = _apply_compliance_filter(response.text)
+        return {"response": filtered}
     except Exception as e:
         _log.error("Error en Gemini API", error=str(e))
         raise HTTPException(status_code=500, detail=f"Error en la IA: {str(e)}")

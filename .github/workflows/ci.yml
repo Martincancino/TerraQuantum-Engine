@@ -25,13 +25,18 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile check (syntax errors)
-        run: python -m compileall api services exploration schemas Camiones core
+        run: python -m compileall api services exploration schemas Camiones core middleware workers
 
-      - name: Run pytest
-        run: pytest tests/ -v
+      - name: Unit tests
+        run: pytest tests/ -m "unit" -v
 
-      - name: Run Geophysics Benchmark (Strict)
-        run: python tests/synthetic_recovery_benchmark.py --ci --no-focusing --quiet
+      - name: Integration tests
+        run: pytest tests/ -m "integration" -v
+
+      - name: Scientific Benchmarks (HITO 4)
+        # Falla si la recuperación esférica o de prisma supera el 10% de error.
+        # Ningún test debe usar la misma malla para forward e inversión (anti-inverse-crime).
+        run: pytest tests/ -m "benchmark" -v --tb=long
 
   frontend:
     runs-on: ubuntu-latest

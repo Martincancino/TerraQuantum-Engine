@@ -24,9 +24,11 @@ export async function POST(req: NextRequest) {
       backendFormData.append("file", file);
     }
 
+    const apiKey = process.env.TQ_API_KEY ?? "";
     const backendResponse = await fetch(url.toString(), {
       method: "POST",
       body: backendFormData,
+      headers: apiKey ? { "X-TQ-API-Key": apiKey } : undefined,
     });
 
     const data = await backendResponse.json();
