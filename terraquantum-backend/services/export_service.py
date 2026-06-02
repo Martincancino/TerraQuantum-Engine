@@ -643,6 +643,7 @@ from typing import Any
 
 from core.block_model_store import (
     RUN_BLOCK_MODEL_FILENAME,
+    RUN_MANIFEST_FILENAME,
     RUN_SOURCE_GRAVITY_FILENAME,
     RUN_VTK_FILENAME,
     clean_trace_context,
@@ -750,6 +751,19 @@ def _build_bundle_manifest(
     except Exception:
         _sha256_csv = None
 
+    # HITO 2: Read run_manifest.json if available and prefer its hashes (computed at inversion time).
+    _run_manifest_provenance: "dict | None" = None
+    try:
+        _run_manifest_path = _run_dir_bm / RUN_MANIFEST_FILENAME
+        if _run_manifest_path.exists():
+            _run_manifest_provenance = _json.loads(_run_manifest_path.read_text(encoding="utf-8"))
+            if _run_manifest_provenance.get("sha256_parquet"):
+                _sha256_parquet = _run_manifest_provenance["sha256_parquet"]
+            if _run_manifest_provenance.get("sha256_csv"):
+                _sha256_csv = _run_manifest_provenance["sha256_csv"]
+    except Exception:
+        _run_manifest_provenance = None
+
     return {
         "schema_version": "11.0",
         "generated_utc": datetime.now(timezone.utc).isoformat(),
@@ -778,12 +792,14 @@ def _build_bundle_manifest(
             "overall_level": ts.get("overall_level"),
             "fit_level": fit_diag.get("fit_level"),
         } if report else None,
+        "run_manifest_provenance": _run_manifest_provenance,
         "bundle_contents": [
             {"file": "model.vtr",      "format": "VTK RectilinearGrid XML",    "software": ["ParaView", "Leapfrog Geo"]},
             {"file": "model.mod",      "format": "UBC-GIF Density Model",      "software": ["UBC-GIF Grav3D", "SimPEG"]},
             {"file": "model.msh",      "format": "UBC-GIF Mesh Definition",    "software": ["UBC-GIF Grav3D", "SimPEG"]},
             {"file": "model.gslib",    "format": "Stanford GSLIB / SGeMS",     "software": ["SGeMS", "ISATIS"]},
             {"file": "manifest.json",  "format": "Audit Trail JSON Fase 11",   "note": "Trazabilidad completa"},
+            {"file": "run_manifest.json", "format": "Run Provenance HITO 2",   "note": "SHA-256 parquet+CSV, solver_stats, schema_version"},
         ],
         "disclaimer": (
             "NO-JORC / NI 43-101 — EXPLORATION ONLY. "

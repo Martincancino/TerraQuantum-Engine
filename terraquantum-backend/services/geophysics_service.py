@@ -1612,6 +1612,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
                 pass
 
     _log.info("magnetic_inversion_start", project_id=project_id, run_id=run_id)
+    _mag_start_utc = datetime.now(timezone.utc)
     ensure_runtime_dirs()
     _update("running", 0.0, "loading_data", "Validando input magnético (Fase 9A)...")
 
@@ -1818,6 +1819,63 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             _log.info("magnetic_parquet_written", path=_mag_path, voxels=_nC_mag)
     except Exception as _mag_pq_exc:
         _log.warning("magnetic_parquet_nonfatal", error=str(_mag_pq_exc))
+
+    # ── HITO 2: Run Manifest magnético (provenance audit trail) ──────────────
+    try:
+        def _mag_git_hash_short() -> str:
+            try:
+                return subprocess.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    stderr=subprocess.DEVNULL, timeout=2,
+                ).decode().strip()
+            except Exception:
+                return "unknown"
+
+        _mag_ref_manifest = get_run_block_model_reference(
+            project_id=params.project_id,
+            run_id=params.run_id,
+            filename=RUN_MAGNETIC_BLOCK_MODEL_FILENAME,
+        )
+        _mag_run_dir = _mag_ref_manifest.path.parent
+        _mag_parquet_path = _mag_ref_manifest.path
+        _csv_path_mag = _mag_run_dir / RUN_SOURCE_GRAVITY_FILENAME
+        write_run_manifest(_mag_run_dir, {
+            "schema_version": "v3.0",
+            "run_type": "magnetic",
+            "code_version": _mag_git_hash_short(),
+            "rng_seed": None,
+            "timestamp_utc_start": _mag_start_utc.isoformat(),
+            "timestamp_utc_end": datetime.now(timezone.utc).isoformat(),
+            "sha256_parquet": sha256_file(_mag_parquet_path) if _mag_parquet_path.exists() else None,
+            "sha256_csv": sha256_file(_csv_path_mag) if _csv_path_mag.exists() else None,
+            "inversion_params": {
+                "nx": params.nx, "ny": params.ny, "nz": params.nz,
+                "block_size": params.block_size,
+                "lambda_mag": params.lambda_mag,
+                "alpha_spatial": params.alpha_spatial,
+                "cutoff_radius": params.cutoff_radius,
+                "inclination_deg": params.inclination_deg,
+                "declination_deg": params.declination_deg,
+                "field_intensity_nt": params.field_intensity_nt,
+                "susc_min": params.susc_min,
+                "susc_max": params.susc_max,
+            },
+            "solver_stats": {
+                "acond": solver_meta.get("acond"),
+                "chi2_final": solver_meta.get("chi2_final"),
+                "misfit_percent": misfit_percent,
+                "depth_beta": solver_meta.get("depth_beta"),
+                "n_active": solver_meta.get("n_active"),
+                "saturation_fraction": solver_meta.get("sat_fraction"),
+                "n_sat_lower": solver_meta.get("n_sat_lower"),
+                "n_sat_upper": solver_meta.get("n_sat_upper"),
+                "n_anchored_voxels": solver_meta.get("n_anchored_voxels"),
+                "anomaly_voxels": len(voxels),
+            },
+        })
+    except Exception as _mag_mfst_exc:
+        _log.warning("magnetic_run_manifest_nonfatal", error=str(_mag_mfst_exc))
+    # ── Fin HITO 2 ────────────────────────────────────────────────────────────
 
     _update(
         "done", 1.0, "completed", "Inversión magnética completada (Fase 9A).",
