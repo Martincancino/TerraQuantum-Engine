@@ -1,7 +1,10 @@
+import logging
 import math
 from typing import Optional
 
 from schemas.gravity_import_schema import AutoGrid
+
+logger = logging.getLogger(__name__)
 
 
 R10_LIMIT = 200_000
@@ -11,6 +14,13 @@ MIN_GRID_CELLS = 4
 MIN_DEPTH_M = 1_000.0
 MAX_DEPTH_M = 100_000.0
 MAX_R10_ITERATIONS = 100
+
+# HITO 5 — Scale-aware meshing (Bug de Bushveld).
+# Profundidad de sensibilidad confiable ≈ L_max / DEPTH_SENS_FACTOR (regla geofísica,
+# Li & Oldenburg). El antiguo factor 0.6 sobre-profundizaba; L_max/3 es el estándar.
+DEPTH_SENS_FACTOR = 3.0
+# Umbral de régimen regional (por encima, el cap fijo de 100 km truncaba el modelo).
+REGIONAL_SCALE_M = 50_000.0
 
 
 def _clamp(value: float, min_value: float, max_value: float) -> float:
@@ -123,9 +133,30 @@ def compute_auto_grid(
     warnings.extend(block_warnings)
     rationale.append("block_size_m inicial = mean_spacing_m / 2 con caps 25..10000 m.")
 
+    # ── HITO 5: Scale-Aware Meshing (Paso 1) ─────────────────────────────────
+    # L_max = extensión horizontal máxima del survey.
     max_extent = max(safe_x, safe_z)
-    depth_m = _clamp(max_extent * 0.6, MIN_DEPTH_M, MAX_DEPTH_M)
-    rationale.append("depth_m = clamp(max_extent * 0.6, 1000, 100000).")
+    is_regional = max_extent > REGIONAL_SCALE_M
+    # Profundidad = L_max / 3 (sensibilidad geofísica confiable), NO 0.6·L_max.
+    # El tope deja de ser 100 km FIJO: en surveys regionales escala con el survey
+    # (max(100km, L_max)) para no truncar el modelo. En L_max/3 el cap nunca llega
+    # a morder, pero protege ante extents degenerados.
+    depth_cap = max(MAX_DEPTH_M, max_extent)
+    depth_m = _clamp(max_extent / DEPTH_SENS_FACTOR, MIN_DEPTH_M, depth_cap)
+    rationale.append(
+        f"depth_m = clamp(max_extent / {DEPTH_SENS_FACTOR:g}, "
+        f"{MIN_DEPTH_M:g}, max(100000, max_extent)) [scale-aware]."
+    )
+    logger.info(
+        "Survey Scale: %s (L=%.0fkm). Mesh adjusted dynamically "
+        "(depth=L/%g=%.1fkm, cap=%.0fkm). Depth Weighting z0 calibrated "
+        "(z0=block_size/2, Li & Oldenburg).",
+        "Regional" if is_regional else "Local",
+        max_extent / 1000.0,
+        DEPTH_SENS_FACTOR,
+        depth_m / 1000.0,
+        depth_cap / 1000.0,
+    )
 
     if safe_x <= 0 or safe_z <= 0:
         warnings.append("Extent canonico degenerado; se aplicaron minimos de grilla.")

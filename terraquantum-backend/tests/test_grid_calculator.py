@@ -46,13 +46,15 @@ def test_hvc_like_grid_matches_expected_scale():
         quality_label="MEDIA",
     )
 
+    # HITO 5 — Scale-aware meshing: depth = L_max / 3 (no 0.6·L_max).
+    # Para L_max=50km → depth≈16.7km → ny≈11 (antes 0.6·50km=30km → ny≈20).
     assert 1400.0 <= grid.block_size_m <= 1700.0
     assert 30 <= grid.nx <= 34
-    assert 18 <= grid.ny <= 22
+    assert 9 <= grid.ny <= 13
     assert 30 <= grid.nz <= 34
     assert grid.voxel_count <= R10_LIMIT
-    assert 18_000 <= grid.voxel_count <= 24_000
-    assert 29_999.0 <= grid.depth_m <= 30_001.0
+    assert 9_000 <= grid.voxel_count <= 14_000
+    assert 16_000.0 <= grid.depth_m <= 17_000.0
 
 
 def test_voxel_count_always_respects_r10_for_large_dataset():
