@@ -70,6 +70,8 @@ def get_index_columns(df: pl.DataFrame):
 
 
 def ensure_visual_columns(df: pl.DataFrame) -> pl.DataFrame:
+    _density_degraded = False
+
     if "density" not in df.columns:
         if "rho" in df.columns:
             df = df.with_columns(pl.col("rho").alias("density"))
@@ -77,25 +79,36 @@ def ensure_visual_columns(df: pl.DataFrame) -> pl.DataFrame:
             # Joint schema: density_t_m3 is the absolute density — use it as the canonical density column.
             df = df.with_columns(pl.col("density_t_m3").alias("density"))
         else:
-            df = df.with_columns(pl.lit(2.6).alias("density"))
+            # Sin densidad real: emitir null en vez de inventar 2.6 t/m³.
+            df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("density"))
+            _density_degraded = True
 
     if "rho" not in df.columns:
         df = df.with_columns(pl.col("density").alias("rho"))
 
     if "probability" not in df.columns:
-        df = df.with_columns(pl.lit(1.0).alias("probability"))
+        # Sin score real: emitir null en vez de inventar 100% de probabilidad.
+        df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("probability"))
 
     if "visual_score" not in df.columns:
-        density_min = float(df["density"].min())
-        density_max = float(df["density"].max())
-        density_range = max(density_max - density_min, 1e-9)
+        density_min_val = df["density"].min()
+        density_max_val = df["density"].max()
+        if density_min_val is None or density_max_val is None:
+            # Densidad degenerada (toda null): no inventar visual_score.
+            df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("visual_score"))
+        else:
+            density_min = float(density_min_val)
+            density_max = float(density_max_val)
+            density_range = max(density_max - density_min, 1e-9)
+            df = df.with_columns(
+                (
+                    ((pl.col("density") - density_min) / density_range)
+                    * pl.col("probability").fill_null(0.0).clip(0.0, 1.0)
+                ).alias("visual_score")
+            )
 
-        df = df.with_columns(
-            (
-                ((pl.col("density") - density_min) / density_range)
-                * pl.col("probability").clip(0.0, 1.0)
-            ).alias("visual_score")
-        )
+    if "degraded" not in df.columns:
+        df = df.with_columns(pl.lit(_density_degraded).alias("degraded"))
 
     if "grade" not in df.columns:
         df = df.with_columns(pl.lit(0.0).alias("grade"))
@@ -606,8 +619,9 @@ def build_block_model_response(
         y_center = ny * cell_size / 2.0
         z_center = nz * cell_size / 2.0
 
-    density_min = float(df["density"].min())
-    density_max = float(df["density"].max())
+    _dens_series = df["density"].drop_nulls()
+    density_min = float(_dens_series.min()) if len(_dens_series) > 0 else None
+    density_max = float(_dens_series.max()) if len(_dens_series) > 0 else None
 
     if mode_clean == "economic":
         cutoff_grade = 0.3
@@ -755,8 +769,8 @@ def build_block_model_response(
         "returnedCells": returned_voxels,
         "warnings": warnings,
         **voxel_trace,
-        "densityMin": round(density_min, 6),
-        "densityMax": round(density_max, 6),
+        "densityMin": round_stat(density_min),
+        "densityMax": round_stat(density_max),
         "availableColumns": df.columns,
         "sourcePath": str(parquet_path),
         "percentile_stats": percentile_stats,
@@ -827,6 +841,14 @@ def build_block_model_arrow_bytes(
         raise ValueError("Block model vacío.")
 
     df = ensure_visual_columns(df)
+
+    # Stats autoritativos del modelo COMPLETO (antes de cualquier subsetting).
+    # Estos se emiten como headers X-TQ-* para que el FE los consuma directamente
+    # sin re-inferir cell_size ni recalcular bounds desde el subconjunto devuelto.
+    _arrow_cell_size = infer_cell_size(df)
+    _density_series = df["density"].drop_nulls()
+    _arrow_density_min = float(_density_series.min()) if len(_density_series) > 0 else None
+    _arrow_density_max = float(_density_series.max()) if len(_density_series) > 0 else None
 
     try:
         ix_col, iy_col, iz_col = get_index_columns(df)
@@ -927,7 +949,15 @@ def build_block_model_arrow_bytes(
         "X-TQ-Total-Voxels": str(total_returned),
         "X-TQ-Bounds-Min": f"{x_min:.4f},{y_min_raw:.4f},{z_min:.4f}",
         "X-TQ-Bounds-Max": f"{x_max:.4f},{y_max_raw:.4f},{z_max:.4f}",
+        "X-TQ-Cell-Size": f"{_arrow_cell_size:.4f}",
+        "X-TQ-Domain-L": f"{x_max - x_min:.4f}",
+        "X-TQ-Domain-H": f"{y_max_raw - y_min_raw:.4f}",
+        "X-TQ-Domain-W": f"{z_max - z_min:.4f}",
     }
+    if _arrow_density_min is not None:
+        headers["X-TQ-Density-Min"] = f"{_arrow_density_min:.6f}"
+    if _arrow_density_max is not None:
+        headers["X-TQ-Density-Max"] = f"{_arrow_density_max:.6f}"
     run_id_val = trace_metadata.get("runId")
     if run_id_val:
         headers["X-TQ-Run-Id"] = str(run_id_val)

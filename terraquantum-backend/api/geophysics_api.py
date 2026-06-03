@@ -1,4 +1,5 @@
 import json
+import math
 import uuid as _uuid
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
@@ -17,6 +18,17 @@ from services.geophysics_service import run_geophysics_inversion, run_geophysics
 
 router = APIRouter()
 _log = get_logger(__name__)
+
+
+def _sanitize_nan(obj):
+    """Reemplaza float NaN/Inf por None para emitir JSON válido."""
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
 
 
 class GeophysicsSensitivitySweepRequest(GeophysicsInvertInput):
@@ -93,7 +105,7 @@ async def get_geophysics_status(project_id: str, run_id: str):
         )
 
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return _sanitize_nan(json.loads(path.read_text(encoding="utf-8")))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error leyendo status: {exc}")
 
