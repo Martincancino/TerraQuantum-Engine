@@ -688,7 +688,7 @@ export async function compareRuns(params: CompareRunsParams) {
 export function exportRunUrl(projectId: string, runId: string) {
   return `/api/export-run?project_id=${encodeURIComponent(
     projectId
-  )}&runId=${encodeURIComponent(runId)}`;
+  )}&run_id=${encodeURIComponent(runId)}`;
 }
 
 export function exportBundleUrl(projectId: string, runId: string) {
@@ -1008,7 +1008,12 @@ export async function invertGravityCsv(
       return { ok: false, status: res.status, data: null, error: "Respuesta no es JSON." };
     }
     if (!res.ok) {
-      const detailStr = typeof data?.detail === "string" ? data.detail : null;
+      const detail = data?.detail;
+      const detailStr = typeof detail === "string"
+        ? detail
+        : typeof detail === "object" && detail !== null
+          ? (detail as Record<string, unknown>).message as string ?? JSON.stringify(detail)
+          : null;
       return { ok: false, status: res.status, data: data as GravityCsvInvertResponse, error: detailStr ?? `Error ${res.status}` };
     }
     return { ok: true, status: res.status, data: data as GravityCsvInvertResponse, error: null };
@@ -1118,19 +1123,7 @@ export async function fetchProjectFootprint(
 // Fase 3+4: loader Arrow + adaptador temporal TypedArrays→objetos para Scene3D.
 // Pipeline: fetch ArrayBuffer → tableFromIPC → TypedArrays → cells[] → BlockModelResponse
 
-function _inferCellSizeFromFloat32(xs: Float32Array): number {
-  // Muestrea hasta 2000 valores, ordena, busca el gap mínimo entre valores únicos.
-  const sample = Array.from(xs.subarray(0, Math.min(xs.length, 2000)));
-  const unique = Array.from(new Set(sample.map((v) => Math.round(v * 1000) / 1000))).sort(
-    (a, b) => a - b
-  );
-  let minGap = Infinity;
-  for (let i = 1; i < unique.length; i++) {
-    const d = unique[i] - unique[i - 1];
-    if (d > 0.01 && d < minGap) minGap = d;
-  }
-  return Number.isFinite(minGap) && minGap < Infinity ? minGap : 10;
-}
+// _inferCellSizeFromFloat32 eliminado en Fase 3B: el backend emite X-TQ-Cell-Size.
 
 async function _buildBlockModelResponseFromArrow(
   buffer: ArrayBuffer,
@@ -1151,7 +1144,12 @@ async function _buildBlockModelResponseFromArrow(
 
   const getF32 = (name: string): Float32Array => {
     const col = table.getChild(name);
-    if (!col) return new Float32Array(n);
+    if (!col) {
+      // Columna física ausente: NaN en vez de ceros para que la UI no pinte datos inventados.
+      const arr = new Float32Array(n);
+      arr.fill(NaN);
+      return arr;
+    }
     return col.toArray() as Float32Array;
   };
   const getI32 = (name: string): Int32Array => {
@@ -1183,24 +1181,46 @@ async function _buildBlockModelResponseFromArrow(
   const densityT = hasCol("density_t_m3") ? getF32("density_t_m3") : null;
   const densityContrast = hasCol("density_contrast_t_m3") ? getF32("density_contrast_t_m3") : null;
 
-  // Bounds para domainL/H/W — single pass
+  // Headers autoritativos del backend (emitidos sobre el modelo COMPLETO, no el subconjunto).
+  // El FE los consume directamente en vez de re-inferir física desde coordenadas parciales.
+  const hCellSize = parseFloat(headers.get("x-tq-cell-size")  ?? "");
+  const hDomainL  = parseFloat(headers.get("x-tq-domain-l")   ?? "");
+  const hDomainH  = parseFloat(headers.get("x-tq-domain-h")   ?? "");
+  const hDomainW  = parseFloat(headers.get("x-tq-domain-w")   ?? "");
+  const hDensMin  = parseFloat(headers.get("x-tq-density-min") ?? "");
+  const hDensMax  = parseFloat(headers.get("x-tq-density-max") ?? "");
+
+  // Fallback de densidad desde celdas (si header ausente).
+  // NaN en densities (columna faltante) no actualiza min/max — se detecta como degenerado.
+  let densityMinFromCells = Infinity, densityMaxFromCells = -Infinity;
+  for (let i = 0; i < n; i++) {
+    if (densities[i] < densityMinFromCells) densityMinFromCells = densities[i];
+    if (densities[i] > densityMaxFromCells) densityMaxFromCells = densities[i];
+  }
+
+  // Fallback de dominio desde coords del subconjunto (menos preciso que el header).
+  // Solo se computa si los headers de dominio están ausentes.
   let xMin = Infinity, xMax = -Infinity;
   let yMin = Infinity, yMax = -Infinity;
   let zMin = Infinity, zMax = -Infinity;
-  let densityMin = Infinity, densityMax = -Infinity;
-
-  for (let i = 0; i < n; i++) {
-    if (xs[i] < xMin) xMin = xs[i]; if (xs[i] > xMax) xMax = xs[i];
-    if (ys[i] < yMin) yMin = ys[i]; if (ys[i] > yMax) yMax = ys[i];
-    if (zs[i] < zMin) zMin = zs[i]; if (zs[i] > zMax) zMax = zs[i];
-    if (densities[i] < densityMin) densityMin = densities[i];
-    if (densities[i] > densityMax) densityMax = densities[i];
+  if (!Number.isFinite(hDomainL) || !Number.isFinite(hDomainH) || !Number.isFinite(hDomainW)) {
+    for (let i = 0; i < n; i++) {
+      if (xs[i] < xMin) xMin = xs[i]; if (xs[i] > xMax) xMax = xs[i];
+      if (ys[i] < yMin) yMin = ys[i]; if (ys[i] > yMax) yMax = ys[i];
+      if (zs[i] < zMin) zMin = zs[i]; if (zs[i] > zMax) zMax = zs[i];
+    }
   }
 
-  const domainL = xMax - xMin;
-  const domainH = yMax - yMin;
-  const domainW = zMax - zMin;
-  const cellSize = _inferCellSizeFromFloat32(xs);
+  const cellSize   = Number.isFinite(hCellSize) ? hCellSize : 10;
+  const domainL    = Number.isFinite(hDomainL)  ? hDomainL  : (xMax - xMin);
+  const domainH    = Number.isFinite(hDomainH)  ? hDomainH  : (yMax - yMin);
+  const domainW    = Number.isFinite(hDomainW)  ? hDomainW  : (zMax - zMin);
+  const densityMin = Number.isFinite(hDensMin)  ? hDensMin
+    : (Number.isFinite(densityMinFromCells)      ? densityMinFromCells : null);
+  const densityMax = Number.isFinite(hDensMax)  ? hDensMax
+    : (Number.isFinite(densityMaxFromCells)      ? densityMaxFromCells : null);
+  const isDensityDegraded = densityMin === null || densityMax === null
+    || densityMin === densityMax;
 
   // Adaptador Fase 4: TypedArrays → objetos JS (Scene3D require objects por vóxel)
   const _r08_cells_start = performance.now();
@@ -1273,7 +1293,6 @@ async function _buildBlockModelResponseFromArrow(
     };
   }
 
-  // Leer metadata de headers HTTP
   const totalVoxels = parseInt(headers.get("x-tq-total-voxels") ?? String(n), 10);
 
   // Construir BlockModelResponse compatible con parseBackendVoxelModel()
@@ -1285,8 +1304,9 @@ async function _buildBlockModelResponseFromArrow(
     domainH,
     domainW,
     cellSize,
-    densityMin: Number.isFinite(densityMin) ? densityMin : 0,
-    densityMax: Number.isFinite(densityMax) ? densityMax : 1,
+    densityMin: densityMin ?? 0,
+    densityMax: densityMax ?? 1,
+    degraded: isDensityDegraded,
     warnings: [] as string[],
     total_voxels: totalVoxels,
     stored_voxels: totalVoxels,

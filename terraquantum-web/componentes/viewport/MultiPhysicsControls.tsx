@@ -86,14 +86,11 @@ export default function MultiPhysicsControls() {
 
   function handleSetViewMode(id: ViewMode) {
     const qa = modeQa(id);
-    // Allow switching even when data is absent — the rendering already handles
-    // absence gracefully (gray for susceptibility, hidden for joint after the
-    // joint-default-1.0 bug fix). The badge below makes the state explicit.
-    setViewMode(id);
-    // Log for debugging in case a QA gate triggers unexpectedly
     if (qa && qa.status === "FAIL") {
-      console.info(`[QA] viewMode='${id}' activado sin datos: ${qa.reason}`);
+      // Gate: no hay datos para este modo — no cambiar viewMode.
+      return;
     }
+    setViewMode(id);
   }
 
   return (

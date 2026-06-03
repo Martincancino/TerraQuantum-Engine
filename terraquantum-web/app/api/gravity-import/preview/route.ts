@@ -31,11 +31,26 @@ export async function POST(req: NextRequest) {
       headers: apiKey ? { "X-TQ-API-Key": apiKey } : undefined,
     });
 
-    const data = await backendResponse.json();
+    const rawText = await backendResponse.text();
+    let data: unknown;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      return NextResponse.json(
+        { detail: "El backend no devolvió JSON válido.", raw: rawText.slice(0, 300) },
+        { status: 502 }
+      );
+    }
 
     if (!backendResponse.ok) {
+      const detail = (data as Record<string, unknown>)?.detail;
+      const detailMsg = typeof detail === "string"
+        ? detail
+        : typeof detail === "object" && detail !== null
+          ? (detail as Record<string, unknown>).message ?? JSON.stringify(detail)
+          : "Error del backend importador";
       return NextResponse.json(
-        { detail: data?.detail || "Error del backend importador", backendStatus: backendResponse.status },
+        { detail: detailMsg, backendStatus: backendResponse.status },
         { status: backendResponse.status }
       );
     }
