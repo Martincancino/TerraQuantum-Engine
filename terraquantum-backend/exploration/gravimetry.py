@@ -1314,115 +1314,83 @@ class GravimetryInversion:
             f"lambda_mag={lambda_mag:.2e} | lambda_spatial={lambda_spatial:.2e}"
         )
 
-        # Regularización compuesta (función objetivo de modelo tipo Li & Oldenburg):
-        #   φ_m(m) = ‖ lambda_spatial · W_m · (m − m_ref) ‖²   (suavidad espacial, en G_aug)
-        #          + lambda_mag² · ‖ m_tilde ‖²                 (smallness / orden cero, vía damp)
-        # R-02: cuando padding_mask está activo, la smallness se expande al sistema augmentado
-        # con bloque diagonal diferencial (κ·λ_mag para padding, λ_mag para core) y damp=0.
-        if _padding_active is not None or _has_anchors:
-            # Smallness diferencial por celda (R-02 padding + FASE 8 sondajes):
-            #   core normal      → lambda_mag
-            #   padding (R-02)   → padding_kappa · lambda_mag   (κ=1e5 post-auditoría R-A1)
-            #   anclado (FASE 8) → anchor_kappa  · lambda_mag   (strong soft constraint)
-            # Solo actúa sobre smallness; el Laplaciano (smoothing) ya fue relajado
-            # localmente en filas ancladas. anchor_kappa=1e4 (NO 1e6) preserva cond(A).
-            _w_small = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64)
-            if _padding_active is not None:
-                _w_small = np.where(
-                    _padding_active,
-                    float(padding_kappa) * float(lambda_mag),
-                    _w_small,
-                )
-            if _has_anchors:
-                _w_small = np.where(
-                    _anchor_active,
-                    float(anchor_kappa) * float(lambda_mag),
-                    _w_small,
-                )
-            _small_block = sp.diags(_w_small) @ Ws  # incluye column scaling
-            # RHS de smallness: 0 (core/padding → hacia base_density) excepto celdas
-            # ancladas, que apuntan al contraste medido del sondaje. El residual de la
-            # fila i es w_i·(contraste_i − target_i), por lo que d_small_i = w_i·target_i.
-            _small_target = np.zeros(_n_active_sol, dtype=np.float64)
-            if _has_anchors:
-                _small_target[_anchor_active] = _anchor_contrast_active[_anchor_active]
-            _d_small     = _w_small * _small_target
-            _G_aug_r02   = sp.vstack([G_aug, _small_block]).tocsr()
-            _d_aug_r02   = np.concatenate([d_aug, _d_small])
-            from core.config import USE_BOUNDED_SOLVER as _USE_BC
-            # Benchmark empírico (2026-06-01): TRF+LSMR tarda ~40s con NNZ≈213K y
-            # n_active_sol=14K; LSQR converge en <0.1s. Umbral 8000 (HITO 5): demo
-            # (~800), medium CSV (~5K) y DOI test (~5K) usan TRF bounded; auto_grid
-            # (>14K) usa LSQR+clip como fallback.
-            _use_trf = _USE_BC and _n_active_sol <= 8_000
-            print(
-                f"[SOLVER R-02] G_aug=({_G_aug_r02.shape[0]:,}×{_G_aug_r02.shape[1]:,}) "
-                f"n_active_sol={_n_active_sol:,} NNZ={_G_aug_r02.nnz:,} "
-                f"-> {'TRF/bounded' if _use_trf else 'LSQR+clip (auto-fallback n>3K)'}"
+        # ── Regularización compuesta (objetivo de modelo tipo Li & Oldenburg) ─
+        #   φ_m(m) = ‖ lambda_spatial · W_m · (m − m_ref) ‖²    (suavidad, en G_aug)
+        #          + ‖ diag(w_small) · m ‖²                      (smallness / orden cero)
+        # FASE 4 (H2 — causa J): el depth weighting w_reg que ya pondera la suavidad
+        # (W_m = diag(w_reg)·L_active) AHORA también pondera la smallness del core.
+        # Antes el core usaba un peso uniforme lambda_mag (vía damp sobre m_tilde, que
+        # de hecho lo ponderaba implícitamente por col_norms), de modo que el depth
+        # weighting de Li & Oldenburg actuaba SOLO sobre la suavidad y la masa somera
+        # quedaba sub-penalizada. Con w_small_core = lambda_mag · w_reg ambos términos
+        # del objetivo de modelo comparten la MISMA ponderación en profundidad y se
+        # unifican las dos rutas (con/sin padding-anclajes) en un único solver.
+        # padding (R-02) y anclajes (FASE 8) conservan su peso ABSOLUTO (κ·lambda_mag):
+        # son restricciones fuertes que NO deben relajarse por profundidad.
+        _w_small = float(lambda_mag) * w_reg            # H2: smallness depth-weighted (= suavidad)
+        if _padding_active is not None:
+            _w_small = np.where(
+                _padding_active,
+                float(padding_kappa) * float(lambda_mag),
+                _w_small,
             )
-            _t_solve = time.perf_counter()
-            if _use_trf:
-                from scipy.optimize import lsq_linear as _lsq_linear
-                _bc = _lsq_linear(
-                    _G_aug_r02, _d_aug_r02,
-                    bounds=(_lb_tilde, _ub_tilde),
-                    method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
-                )
-                m_tilde = _bc.x
-                _acond = float('nan')
-                print(f"[R-02/FASE8] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
-            else:
-                result = lsqr(
-                    _G_aug_r02, _d_aug_r02,
-                    damp=0.0,
-                    iter_lim=500, atol=1e-8, btol=1e-8, show=False,
-                )
-                m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
-                _acond = result[6]
-                print(
-                    f"[R-02/FASE8] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
-                    f"cond(A)~{_acond:.2e}"
-                )
-            if _acond > 1e12:
-                print(
-                    f"[R-02/FASE8] WARN cond(A)={_acond:.2e} > 1e12. "
-                    f"Revisar padding_kappa={padding_kappa:.0e}, anchor_kappa={anchor_kappa:.0e} "
-                    f"o lambda_mag={lambda_mag:.2e}."
-                )
+        if _has_anchors:
+            _w_small = np.where(
+                _anchor_active,
+                float(anchor_kappa) * float(lambda_mag),
+                _w_small,
+            )
+        _small_block = sp.diags(_w_small) @ Ws          # incluye column scaling
+        # RHS de smallness: 0 (core/padding → hacia base_density) excepto celdas
+        # ancladas, que apuntan al contraste medido del sondaje. El residual de la
+        # fila i es w_i·(contraste_i − target_i), por lo que d_small_i = w_i·target_i.
+        _small_target = np.zeros(_n_active_sol, dtype=np.float64)
+        if _has_anchors:
+            _small_target[_anchor_active] = _anchor_contrast_active[_anchor_active]
+        _d_small   = _w_small * _small_target
+        _G_aug_sm  = sp.vstack([G_aug, _small_block]).tocsr()
+        _d_aug_sm  = np.concatenate([d_aug, _d_small])
+
+        from core.config import USE_BOUNDED_SOLVER as _USE_BC
+        # Benchmark empírico (2026-06-01): TRF+LSMR ~40s con NNZ≈213K y n_active≈14K;
+        # LSQR <0.1s. Umbral 8000 (HITO 5): demo (~800), medium CSV (~5K) y DOI test
+        # (~5K) usan TRF bounded; auto_grid (>8K) usa LSQR+clip como fallback.
+        _use_trf = _USE_BC and _n_active_sol <= 8_000
+        print(
+            f"[SOLVER] G_aug=({_G_aug_sm.shape[0]:,}×{_G_aug_sm.shape[1]:,}) "
+            f"n_active_sol={_n_active_sol:,} NNZ={_G_aug_sm.nnz:,} "
+            f"smallness=depth-weighted(H2) "
+            f"-> {'TRF/bounded' if _use_trf else 'LSQR+clip (auto-fallback n>8K)'}"
+        )
+        _t_solve = time.perf_counter()
+        if _use_trf:
+            from scipy.optimize import lsq_linear as _lsq_linear
+            _bc = _lsq_linear(
+                _G_aug_sm, _d_aug_sm,
+                bounds=(_lb_tilde, _ub_tilde),
+                method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
+            )
+            m_tilde = _bc.x
+            _acond = float('nan')
+            print(f"[SOLVER] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
         else:
-            from core.config import USE_BOUNDED_SOLVER as _USE_BC
-            _use_trf = _USE_BC and _n_active_sol <= 8_000
-            print(
-                f"[SOLVER] G_aug=({G_aug.shape[0]:,}×{G_aug.shape[1]:,}) "
-                f"n_active_sol={_n_active_sol:,} NNZ={G_aug.nnz:,} "
-                f"-> {'TRF/bounded' if _use_trf else 'LSQR+clip (auto-fallback n>3K)'}"
+            result = lsqr(
+                _G_aug_sm, _d_aug_sm,
+                damp=0.0,
+                iter_lim=500, atol=1e-8, btol=1e-8, show=False,
             )
-            _t_solve = time.perf_counter()
-            if _use_trf:
-                from scipy.optimize import lsq_linear as _lsq_linear
-                _eye_lam = sp.eye(_n_active_sol, format='csr', dtype=np.float64) * float(lambda_mag)
-                _A_bc = sp.vstack([G_aug, _eye_lam]).tocsr()
-                _b_bc = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
-                _bc = _lsq_linear(
-                    _A_bc, _b_bc,
-                    bounds=(_lb_tilde, _ub_tilde),
-                    method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
-                )
-                m_tilde = _bc.x
-                _acond = float('nan')
-                print(f"[SOLVER] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
-            else:
-                result = lsqr(
-                    G_aug, d_aug,
-                    damp=float(lambda_mag),
-                    iter_lim=500, atol=1e-8, btol=1e-8, show=False,
-                )
-                m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
-                _acond = result[6]
-                print(
-                    f"[SOLVER] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
-                    f"cond(A)~{_acond:.2e}"
-                )
+            m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
+            _acond = result[6]
+            print(
+                f"[SOLVER] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
+                f"cond(A)~{_acond:.2e}"
+            )
+        if np.isfinite(_acond) and _acond > 1e12:
+            print(
+                f"[SOLVER] WARN cond(A)={_acond:.2e} > 1e12. "
+                f"Revisar padding_kappa={padding_kappa:.0e}, anchor_kappa={anchor_kappa:.0e} "
+                f"o lambda_mag={lambda_mag:.2e}."
+            )
 
         density_contrast_active = Ws @ m_tilde
 
