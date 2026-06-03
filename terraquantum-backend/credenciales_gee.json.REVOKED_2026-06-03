@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "terraquantum-backend",
+  "private_key_id": "f1eeda12c2acaa5e90ac7e017909a74ab5cb81fa",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCgNINfuG473Ia/\nZTAx8LNt+WQLsg0sSzVnUCGnTv0QMer+/uIYLoxGh4eYxc5ew6m1gL4+0AXRaiNm\nKdcXu/ur/n5PhfYRCI4asKPiLb26nAv69q0c9go9j7lSEiPQtY3DbmdHr5vfNNCx\nFvW1wGIUjqWZ11O1Cx15qpwFA7/4j41iW/kOIfYvDQi9bcab+it2c9yxZzG6FsE1\n/cSniD4gfeqRLtqUyJAmyh8HO1YSwH8UdyfUGMJTwGCFyskpmKG70R2xI6fzTJL9\nyBzLB3qcJeZy1fk5J3iwZYsJWA2UESWfWmSotsObIBCdRX5yYEtUZA/UAptn27D1\nAVF+AWA3AgMBAAECggEAA3xYIPn80c2dRZwKS+k1bVeju5GiePZqLcU6oACTzgJY\n7W/BgmO9xptNTnwm3qCkrZizA9/bYzd17Zq+Oi1dLzHIosdRAlpsk8bdyt6LW4qv\nw9KgTGiEgKJKFq+qPmKQcTz2ODTpVySpiuHAuoqzN53YDR/p/UmbPGguEhYVaX2P\nhCvb8AGn6gMnRMesbdLQ77kxL2d+Vrusmi8GykD15CRkCULL1Wh63CwPV+yRho14\naxHKy/JwLVs6nNWjtuCqcS3rvXyD7+jDiUhRGqfUiOtopIhWt6tFvrRxnx4xlIkw\nCJhKRUPoY+2MHLooqBOP0IndS0Wp66nGiln3loZ2IQKBgQDPh+mhqAbU/G3aFFW1\nNHpt1u873QmPEH+DKt/VDfD72SoBXeNzTW64Amlv6nEhPwtk1I52hnJ6Tm1h4wL2\nfJrEyWDAUpzRaAvECB/6ENXq80UQTtE3DEKGXYR+k1gWyP7WBLr3/jQOxn1JUyrC\noNtQPvev1QX/bB9SArrwlx0/IQKBgQDFnwjZEE3AYX85rwTXN5SMqgR4WSBKzTcX\n9/lOeKHLlK8/8i9jxWeUgHN7ZpKXSZmAAZMAPmCSSI4dks6WIZFwdXXvQ5x0i0RW\nySjhDd3OXFGcMWMOg6EPSsGh1DJTmVp6xSnEQcCtGbTQZW8iOmK9cmrwWojlwF2s\nDT4zaY9sVwKBgDA/JK2UZqI1XUSJ3bMW1C+c/FkqdgJwj3RrD0Z0y0WBoyZWMX6o\nzcixptmB43MbOQbj84rSjuKoQP20zQeIyGJffsK3cgWs7q9QRD7akyDgFXpJGJJ3\noy+hph/XGW+SoswWpXDqBCg7NP1K/HHq+5GYUfTqzU4oUM+8GsG8H+yBAoGAPejT\nicTMxs8EX1rQBmg4FlUQ727kaeqeLtkVdhrefPuIZ10EsZnfGCuhgfAhTlnVR7+2\ngKYJ9Onb87HRHEFJ4dQ6bQleUzhp4VJFhzOj4AkV2/uwz5Q2+aZuwLbMSVpKeRmZ\nOw1qQhBCj+KnDS8DTdwxWjjSmD9KWSMQ8GRKdSMCgYASofeo8JVIWtTMhpSPw5BE\nSfp1o4nsk/AP3uegS8nIz7llMpw70x5m5PwgPoBkFa6OFu56P+etTNF7w32lmvYK\n29o9e9cui1L6miYSAuzXOhMczAPBUKrcqkGeXlPoSvsKIdpCc3EWKFa+Rx3NEQw9\nab3RVOG6TSNUYljrlcE/Vg==\n-----END PRIVATE KEY-----\n",
+  "client_email": "terraquantum-satelite@terraquantum-backend.iam.gserviceaccount.com",
+  "client_id": "115925718198019666628",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/terraquantum-satelite%40terraquantum-backend.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

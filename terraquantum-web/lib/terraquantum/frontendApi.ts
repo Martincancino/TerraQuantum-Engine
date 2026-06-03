@@ -700,13 +700,11 @@ export async function deleteRun(
   runId: string
 ): Promise<{ ok: boolean; error: string | null }> {
   const url = `${BACKEND_PUBLIC_URL}/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`;
-  const _apiKey = process.env.NEXT_PUBLIC_TQ_API_KEY ?? "";
   try {
     const res = await fetch(url, {
       method: "DELETE",
       headers: {
         accept: "application/json",
-        ...(_apiKey ? { "X-TQ-API-Key": _apiKey } : {}),
       },
     });
     if (!res.ok) {
@@ -1063,7 +1061,6 @@ export async function fetchProjectFootprint(
   projectId: string
 ): Promise<FrontendApiResult<ProjectFootprintResponse>> {
   const url = `${BACKEND_PUBLIC_URL}/projects/${encodeURIComponent(projectId)}/footprint`;
-  const _apiKey = process.env.NEXT_PUBLIC_TQ_API_KEY ?? "";
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 15_000);
 
@@ -1073,7 +1070,6 @@ export async function fetchProjectFootprint(
       cache: "no-store",
       headers: {
         accept: "application/json",
-        ...(_apiKey ? { "X-TQ-API-Key": _apiKey } : {}),
       },
       signal: controller.signal,
     });

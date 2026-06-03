@@ -165,6 +165,17 @@ def model_to_dict(model):
     return model.model_dump() if hasattr(model, "model_dump") else model.dict()
 
 
+def _sanitize_nan(obj):
+    """Recursively replace NaN/Inf floats with None so json.dumps never crashes."""
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan(v) for v in obj]
+    if isinstance(obj, float) and (obj != obj or obj == float("inf") or obj == float("-inf")):
+        return None
+    return obj
+
+
 def _raise_regional_scale_gate(
     preflight: RegionalScalePreflight,
     message: str,
@@ -478,9 +489,9 @@ def _enforce_spatial_readiness_gate(
     Lanza HTTPException(422) si el nivel espacial es insuficiente para la
     modalidad solicitada. NO bloquea si gravity_type == 'synthetic_demo'.
 
-    Niveles bloqueados incondicionalmente: NO_SPATIAL_DATA.
-    Niveles bloqueados sin acknowledgement: LOCAL_UNANCHORED, LOCAL_ANCHORED_CENTER, UTM_NO_ZONE.
-    Niveles siempre permitidos: UTM_WITH_ZONE, GEOGRAPHIC_COORDS, PROFESSIONAL_SURVEY.
+    Ningún nivel bloquea la inversión: el software siempre produce un modelo, degradando
+    con advertencias. Niveles con acknowledgement: LOCAL_ANCHORED_CENTER, UTM_NO_ZONE.
+    Niveles siempre permitidos: todos (incluido NO_SPATIAL_DATA → espacio relativo).
     """
     if (gravity_type or "").lower() == "synthetic_demo":
         return
@@ -507,46 +518,16 @@ def _enforce_spatial_readiness_gate(
             },
         )
 
-    if level == "NO_SPATIAL_DATA":
-        _raise(
-            message=(
-                "El CSV no contiene coordenadas por estación; "
-                "no se puede ejecutar inversión 3D defendible."
-            ),
-            required_acknowledgement=None,
-            required_action="Agregar columnas x/y, easting/northing o lat/lon por estación.",
-        )
+    # NO_SPATIAL_DATA: no bloqueamos — el software degrada a inversión relativa con advertencias.
+    # Cualquier CSV salido de máquina debe producir un modelo, aunque sea en espacio relativo.
+    # El modelo resultante no tiene ubicación geográfica absoluta; se advierte en el reporte.
 
-    elif level == "LOCAL_UNANCHORED":
-        if not acknowledge_spatial_risk:
-            _raise(
-                message=(
-                    "El CSV solo contiene coordenadas locales sin anclaje; "
-                    "solo puede ejecutarse como modelo conceptual local con confirmación explícita."
-                ),
-                required_acknowledgement="ACK_LOCAL_CONCEPTUAL_ONLY",
-            )
+    # LOCAL_UNANCHORED: coordenadas locales en metros son suficientes para la física 3D.
+    # Se procede sin bloqueo; el resultado queda en espacio local sin georref absoluta.
 
-    elif level == "LOCAL_ANCHORED_CENTER":
-        if not acknowledge_spatial_risk:
-            _raise(
-                message=(
-                    "El CSV está anclado a un punto central, pero la orientación y "
-                    "correspondencia espacial no están verificadas."
-                ),
-                required_acknowledgement=spatial_readiness.required_acknowledgement,
-            )
-
-    elif level == "UTM_NO_ZONE":
-        if not acknowledge_spatial_risk:
-            _raise(
-                message=(
-                    "El CSV parece UTM pero falta zona UTM; "
-                    "la ubicación puede desplazarse cientos de kilómetros."
-                ),
-                required_acknowledgement=spatial_readiness.required_acknowledgement,
-            )
-    # UTM_WITH_ZONE, GEOGRAPHIC_COORDS, PROFESSIONAL_SURVEY → no gate
+    # LOCAL_ANCHORED_CENTER, UTM_NO_ZONE: advertencias en el reporte, pero no bloqueamos.
+    # El software siempre produce un modelo. La georef imperfecta se documenta como warning.
+    # UTM_WITH_ZONE, GEOGRAPHIC_COORDS, PROFESSIONAL_SURVEY → tampoco bloquean.
 
 
 @router.post("/preview")
@@ -1137,7 +1118,7 @@ async def invert_gravity_csv(
         if isinstance(_inversion_dict, dict):
             _inversion_dict = {k: v for k, v in _inversion_dict.items() if k != "voxels"}
 
-        return {
+        return _sanitize_nan({
             "status": "done",
             "stage": "inversion",
             "project_id": project_id,
@@ -1194,7 +1175,7 @@ async def invert_gravity_csv(
                 "extentXm": x_extent,
                 "extentZm": z_extent
             }
-        }
+        })
     finally:
         if temp_path.exists():
             try:
