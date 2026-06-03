@@ -581,8 +581,8 @@ export default function GravityCsvPreviewPanel() {
     const payloadWithFlags = {
       ...invertPayloadBase,
       projectId,
-      lat: latNorth.trim() || "-22.28", // Fallback temp mientras no cambia backend
-      lon: lonWest.trim() || "-68.89",
+      lat: latNorth.trim(),
+      lon: lonWest.trim(),
       nx: LEGACY_INVERSION_PARAMS.nx,
       ny: LEGACY_INVERSION_PARAMS.ny,
       nz: LEGACY_INVERSION_PARAMS.nz,

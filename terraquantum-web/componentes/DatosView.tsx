@@ -66,8 +66,17 @@ function buildDatosReportFromRunDetail(
     readOptionalNumber(persistedReport.estimated_anomaly_tonnage) ??
     readOptionalNumber(persistedReport.estimated_total_tonnage) ?? 0;
 
+  // DV-02: detectar run degenerado (misfit NaN + sin best_target = la inversión no recuperó nada)
+  const rawMisfit = persistedReport.misfit_error_percent;
+  const misfitIsDegenerate =
+    rawMisfit === null ||
+    rawMisfit === undefined ||
+    (typeof rawMisfit === "number" && !Number.isFinite(rawMisfit));
+  const isDegraded = bestTarget === null && misfitIsDegenerate;
+
   return {
     ...persistedReport,
+    isDegraded,
     profundidad:
       readOptionalNumber(inputs?.depth) ??
       readOptionalNumber(bestTarget?.z_m) ??
@@ -330,15 +339,35 @@ export default function DatosView() {
           />
         </div>
 
+        {/* ── Banner: modelo degenerado (DV-02) ── */}
+        {report?.isDegraded && (
+          <div className="border border-red-700/50 bg-red-900/10 rounded-xl px-4 py-3 flex items-start gap-3">
+            <span className="text-red-500 text-base leading-none mt-0.5">⚠</span>
+            <div>
+              <p className="text-red-400 text-[10px] font-mono font-bold uppercase tracking-widest mb-0.5">
+                Modelo no recuperado
+              </p>
+              <p className="text-red-400/70 text-[9px] font-mono leading-relaxed">
+                La inversión no recuperó ningún cuerpo anómalo (misfit indefinido, sin target).
+                Los indicadores a continuación no tienen validez física.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* ── KPIs principales ── */}
         {report && (
           <Section title="Indicadores principales">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <KpiCard label="Anomalía profunda"  value={`+${report.anomaliaPico}`} unit="mGal" />
-              <KpiCard label="Cota de techo (Z)"  value={String(report.profundidad)}  unit="m" />
+              <KpiCard
+                label="Densidad máx. anómalo"
+                value={report.anomaliaPico !== undefined ? `${safeNumber(report.anomaliaPico).toFixed(3)}` : "—"}
+                unit="t/m³"
+              />
+              <KpiCard label="Cota de techo (Z)"  value={String(report.profundidad ?? "—")}  unit="m" />
               <KpiCard label="Volumen anómalo"    value={(safeNumber(report.masaKg) / 1000).toFixed(1)} unit="Ton" />
               <KpiCard label="Score relativo"
-                value={String(report.indiceAnomalia)} unit="/ 100"
+                value={String(report.indiceAnomalia ?? "—")} unit="/ 100"
                 highlight={safeNumber(report.indiceAnomalia) > 85}
               />
             </div>
