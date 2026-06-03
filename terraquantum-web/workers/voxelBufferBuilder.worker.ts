@@ -70,17 +70,6 @@ interface WorkerOutput {
 }
 
 // ── Colormaps (copiados de terraQuantumGeology.ts — sin dependencias) ─────────
-const VIRIDIS_STOPS: ColorStop[] = [
-  [0.000, [0.267, 0.005, 0.329]],
-  [0.143, [0.282, 0.141, 0.458]],
-  [0.286, [0.232, 0.319, 0.545]],
-  [0.429, [0.157, 0.473, 0.558]],
-  [0.571, [0.122, 0.595, 0.543]],
-  [0.714, [0.285, 0.703, 0.427]],
-  [0.857, [0.595, 0.781, 0.258]],
-  [1.000, [0.993, 0.906, 0.144]],
-];
-
 const INFERNO_STOPS: ColorStop[] = [
   [0.000, [0.000, 0.000, 0.016]],
   [0.143, [0.122, 0.047, 0.165]],
@@ -90,6 +79,17 @@ const INFERNO_STOPS: ColorStop[] = [
   [0.714, [0.937, 0.494, 0.122]],
   [0.857, [0.988, 0.749, 0.353]],
   [1.000, [0.988, 1.000, 0.643]],
+];
+
+const YLORRD_STOPS: ColorStop[] = [
+  [0.000, [1.000, 1.000, 0.800]],
+  [0.143, [1.000, 0.929, 0.627]],
+  [0.286, [0.996, 0.851, 0.463]],
+  [0.429, [0.996, 0.698, 0.298]],
+  [0.571, [0.992, 0.553, 0.235]],
+  [0.714, [0.988, 0.306, 0.165]],
+  [0.857, [0.890, 0.102, 0.110]],
+  [1.000, [0.741, 0.000, 0.149]],
 ];
 
 const TURBO_STOPS: ColorStop[] = [
@@ -204,6 +204,8 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
   // ── Rango dinámico para normalización (susceptibility / density) ─────────
   let dynChiMin = Infinity, dynChiMax = -Infinity;
   let dynDensMin = Infinity, dynDensMax = -Infinity;
+  // Muestras de densidad para normalización robusta por percentiles (P2–P98).
+  const densitySamples: number[] = [];
 
   if (viewMode === 'susceptibility' || viewMode === 'density') {
     for (let i = 0; i < n; i++) {
@@ -220,13 +222,28 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
         const dens = getModeledDensity(cell);
         if (dens < dynDensMin) dynDensMin = dens;
         if (dens > dynDensMax) dynDensMax = dens;
+        densitySamples.push(dens);
       }
     }
   }
   if (dynChiMax <= dynChiMin) { dynChiMin = -9; dynChiMax = 0; }
   if (dynDensMax <= dynDensMin) { dynDensMin = p.densityStats.densityMin; dynDensMax = p.densityStats.densityMax; }
   const _dynChiRange = dynChiMax - dynChiMin;
-  const _dynDensRange = Math.max(dynDensMax - dynDensMin, 1e-9);
+
+  // Piso robusto P2 (recorta un outlier bajo); techo = máximo real. El cuerpo
+  // mineralizado es <2% del volumen y vive entero por encima de P98: recortar a
+  // P98 satura toda la anomalía a un rojo plano. Con el máximo se ve su gradiente.
+  let densLo = dynDensMin;
+  let densHi = dynDensMax;
+  if (densitySamples.length > 1) {
+    densitySamples.sort((a, b) => a - b);
+    const pick = (q: number) =>
+      densitySamples[Math.min(densitySamples.length - 1, Math.max(0, Math.round(q * (densitySamples.length - 1))))];
+    densLo = pick(0.02);
+    densHi = dynDensMax;
+  }
+  if (densHi <= densLo) { densLo = dynDensMin; densHi = dynDensMax; }
+  const _dynDensRange = Math.max(densHi - densLo, 1e-9);
 
   let visibleCount = 0, highlightedCount = 0, susceptibilityFoundCount = 0;
   const DOI_THRESHOLD = 0.05;
@@ -372,15 +389,16 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
       if (p.visualLayer === "uncertainty") {
         [_r, _g, _b] = sampleColormap(INFERNO_STOPS, _sigmaRatio);
       } else {
-        const _u = clamp01((density - dynDensMin) / _dynDensRange);
-        const _uPrime = Math.log(1 + 4 * _u) / Math.log(5);
-        [_r, _g, _b] = sampleColormap(VIRIDIS_STOPS, _uPrime);
+        // Normalización lineal robusta (P2–P98) + colormap YlOrRd:
+        // baja densidad = amarillo suave → alta densidad = rojo intenso.
+        const _u = clamp01((density - densLo) / _dynDensRange);
+        [_r, _g, _b] = sampleColormap(YLORRD_STOPS, _u);
         const _alpha = 1 - 0.7 * _sigmaRatio;
         _r *= _alpha; _g *= _alpha; _b *= _alpha;
       }
     }
 
-    const brightness = 0.25 + Math.min(1.0, (sensitivityProxy - DOI_THRESHOLD) / (0.3 - DOI_THRESHOLD)) * 0.75;
+    const brightness = 0.55 + Math.min(1.0, (sensitivityProxy - DOI_THRESHOLD) / (0.3 - DOI_THRESHOLD)) * 0.45;
     writeMatrix(matricesF32, mb, rdx, rdy, rdz, rx_visual, ry_visual, rz_visual);
     colorsF32[cb]     = _r * brightness;
     colorsF32[cb + 1] = _g * brightness;

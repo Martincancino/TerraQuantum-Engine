@@ -146,17 +146,6 @@ const NEUTRAL_GRAY: [number, number, number] = [0.5, 0.5, 0.5];
 
 type ColorStop = [number, [number, number, number]];
 
-const VIRIDIS_STOPS: ColorStop[] = [
-  [0.000, [0.267, 0.005, 0.329]],
-  [0.143, [0.282, 0.141, 0.458]],
-  [0.286, [0.232, 0.319, 0.545]],
-  [0.429, [0.157, 0.473, 0.558]],
-  [0.571, [0.122, 0.595, 0.543]],
-  [0.714, [0.285, 0.703, 0.427]],
-  [0.857, [0.595, 0.781, 0.258]],
-  [1.000, [0.993, 0.906, 0.144]],
-];
-
 const INFERNO_STOPS: ColorStop[] = [
   [0.000, [0.000, 0.000, 0.016]],
   [0.143, [0.122, 0.047, 0.165]],
@@ -178,6 +167,18 @@ const TURBO_STOPS: ColorStop[] = [
   [0.714, [0.996, 0.776, 0.082]],
   [0.857, [0.957, 0.365, 0.004]],
   [1.000, [0.478, 0.027, 0.000]],
+];
+
+// YlOrRd (ColorBrewer) — densidad: baja = amarillo suave, alta = rojo intenso.
+const YLORRD_STOPS: ColorStop[] = [
+  [0.000, [1.000, 1.000, 0.800]],
+  [0.143, [1.000, 0.929, 0.627]],
+  [0.286, [0.996, 0.851, 0.463]],
+  [0.429, [0.996, 0.698, 0.298]],
+  [0.571, [0.992, 0.553, 0.235]],
+  [0.714, [0.988, 0.306, 0.165]],
+  [0.857, [0.890, 0.102, 0.110]],
+  [1.000, [0.741, 0.000, 0.149]],
 ];
 
 function sampleColormap(stops: ColorStop[], t: number): [number, number, number] {
@@ -353,12 +354,16 @@ export function updateInstancedBuffers({
   let dynChiMax = -Infinity;
   let dynDensMin = Infinity;
   let dynDensMax = -Infinity;
+  // Muestras de densidad para normalización robusta por percentiles (P2–P98):
+  // evita que un único vóxel atípico estire el rango y aplaste todo el gradiente
+  // contra el extremo bajo del colormap (causa raíz del "todo morado/plano").
+  const densitySamples: number[] = [];
 
   if (viewMode === 'susceptibility' || viewMode === 'density') {
     for (let i = 0; i < cells.length; i++) {
       const rawCell = cells[i] as Record<string, unknown>;
       if (rawCell.is_active === false || rawCell.is_active === 0 || rawCell.density === null || rawCell.rho === null) continue;
-      
+
       if (viewMode === 'susceptibility') {
         const chiRaw = Number(rawCell.susceptibility_si);
         if (Number.isFinite(chiRaw)) {
@@ -370,6 +375,7 @@ export function updateInstancedBuffers({
         const density = getVoxelModeledDensity(cells[i] as SceneCell);
         if (density < dynDensMin) dynDensMin = density;
         if (density > dynDensMax) dynDensMax = density;
+        densitySamples.push(density);
       }
     }
   }
@@ -378,7 +384,23 @@ export function updateInstancedBuffers({
   if (dynChiMax <= dynChiMin) { dynChiMin = -9; dynChiMax = 0; }
   if (dynDensMax <= dynDensMin) { dynDensMin = densityStats.densityMin; dynDensMax = densityStats.densityMax; }
   const _dynChiRange = dynChiMax - dynChiMin;
-  const _dynDensRange = Math.max(dynDensMax - dynDensMin, 1e-9);
+
+  // Cotas para el colormap de densidad: piso robusto P2 (recorta un outlier bajo),
+  // techo = máximo real. En un campo dominado por roca de fondo, el cuerpo
+  // mineralizado es <2% del volumen y vive ENTERO por encima de P98; recortar a
+  // P98 satura toda la anomalía a un rojo plano. Con el máximo, el cuerpo muestra
+  // su gradiente interno y se distingue del fondo.
+  let densLo = dynDensMin;
+  let densHi = dynDensMax;
+  if (densitySamples.length > 1) {
+    densitySamples.sort((a, b) => a - b);
+    const pick = (q: number) =>
+      densitySamples[Math.min(densitySamples.length - 1, Math.max(0, Math.round(q * (densitySamples.length - 1))))];
+    densLo = pick(0.02);
+    densHi = dynDensMax;
+  }
+  if (densHi <= densLo) { densLo = dynDensMin; densHi = dynDensMax; }
+  const _dynDensRange = Math.max(densHi - densLo, 1e-9);
 
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i] as SceneCell;
@@ -482,16 +504,17 @@ export function updateInstancedBuffers({
       if (visualLayer === "uncertainty") {
         [_r, _g, _b] = sampleColormap(INFERNO_STOPS, _sigmaRatio);
       } else {
-        const _u = clamp01((density - dynDensMin) / _dynDensRange);
-        const _uPrime = Math.log(1 + 4 * _u) / Math.log(5);
-        [_r, _g, _b] = sampleColormap(VIRIDIS_STOPS, _uPrime);
+        // Normalización lineal robusta (P2–P98) + colormap YlOrRd:
+        // baja densidad = amarillo suave → alta densidad = rojo intenso.
+        const _u = clamp01((density - densLo) / _dynDensRange);
+        [_r, _g, _b] = sampleColormap(YLORRD_STOPS, _u);
         const _alpha = 1 - 0.7 * _sigmaRatio;
         _r *= _alpha; _g *= _alpha; _b *= _alpha;
       }
     }
 
     // Brillo DOI (proxy de sensibilidad — invariante de la capa activa)
-    const brightness = 0.25 + Math.min(1.0, (sensitivityProxy - DOI_THRESHOLD) / (0.3 - DOI_THRESHOLD)) * 0.75;
+    const brightness = 0.55 + Math.min(1.0, (sensitivityProxy - DOI_THRESHOLD) / (0.3 - DOI_THRESHOLD)) * 0.45;
     _tmpColor.setRGB(_r * brightness, _g * brightness, _b * brightness);
 
     dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.scale.set(rdx, rdy, rdz); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); mesh.setColorAt(i, _tmpColor);

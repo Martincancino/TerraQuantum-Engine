@@ -32,8 +32,14 @@ ALLOWED_GRAVITY_TYPES = {
     "absolute_gravity",
     "corrected_gravity",
     "free_air_anomaly",
+    "free_air_mgal",
     "bouguer_anomaly",
+    "bouguer_mgal",
+    "complete_bouguer_anomaly",
     "residual_anomaly",
+    "residual_gravity",
+    "terrain_corrected_bouguer",
+    "magnetic_only",
     "synthetic_demo",
 }
 GRAVITY_COLUMN_PRIORITY = [
@@ -463,6 +469,28 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
         )
         if first_utm_zone:
             csv_analysis.coordinate_system.utm_zone = first_utm_zone
+
+        # Column names are authoritative evidence of coordinate type.
+        # Value-range inference (_infer_coordinate_system) fails for regional surveys
+        # (e.g. 350 km Bouguer grids) where spans exceed the 200 km threshold.
+        # When the column resolver found a clear coord_type but inference returned
+        # "unknown", trust the column names.
+        _COORD_TYPE_TO_DETECTED = {
+            "legacy": "local_meters",
+            "local": "local_meters",
+            "latlon": "latlon",
+            "utm": "utm",
+        }
+        if (
+            coord_map.get("coord_type") is not None
+            and csv_analysis.coordinate_system.detected == "unknown"
+        ):
+            csv_analysis.coordinate_system.detected = _COORD_TYPE_TO_DETECTED.get(
+                coord_map["coord_type"], "local_meters"
+            )
+            csv_analysis.coordinate_system.confidence = "high"
+            csv_analysis.coordinate_system.warning = None
+
         warnings_list = list(csv_analysis.warnings)
         observations, coordinate_transform = transform_coordinates(
             observations,
@@ -528,7 +556,10 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
                 auto_grid=auto_grid,
             )
             
-        if all(math.isclose(obs.g, 0.0, abs_tol=1e-15) for obs in observations):
+        if (
+            first_gravity_type != "magnetic_only"
+            and all(math.isclose(obs.g, 0.0, abs_tol=1e-15) for obs in observations)
+        ):
             errors_list.append("All normalized gravity values are zero or near zero")
             return _build_error_result(
                 path.name,
@@ -581,7 +612,7 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
                 conversion_applied=conversion_applied, is_demo=is_demo,
                 coordinate_transform=coordinate_transform, auto_grid=auto_grid,
             )
-        if np.std(g_mgal) < 1e-6:
+        if first_gravity_type != "magnetic_only" and np.std(g_mgal) < 1e-6:
             errors_list.append(
                 "Varianza casi cero detectada. Los datos no contienen anomalías medibles"
             )

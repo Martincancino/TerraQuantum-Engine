@@ -59,36 +59,36 @@ def _build_local_unanchored() -> SpatialReadiness:
     return SpatialReadiness(
         level="LOCAL_UNANCHORED",
         level_rank=SPATIAL_LEVEL_RANKS["LOCAL_UNANCHORED"],
-        can_run_3d_inversion=False,
+        can_run_3d_inversion=True,
         can_run_local_conceptual_inversion=True,
         can_use_dem=False,
         can_compute_voxel_masl=False,
         can_compute_voxel_latlon=False,
-        requires_user_acknowledgement=True,
-        required_acknowledgement="ACK_LOCAL_CONCEPTUAL_ONLY",
+        requires_user_acknowledgement=False,
+        required_acknowledgement=None,
         max_priority_class_allowed=SPATIAL_LEVEL_MAX_PRIORITY["LOCAL_UNANCHORED"],
         max_favorability_score_allowed=SPATIAL_LEVEL_MAX_FAVORABILITY["LOCAL_UNANCHORED"],
-        missing_fields=["anchor_lat", "anchor_lon"],
+        missing_fields=[],
         warnings=[
-            "Coordenadas locales en metros detectadas sin anclaje geográfico.",
-            "Solo es posible inversión conceptual en espacio relativo.",
-            "Proporcione anchor_lat y anchor_lon para habilitar inversión 3D georeferenciada.",
+            "Coordenadas locales en metros (x_m/y_m/z_m). La inversión 3D opera en espacio local.",
+            "Sin anclaje geográfico: el modelo no tiene ubicación absoluta en el mapa.",
+            "Para co-registro DEM y lat/lon por vóxel, proporcione anchor_lat y anchor_lon.",
         ],
         allowed_outputs=[
+            "3d_inversion",
             "local_conceptual_inversion",
             "relative_model_visualization",
             "internal_quality_report",
         ],
         blocked_outputs=[
-            "3d_inversion",
             "dem_coregistration",
             "voxel_masl",
             "voxel_latlon",
         ],
         rationale=(
-            "Coordenadas locales sin anclaje geográfico. El modelo existe solo en "
-            "espacio relativo. Para inversión 3D georreferenciada se requiere un "
-            "punto de anclaje (anchor_lat, anchor_lon) o un CSV con coordenadas absolutas."
+            "Coordenadas locales en metros sin anclaje geográfico. La inversión 3D es "
+            "físicamente válida en espacio local. El modelo no tiene ubicación geográfica "
+            "absoluta; proporcionar anchor_lat/lon para georeferenciación."
         ),
     )
 

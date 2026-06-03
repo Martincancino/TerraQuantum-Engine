@@ -424,6 +424,15 @@ def _infer_coordinate_system(observations: Sequence[GravityObservation]) -> Coor
             warning="Sistema local en metros inferido con confianza media; revisar CRS declarado.",
         )
 
+    # Regional survey in local meters: spans up to 1000 km are physically valid.
+    # Bouguer grids and airborne regional surveys commonly cover 300-800 km.
+    if x_span <= 1_000_000.0 and z_span <= 1_000_000.0 and max_abs <= 2_000_000.0:
+        return CoordSystemDetection(
+            detected="local_meters",
+            confidence="medium",
+            warning="Sistema local en metros de escala regional (>200 km). Inversión en espacio local válida.",
+        )
+
     return CoordSystemDetection(
         detected="unknown",
         confidence="low",
