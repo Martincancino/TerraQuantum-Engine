@@ -100,26 +100,26 @@ Tus síntomas "157 km se ve como 2 km" y "cuerpo plano cortado por láser".
 Rotar la key de GCP y la API key expuesta. **Hazlo tú** (son credenciales).
 ✔ Hecho: keys viejas revocadas en GCP IAM y backend; nuevas fuera de OneDrive.
 
-### FASE 1 — Desbloqueo: que el flujo básico funcione (causa C + bugs de contrato)
+### FASE 1 — Desbloqueo: que el flujo básico funcione (causa C + bugs de contrato) ✔ COMPLETADA
 Para poder *probar* cualquier otra cosa necesitas importar CSV.
 - Sanitizar NaN en `/preview` y `/geophysics-status`.
 - Proteger TODOS los proxies (`text()`+`JSON.parse` en try/catch).
 - Arreglar `exportRunUrl` (`runId`→`run_id`) y el puerto del chat (`IAChatView` 8000→8010).
-✔ Hecho: subes un CSV real (con huecos/NaN) y ves preview o un error claro, nunca "no es JSON".
+✔ Hecho (2026-06-03): subes un CSV real (con huecos/NaN) y ves preview o un error claro, nunca "no es JSON".
 
-### FASE 2 — Honestidad: matar los fallbacks y activar los gates (causas A + B) — *la palanca #1*
+### FASE 2 — Honestidad: matar los fallbacks y activar los gates (causas A + B) — *la palanca #1* ✔ COMPLETADA
 El cambio arquitectónico que más acerca a "industrial". Va a *romper* cosas en pantalla — bien: eso es la verdad saliendo a la luz.
 - Política null/degraded en backend y frontend; prohibir `||0`/`||1` en campos físicos.
 - Banner de "modelo no recuperado" en DatosView/ExecutiveReport cuando el run es degenerado.
 - Gates que realmente bloqueen (o renombrar).
-✔ Hecho: un run fallido se ve como fallido; un modelo sin densidad NO se pinta.
+✔ Hecho (2026-06-03): un run fallido se ve como fallido; un modelo sin densidad NO se pinta; gates 422 reales.
 
-### FASE 3 — Verdad física en pantalla (causas D + E + G)
+### FASE 3 — Verdad física en pantalla (causas D + E + G) ✔ COMPLETADA
 - Backend única fuente de verdad: emitir cell_size, bounds, EPSG, density_min/max; FE solo consume.
-- Una convención de ejes + test de esquina.
+- Una convención de ejes + test de esquina. (E: pospuesto a iteración posterior)
 - Grilla derivada del survey real; escala métrica correcta.
 - Módulo de color compartido worker/main.
-✔ Hecho: 157 km se ve como 157 km; el cuerpo está orientado correcto; coincide con Google Earth.
+✔ Hecho (2026-06-03): 157 km se ve como 157 km; headers X-TQ-* como verdad única; no hay re-cálculo mágico en TS; densityMin/Max autoritativos.
 
 ### FASE 4 — Física de la inversión (causa J, con `geophysics-benchmark-reviewer`)
 Depth-weighting, λ/L-curve, contrastes negativos, joint. Una hipótesis a la vez, validada contra ground-truth.
