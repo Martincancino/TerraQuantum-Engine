@@ -482,8 +482,8 @@ class GravimetryInversion:
         x_c,
         z_c,
         n_trials: int = 20,
-        lambda_min: float = 1e-6,
-        lambda_max: float = 1e-1,
+        lambda_min: float = 1e-4,
+        lambda_max: float = 1e2,
         alpha_spatial: float = 1.0,
         noise_floor: float = 0.02,
         noise_pct: float = 0.02,
@@ -582,6 +582,15 @@ class GravimetryInversion:
         n_sensors      = len(g_observed)
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
 
+        # ── H3 (causa J): trial consistente con solve_inversion_lsqr (tras H2) ──
+        # solve penaliza la smallness con diag(lambda_mag·w_reg)·m (mismo depth
+        # weighting que la suavidad). El trial de la L-curve debe usar la MISMA
+        # regularización: bloque diag(lam·w_reg)·Ws con damp=0, no damp=lam uniforme.
+        # La parte fija (datos + suavidad, no depende de lam) se construye una vez.
+        _Ws_wreg = _sp.diags(w_reg) @ Ws         # diag(w_reg)·Ws (smallness sin lam)
+        _G_fixed = _sp.vstack([G_scaled, lambda_spatial * L_scaled]).tocsr()
+        _d_fixed = np.concatenate([d_w, np.zeros(n_active, dtype=np.float64)])
+
         # ── Barrido logarítmico de lambdas ────────────────────────────────────
         lambdas = np.logspace(
             np.log10(lambda_min), np.log10(lambda_max), num=n_trials
@@ -594,10 +603,10 @@ class GravimetryInversion:
 
         trials = []
         for lam in lambdas:
-            G_aug = _sp.vstack([G_scaled, lambda_spatial * L_scaled]).tocsr()
-            d_aug = np.concatenate([d_w, np.zeros(n_active, dtype=np.float64)])
+            G_aug = _sp.vstack([_G_fixed, float(lam) * _Ws_wreg]).tocsr()
+            d_aug = np.concatenate([_d_fixed, np.zeros(n_active, dtype=np.float64)])
 
-            res = lsqr(G_aug, d_aug, damp=float(lam), iter_lim=150, show=False)
+            res = lsqr(G_aug, d_aug, damp=0.0, iter_lim=150, show=False)
             m_tilde = res[0]
             m_phys  = Ws @ m_tilde
 
@@ -605,8 +614,11 @@ class GravimetryInversion:
             g_pred       = G_active @ m_phys
             misfit_norm  = float(np.linalg.norm(g_observed - g_pred))
 
-            # Roughness: ||L_active @ m_phys||₂
-            roughness_norm = float(np.linalg.norm(L_active @ m_phys))
+            # Roughness = seminorma del término que lam penaliza: ‖diag(w_reg)·m‖
+            # (smallness depth-weighted). Antes se medía ‖L_active·m‖ (suavidad,
+            # penalizada por lambda_spatial FIJO) — inconsistente con el parámetro
+            # lam que se varía, de modo que la esquina elegía un λ no-óptimo.
+            roughness_norm = float(np.linalg.norm(w_reg * m_phys))
 
             print(
                 f"  lambda={lam:.2e} | misfit={misfit_norm:.4e} | roughness={roughness_norm:.4e}"

@@ -470,7 +470,7 @@ def run_benchmark(
 
     if use_lcurve:
         logger.info(
-            f"[4/6] L-Curve: {DEFAULT_LCURVE_TRIALS} trials | lambda in [1e-6, 1e-1]"
+            f"[4/6] L-Curve: {DEFAULT_LCURVE_TRIALS} trials | lambda in [1e-4, 1e2]"
         )
         try:
             lcurve_result = inversor.select_lambda_lcurve(
@@ -481,8 +481,8 @@ def run_benchmark(
                 x_c=x_coarse,
                 z_c=z_coarse,
                 n_trials=DEFAULT_LCURVE_TRIALS,
-                lambda_min=1e-6,
-                lambda_max=1e-1,
+                lambda_min=1e-4,
+                lambda_max=1e2,
                 alpha_spatial=alpha_spatial,
                 noise_floor=noise_sigma,
                 noise_pct=0.0,
