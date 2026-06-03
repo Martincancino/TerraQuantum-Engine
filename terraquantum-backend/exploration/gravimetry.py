@@ -1478,7 +1478,8 @@ class GravimetryInversion:
         residual_error = float(np.linalg.norm(residual_sensor))
         observed_norm = float(np.linalg.norm(g_observed))
         if observed_norm <= 0 or not np.isfinite(observed_norm):
-            misfit_percent = 0.0
+            # Datos degenerados (vacíos o planos): reportar NaN en vez de fingir ajuste perfecto.
+            misfit_percent = float("nan")
         else:
             misfit_percent = float((residual_error / observed_norm) * 100.0)
 
@@ -1496,7 +1497,8 @@ class GravimetryInversion:
 
         relative_score_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
         if max_voxel_error <= 0 or not np.isfinite(max_voxel_error):
-            relative_score_full[active_cells] = 1.0
+            # Datos degenerados: NaN en vez de score=1.0 que finge calidad máxima.
+            relative_score_full[active_cells] = np.nan
         else:
             relative_active = 1.0 - (voxel_error_active / max_voxel_error)
             relative_score_full[active_cells] = np.clip(relative_active, 0.0, 1.0)

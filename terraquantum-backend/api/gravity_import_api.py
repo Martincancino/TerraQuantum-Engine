@@ -38,6 +38,17 @@ from services.coordinate_transform_real import (
 router = APIRouter(prefix="/gravity-import", tags=["Gravity Import"])
 
 
+def _sanitize_nan(obj):
+    """Reemplaza float NaN/Inf por None recursivamente para emitir JSON válido."""
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
+
+
 # ---------------------------------------------------------------------------
 # R3.5-K — UTM zone extraction helpers
 # ---------------------------------------------------------------------------
@@ -486,12 +497,17 @@ def _enforce_spatial_readiness_gate(
     """
     R3.5-D — Hard gate industrial para inversión 3D.
 
-    Lanza HTTPException(422) si el nivel espacial es insuficiente para la
-    modalidad solicitada. NO bloquea si gravity_type == 'synthetic_demo'.
+    Lanza HTTPException(422) si el nivel espacial es insuficiente.
+    NO bloquea si gravity_type == 'synthetic_demo'.
 
-    Ningún nivel bloquea la inversión: el software siempre produce un modelo, degradando
-    con advertencias. Niveles con acknowledgement: LOCAL_ANCHORED_CENTER, UTM_NO_ZONE.
-    Niveles siempre permitidos: todos (incluido NO_SPATIAL_DATA → espacio relativo).
+    Niveles bloqueados sin bypass:
+      - NO_SPATIAL_DATA: sin coordenadas, imposible georreferenciar.
+    Niveles bloqueados salvo acknowledgement:
+      - LOCAL_UNANCHORED: coordenadas locales sin referencia geográfica.
+      - LOCAL_ANCHORED_CENTER: anclaje central sin coords por estación.
+      - UTM_NO_ZONE: UTM detectado pero zona desconocida.
+    Niveles siempre permitidos:
+      - UTM_WITH_ZONE, GEOGRAPHIC_COORDS, PROFESSIONAL_SURVEY.
     """
     if (gravity_type or "").lower() == "synthetic_demo":
         return
@@ -518,16 +534,39 @@ def _enforce_spatial_readiness_gate(
             },
         )
 
-    # NO_SPATIAL_DATA: no bloqueamos — el software degrada a inversión relativa con advertencias.
-    # Cualquier CSV salido de máquina debe producir un modelo, aunque sea en espacio relativo.
-    # El modelo resultante no tiene ubicación geográfica absoluta; se advierte en el reporte.
+    if level == "NO_SPATIAL_DATA":
+        _raise(
+            "El CSV no contiene coordenadas espaciales. "
+            "No es posible ejecutar la inversión 3D sin referencia posicional.",
+            required_acknowledgement=None,
+            required_action="Agregar columnas de coordenadas (x/y/z, lat/lon, o Easting/Northing) al CSV.",
+        )
 
-    # LOCAL_UNANCHORED: coordenadas locales en metros son suficientes para la física 3D.
-    # Se procede sin bloqueo; el resultado queda en espacio local sin georref absoluta.
+    if level == "LOCAL_UNANCHORED" and not acknowledge_spatial_risk:
+        _raise(
+            "Coordenadas locales sin anclaje geográfico. "
+            "El modelo resultante no tendrá ubicación absoluta en el mapa.",
+            required_acknowledgement="ACK_LOCAL_CONCEPTUAL_ONLY",
+            required_action="Confirmar acknowledge_spatial_risk=true para continuar en modo conceptual.",
+        )
 
-    # LOCAL_ANCHORED_CENTER, UTM_NO_ZONE: advertencias en el reporte, pero no bloqueamos.
-    # El software siempre produce un modelo. La georef imperfecta se documenta como warning.
-    # UTM_WITH_ZONE, GEOGRAPHIC_COORDS, PROFESSIONAL_SURVEY → tampoco bloquean.
+    if level == "LOCAL_ANCHORED_CENTER" and not acknowledge_spatial_risk:
+        _raise(
+            "Anclaje solo en el centro; sin coordenadas por estación. "
+            "La georef del modelo será imprecisa.",
+            required_acknowledgement="ACK_LOCAL_ANCHORED_CENTER",
+            required_action="Confirmar acknowledge_spatial_risk=true para continuar.",
+        )
+
+    if level == "UTM_NO_ZONE" and not acknowledge_spatial_risk:
+        _raise(
+            "Sistema UTM detectado pero zona desconocida. "
+            "La conversión a coordenadas geográficas puede ser incorrecta.",
+            required_acknowledgement="ACK_UTM_NO_ZONE",
+            required_action="Especificar utm_zone en el formulario o confirmar acknowledge_spatial_risk=true.",
+        )
+
+    # UTM_WITH_ZONE, GEOGRAPHIC_COORDS, PROFESSIONAL_SURVEY — suficiencia completa, sin bloqueo.
 
 
 @router.post("/preview")
@@ -594,7 +633,7 @@ async def preview_gravity_csv(
         )
         regional_scale_preflight = build_preflight_from_import_result(result)
 
-        return {
+        return _sanitize_nan({
             "status": result.status,
             "previewCount": len(observations_preview),
             "totalObservations": len(result.observations),
@@ -608,7 +647,7 @@ async def preview_gravity_csv(
             "regional_scale_preflight": model_to_dict(regional_scale_preflight),
             "warnings": result.warnings,
             "errors": result.errors
-        }
+        })
     finally:
         if temp_path.exists():
             try:
