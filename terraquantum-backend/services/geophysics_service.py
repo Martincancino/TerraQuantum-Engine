@@ -40,6 +40,24 @@ from services.export_service import export_core_to_vtr
 _log = get_logger(__name__)
 
 
+# ── FASE 4 (causa J): Operating point fijo de lambda_mag ──────────────────────
+# La inversión gravimétrica es severamente SUB-DETERMINADA (n_modelo ≫ n_datos):
+# los datos se ajustan con casi cualquier λ por debajo del óptimo, así que los
+# selectores data-driven (L-curve, chi²-target/discrepancy, GCV) TODOS sub-
+# regularizan (pearson 0.74-0.80 vs óptimo ~0.95 en ground-truth sintético).
+# Como Wd=1/σ (σ adaptivo, invariante de escala) + Ws (columnas unitarias)
+# precondicionan el sistema, lambda_mag vive en un espacio normalizado donde el
+# óptimo de recuperación es O(1-10). Por eso el default robusto es un operating
+# point fijo, validado contra tests/synthetic_recovery_benchmark.py (λ≈3 → r≈0.95).
+#
+# ADVERTENCIA: validado en el benchmark sintético (n_obs≈49, n_active≈256). El
+# óptimo puede depender del ratio n_obs/n_active, NO verificado aún a escala
+# regional real (1552 m, n_active~14K). Es ~1000× mejor que el λ≈1e-3 previo
+# (sub-regularizado), pero requiere calibración en un run real. Ver memoria
+# project_fase4_h2_depth_smallness.
+PRECONDITIONED_OPERATING_LAMBDA = 3.0
+
+
 class PriorityClass(str, Enum):
     HIGH_RELATIVE_PRIORITY   = "HIGH_RELATIVE_PRIORITY"
     MEDIUM_RELATIVE_PRIORITY = "MEDIUM_RELATIVE_PRIORITY"
@@ -2050,44 +2068,32 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             _topography_elevations_padded = None
             _topography_used = "flat_fallback"
 
-    # ── R-A2: Selección automática de lambda vía chi²-target ─────────────────
+    # ── FASE 4 (causa J): Operating point fijo de lambda (reemplaza chi²-target) ─
     # Se activa cuando auto_lambda=True o lambda_mag==0 (sentinel de auto-selección).
+    # Antes se usaba select_lambda_chi2_target(chi2_target=1, candidatos ≤1e-3), que
+    # sub-regularizaba (problema sub-determinado; ver PRECONDITIONED_OPERATING_LAMBDA).
+    # Se reemplaza por el operating point fijo en espacio preconditioned. El método
+    # chi²-target permanece disponible en gravimetry.py para diagnóstico.
     _lambda_mag = params.lambda_mag
     _lambda_scan_meta = {}
     if getattr(params, "auto_lambda", False) or params.lambda_mag == 0.0:
-        _update("running", 0.30, "lambda_scan",
-                "Escaneando lambda óptimo (chi²-target R-A2)...")
-        try:
-            _lam_result = inversor_padded.select_lambda_chi2_target(
-                g_observed=g_observed,
-                y_c=y_c_full,
-                forward_model=forward,
-                sensor_coords=sensor_coords,
-                x_c=x_c_full,
-                z_c=z_c_full,
-                lambda_candidates=[1e-3, 5e-4, 1e-4, 5e-5, 1e-5, 5e-6, 1e-6],
-                chi2_target=1.0,
-                cond_max=1e12,
-                alpha_spatial=params.alpha_spatial,
-                topography_elevations=_topography_elevations_padded,
-                hx=hx, hy=hy, hz=hz,
-                padding_mask=_padding_mask_r02,
-                padding_kappa=_kappa,
-            )
-            _lambda_mag = _lam_result["lambda_selected"]
-            _lambda_scan_meta = _lam_result
-            _log.info(
-                "auto_lambda_selected",
-                lambda_selected=_lambda_mag,
-                chi2_achieved=_lam_result["chi2_achieved"],
-                cond_A=_lam_result["cond_A_achieved"],
-            )
-        except Exception as _lam_exc:
-            _log.warning("auto_lambda_nonfatal", error=str(_lam_exc))
-            if params.lambda_mag > 0:
-                _lambda_mag = params.lambda_mag
-            else:
-                _lambda_mag = 1e-4   # fallback conservador
+        _lambda_mag = PRECONDITIONED_OPERATING_LAMBDA
+        _lambda_scan_meta = {
+            "selection_method": "fixed_preconditioned_operating_point",
+            "lambda_selected":  _lambda_mag,
+            "rationale": (
+                "underdetermined inversion: data-driven selectors (L-curve, "
+                "chi2-target, GCV) under-regularize. Preconditioned optimum O(1-10), "
+                "validated vs synthetic ground-truth (lambda~3 -> pearson~0.95)."
+            ),
+        }
+        _update("running", 0.30, "lambda_set",
+                f"Lambda operativo fijo (preconditioned) = {_lambda_mag:.2f}")
+        _log.info(
+            "auto_lambda_fixed_operating_point",
+            lambda_selected=_lambda_mag,
+            method="fixed_preconditioned_operating_point",
+        )
 
     # P1-2: Diagnóstico de lambda_spatial efectivo (auditoría R09).
     # lambda_spatial = alpha_spatial * (n_sensors / n_active). Para grillas grandes
