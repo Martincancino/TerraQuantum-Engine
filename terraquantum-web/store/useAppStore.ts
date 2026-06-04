@@ -342,22 +342,7 @@ export interface AppState {
   percentileStats: PercentileStats | null;
   setPercentileStats: (stats: PercentileStats | null) => void;
 
-  // 12. POLLING F0.5 — estado del worker de inversión asíncrona
-  pollingStatus: string | null;
-  pollingStage: string | null;
-  pollingMessage: string | null;
-  pollingProgress: number;
-  lastHeartbeat: string | null;
-  setPollingState: (patch: {
-    pollingStatus?: string | null;
-    pollingStage?: string | null;
-    pollingMessage?: string | null;
-    pollingProgress?: number;
-    lastHeartbeat?: string | null;
-  }) => void;
-  resetPollingState: () => void;
-
-  // 13. RENDER SETTINGS — Fase 12 Multi-Física
+  // 12. RENDER SETTINGS — Fase 12 Multi-Física
   // Aislado del blockModel y la cámara para evitar cascading renders.
   viewMode: ViewMode;
   setViewMode: (mode: ViewMode) => void;
@@ -417,7 +402,6 @@ export const useAppStore = create<AppState>((set) => ({
   setView: (v) => set({ view: v }),
   model: null,
   setModel: (m) => {
-    const _r08_t0 = performance.now();
     set({
       model: m,
       selectedVoxel: null,
@@ -440,7 +424,6 @@ export const useAppStore = create<AppState>((set) => ({
           }
         : {}),
     });
-    console.log(`[R08] setModel (Zustand set): ${(performance.now() - _r08_t0).toFixed(2)}ms | cells=${m?.cells?.length ?? 0}`);
   },
 
   // 2. FAVORABILITY GATE
@@ -657,35 +640,7 @@ export const useAppStore = create<AppState>((set) => ({
   percentileStats: null,
   setPercentileStats: (stats) => set({ percentileStats: stats }),
 
-  // 12. POLLING F0.5
-  pollingStatus: null,
-  pollingStage: null,
-  pollingMessage: null,
-  pollingProgress: 0,
-  lastHeartbeat: null,
-  setPollingState: (patch) =>
-    set((state) => ({
-      pollingStatus:
-        patch.pollingStatus !== undefined ? patch.pollingStatus : state.pollingStatus,
-      pollingStage:
-        patch.pollingStage !== undefined ? patch.pollingStage : state.pollingStage,
-      pollingMessage:
-        patch.pollingMessage !== undefined ? patch.pollingMessage : state.pollingMessage,
-      pollingProgress:
-        patch.pollingProgress !== undefined ? patch.pollingProgress : state.pollingProgress,
-      lastHeartbeat:
-        patch.lastHeartbeat !== undefined ? patch.lastHeartbeat : state.lastHeartbeat,
-    })),
-  resetPollingState: () =>
-    set({
-      pollingStatus: null,
-      pollingStage: null,
-      pollingMessage: null,
-      pollingProgress: 0,
-      lastHeartbeat: null,
-    }),
-
-  // 13. RENDER SETTINGS — Fase 12 Multi-Física
+  // 12. RENDER SETTINGS — Fase 12 Multi-Física
   viewMode: 'density',
   setViewMode: (mode) => set({ viewMode: mode }),
   jointThreshold: 0.6,

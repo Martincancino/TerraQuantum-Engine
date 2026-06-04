@@ -1,3 +1,4 @@
+import logging
 import polars as pl
 import numpy as np
 import sys
@@ -6,6 +7,8 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from Camiones.fms import TruckPhysics, DispatchEngineV2
+
+_log = logging.getLogger(__name__)
 
 # El scheduler opera siempre sobre bloques "normalizados" de 25m equivalentes.
 # Con blockSize regional (ej. 1552m), el tonnage real por bloque supera 1e10 t,
@@ -153,16 +156,18 @@ class ProductionScheduler:
         # Se reemplaza por tonnage calculado sobre blockSize normalizado de 25m.
         # Los valores resultantes son "relativos" (correctos para comparación
         # entre bloques) pero NO representativos de tonelaje absoluto real.
+        _tonnage_was_normalized = False
         max_block_ton = float(np.max(ton)) if len(ton) > 0 else 0.0
         if max_block_ton > _MAX_REASONABLE_BLOCK_TONNAGE and "density" in df_sorted.columns:
             density_arr = df_sorted["density"].to_numpy().astype(float)
             ton = density_arr * _NORMALIZED_BLOCK_VOLUME_M3
-            print(
-                f"[SCHEDULER] Tonelaje normalizado a blockSize equivalente "
-                f"{SCHEDULER_NORMALIZED_BLOCK_SIZE_M}m "
-                f"(max original: {max_block_ton:.3e} t/bloque -> "
-                f"max normalizado: {float(np.max(ton)):.3e} t/bloque). "
-                "Tonelaje absoluto no representativo para escala regional."
+            _tonnage_was_normalized = True
+            _log.warning(
+                "tonnage_normalized_regional_scale "
+                f"blockSize_equiv={SCHEDULER_NORMALIZED_BLOCK_SIZE_M}m "
+                f"max_original={max_block_ton:.3e}t "
+                f"max_normalized={float(np.max(ton)):.3e}t — "
+                "NPV resultante es relativo, no monetario absoluto."
             )
 
         # Guard: reemplazar valores no finitos por 0 (no bloqueantes)
@@ -182,6 +187,7 @@ class ProductionScheduler:
                 ),
                 [],
                 0.0,
+                _tonnage_was_normalized,
             )
 
         years = np.zeros(len(ton), dtype=np.int32)
@@ -266,9 +272,8 @@ class ProductionScheduler:
             pl.Series("extraction_year", years)
         )
 
-        print(
-            f"[SCHEDULER] Schedule completado. "
-            f"Años: {len(metrics)} | NPV: ${total_npv:,.0f}"
+        _log.info(
+            f"schedule_done years={len(metrics)} npv={total_npv:,.0f}"
         )
 
-        return df_result, metrics, float(total_npv)
+        return df_result, metrics, float(total_npv), _tonnage_was_normalized

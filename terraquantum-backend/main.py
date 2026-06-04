@@ -1,3 +1,4 @@
+import logging
 import os
 
 from fastapi import FastAPI
@@ -32,6 +33,7 @@ from core.config import (
     CORS_ORIGINS,
     MODELS_DIR,
     MODELS_ROUTE_PREFIX,
+    TQ_AUTH_ENABLED,
     ensure_runtime_dirs,
 )
 from core.gee_client import init_gee
@@ -51,6 +53,28 @@ _ENABLE_FOCUSING = os.environ.get("ENABLE_FOCUSING", "false").lower() == "true"
 ensure_runtime_dirs()
 init_gee()
 init_tracing()
+
+_startup_log = logging.getLogger(__name__)
+
+# CORS safety: wildcard + credentials is rejected by browsers and signals misconfiguration.
+if "*" in CORS_ORIGINS:
+    _cors_warn = (
+        "ADVERTENCIA DE SEGURIDAD: CORS_ALLOWED_ORIGINS contiene '*'. "
+        "Combinado con allow_credentials=True esto viola la especificación CORS "
+        "y los navegadores rechazarán las respuestas. "
+        "Define orígenes explícitos en la var de entorno CORS_ALLOWED_ORIGINS."
+    )
+    _startup_log.error(_cors_warn)
+    if TQ_AUTH_ENABLED:
+        raise RuntimeError(_cors_warn)
+
+# Auth safety: recordatorio visible si el backend arranca sin autenticación.
+if not TQ_AUTH_ENABLED:
+    _startup_log.warning(
+        "MODO SIN AUTENTICACIÓN: TQ_AUTH_ENABLED=false. "
+        "Todas las rutas son accesibles sin API key. "
+        "En producción establece TQ_AUTH_ENABLED=true y configura TQ_MASTER_KEY."
+    )
 
 app = FastAPI(
     title=APP_TITLE,

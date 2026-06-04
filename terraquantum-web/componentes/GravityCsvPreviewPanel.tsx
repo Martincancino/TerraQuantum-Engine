@@ -1138,12 +1138,16 @@ export default function GravityCsvPreviewPanel() {
             />
           </div>
           <div>
-            <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-2">CSV Magnetometría</label>
+            <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-2">
+              CSV Magnetometría{" "}
+              <span className="normal-case text-yellow-600 font-normal">(Próximamente)</span>
+            </label>
             <input
               type="file"
               accept=".csv"
-              onChange={handleFileMagnetometryChange}
-              className="w-full max-w-full min-w-0 overflow-hidden text-xs text-neutral-400 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-neutral-800 file:text-purple-400 hover:file:bg-neutral-700"
+              disabled
+              title="La importación de magnetometría no está disponible aún."
+              className="w-full max-w-full min-w-0 overflow-hidden text-xs text-neutral-600 opacity-40 cursor-not-allowed file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-neutral-900 file:text-neutral-600"
             />
           </div>
         </div>

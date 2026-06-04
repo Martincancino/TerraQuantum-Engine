@@ -19,18 +19,33 @@ import os
 import tempfile
 from pathlib import Path
 
-# ── Añadir raíz del backend al path ─────────────────────────────────────────
-# __file__ = terraquantum-backend/scripts/validation/test_vtk_export.py
-# parent.parent.parent = terraquantum-backend/
-_SCRIPT_DIR  = Path(__file__).resolve()
-BACKEND_ROOT = _SCRIPT_DIR.parent.parent.parent   # = terraquantum-backend/
-sys.path.insert(0, str(BACKEND_ROOT))
-
 import numpy as np
+import pytest
+
+# ── Añadir raíz del backend al path (redundante con conftest.py, inofensivo) ─
+_SCRIPT_DIR  = Path(__file__).resolve()
+BACKEND_ROOT = _SCRIPT_DIR.parent.parent.parent
+sys.path.insert(0, str(BACKEND_ROOT))
 
 PASS = "[PASS]"
 FAIL = "[FAIL]"
 SKIP = "[SKIP]"
+
+_PYEVTK_AVAILABLE = False
+try:
+    from pyevtk.hl import gridToVTK  # noqa: F401
+    _PYEVTK_AVAILABLE = True
+except ImportError:
+    try:
+        from pyevtk.hl import rectilinearToVTK  # noqa: F401
+        _PYEVTK_AVAILABLE = True
+    except ImportError:
+        pass
+
+_pyevtk_required = pytest.mark.skipif(
+    not _PYEVTK_AVAILABLE,
+    reason="pyevtk no instalado — instala con: pip install pyevtk",
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -106,10 +121,10 @@ def test_build_vtk_core_arrays():
     assert np.all(sens[ia == 0] == 0.0), "Sensibilidad de celdas de aire debe ser 0.0"
 
     print(f"  {PASS} build_vtk_core_arrays: edges OK, shapes OK, valores OK")
-    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+@_pyevtk_required
 def test_export_block_model_to_vtr(tmp_dir: str):
     """Prueba la escritura del archivo .vtr con pyevtk."""
     from services.export_service import build_vtk_core_arrays, export_block_model_to_vtr
@@ -153,10 +168,10 @@ def test_export_block_model_to_vtr(tmp_dir: str):
 
     print(f"  {PASS} export_block_model_to_vtr: archivo={Path(vtr_path).name} | size={size_bytes/1024:.1f} KB")
     print(f"         Ruta completa: {vtr_path}")
-    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+@_pyevtk_required
 def test_export_core_to_vtr_pipeline(tmp_dir: str):
     """Prueba el pipeline completo de alto nivel export_core_to_vtr."""
     from services.export_service import export_core_to_vtr
@@ -211,7 +226,6 @@ def test_export_core_to_vtr_pipeline(tmp_dir: str):
     print("  ParaView: File > Open -> selecciona el .vtr")
     print("            Filters > Common > Threshold -> Is_Active = [1, 1]")
     print("            Color by: Density_Contrast_gcm3")
-    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────

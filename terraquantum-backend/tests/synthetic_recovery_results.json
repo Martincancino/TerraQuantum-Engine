@@ -1,6 +1,6 @@
 {
   "benchmark_type": "synthetic_sphere_recovery_v2_anti_inverse_crime",
-  "timestamp": "2026-06-03T23:11:23 UTC",
+  "timestamp": "2026-06-04T10:49:44 UTC",
   "forward_mesh_shape": [
     24,
     12,
@@ -35,23 +35,23 @@
   "trend_rms_si": 3e-08,
   "regional_trend_pct": 0.08,
   "snr_db": 26.02,
-  "lambda_mag": 0.019306977288832496,
+  "lambda_mag": 3.0,
   "alpha_spatial": 1.0,
-  "misfit_percent": 0.0205,
-  "pearson_r": 0.7442,
-  "rms_error": 0.061134,
-  "nrmse": 0.122268,
-  "phi_d": 0.00091,
-  "chi_squared": 1.9e-05,
-  "recovery_score": "GOOD",
+  "misfit_percent": 0.6522,
+  "pearson_r": 0.947,
+  "rms_error": 0.029911,
+  "nrmse": 0.059823,
+  "phi_d": 0.922837,
+  "chi_squared": 0.018833,
+  "recovery_score": "EXCELLENT",
   "bound_saturation_pct": 0.0,
   "n_sat_lower": 0,
   "n_sat_upper": 0,
   "solver": "LSQR",
-  "regularization": "Tikhonov + L-Curve + MS-IRLS",
-  "lcurve_used": true,
+  "regularization": "Tikhonov + operating_point_fijo (λ=3.0) + MS-IRLS",
+  "lcurve_used": false,
   "focusing_status": "OK",
-  "elapsed_s": 1.92,
+  "elapsed_s": 0.63,
   "rng_seed": 42,
   "notes": [
     "v2: benchmark anti-inverse crime con mallas DISTINTAS para forward e inversión",
@@ -61,6 +61,8 @@
     "Kernel gravitacional: Nagy (1966) campo cercano + masa puntual campo lejano",
     "Regularización: Tikhonov 3D + depth weighting Li & Oldenburg (1998, β=2)",
     "Ruido gaussiano fijo (seed=42) — resultados 100% reproducibles",
-    "bound_saturation_pct: fracción de vóxeles en el bound petrofísico [densidad_min, densidad_max]"
+    "bound_saturation_pct: fracción de vóxeles en el bound petrofísico [densidad_min, densidad_max]",
+    "Lambda selección: operating point fijo PRECONDITIONED_OPERATING_LAMBDA=3.0 (L-curve deshabilitada; importado de services/geophysics_service.py)",
+    "CI threshold: Pearson r >= 0.85 requerido para exit(0); exit(1) si r < 0.85"
   ]
 }

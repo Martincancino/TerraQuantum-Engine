@@ -77,6 +77,19 @@ try:
 except ImportError:
     _FOCUSING_AVAILABLE = False
 
+# ── Operating point fijo de producción ────────────────────────────────────────
+# Importado de services/geophysics_service.py para garantizar que el benchmark
+# usa EXACTAMENTE el mismo λ que producción. Fallback al valor numérico si las
+# dependencias del servicio (FastAPI, polars) no están disponibles.
+try:
+    from services.geophysics_service import PRECONDITIONED_OPERATING_LAMBDA
+except ImportError:
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from services.geophysics_service import PRECONDITIONED_OPERATING_LAMBDA
+    except ImportError:
+        PRECONDITIONED_OPERATING_LAMBDA = 3.0  # fallback — mismo valor que geophysics_service.py:58
+
 # UTF-8 output: necesario en consolas Windows con encoding cp1252
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -106,7 +119,7 @@ DEFAULT_FINE_BLOCK_SIZE = 5.0  # m — ratio 3:1 vs bloque de inversión
 
 DEFAULT_CONTRAST      = 0.5    # t/m³ — contraste de densidad de la esfera (+ denso)
 DEFAULT_NOISE_LEVEL   = 0.05   # fracción del RMS de señal para ruido gaussiano
-DEFAULT_LAMBDA_MAG    = 1e-4   # regularización Tikhonov (fallback si L-curve falla)
+DEFAULT_LAMBDA_MAG    = PRECONDITIONED_OPERATING_LAMBDA  # operating point fijo de producción (services/geophysics_service.py)
 DEFAULT_ALPHA_SPATIAL = 1.0
 DEFAULT_LCURVE_TRIALS = 8      # trials L-curve (rápido pero diagnóstico)
 
@@ -306,7 +319,7 @@ def run_benchmark(
     noise_level:     float = DEFAULT_NOISE_LEVEL,
     lambda_mag:      float = DEFAULT_LAMBDA_MAG,
     alpha_spatial:   float = DEFAULT_ALPHA_SPATIAL,
-    use_lcurve:      bool  = True,
+    use_lcurve:      bool  = False,
     use_focusing:    bool  = True,
     verbose:         bool  = True,
 ) -> dict:
@@ -466,7 +479,7 @@ def run_benchmark(
     # ─────────────────────────────────────────────────────────────────────────
     lcurve_result   = None
     lambda_selected = lambda_mag
-    regularization  = "Tikhonov"
+    regularization  = f"Tikhonov + operating_point_fijo (λ={PRECONDITIONED_OPERATING_LAMBDA})"
 
     if use_lcurve:
         logger.info(
@@ -500,7 +513,10 @@ def run_benchmark(
             )
             lambda_selected = lambda_mag
     else:
-        logger.info(f"[4/6] L-Curve omitida. λ={lambda_selected:.2e} fijo")
+        logger.info(
+            f"[4/6] L-Curve omitida. λ={lambda_selected:.2e} = PRECONDITIONED_OPERATING_LAMBDA "
+            f"(operating point fijo, importado de services/geophysics_service.py)"
+        )
 
     # ─────────────────────────────────────────────────────────────────────────
     # [5/6] Inversión en malla gruesa — LSQR + Tikhonov + depth weighting
@@ -701,6 +717,9 @@ def run_benchmark(
             "Regularización: Tikhonov 3D + depth weighting Li & Oldenburg (1998, β=2)",
             f"Ruido gaussiano fijo (seed={RNG_SEED}) — resultados 100% reproducibles",
             "bound_saturation_pct: fracción de vóxeles en el bound petrofísico [densidad_min, densidad_max]",
+            f"Lambda selección: operating point fijo PRECONDITIONED_OPERATING_LAMBDA={PRECONDITIONED_OPERATING_LAMBDA} "
+            f"(L-curve deshabilitada; importado de services/geophysics_service.py)",
+            "CI threshold: Pearson r >= 0.85 requerido para exit(0); exit(1) si r < 0.85",
         ],
     }
 
@@ -845,7 +864,7 @@ def _parse_args() -> argparse.Namespace:
             "El umbral duro se fijará en un commit futuro cuando se conozca el baseline."
         ),
     )
-    parser.set_defaults(use_lcurve=True, use_focusing=True)
+    parser.set_defaults(use_lcurve=False, use_focusing=True)
     return parser.parse_args()
 
 
@@ -891,14 +910,20 @@ if __name__ == "__main__":
         ))
 
     if args.ci:
-        # Modo CI: solo reportar, nunca romper el pipeline.
-        # El umbral duro se añadirá en un commit futuro tras establecer el baseline.
+        pearson_r_ci = results.get("pearson_r", 0.0)
         score = results.get("recovery_score", "POOR")
         print(
             f"\n[CI] Benchmark completado — recovery_score={score} | "
-            f"pearson_r={results.get('pearson_r', 0.0):.4f} | "
+            f"pearson_r={pearson_r_ci:.4f} | "
             f"bound_saturation_pct={results.get('bound_saturation_pct', 0.0):.2f}%"
         )
+        if pearson_r_ci < 0.85:
+            print(
+                f"[CI] FAIL — Pearson r={pearson_r_ci:.4f} < 0.85 "
+                f"(umbral requerido para operating point fijo λ={PRECONDITIONED_OPERATING_LAMBDA})"
+            )
+            sys.exit(1)
+        print(f"[CI] PASS — Pearson r={pearson_r_ci:.4f} >= 0.85")
         sys.exit(0)
     else:
         # Modo normal: exit(1) si el benchmark falla (POOR)
