@@ -2027,6 +2027,76 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             "La matriz forward no coincide con la cantidad de observaciones gravimétricas."
         )
 
+    # ── SPRINT 3C: TreeMesh branch (opt-in, separate path from regular grid) ──
+    _use_treemesh = getattr(params, "use_treemesh", False)
+    if _use_treemesh:
+        from exploration.treemesh import TreeMesh
+        from exploration.gravimetry import solve_inversion_treemesh
+
+        _update("running", 0.35, "treemesh_build", "Construyendo malla Octree adaptativa...")
+
+        mesh = TreeMesh.from_regular_grid(
+            nx=nx, ny=ny, nz=nz,
+            block_size=dx,
+            max_refinement_depth=getattr(params, "treemesh_max_refine", 2),
+            sensor_coords=sensor_coords,
+        )
+
+        _update("running", 0.40, "treemesh_solve", f"Resolviendo inversión sobre TreeMesh ({mesh.n_cells:,} celdas)...")
+
+        _solver_meta = {}
+        est_density, probability, misfit_percent = solve_inversion_treemesh(
+            mesh=mesh,
+            g_observed=g_observed,
+            sensor_coords=sensor_coords,
+            forward_model=forward,
+            lambda_mag=params.lambda_mag if params.lambda_mag > 0 else PRECONDITIONED_OPERATING_LAMBDA,
+            alpha_spatial=params.alpha_spatial,
+            depth_beta=getattr(params, "depth_beta", 2.0),
+            density_min=params.density_min,
+            density_max=params.density_max,
+            solver_meta=_solver_meta,
+        )
+
+        # Construir vóxeles mínimos from TreeMesh
+        cell_centers = mesh.get_cell_centers()
+        voxels = []
+        for i in range(mesh.n_cells):
+            voxels.append({
+                "ix": i % 32 if mesh.n_cells > 0 else 0,  # Dummy index
+                "iy": (i // 32) % 32,
+                "iz": (i // 1024) % 32,
+                "x_m": float(cell_centers[i, 0]),
+                "y_m": float(cell_centers[i, 1]),
+                "z_m": float(cell_centers[i, 2]),
+                "density": float(est_density[i]) if np.isfinite(est_density[i]) else None,
+                "probability": float(probability[i]) if np.isfinite(probability[i]) else None,
+                "is_active": bool(np.isfinite(est_density[i])),
+            })
+
+        _mesh_info = {
+            'n_cells': mesh.n_cells,
+            'n_levels': mesh.max_refinement_depth + 1,
+            'min_cell_size_m': float(np.min(mesh.get_cell_sizes())),
+            'max_cell_size_m': float(np.max(mesh.get_cell_sizes())),
+            'base_cell_size_m': float(mesh.base_cell_size),
+            'sensor_guided_refine': True,
+        }
+
+        _update("done", 1.0, "completed", f"TreeMesh inversión completada ({mesh.n_cells} celdas).",
+                metrics={"misfit_percent": misfit_percent, "mesh_cells": mesh.n_cells, "mesh_levels": mesh.max_refinement_depth + 1})
+
+        return {
+            "voxels": voxels,
+            "best_target": None,
+            "report": {"mesh_info": _mesh_info, "misfit_error_percent": misfit_percent},
+            "misfit_error_percent": misfit_percent,
+        }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Regular Grid path (original, unmodified)
+    # ─────────────────────────────────────────────────────────────────────────
+
     # inversor_padded: opera sobre grilla completa (Core + Padding) para LSQR + Laplaciano
     inversor_padded = GravimetryInversion(nx_total, ny_total, nz_total, dx)
     # inversor_core: para focusing y regularizador de diagnóstico (grilla Core solamente)
