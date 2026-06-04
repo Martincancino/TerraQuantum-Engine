@@ -271,8 +271,7 @@ export default function DatosView() {
   };
 
   const handleExportPDF = () => {
-    setIsExportingPDF(true);
-    setTimeout(() => { window.print(); setIsExportingPDF(false); }, 1200);
+    window.print();
   };
 
   const geminiInterpretation = useMemo<GeminiInterpretation | null>(() => {
@@ -554,9 +553,8 @@ function ExportBar({
 
           {/* PDF */}
           <DlButton
-            icon="↓" label="Exportar PDF"
+            icon="↓" label="Imprimir"
             onClick={onExportPDF}
-            loading={isExportingPDF}
             variant="primary"
           />
         </>

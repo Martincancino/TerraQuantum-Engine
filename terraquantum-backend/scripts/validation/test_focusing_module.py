@@ -72,7 +72,6 @@ def _call_focusing(**kwargs):
 def test_output_is_msxresult():
     result = _call_focusing()
     assert isinstance(result, MSXResult), f"Output debe ser MSXResult, got {type(result)}"
-    return "MSXResult correcto"
 
 
 def test_m_best_shape():
@@ -80,14 +79,12 @@ def test_m_best_shape():
     assert result.m_best.shape == _est_density.shape, (
         f"Shape incorrecto: {result.m_best.shape} vs {_est_density.shape}"
     )
-    return f"shape={result.m_best.shape}"
 
 
 def test_m_best_no_nan_inf():
     result = _call_focusing()
     assert not np.any(np.isnan(result.m_best)), "m_best contiene NaN"
     assert not np.any(np.isinf(result.m_best)), "m_best contiene Inf"
-    return "sin NaN/Inf"
 
 
 def test_m_best_bounded():
@@ -97,21 +94,18 @@ def test_m_best_bounded():
     hi = float(np.max(result.m_best))
     assert lo >= 0.0,           f"m_best tiene valores negativos: {lo:.4f}"
     assert hi <= M_MAX + 1e-9,  f"m_best supera M_MAX={M_MAX}: {hi:.4f}"
-    return f"m_best in [0, {M_MAX}], max={hi:.4f}"
 
 
 def test_scale_status_valid():
     result = _call_focusing()
     valid = {"OK", "SUPRIMIDA", "INESTABLE"}
     assert result.scale_status in valid, f"scale_status inválido: {result.scale_status!r}"
-    return f"scale_status={result.scale_status!r}"
 
 
 def test_use_mode_valid():
     result = _call_focusing()
     valid = {"physical_mask_candidate", "relative_targeting_score"}
     assert result.use_mode in valid, f"use_mode inválido: {result.use_mode!r}"
-    return f"use_mode={result.use_mode!r}"
 
 
 def test_safety_labels_not_resource_estimate():
@@ -119,7 +113,6 @@ def test_safety_labels_not_resource_estimate():
     assert "not_resource_estimate" in result.safety_labels, (
         f"safety_labels debe incluir 'not_resource_estimate'. Got: {result.safety_labels}"
     )
-    return f"safety_labels={result.safety_labels}"
 
 
 def test_history_nonempty():
@@ -129,7 +122,6 @@ def test_history_nonempty():
         assert "iter"        in h, "history entry falta 'iter'"
         assert "rms"         in h, "history entry falta 'rms'"
         assert "max_density" in h, "history entry falta 'max_density'"
-    return f"history entries={len(result.history)}"
 
 
 def test_best_iter_valid():
@@ -138,14 +130,12 @@ def test_best_iter_valid():
     assert 0 <= result.best_iter < result.total_iters, (
         f"best_iter={result.best_iter} fuera de rango [0, {result.total_iters})"
     )
-    return f"best_iter={result.best_iter} / total_iters={result.total_iters}"
 
 
 def test_rms_finite_positive():
     result = _call_focusing()
     assert np.isfinite(result.rms_base) and result.rms_base > 0, f"rms_base inválido: {result.rms_base}"
     assert np.isfinite(result.rms_best) and result.rms_best > 0, f"rms_best inválido: {result.rms_best}"
-    return f"rms_base={result.rms_base:.5f}, rms_best={result.rms_best:.5f}"
 
 
 def test_config_summary_structure():
@@ -167,7 +157,6 @@ def test_config_summary_structure():
     assert cs["alpha_spatial"] == 2.0,                                   "alpha_spatial incorrecto"
     assert cs["best_iter_selection"] == "min_rms_proxy_without_ground_truth", \
         "best_iter_selection incorrecto"
-    return f"config_summary OK, lambda_mag_used_in_msx={cs['lambda_mag_used_in_msx']}"
 
 
 def test_empty_kernel_raises():
@@ -178,7 +167,6 @@ def test_empty_kernel_raises():
     except ValueError as exc:
         msg = str(exc).lower()
         assert "vacío" in msg or "kernel" in msg, f"Mensaje inesperado: {exc}"
-        return f"ValueError correcto: {exc}"
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────

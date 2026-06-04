@@ -5,6 +5,8 @@ POST   /api/keys/         — create a new API key
 GET    /api/keys/         — list all keys (hash prefix shown, never plaintext)
 DELETE /api/keys/         — revoke a key by hash prefix
 """
+import hmac
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
@@ -22,7 +24,7 @@ def _require_master(x_tq_master_key: str = Header(...)):
             status_code=503,
             detail="Master key not configured. Set TQ_MASTER_KEY env var.",
         )
-    if x_tq_master_key != TQ_MASTER_KEY:
+    if not hmac.compare_digest(x_tq_master_key, TQ_MASTER_KEY):
         raise HTTPException(status_code=403, detail="Invalid master key.")
 
 

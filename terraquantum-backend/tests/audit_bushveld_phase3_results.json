@@ -1,0 +1,218 @@
+{
+  "sweep": {
+    "lambda_vals": [
+      1.0,
+      3.0,
+      5.0
+    ],
+    "alpha_spatial_vals": [
+      1.0,
+      5.0,
+      10.0,
+      25.0,
+      50.0
+    ],
+    "grid": {
+      "block_km": 4.0,
+      "nz_depth": 5,
+      "total_depth_km": 20.0
+    },
+    "reg_order": 2,
+    "n_stations": 441
+  },
+  "sanity_thresholds": {
+    "depth_km": [
+      5.0,
+      12.0
+    ],
+    "horiz_offset_max_km": 15.0,
+    "misfit_max_pct": 35.0,
+    "delta_rho_range_t_m3": [
+      0.2,
+      1.0
+    ]
+  },
+  "summary": {
+    "n_total": 15,
+    "n_pass": 0,
+    "lambda3_any_pass": false
+  },
+  "results": [
+    {
+      "lambda": 1.0,
+      "alpha_spatial": 1.0,
+      "depth_km": 15.83,
+      "horiz_offset_km": 122.98,
+      "misfit_pct": 107.77,
+      "delta_rho_max": 0.5,
+      "n_body": 366,
+      "pass_sanity": false,
+      "notes": "depth 15.8km > 12.0km (demasiado profundo) | horiz_offset 123.0km ≥ 15.0km | misfit 107.8% ≥ 35.0%"
+    },
+    {
+      "lambda": 1.0,
+      "alpha_spatial": 5.0,
+      "depth_km": 15.83,
+      "horiz_offset_km": 123.0,
+      "misfit_pct": 107.74,
+      "delta_rho_max": 0.501,
+      "n_body": 368,
+      "pass_sanity": false,
+      "notes": "depth 15.8km > 12.0km (demasiado profundo) | horiz_offset 123.0km ≥ 15.0km | misfit 107.7% ≥ 35.0%"
+    },
+    {
+      "lambda": 1.0,
+      "alpha_spatial": 10.0,
+      "depth_km": 15.81,
+      "horiz_offset_km": 122.75,
+      "misfit_pct": 107.86,
+      "delta_rho_max": 0.51,
+      "n_body": 365,
+      "pass_sanity": false,
+      "notes": "depth 15.8km > 12.0km (demasiado profundo) | horiz_offset 122.8km ≥ 15.0km | misfit 107.9% ≥ 35.0%"
+    },
+    {
+      "lambda": 1.0,
+      "alpha_spatial": 25.0,
+      "depth_km": 15.73,
+      "horiz_offset_km": 122.13,
+      "misfit_pct": 108.42,
+      "delta_rho_max": 0.524,
+      "n_body": 364,
+      "pass_sanity": false,
+      "notes": "depth 15.7km > 12.0km (demasiado profundo) | horiz_offset 122.1km ≥ 15.0km | misfit 108.4% ≥ 35.0%"
+    },
+    {
+      "lambda": 1.0,
+      "alpha_spatial": 50.0,
+      "depth_km": 15.78,
+      "horiz_offset_km": 116.67,
+      "misfit_pct": 107.76,
+      "delta_rho_max": 0.54,
+      "n_body": 333,
+      "pass_sanity": false,
+      "notes": "depth 15.8km > 12.0km (demasiado profundo) | horiz_offset 116.7km ≥ 15.0km | misfit 107.8% ≥ 35.0%"
+    },
+    {
+      "lambda": 3.0,
+      "alpha_spatial": 1.0,
+      "depth_km": 15.94,
+      "horiz_offset_km": 105.28,
+      "misfit_pct": 109.36,
+      "delta_rho_max": 0.632,
+      "n_body": 222,
+      "pass_sanity": false,
+      "notes": "depth 15.9km > 12.0km (demasiado profundo) | horiz_offset 105.3km ≥ 15.0km | misfit 109.4% ≥ 35.0%"
+    },
+    {
+      "lambda": 3.0,
+      "alpha_spatial": 5.0,
+      "depth_km": 15.94,
+      "horiz_offset_km": 105.29,
+      "misfit_pct": 109.36,
+      "delta_rho_max": 0.631,
+      "n_body": 222,
+      "pass_sanity": false,
+      "notes": "depth 15.9km > 12.0km (demasiado profundo) | horiz_offset 105.3km ≥ 15.0km | misfit 109.4% ≥ 35.0%"
+    },
+    {
+      "lambda": 3.0,
+      "alpha_spatial": 10.0,
+      "depth_km": 15.94,
+      "horiz_offset_km": 104.92,
+      "misfit_pct": 109.37,
+      "delta_rho_max": 0.631,
+      "n_body": 223,
+      "pass_sanity": false,
+      "notes": "depth 15.9km > 12.0km (demasiado profundo) | horiz_offset 104.9km ≥ 15.0km | misfit 109.4% ≥ 35.0%"
+    },
+    {
+      "lambda": 3.0,
+      "alpha_spatial": 25.0,
+      "depth_km": 15.89,
+      "horiz_offset_km": 107.05,
+      "misfit_pct": 109.37,
+      "delta_rho_max": 0.623,
+      "n_body": 234,
+      "pass_sanity": false,
+      "notes": "depth 15.9km > 12.0km (demasiado profundo) | horiz_offset 107.0km ≥ 15.0km | misfit 109.4% ≥ 35.0%"
+    },
+    {
+      "lambda": 3.0,
+      "alpha_spatial": 50.0,
+      "depth_km": 15.9,
+      "horiz_offset_km": 114.74,
+      "misfit_pct": 109.08,
+      "delta_rho_max": 0.585,
+      "n_body": 275,
+      "pass_sanity": false,
+      "notes": "depth 15.9km > 12.0km (demasiado profundo) | horiz_offset 114.7km ≥ 15.0km | misfit 109.1% ≥ 35.0%"
+    },
+    {
+      "lambda": 5.0,
+      "alpha_spatial": 1.0,
+      "depth_km": 15.97,
+      "horiz_offset_km": 104.15,
+      "misfit_pct": 109.14,
+      "delta_rho_max": 0.628,
+      "n_body": 221,
+      "pass_sanity": false,
+      "notes": "depth 16.0km > 12.0km (demasiado profundo) | horiz_offset 104.2km ≥ 15.0km | misfit 109.1% ≥ 35.0%"
+    },
+    {
+      "lambda": 5.0,
+      "alpha_spatial": 5.0,
+      "depth_km": 15.97,
+      "horiz_offset_km": 104.16,
+      "misfit_pct": 109.14,
+      "delta_rho_max": 0.628,
+      "n_body": 221,
+      "pass_sanity": false,
+      "notes": "depth 16.0km > 12.0km (demasiado profundo) | horiz_offset 104.2km ≥ 15.0km | misfit 109.1% ≥ 35.0%"
+    },
+    {
+      "lambda": 5.0,
+      "alpha_spatial": 10.0,
+      "depth_km": 15.97,
+      "horiz_offset_km": 104.17,
+      "misfit_pct": 109.14,
+      "delta_rho_max": 0.627,
+      "n_body": 221,
+      "pass_sanity": false,
+      "notes": "depth 16.0km > 12.0km (demasiado profundo) | horiz_offset 104.2km ≥ 15.0km | misfit 109.1% ≥ 35.0%"
+    },
+    {
+      "lambda": 5.0,
+      "alpha_spatial": 25.0,
+      "depth_km": 15.94,
+      "horiz_offset_km": 106.15,
+      "misfit_pct": 109.15,
+      "delta_rho_max": 0.625,
+      "n_body": 227,
+      "pass_sanity": false,
+      "notes": "depth 15.9km > 12.0km (demasiado profundo) | horiz_offset 106.1km ≥ 15.0km | misfit 109.1% ≥ 35.0%"
+    },
+    {
+      "lambda": 5.0,
+      "alpha_spatial": 50.0,
+      "depth_km": 15.99,
+      "horiz_offset_km": 108.19,
+      "misfit_pct": 109.06,
+      "delta_rho_max": 0.612,
+      "n_body": 243,
+      "pass_sanity": false,
+      "notes": "depth 16.0km > 12.0km (demasiado profundo) | horiz_offset 108.2km ≥ 15.0km | misfit 109.1% ≥ 35.0%"
+    }
+  ],
+  "best_with_lambda_3": {
+    "lambda": 3.0,
+    "alpha_spatial": 25.0,
+    "depth_km": 15.89,
+    "horiz_offset_km": 107.05,
+    "misfit_pct": 109.37,
+    "delta_rho_max": 0.623,
+    "n_body": 234,
+    "pass_sanity": false,
+    "notes": "depth 15.9km > 12.0km (demasiado profundo) | horiz_offset 107.0km ≥ 15.0km | misfit 109.4% ≥ 35.0%"
+  }
+}

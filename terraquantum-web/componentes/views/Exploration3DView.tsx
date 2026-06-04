@@ -225,8 +225,6 @@ export default function Exploration3DView() {
     visibleCellCount,
     highlightedCellCount,
     returnedVoxels,
-    setPollingState,
-    resetPollingState,
     visualLayer,
   } = useAppStore() as AppState;
 
@@ -236,22 +234,6 @@ export default function Exploration3DView() {
   const blockModelReloadRequestRef = React.useRef(0);
   const previousBlockModelDataModeRef =
     React.useRef<BlockModelDataMode>(blockModelDataMode);
-
-  const pollingRef = React.useRef<{
-    active: boolean;
-    timeoutId?: ReturnType<typeof setTimeout>;
-  }>({ active: false, timeoutId: undefined });
-
-  useEffect(() => {
-    const ref = pollingRef;
-    return () => {
-      ref.current.active = false;
-      if (ref.current.timeoutId !== undefined) {
-        clearTimeout(ref.current.timeoutId);
-        ref.current.timeoutId = undefined;
-      }
-    };
-  }, []);
 
   // Estados de la interfaz fake eliminados
 

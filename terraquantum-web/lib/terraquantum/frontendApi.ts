@@ -420,7 +420,6 @@ function finalizeBlockModelResult(
   result: FrontendApiResult<JsonValue>,
   fallbackMode: string
 ): FrontendApiResult<BlockModelResponse> {
-  const _r08_t0 = performance.now();
   const data = normalizeBlockModelResponse(result.data, fallbackMode);
 
   if (result.ok) {
@@ -429,9 +428,7 @@ function finalizeBlockModelResult(
     syncPercentileStats(data);
   }
 
-  const out = { ...result, data };
-  console.log(`[R08] finalizeBlockModelResult (store sync): ${(performance.now() - _r08_t0).toFixed(1)}ms`);
-  return out;
+  return { ...result, data };
 }
 
 async function fetchInternalJson<T>(options: {
@@ -620,7 +617,6 @@ export async function getExplorationBlockModelForRunWithArrow(
   if (request.limit > 5000) {
     const arrowResult = await fetchBlockModelArrowForRun(projectId, runId, request.mode);
     if (arrowResult.ok) {
-      console.log(`[QW-6] ${arrowResult.data?.returnedVoxels ?? 0} vóxeles via Arrow IPC`);
       return arrowResult;
     }
     console.warn("[QW-6] Arrow falló, fallback a JSON:", arrowResult.error);
@@ -1130,12 +1126,9 @@ async function _buildBlockModelResponseFromArrow(
   headers: Headers,
   fallbackMode: string
 ): Promise<FrontendApiResult<BlockModelResponse>> {
-  const _r08_fn_start = performance.now();
   // Dynamic import para evitar incompatibilidades SSR
   const { tableFromIPC } = await import("apache-arrow");
-  const _r08_ipc_start = performance.now();
   const table = tableFromIPC(buffer);
-  const _r08_ipc_end = performance.now();
 
   const n = table.numRows;
   if (n === 0) {
@@ -1223,7 +1216,6 @@ async function _buildBlockModelResponseFromArrow(
     || densityMin === densityMax;
 
   // Adaptador Fase 4: TypedArrays → objetos JS (Scene3D require objects por vóxel)
-  const _r08_cells_start = performance.now();
   const cells: JsonValue[] = new Array(n);
   for (let i = 0; i < n; i++) {
     const cell: { [key: string]: JsonValue } = {
@@ -1247,13 +1239,6 @@ async function _buildBlockModelResponseFromArrow(
     if (densityContrast) cell.density_contrast_t_m3 = densityContrast[i];
     cells[i] = cell;
   }
-  const _r08_cells_end = performance.now();
-  console.log(
-    `[R08] _buildBlockModelResponseFromArrow | n=${n} | buf=${(buffer.byteLength / 1024).toFixed(0)}KB` +
-    ` | import=${(_r08_ipc_start - _r08_fn_start).toFixed(1)}ms` +
-    ` | ipc_decode=${(_r08_ipc_end - _r08_ipc_start).toFixed(1)}ms` +
-    ` | cells_build=${(_r08_cells_end - _r08_cells_start).toFixed(1)}ms`
-  );
 
   // Metadata de elevación
   const hasElevationData = voxelElevs !== null;
@@ -1331,9 +1316,7 @@ async function _buildBlockModelResponseFromArrow(
     error: null,
   };
 
-  const _r08_out = finalizeBlockModelResult(result, fallbackMode);
-  console.log(`[R08] _buildBlockModelResponseFromArrow total: ${(performance.now() - _r08_fn_start).toFixed(1)}ms`);
-  return _r08_out;
+  return finalizeBlockModelResult(result, fallbackMode);
 }
 
 export async function fetchBlockModelArrow(
@@ -1343,7 +1326,6 @@ export async function fetchBlockModelArrow(
   const timeout = window.setTimeout(() => controller.abort(), 120_000);
 
   try {
-    const _r08_fetch_start = performance.now();
     const url = `/api/block-model?format=arrow&mode=${encodeURIComponent(mode)}`;
     const res = await fetch(url, {
       method: "GET",
@@ -1362,14 +1344,7 @@ export async function fetchBlockModelArrow(
     }
 
     const buffer = await res.arrayBuffer();
-    const _r08_buf_end = performance.now();
-    const result = await _buildBlockModelResponseFromArrow(buffer, res.headers, mode);
-    console.log(
-      `[R08] fetchBlockModelArrow | fetch+buffer=${(_r08_buf_end - _r08_fetch_start).toFixed(1)}ms` +
-      ` | processing=${(performance.now() - _r08_buf_end).toFixed(1)}ms` +
-      ` | total=${(performance.now() - _r08_fetch_start).toFixed(1)}ms`
-    );
-    return result;
+    return await _buildBlockModelResponseFromArrow(buffer, res.headers, mode);
   } catch (error: unknown) {
     const isTimeout =
       error instanceof Error &&

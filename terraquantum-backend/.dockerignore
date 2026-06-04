@@ -8,3 +8,20 @@ data/
 tmp/
 .env
 *.log
+
+# Credenciales — nunca en la imagen
+credenciales_gee.json
+*.db
+*.sqlite
+
+# Dead code / scripts de diagnóstico
+*_tmp.py
+*.bat
+
+# Tests y benchmarks (no necesarios en producción)
+tests/
+scripts/validation/
+scripts/demo/
+
+# Documentación de auditoría
+AUDITORIA_INDUSTRIAL/

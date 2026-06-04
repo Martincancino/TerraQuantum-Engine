@@ -6,7 +6,7 @@ echo   TERRAQUANTUM BACKEND SMOKE TEST
 echo ==========================================
 echo.
 
-cd /d C:\Users\marti\OneDrive\Documentos\terraquantum-backend
+cd /d %~dp0
 
 echo Verificando backend en http://127.0.0.1:8010
 echo.

@@ -121,21 +121,25 @@ El cambio arquitectónico que más acerca a "industrial". Va a *romper* cosas en
 - Módulo de color compartido worker/main.
 ✔ Hecho (2026-06-03): 157 km se ve como 157 km; headers X-TQ-* como verdad única; no hay re-cálculo mágico en TS; densityMin/Max autoritativos.
 
-### FASE 4 — Física de la inversión (causa J, con `geophysics-benchmark-reviewer`)
+### FASE 4 — Física de la inversión (causa J, con `geophysics-benchmark-reviewer`) ✔ COMPLETADA
 Depth-weighting, λ/L-curve, contrastes negativos, joint. Una hipótesis a la vez, validada contra ground-truth.
-✔ Hecho: el self-test sintético recupera profundidad/posición conocidas con pearson_r ≥ umbral.
+✔ Hecho (2026-06-03): H2 depth-weighting (+0.265 Pearson); H3 L-curve/chi²-target consistentes; H3d λ=3.0 shipped; Pearson r=0.947 vs ground-truth sintético. Validación pendiente: escala regional (1552 m).
 
-### FASE 5 — Economía honesta (causa F)
+### FASE 5 — Economía honesta (causa F) ✔ COMPLETADA
 Exigir ensayo real o etiquetar proxy en la API; corregir unidades (cutoff /100, tonelaje); no emitir USD sin ley real.
-✔ Hecho: no hay NPV en USD sobre datos inventados; el proxy está rotulado como tal en la respuesta.
+✔ Hecho (2026-06-03): gate rechaza NPV sobre ceros; grade_provenance + disclaimer en toda respuesta; cutoff=100×cost/(recovery×price) consistente; tonnage normalization flagged; schema validators duros (price>0, recovery∈(0,1], pit_angle∈(0°,90°)).
 
-### FASE 6 — Tests reales + CI (causa I)
+### FASE 6 — Tests reales + CI (causa I) ✔ COMPLETADA
 Asserts contra ground-truth, en CI, con umbrales. Sin esto, todo lo anterior se degrada en silencio otra vez.
-✔ Hecho: romper a propósito la inversión hace fallar el CI.
+✔ Hecho (2026-06-03): `testpaths = tests scripts/validation`; `scripts/validation/conftest.py` con sys.path + fixture `tmp_dir`; 56 tests nuevos habilitados (focusing 12, input-validation 15, anomaly-mask 6, sensor-flags 5, technical-summary 5, uncertainty 4, sensitivity-sweep 3, sensitivity-api 3, vtk-export 3); `PytestReturnNotNone` warnings eliminados. Total: **808 tests en CI** (752→808). Romper `GravimetryInversion` hace fallar `test_prism_recovery_horizontal_position` (CI exit 1).
 
 ### FASE 7 — Hardening de producción (resto de H + perf + limpieza)
 Auth fail-closed, Docker no-root, `.dockerignore`, lockfile de deps, CORS, path traversal, timing; borrar `*_tmp.py`, `.bat` con rutas absolutas, controles fantasma (sliceThickness, input de magnetometría, "Exportar PDF"), `console.log` en hot paths, polling muerto del store.
-✔ Hecho: deploy reproducible y cerrado por defecto; sin controles que mientan.
+✔ Backend (2026-06-03): timing attack master key → `hmac.compare_digest`; path traversal `get_run_dir` → `clean_trace_context`; Docker `USER tq`; `.dockerignore` con credenciales/DB/tmp; CORS guard fail-closed contra `*` en producción; borrados `_test_mag_route_tmp.py` y `_diag_mag_tmp.py`; `run-smoke-test.bat` usa `%~dp0` (no ruta absoluta).
+✔ Frontend (2026-06-03): `console.log` eliminados de hot paths (F10: frontendApi.ts, ZUS-07: useAppStore.ts); polling muerto eliminado (ZUS-01: sección 12 del store, ZUS-02: pollingRef skeleton en Exploration3DView); controles fantasma: CSV-magnetometría deshabilitada con "Próximamente" (CSV-P2-03), "Exportar PDF" renombrado a "Imprimir" sin setTimeout falso (DV-12).
+✔ Deps (2026-06-03): `requirements.txt` 100% pineado (fastapi==0.135.3, uvicorn==0.44.0, pydantic==2.13.0, starlette==1.0.0, + resto). `starlette` explicitado para evitar bump silencioso.
+✔ Auth (2026-06-03): `.env.example` completo con `TQ_AUTH_ENABLED`, `TQ_MASTER_KEY` y guía de generación; warning de arranque visible en logs cuando auth está desactivado.
+⚠ ACCIÓN MANUAL REQUERIDA — Rotar credenciales GCP: ir a GCP IAM → Service Accounts → TerraQuantum SA → Keys → Delete key actual → Add Key → JSON → guardar fuera de OneDrive. Luego revocar la API key `tq_8YBe...` via DELETE /api/keys/ con el master key.
 
 ---
 

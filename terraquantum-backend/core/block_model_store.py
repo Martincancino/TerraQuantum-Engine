@@ -103,7 +103,10 @@ def clean_trace_context(
 
 
 def get_run_dir(project_id: str, run_id: str) -> Path:
-    return PROJECTS_DIR / project_id / "runs" / run_id
+    clean_project_id, clean_run_id = clean_trace_context(project_id, run_id)
+    if not clean_project_id or not clean_run_id:
+        raise ValueError("project_id y run_id son requeridos.")
+    return PROJECTS_DIR / clean_project_id / "runs" / clean_run_id
 
 
 def get_project_meta_path(project_id: str) -> Path:

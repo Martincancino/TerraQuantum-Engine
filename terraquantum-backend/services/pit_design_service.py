@@ -298,6 +298,33 @@ def generate_pit_design(req: PitRequest):
         )
 
     df = pl.read_parquet(file_path)
+
+    # ── Gate: datos económicos reales (P0 econ-grade-tonnage-zero-01) ──────────
+    # El parquet de inversión gravimétrica no tiene grade/tonnage/domain.
+    # Si se usan los defaults (0.0) la economía retorna 'done' sobre ceros.
+    _grade_in_parquet = "grade" in df.columns and df["grade"].drop_nulls().len() > 0
+    _tonnage_in_parquet = "tonnage" in df.columns and df["tonnage"].drop_nulls().len() > 0
+    if not _grade_in_parquet:
+        return {
+            "status": "error",
+            "detail": (
+                "El block model no contiene columna 'grade' con ley real. "
+                "La economía de mina requiere ensayos geoquímicos o sondajes — "
+                "no se puede calcular NPV sobre un modelo sin ley declarada."
+            ),
+            "missing_columns": ["grade"],
+        }
+    if not _tonnage_in_parquet:
+        return {
+            "status": "error",
+            "detail": (
+                "El block model no contiene columna 'tonnage' con tonelaje real. "
+                "No se puede calcular NPV sin tonelaje declarado."
+            ),
+            "missing_columns": ["tonnage"],
+        }
+    # ──────────────────────────────────────────────────────────────────────────
+
     df = ensure_visual_columns(df)
 
     try:
@@ -318,6 +345,15 @@ def generate_pit_design(req: PitRequest):
     density = df["density"].to_numpy()
     tonnage = df["tonnage"].to_numpy()
     domain = df["domain"].to_numpy()
+
+    # ── Derivar domain si ausente del parquet (P1 econ-domain-default-waste-08) ──
+    # ensure_visual_columns pone domain=0 → processing_cost nunca se aplica (todo estéril).
+    # Si domain es todo ceros pero hay ley, derivar ore/waste desde cutoff económico.
+    if np.all(domain == 0) and np.any(grade > 0):
+        _cutoff_pct = 100.0 * req.processing_cost / (req.recovery * req.price)
+        domain = np.where(grade > _cutoff_pct, 1, 0).astype(np.int64)
+        _log.info("domain_derived_from_cutoff", cutoff_pct=round(_cutoff_pct, 4))
+    # ──────────────────────────────────────────────────────────────────────────
 
     if "resource_class" in df.columns:
         resource_class = df["resource_class"].to_numpy()
@@ -453,7 +489,7 @@ def generate_pit_design(req: PitRequest):
         fleet_size=req.fleet_size,
     )
 
-    df_scheduled, yearly_metrics, total_npv = scheduler.run()
+    df_scheduled, yearly_metrics, total_npv, _tonnage_normalized = scheduler.run()
 
     # ── Determine pit_mesh_mode and handle empty scene ──
     pit_mesh_mode = "benched_mesh"
@@ -517,7 +553,7 @@ def generate_pit_design(req: PitRequest):
         }
 
     scene.export(str(tmp_glb), file_type="glb")
-    os.rename(str(tmp_glb), str(final_glb))
+    os.replace(str(tmp_glb), str(final_glb))
 
     mask_final = phase_1d > 0
 
@@ -542,7 +578,7 @@ def generate_pit_design(req: PitRequest):
         else 0.0
     )
 
-    cutoff_grade = float(req.processing_cost / (req.recovery * req.price))
+    cutoff_grade = float(100.0 * req.processing_cost / (req.recovery * req.price))
 
     final_metrics = {
         "npv": float(total_npv),
@@ -589,17 +625,43 @@ def generate_pit_design(req: PitRequest):
         pit_mesh_mode=pit_mesh_mode,
     )
 
+    # ── Advertencia según calidad del diseño (P2 econ-fallback-shell-passes-as-pit-17) ──
+    if pit_mesh_mode == "fallback_block_shell":
+        _design_warning = (
+            "Diseño de pit usando cáscara de bloques (fallback) — no es un pit calculado por "
+            "Lerch-Grossmann. Orientativo únicamente, no defensible para ingeniería."
+        )
+    elif is_low_resolution:
+        _design_warning = (
+            "Modelo de baja resolución — pit conceptual orientativo, no defensible para ingeniería."
+        )
+    else:
+        _design_warning = None
+
+    # ── Disclaimer NPV (P0 econ-grade-proxy-02 / P1 econ-tonnage-normalize-fake-07) ──
+    if _tonnage_normalized:
+        _npv_disclaimer = (
+            "NPV relativo/no monetario — tonelaje normalizado por blockSize regional "
+            "(no representa tonelaje absoluto real). "
+            "Requiere validación con block model de resolución real."
+        )
+    else:
+        _npv_disclaimer = (
+            "NPV y métricas económicas son orientativas y no defendibles. "
+            "La ley ('grade') puede provenir de proxy gravimétrico, no de ensayos geoquímicos certificados. "
+            "Requiere validación de Qualified Person / Competent Person antes de cualquier uso regulatorio."
+        )
+
     return {
         "jobId": job_id,
         "status": "done",
         "modelUrl": model_url,
         "metrics": final_metrics,
         "pit_mesh_mode": pit_mesh_mode,
-        "warning": (
-            "Modelo de baja resolución — pit conceptual orientativo, no defensible para ingeniería."
-            if is_low_resolution
-            else None
-        ),
+        "tonnage_normalized": _tonnage_normalized,
+        "grade_provenance": "unvalidated_proxy",
+        "npv_disclaimer": _npv_disclaimer,
+        "warning": _design_warning,
         "input_params": {
             "pit_angle": req.pit_angle,
             "bench_height": req.bench_height,

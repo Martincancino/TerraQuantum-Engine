@@ -968,6 +968,8 @@ class GravimetryInversion:
         extra_reg_blocks: Optional[list] = None,
         extra_reg_rhs: Optional[list] = None,
         prune_observable_domain: bool = True,
+        # ── AUDIT H-A4: β configurable para test de sensibilidad ─────────────
+        depth_beta: float = 2.0,    # Li & Oldenburg: 2.0 = estándar industrial
     ):
         """
         LSQR + Tikhonov 3D. Motor HPC F0.2 EXCLUSIVO.
@@ -1240,7 +1242,7 @@ class GravimetryInversion:
         true_depth = y_c_active - _topo_sol
         true_depth = np.clip(true_depth, a_min=1.0, a_max=None)  # Near-field protection
 
-        w_depth = (true_depth + z0) ** 2.0   # Li & Oldenburg 1998: β=2 estándar industrial
+        w_depth = (true_depth + z0) ** depth_beta   # Li & Oldenburg 1998: β configurable (default=2.0)
         w_reg = 1.0 / w_depth
         w_reg = w_reg / np.mean(w_reg)
         W_m = sp.diags(w_reg) @ L_active
