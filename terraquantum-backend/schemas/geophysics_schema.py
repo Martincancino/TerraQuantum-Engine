@@ -181,6 +181,18 @@ class GeophysicsInvertInput(BaseModel):
         description="Elevación MASL de cada sensor (m s.n.m.), paralelo a observations. "
                     "Activa máscara topográfica en el solver. None = terreno plano.",
     )
+    # ── SPRINT 3C: TreeMesh adaptativo (malla Octree sensor-guided) ──────────────────
+    # Cuando True, usa malla Octree adaptativa en lugar de grilla regular. La malla
+    # se refina automáticamente alrededor de los sensores. Default False → grilla regular.
+    use_treemesh: bool = Field(
+        False,
+        description="Usar malla Octree adaptativa (sensor-guided). Default False = grilla regular.",
+    )
+    treemesh_max_refine: int = Field(
+        2,
+        ge=0, le=4,
+        description="Profundidad máxima de refinamiento en la malla Octree (0-4). Default 2.",
+    )
 
 
 class GeophysicsVoxel(BaseModel):
