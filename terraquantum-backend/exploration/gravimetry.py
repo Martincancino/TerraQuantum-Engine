@@ -849,18 +849,21 @@ class GravimetryInversion:
             f"chi²_target={chi2_target:.1f} | cond_max={cond_max:.0e}"
         )
 
+        # H3b (causa J): el trial debe usar la MISMA smallness depth-weighted que
+        # solve_inversion_lsqr (tras H2): diag(lam·w_reg)·Ws con damp=0. Antes el
+        # core usaba damp=lam (smallness uniforme) → el χ² del trial divergía ~700×
+        # del χ² real del solve, invalidando la calibración por chi²-target.
+        # padding conserva peso ABSOLUTO (padding_kappa·lam), no se relaja por prof.
         trials = []
         for lam in lambda_candidates:
+            _w_sm = float(lam) * w_reg
             if _padding_active is not None:
-                _w_sm = np.where(_padding_active, float(padding_kappa) * float(lam), float(lam))
-                _sb   = _sp.diags(_w_sm) @ Ws
-                A_sys = _sp.vstack([G_aug, _sb]).tocsr()
-                b_sys = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
-                res   = lsqr(A_sys, b_sys, damp=0.0,
-                             iter_lim=500, atol=1e-8, btol=1e-8, show=False)
-            else:
-                res = lsqr(G_aug, d_aug, damp=float(lam),
-                           iter_lim=500, atol=1e-8, btol=1e-8, show=False)
+                _w_sm = np.where(_padding_active, float(padding_kappa) * float(lam), _w_sm)
+            _sb   = _sp.diags(_w_sm) @ Ws
+            A_sys = _sp.vstack([G_aug, _sb]).tocsr()
+            b_sys = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
+            res   = lsqr(A_sys, b_sys, damp=0.0,
+                         iter_lim=500, atol=1e-8, btol=1e-8, show=False)
 
             m_tilde = res[0]
             acond   = float(res[6])
