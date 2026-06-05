@@ -348,6 +348,13 @@ export interface AppState {
   setViewMode: (mode: ViewMode) => void;
   jointThreshold: number;
   setJointThreshold: (val: number) => void;
+
+  // 13. CORTE CAJA (Sprint 4A) — 6 planes AABB para secciones A-A'/B-B'
+  // Independiente del sliceAxis: puede usarse junto al corte half-space.
+  clipBoxEnabled: boolean;
+  setClipBoxEnabled: (val: boolean) => void;
+  clipBox: { xMin: number; xMax: number; yMin: number; yMax: number; zMin: number; zMax: number };
+  setClipBox: (patch: Partial<{ xMin: number; xMax: number; yMin: number; yMax: number; zMin: number; zMax: number }>) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -645,4 +652,11 @@ export const useAppStore = create<AppState>((set) => ({
   setViewMode: (mode) => set({ viewMode: mode }),
   jointThreshold: 0.6,
   setJointThreshold: (val) => set({ jointThreshold: Math.max(0, Math.min(1, val)) }),
+
+  // 13. CORTE CAJA (Sprint 4A)
+  clipBoxEnabled: false,
+  setClipBoxEnabled: (val) => set({ clipBoxEnabled: val }),
+  clipBox: { xMin: 0, xMax: 0, yMin: 0, yMax: 0, zMin: 0, zMax: 0 },
+  setClipBox: (patch) =>
+    set((state) => ({ clipBox: { ...state.clipBox, ...patch } })),
 }));

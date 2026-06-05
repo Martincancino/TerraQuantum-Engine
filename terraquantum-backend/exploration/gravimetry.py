@@ -6,7 +6,7 @@ from typing import Optional
 import numpy as np
 import polars as pl
 import scipy.sparse as sp
-from scipy.sparse.linalg import lsqr, splu
+from scipy.sparse.linalg import lsqr
 from scipy.spatial import cKDTree  # F0.2: HPC KDTree kernel híbrido
 
 logger = logging.getLogger(__name__)
@@ -28,78 +28,6 @@ def _sigma_adaptive(g_observed: np.ndarray) -> np.ndarray:
     data_range = max(float(np.max(g_observed) - np.min(g_observed)), 1e-30)
     sigma = np.maximum(0.02 * np.abs(g_observed), 0.01 * data_range)
     return np.maximum(sigma, 1e-30)
-
-
-def solve_sparse_normal_equations(A, b, refine: bool = True):
-    """
-    SPRINT 5A — Resuelve el problema de mínimos cuadrados  A @ x ≈ b  (A dispersa,
-    rectangular alta) con un solver DIRECTO vía las ECUACIONES NORMALES:
-
-        (Aᵀ A) x = Aᵀ b          # sistema cuadrado SPD, factorizado UNA vez (SuperLU)
-
-    Motivación: LSQR es iterativo y su nº de iteraciones crece con el
-    condicionamiento; con regularización fuerte (alpha alto) la inversión regional
-    de Bushveld llega a ~270 s. Un solver directo factoriza AᵀA una sola vez y
-    resuelve por sustitución → el tiempo deja de depender del condicionamiento.
-
-    Por qué es viable aquí: el kernel gravitacional es DISPERSO (soporte truncado
-    por KDTree, ~15 nnz/columna), de modo que AᵀA conserva dispersión manejable y
-    SuperLU (con ordenamiento COLAMD que reduce fill-in) la factoriza eficientemente.
-    Si el kernel fuese denso, AᵀA sería un bloque denso n×n y esto NO escalaría.
-
-    Caveat numérico (POR QUÉ rtol=1e-8 y no 1e-10): formar AᵀA ELEVA AL CUADRADO el
-    número de condición — cond(AᵀA) = cond(A)². Con cond(A)~1.5e3 → cond(AᵀA)~2e6,
-    holgadamente dentro de doble precisión, pero el residual alcanzable es
-    ~cond(AᵀA)·eps ≈ 2e6 · 2.2e-16 ≈ 4e-10. Un paso de refinamiento iterativo
-    (refine=True) recupera los dígitos perdidos al formar las ecuaciones normales.
-
-    AᵀA es SPD (rango columna completo gracias a los bloques de regularización +
-    smallness), por lo que la factorización LU de SuperLU es estable.
-
-    Parameters
-    ----------
-    A : scipy.sparse matrix (m × n), con m >= n.
-    b : np.ndarray (m,).
-    refine : bool
-        Aplica un paso de refinamiento iterativo  x ← x + (AᵀA)⁻¹(Aᵀb − AᵀA·x).
-        Barato (reutiliza la factorización) y corrige el redondeo de las
-        ecuaciones normales. Default True.
-
-    Returns
-    -------
-    x : np.ndarray (n,).
-    info : dict con 'method', 'residual_norm', 'fill_nnz'.
-    """
-    A = sp.csr_matrix(A)
-    if A.shape[0] < A.shape[1]:
-        raise ValueError(
-            f"solve_sparse_normal_equations requiere A alta (m≥n); "
-            f"got shape={A.shape}. ¿Falta el bloque de regularización?"
-        )
-    At = A.transpose().tocsr()
-    AtA = (At @ A).tocsc()          # CSC: formato requerido por splu
-    Atb = At @ np.asarray(b, dtype=np.float64)
-
-    # COLAMD reduce el fill-in de la factorización; SuperLU lo usa por defecto.
-    lu = splu(AtA, permc_spec="COLAMD")
-    x = lu.solve(Atb)
-
-    if refine:
-        # Refinamiento iterativo: corrige el error de redondeo introducido al
-        # formar AᵀA (su condicionamiento al cuadrado). Un paso recupera ~varios
-        # dígitos a coste de una sustitución forward/backward extra.
-        r = Atb - AtA @ x
-        x = x + lu.solve(r)
-
-    if not np.isfinite(x).all():
-        raise RuntimeError("solve_sparse_normal_equations produjo valores no finitos.")
-
-    residual_norm = float(np.linalg.norm(A @ x - np.asarray(b, dtype=np.float64)))
-    return x, {
-        "method": "superlu-normal-eq",
-        "residual_norm": residual_norm,
-        "fill_nnz": int(lu.L.nnz + lu.U.nnz),
-    }
 
 
 def hutchinson_diag_inv(

@@ -13,6 +13,7 @@ import CommandBar from "../workspace/CommandBar";
 import SidebarSection from "../workspace/SidebarSection";
 import Panel from "../workspace/Panel";
 import SliceControls from "../viewport/SliceControls";
+import BoxClipControls from "../viewport/BoxClipControls";
 import MultiPhysicsControls from "../viewport/MultiPhysicsControls";
 import AnalyticsPanel from "../analytics/AnalyticsPanel";
 
@@ -509,6 +510,11 @@ export default function Exploration3DView() {
             {show3D && model && (
               <SidebarSection title="Cortes geológicos">
                 <SliceControls />
+              </SidebarSection>
+            )}
+            {show3D && model && (
+              <SidebarSection title="Corte caja A-A' / B-B'">
+                <BoxClipControls />
               </SidebarSection>
             )}
           </div>

@@ -77,6 +77,13 @@ try:
 except ImportError:
     _FOCUSING_AVAILABLE = False
 
+# ── Parquet + Zarr storage (Sprint 1) ─────────────────────────────────────────
+try:
+    from exploration.storage import save_inversion_results_parquet as _save_parquet_zarr
+    _STORAGE_AVAILABLE = True
+except ImportError:
+    _STORAGE_AVAILABLE = False
+
 # ── Operating point fijo de producción ────────────────────────────────────────
 # Importado de services/geophysics_service.py para garantizar que el benchmark
 # usa EXACTAMENTE el mismo λ que producción. Fallback al valor numérico si las
@@ -623,6 +630,30 @@ def run_benchmark(
     metrics["phi_d"]       = round(phi_d, 6)
     metrics["chi_squared"] = round(chi_squared, 6)
 
+    # ── Guardar grilla 3D en Zarr + metadatos en Parquet (Sprint 1) ──────────
+    _storage_paths: dict = {}
+    if _STORAGE_AVAILABLE:
+        try:
+            _storage_paths = _save_parquet_zarr(
+                density_grid=est_density,
+                susceptibility_grid=None,
+                misfit=misfit_pct,
+                chi2=chi_squared,
+                lambda_used=lambda_selected,
+                params_dict={
+                    "nx": nx, "ny": ny, "nz": nz,
+                    "block_size_m": block_size,
+                    "n_sensors": n_sensors,
+                    "benchmark_type": "synthetic_sphere_recovery_v2",
+                },
+                output_dir=_THIS_DIR,
+                run_id="benchmark_ci",
+            )
+            logger.info(f"[Storage] Parquet → {_storage_paths.get('parquet_metadata')}")
+            logger.info(f"[Storage] Zarr    → {_storage_paths.get('zarr_density')}")
+        except Exception as _exc:
+            logger.warning(f"[Storage] save_inversion_results_parquet no-fatal: {_exc}")
+
     ts_end    = datetime.now(timezone.utc)
     elapsed_s = (ts_end - ts_start).total_seconds()
 
@@ -707,6 +738,11 @@ def run_benchmark(
         "focusing_status":      focusing_status,
         "elapsed_s":            round(elapsed_s, 2),
         "rng_seed":             RNG_SEED,
+        # Sprint 1 — Parquet + Zarr storage paths
+        "storage_format":          "parquet+zarr" if _storage_paths else "json",
+        "storage_parquet":         _storage_paths.get("parquet_metadata"),
+        "storage_zarr_density":    _storage_paths.get("zarr_density"),
+        "storage_zarr_susc":       _storage_paths.get("zarr_susceptibility"),
         "notes": [
             "v2: benchmark anti-inverse crime con mallas DISTINTAS para forward e inversión",
             f"Forward mesh: {nx_fine}×{ny_fine}×{nz_fine} @ {fine_block_size}m | "
@@ -821,7 +857,57 @@ def export_results(results: dict, output_path: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. CLI
+# 7. Validación de almacenamiento Parquet + Zarr (Sprint 1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _validate_storage(results: dict) -> None:
+    """Verify Parquet and Zarr files exist, are readable, and have correct shape."""
+    import pandas as pd
+    import zarr as _zarr
+
+    ok = True
+
+    pq_path = results.get("storage_parquet")
+    if pq_path and os.path.exists(pq_path):
+        try:
+            df = pd.read_parquet(pq_path)
+            for col in ("chi2_reduced", "lambda", "misfit_pct"):
+                assert col in df.columns, f"columna faltante: {col}"
+            logger.info(
+                f"[Validate] Parquet OK: chi2={df['chi2_reduced'].iloc[0]:.4f} "
+                f"λ={df['lambda'].iloc[0]:.4e} | {pq_path}"
+            )
+        except Exception as exc:
+            logger.warning(f"[Validate] Parquet FAIL: {exc}")
+            ok = False
+    else:
+        logger.warning(f"[Validate] Parquet no encontrado: {pq_path}")
+        ok = False
+
+    zarr_path = results.get("storage_zarr_density")
+    expected_shape = tuple(results.get("inverse_mesh_shape", []))
+    if zarr_path and os.path.exists(zarr_path):
+        try:
+            zd = _zarr.open_array(zarr_path, mode="r")
+            assert zd.shape == expected_shape, (
+                f"Zarr shape mismatch: {zd.shape} != {expected_shape}"
+            )
+            logger.info(f"[Validate] Zarr density OK: shape={zd.shape} | {zarr_path}")
+        except Exception as exc:
+            logger.warning(f"[Validate] Zarr FAIL: {exc}")
+            ok = False
+    else:
+        logger.warning(f"[Validate] Zarr no encontrado: {zarr_path}")
+        ok = False
+
+    if ok:
+        logger.info("[Validate] storage_format=parquet+zarr PASS")
+    else:
+        logger.warning("[Validate] storage_format=parquet+zarr PARCIAL (ver warnings)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_args() -> argparse.Namespace:
@@ -891,6 +977,8 @@ if __name__ == "__main__":
     )
 
     export_results(results, args.output)
+    if results.get("storage_format") == "parquet+zarr":
+        _validate_storage(results)
 
     if not args.quiet:
         print(f"\n[JSON] Certificado: {args.output}")
