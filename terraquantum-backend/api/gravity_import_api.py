@@ -542,21 +542,9 @@ def _enforce_spatial_readiness_gate(
             required_action="Agregar columnas de coordenadas (x/y/z, lat/lon, o Easting/Northing) al CSV.",
         )
 
-    if level == "LOCAL_UNANCHORED" and not acknowledge_spatial_risk:
-        _raise(
-            "Coordenadas locales sin anclaje geográfico. "
-            "El modelo resultante no tendrá ubicación absoluta en el mapa.",
-            required_acknowledgement="ACK_LOCAL_CONCEPTUAL_ONLY",
-            required_action="Confirmar acknowledge_spatial_risk=true para continuar en modo conceptual.",
-        )
-
-    if level == "LOCAL_ANCHORED_CENTER" and not acknowledge_spatial_risk:
-        _raise(
-            "Anclaje solo en el centro; sin coordenadas por estación. "
-            "La georef del modelo será imprecisa.",
-            required_acknowledgement="ACK_LOCAL_ANCHORED_CENTER",
-            required_action="Confirmar acknowledge_spatial_risk=true para continuar.",
-        )
+    # LOCAL_UNANCHORED y LOCAL_ANCHORED_CENTER: permitidos sin bloqueo (solo warning)
+    # Estos niveles son aceptables para datos experimentales/operacionales (gravímetros sin georef).
+    # El bloqueo se reserva para NO_SPATIAL_DATA (sin ninguna coordenada).
 
     if level == "UTM_NO_ZONE" and not acknowledge_spatial_risk:
         _raise(
