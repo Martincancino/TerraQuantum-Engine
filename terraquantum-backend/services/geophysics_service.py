@@ -212,18 +212,23 @@ def _apply_spatial_readiness_caps(
 def validate_geophysics_input(params: GeophysicsInvertInput):
     import math
 
-    # 4. coordenadas geográficas
-    try:
-        lat = float(params.lat)
-        lon = float(params.lon)
-    except (ValueError, TypeError):
-        raise ValueError("lat y lon deben ser valores numéricos.")
+    # 4. coordenadas geográficas (opcionales — datos reales del gravímetro no las tienen)
+    if params.lat is not None and params.lon is not None:
+        try:
+            lat = float(params.lat)
+            lon = float(params.lon)
+        except (ValueError, TypeError):
+            raise ValueError("lat y lon deben ser valores numéricos (o null si no disponibles).")
 
-    if lat < -90 or lat > 90:
-        raise ValueError("lat debe estar entre -90 y 90.")
+        if lat < -90 or lat > 90:
+            raise ValueError("lat debe estar entre -90 y 90.")
 
-    if lon < -180 or lon > 180:
-        raise ValueError("lon debe estar entre -180 y 180.")
+        if lon < -180 or lon > 180:
+            raise ValueError("lon debe estar entre -180 y 180.")
+    else:
+        # Datos crudos del gravímetro sin georeferencia — usar "0, 0" como placeholder
+        lat = 0.0
+        lon = 0.0
 
     # observaciones: valores finitos y sin duplicados (mínimo 10 validado por Pydantic)
     seen_coords = set()

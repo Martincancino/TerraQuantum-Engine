@@ -60,12 +60,13 @@ class GeophysicsInvertInput(BaseModel):
     nir: int = Field(..., ge=0, le=100, description="Índice NIR satélite: 0-100")
     fe: int = Field(..., ge=0, le=100, description="Índice Fe satélite: 0-100")
     region: str
-    # lat/lon: metadatos administrativos únicamente. No se usan para proyectar la
-    # grilla local — la inversión opera en coordenadas locales (metros) definidas
-    # por x_m, y_m, z_m de las observaciones. El origen local (0,0,0) no se
-    # georreferencia automáticamente a estas coordenadas geográficas.
-    lat: str
-    lon: str
+    # lat/lon: metadatos administrativos únicamente (OPCIONALES). No se usan para
+    # proyectar la grilla local — la inversión opera en coordenadas locales (metros)
+    # definidas por x_m, y_m, z_m de las observaciones. El origen local (0,0,0) no
+    # se georreferencia automáticamente a estas coordenadas geográficas.
+    # NOTA: Si no tienes lat/lon de los datos crudos del gravímetro, envía null.
+    lat: Optional[str] = None
+    lon: Optional[str] = None
     nx: int = Field(..., ge=4, le=80, description="Grilla X: 4-80 voxeles")
     ny: int = Field(..., ge=4, le=80, description="Grilla Y: 4-80 voxeles")
     nz: int = Field(..., ge=4, le=80, description="Grilla Z: 4-80 voxeles")
