@@ -943,6 +943,9 @@ def build_voxel_output(df_anomaly: pl.DataFrame, block_size: float, cutoff_densi
                 "ix": int(row["ix"]),
                 "iy": int(row["iy"]),
                 "iz": int(row["iz"]),
+                "x": float(row["x"]),
+                "y": float(row["y"]),
+                "z": float(row["z"]),
                 "x_m": float(row["x"]),
                 "y_m": float(row["y"]),
                 "z_m": float(row["z"]),
@@ -2809,6 +2812,13 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         cutoff_density=cutoff_density,
     )
 
+    # Fallback: si no hay anomalías (señal débil), devolver todos los vóxeles activos
+    # para que el frontend pueda siempre renderizar el modelo de densidad.
+    if len(df_anomaly) == 0 and len(df_full) > 0:
+        _active_mask = pl.col("density").is_not_null() & pl.col("density").is_finite()
+        df_anomaly = df_full.filter(_active_mask).sort("density", descending=True)
+        _log.info("anomaly_fallback_all_voxels", total_voxels=len(df_anomaly))
+
     block_model_ref = get_run_block_model_reference(
         project_id=params.project_id,
         run_id=params.run_id,
@@ -3155,6 +3165,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
 
     return {
         "voxels": voxels,
+        "run_id": params.run_id,
+        "misfit_pct": misfit_error_percent,
         "best_target": best_target,
         "report": report_payload,
         "misfit_error_percent": misfit_error_percent,
