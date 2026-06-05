@@ -379,6 +379,22 @@ function computeClippingPlanes(
   ];
 }
 
+// 6-plane AABB box — aísla el sub-volumen [xMin,xMax]×[yMin,yMax]×[zMin,zMax].
+// THREE.Plane(n, c): descarta donde dot(n, p) + c < 0.
+// Keep x ≥ xMin → descarta x < xMin → (1,0,0)·p - xMin < 0 ↔ p.x < xMin
+function computeBoxClippingPlanes(
+  clipBox: { xMin: number; xMax: number; yMin: number; yMax: number; zMin: number; zMax: number }
+): THREE.Plane[] {
+  return [
+    new THREE.Plane(new THREE.Vector3(1, 0, 0), -clipBox.xMin),   // keep x ≥ xMin
+    new THREE.Plane(new THREE.Vector3(-1, 0, 0), clipBox.xMax),   // keep x ≤ xMax
+    new THREE.Plane(new THREE.Vector3(0, 1, 0), -clipBox.yMin),   // keep y ≥ yMin
+    new THREE.Plane(new THREE.Vector3(0, -1, 0), clipBox.yMax),   // keep y ≤ yMax
+    new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipBox.zMin),   // keep z ≥ zMin
+    new THREE.Plane(new THREE.Vector3(0, 0, -1), clipBox.zMax),   // keep z ≤ zMax
+  ];
+}
+
 function getQuantile(values: number[], q: number) {
   if (values.length === 0) return 0;
 
@@ -1407,6 +1423,8 @@ export default function Scene3D() {
     visualProfessionalMode,
     sliceAxis,
     slicePosition,
+    clipBoxEnabled,
+    clipBox,
   } = useAppStore();
 
   const hasElevationData = useAppStore((s) => s.hasElevationData);
@@ -1482,6 +1500,12 @@ export default function Scene3D() {
       ),
     [sliceAxis, slicePosition, modelBounds]
   );
+
+  // Merge half-space slice planes with optional box clip planes (Sprint 4A).
+  const allClippingPlanes = useMemo((): THREE.Plane[] => {
+    if (!clipBoxEnabled) return sliceClippingPlanes;
+    return [...sliceClippingPlanes, ...computeBoxClippingPlanes(clipBox)];
+  }, [sliceClippingPlanes, clipBoxEnabled, clipBox]);
   const modelMaxExtent = model
     ? Math.max(
         model.domainL || 0,
@@ -1697,11 +1721,11 @@ export default function Scene3D() {
             />
             <MineralComplex
               elevationVisualState={elevationVisualState}
-              clippingPlanes={sliceClippingPlanes}
+              clippingPlanes={allClippingPlanes}
             />
             <AnomalyEnvelope
               elevationVisualState={elevationVisualState}
-              clippingPlanes={sliceClippingPlanes}
+              clippingPlanes={allClippingPlanes}
             />
             <SlicePlane modelBounds={modelBounds} modelCenter={modelCenter} />
             <VoxelInspector />

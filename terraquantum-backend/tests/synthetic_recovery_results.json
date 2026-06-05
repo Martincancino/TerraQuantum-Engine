@@ -1,6 +1,6 @@
 {
   "benchmark_type": "synthetic_sphere_recovery_v2_anti_inverse_crime",
-  "timestamp": "2026-06-04T10:49:44 UTC",
+  "timestamp": "2026-06-04T19:19:30 UTC",
   "forward_mesh_shape": [
     24,
     12,
@@ -51,8 +51,12 @@
   "regularization": "Tikhonov + operating_point_fijo (λ=3.0) + MS-IRLS",
   "lcurve_used": false,
   "focusing_status": "OK",
-  "elapsed_s": 0.63,
+  "elapsed_s": 0.57,
   "rng_seed": 42,
+  "storage_format": "json",
+  "storage_parquet": null,
+  "storage_zarr_density": null,
+  "storage_zarr_susc": null,
   "notes": [
     "v2: benchmark anti-inverse crime con mallas DISTINTAS para forward e inversión",
     "Forward mesh: 24×12×24 @ 5.0m | Inverse mesh: 8×4×8 @ 15.0m",
