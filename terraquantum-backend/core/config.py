@@ -38,6 +38,13 @@ GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-3.1-pro")
 # HITO 5: Solver con bounds (B-06). Env var USE_BOUNDED_SOLVER=false fuerza LSQR+clip (rollback).
 USE_BOUNDED_SOLVER: bool = os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false"
 
+# SPRINT 5A: Solver directo disperso (SuperLU sobre ecuaciones normales) como
+# reemplazo del path LSQR iterativo en grillas grandes (n>8000). OPT-IN: default
+# false → comportamiento de producción intacto (LSQR+clip). Poner
+# USE_SPARSE_DIRECT=true para benchmarquear el solver directo. Sin dependencias
+# nuevas: usa scipy.sparse.linalg.splu (SuperLU ya incluido en scipy).
+USE_SPARSE_DIRECT: bool = os.getenv("USE_SPARSE_DIRECT", "false").lower() == "true"
+
 # HITO 7: Cloud storage abstraction.
 # STORAGE_BACKEND env var is read by core/storage.py at import time.
 # Valid values: "local" (default), "s3", "gcs".

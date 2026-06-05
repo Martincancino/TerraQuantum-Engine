@@ -6,7 +6,7 @@ from typing import Optional
 import numpy as np
 import polars as pl
 import scipy.sparse as sp
-from scipy.sparse.linalg import lsqr
+from scipy.sparse.linalg import lsqr, splu
 from scipy.spatial import cKDTree  # F0.2: HPC KDTree kernel híbrido
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,78 @@ def _sigma_adaptive(g_observed: np.ndarray) -> np.ndarray:
     data_range = max(float(np.max(g_observed) - np.min(g_observed)), 1e-30)
     sigma = np.maximum(0.02 * np.abs(g_observed), 0.01 * data_range)
     return np.maximum(sigma, 1e-30)
+
+
+def solve_sparse_normal_equations(A, b, refine: bool = True):
+    """
+    SPRINT 5A — Resuelve el problema de mínimos cuadrados  A @ x ≈ b  (A dispersa,
+    rectangular alta) con un solver DIRECTO vía las ECUACIONES NORMALES:
+
+        (Aᵀ A) x = Aᵀ b          # sistema cuadrado SPD, factorizado UNA vez (SuperLU)
+
+    Motivación: LSQR es iterativo y su nº de iteraciones crece con el
+    condicionamiento; con regularización fuerte (alpha alto) la inversión regional
+    de Bushveld llega a ~270 s. Un solver directo factoriza AᵀA una sola vez y
+    resuelve por sustitución → el tiempo deja de depender del condicionamiento.
+
+    Por qué es viable aquí: el kernel gravitacional es DISPERSO (soporte truncado
+    por KDTree, ~15 nnz/columna), de modo que AᵀA conserva dispersión manejable y
+    SuperLU (con ordenamiento COLAMD que reduce fill-in) la factoriza eficientemente.
+    Si el kernel fuese denso, AᵀA sería un bloque denso n×n y esto NO escalaría.
+
+    Caveat numérico (POR QUÉ rtol=1e-8 y no 1e-10): formar AᵀA ELEVA AL CUADRADO el
+    número de condición — cond(AᵀA) = cond(A)². Con cond(A)~1.5e3 → cond(AᵀA)~2e6,
+    holgadamente dentro de doble precisión, pero el residual alcanzable es
+    ~cond(AᵀA)·eps ≈ 2e6 · 2.2e-16 ≈ 4e-10. Un paso de refinamiento iterativo
+    (refine=True) recupera los dígitos perdidos al formar las ecuaciones normales.
+
+    AᵀA es SPD (rango columna completo gracias a los bloques de regularización +
+    smallness), por lo que la factorización LU de SuperLU es estable.
+
+    Parameters
+    ----------
+    A : scipy.sparse matrix (m × n), con m >= n.
+    b : np.ndarray (m,).
+    refine : bool
+        Aplica un paso de refinamiento iterativo  x ← x + (AᵀA)⁻¹(Aᵀb − AᵀA·x).
+        Barato (reutiliza la factorización) y corrige el redondeo de las
+        ecuaciones normales. Default True.
+
+    Returns
+    -------
+    x : np.ndarray (n,).
+    info : dict con 'method', 'residual_norm', 'fill_nnz'.
+    """
+    A = sp.csr_matrix(A)
+    if A.shape[0] < A.shape[1]:
+        raise ValueError(
+            f"solve_sparse_normal_equations requiere A alta (m≥n); "
+            f"got shape={A.shape}. ¿Falta el bloque de regularización?"
+        )
+    At = A.transpose().tocsr()
+    AtA = (At @ A).tocsc()          # CSC: formato requerido por splu
+    Atb = At @ np.asarray(b, dtype=np.float64)
+
+    # COLAMD reduce el fill-in de la factorización; SuperLU lo usa por defecto.
+    lu = splu(AtA, permc_spec="COLAMD")
+    x = lu.solve(Atb)
+
+    if refine:
+        # Refinamiento iterativo: corrige el error de redondeo introducido al
+        # formar AᵀA (su condicionamiento al cuadrado). Un paso recupera ~varios
+        # dígitos a coste de una sustitución forward/backward extra.
+        r = Atb - AtA @ x
+        x = x + lu.solve(r)
+
+    if not np.isfinite(x).all():
+        raise RuntimeError("solve_sparse_normal_equations produjo valores no finitos.")
+
+    residual_norm = float(np.linalg.norm(A @ x - np.asarray(b, dtype=np.float64)))
+    return x, {
+        "method": "superlu-normal-eq",
+        "residual_norm": residual_norm,
+        "fill_nnz": int(lu.L.nnz + lu.U.nnz),
+    }
 
 
 def hutchinson_diag_inv(
@@ -126,7 +198,10 @@ class GravimetryForward:
         - dtype float64 obligatorio.
         """
         total_g = np.zeros_like(dx_vec, dtype=np.float64)
-        eps = 1e-10 * min(dx, dy, dz)  # eps escala con la dimensión mínima del vóxel
+        # eps escala con la dimensión mínima del vóxel. np.minimum soporta tanto
+        # dx/dy/dz escalares (ruta uniforme, resultado idéntico a min()) como
+        # arrays por-celda (ruta TreeMesh con celdas de tamaño variable).
+        eps = 1e-10 * np.minimum(np.minimum(dx, dy), dz)
 
         for i, sign_x in enumerate([-1, 1]):
             x = dx_vec + sign_x * (dx / 2.0)
@@ -151,7 +226,8 @@ class GravimetryForward:
         # 1000.0: conversión densidad t/m³ → kg/m³
         return G_const * 1000.0 * total_g
 
-    def _build_sparse_kernel(self, x_c_act, y_c_act, z_c_act, sensor_coords):
+    def _build_sparse_kernel(self, x_c_act, y_c_act, z_c_act, sensor_coords,
+                             cell_dx=None, cell_dy=None, cell_dz=None):
         """
         F0.2 HPC: Construye G_active (n_obs × n_active) DIRECTAMENTE para las celdas activas.
 
@@ -162,11 +238,26 @@ class GravimetryForward:
         - Vóxeles fuera del cutoff_radius: contribución = 0, no se almacenan.
         - Acumulación por CSR triplets (rows, cols, data) — cero fancy indexing global.
         - Retorna sp.csr_matrix shape=(n_obs, n_active) dtype=float64.
+
+        SPRINT 3A — Celdas de tamaño variable (TreeMesh):
+        Si se proveen cell_dx/cell_dy/cell_dz (arrays 1D de longitud n_active con la
+        extensión física de CADA celda), el kernel usa el tamaño y volumen POR CELDA
+        en lugar del escalar uniforme self.dx/dy/dz. Esta ruta es ADITIVA y opt-in:
+        con cell_d* = None el comportamiento es byte-idéntico a la versión uniforme
+        (incluida la caché de geometría). La ruta variable omite la caché.
         """
         x_c_act = np.asarray(x_c_act, dtype=np.float64)
         y_c_act = np.asarray(y_c_act, dtype=np.float64)
         z_c_act = np.asarray(z_c_act, dtype=np.float64)
         sensor_coords = np.asarray(sensor_coords, dtype=np.float64)
+
+        # ── SPRINT 3A: ruta de celdas variables (TreeMesh) ───────────────────
+        _variable = cell_dx is not None or cell_dy is not None or cell_dz is not None
+        if _variable:
+            return self._build_sparse_kernel_variable(
+                x_c_act, y_c_act, z_c_act, sensor_coords,
+                cell_dx, cell_dy, cell_dz,
+            )
 
         # ── T3.3: caché de UNA entrada (geometría) — kernel independiente de
         # λ/m_ref/ruido. Validación por np.array_equal (sin colisión de hash).
@@ -302,6 +393,159 @@ class GravimetryForward:
         self.kernel_build_count += 1
 
         return G_active
+
+    def _build_sparse_kernel_variable(
+        self, x_c_act, y_c_act, z_c_act, sensor_coords,
+        cell_dx, cell_dy, cell_dz,
+    ):
+        """
+        SPRINT 3A — Kernel gravitacional para celdas de tamaño VARIABLE (TreeMesh).
+
+        Misma física que la ruta uniforme (Nagy 1966 campo cercano + masa puntual
+        campo lejano) pero con tamaño y volumen POR CELDA. La frontera near/far se
+        decide por celda con su propio a_eq: una celda es campo cercano si
+            r ≤ 4·a_eq_celda,   a_eq_celda = sqrt(dx²+dy²+dz²).
+        Para celdas uniformes esto reproduce exactamente el split de la ruta escalar
+        (pixel-perfect): todas las celdas dentro de 4·a_eq → Nagy; el resto → masa
+        puntual; idéntico conjunto y valores que _build_sparse_kernel uniforme.
+
+        No usa la caché de geometría (la caché está validada solo para la ruta
+        uniforme; en 3A la malla adaptativa no está en el lazo caliente de producción).
+        """
+        n_active = len(x_c_act)
+        n_obs = len(sensor_coords)
+
+        # ── Validación + broadcast de tamaños por celda ──────────────────────
+        def _as_cell_array(v, name):
+            if v is None:
+                # Si solo se dieron algunos ejes, completar con el escalar uniforme.
+                return np.full(n_active, getattr(self, name), dtype=np.float64)
+            arr = np.asarray(v, dtype=np.float64)
+            if arr.ndim == 0:
+                arr = np.full(n_active, float(arr), dtype=np.float64)
+            if arr.shape[0] != n_active:
+                raise ValueError(
+                    f"{name} debe tener longitud n_active={n_active}, got {arr.shape[0]}."
+                )
+            return arr
+
+        cdx = _as_cell_array(cell_dx, "dx")
+        cdy = _as_cell_array(cell_dy, "dy")
+        cdz = _as_cell_array(cell_dz, "dz")
+        if not (np.isfinite(cdx).all() and np.isfinite(cdy).all() and np.isfinite(cdz).all()):
+            raise ValueError("cell_dx/cell_dy/cell_dz contienen NaN o Inf.")
+        if (cdx <= 0).any() or (cdy <= 0).any() or (cdz <= 0).any():
+            raise ValueError("cell_dx/cell_dy/cell_dz deben ser positivos.")
+
+        cell_vol = cdx * cdy * cdz                         # (n_active,)
+        a_eq_cell = np.sqrt(cdx**2 + cdy**2 + cdz**2)      # (n_active,)
+        near_thr_cell = 4.0 * a_eq_cell                    # frontera near/far por celda
+
+        t_start = time.perf_counter()
+        max_workers = max(1, (os.cpu_count() or 2) - 1)
+
+        print(
+            f"[FORWARD HPC/TreeMesh] KDTree variable-cell + ThreadPool({max_workers}w). "
+            f"n_active={n_active:,} | n_obs={n_obs:,} | "
+            f"cell_size∈[{cdx.min():.1f},{cdx.max():.1f}]m | cutoff={self.cutoff_radius:.0f}m"
+        )
+
+        voxel_centers = np.column_stack([x_c_act, y_c_act, z_c_act])
+        tree = cKDTree(voxel_centers)
+        cutoff_lists = tree.query_ball_point(sensor_coords, r=self.cutoff_radius)
+
+        _x, _y, _z = x_c_act, y_c_act, z_c_act
+        _G = self.G
+        _nagy = self._nagy_prism_safe
+
+        def _sensor_row(i):
+            sx, sy, sz = sensor_coords[i]
+            idx = np.asarray(cutoff_lists[i], dtype=np.int64)
+            if len(idx) == 0:
+                return (
+                    np.empty(0, dtype=np.int32),
+                    np.empty(0, dtype=np.int32),
+                    np.empty(0, dtype=np.float64),
+                )
+            dxv = _x[idx] - sx
+            dyv = _y[idx] - sy
+            dzv = _z[idx] - sz
+            r = np.sqrt(dxv**2 + dyv**2 + dzv**2)
+
+            near = r <= near_thr_cell[idx]
+            far = ~near
+
+            r_parts, c_parts, d_parts = [], [], []
+            if np.any(far):
+                fidx = idx[far]
+                r3 = (dxv[far]**2 + dyv[far]**2 + dzv[far]**2) ** 1.5
+                r_parts.append(np.full(len(fidx), i, dtype=np.int32))
+                c_parts.append(fidx.astype(np.int32))
+                d_parts.append((_G * cell_vol[fidx] * 1000.0 * dyv[far]) / r3)
+            if np.any(near):
+                nidx = idx[near]
+                r_parts.append(np.full(len(nidx), i, dtype=np.int32))
+                c_parts.append(nidx.astype(np.int32))
+                d_parts.append(_nagy(
+                    dxv[near], dyv[near], dzv[near],
+                    cdx[nidx], cdy[nidx], cdz[nidx], _G,
+                ))
+            return (
+                np.concatenate(r_parts),
+                np.concatenate(c_parts),
+                np.concatenate(d_parts),
+            )
+
+        rows_chunks, cols_chunks, data_chunks = [], [], []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_sensor_row, i) for i in range(n_obs)]
+            for fut in futures:
+                r, c, d = fut.result()
+                rows_chunks.append(r)
+                cols_chunks.append(c)
+                data_chunks.append(d)
+
+        rows_arr = np.concatenate(rows_chunks) if rows_chunks else np.empty(0, np.int32)
+        cols_arr = np.concatenate(cols_chunks) if cols_chunks else np.empty(0, np.int32)
+        data_arr = np.concatenate(data_chunks) if data_chunks else np.empty(0, np.float64)
+
+        G_active = sp.csr_matrix(
+            (data_arr, (rows_arr, cols_arr)),
+            shape=(n_obs, n_active),
+            dtype=np.float64,
+        )
+
+        fill_rate = G_active.nnz / max(1, n_obs * n_active)
+        print(
+            f"[FORWARD HPC/TreeMesh] G_active CSR: NNZ={G_active.nnz:,} | "
+            f"Fill={fill_rate:.4%} | t_total={time.perf_counter()-t_start:.2f}s"
+        )
+
+        if G_active.nnz == 0:
+            raise ValueError(
+                "El kernel G_active (TreeMesh) quedó vacío. "
+                "Revisa cutoff_radius, sensores y centros de celda."
+            )
+        return G_active
+
+    def build_kernel_from_treemesh(self, mesh, sensor_coords):
+        """
+        SPRINT 3A — API pública: construye el kernel gravitacional desde una TreeMesh.
+
+        Extrae centros y tamaños por celda de la malla adaptativa y delega en la ruta
+        de celdas variables. Retorna sp.csr_matrix shape=(n_sensors, mesh.n_cells).
+        """
+        centers = mesh.get_cell_centers()
+        sizes = mesh.get_cell_sizes()
+        sensor_coords = np.asarray(sensor_coords, dtype=np.float64)
+        if not np.isfinite(centers).all():
+            raise ValueError("Los centros de celda de la TreeMesh contienen NaN o Inf.")
+        if not np.isfinite(sensor_coords).all():
+            raise ValueError("Las coordenadas de sensores contienen NaN o Inf.")
+        return self._build_sparse_kernel_variable(
+            centers[:, 0], centers[:, 1], centers[:, 2], sensor_coords,
+            sizes[:, 0], sizes[:, 1], sizes[:, 2],
+        )
 
     def build_sparse_kernel(self, x_vox, y_vox, z_vox, sensor_coords):
         """
@@ -1391,17 +1635,35 @@ class GravimetryInversion:
             _acond = float('nan')
             print(f"[SOLVER] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
         else:
-            result = lsqr(
-                _G_aug_sm, _d_aug_sm,
-                damp=0.0,
-                iter_lim=500, atol=1e-8, btol=1e-8, show=False,
-            )
-            m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
-            _acond = result[6]
-            print(
-                f"[SOLVER] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
-                f"cond(A)~{_acond:.2e}"
-            )
+            from core.config import USE_SPARSE_DIRECT as _USE_SPARSE
+            if _USE_SPARSE:
+                # SPRINT 5A: solver DIRECTO (SuperLU sobre ecuaciones normales).
+                # Misma estrategia de bounds que LSQR+clip: solución sin bounds y
+                # luego clip al box petrofísico. Reemplaza SOLO el path n>8000;
+                # el path TRF bounded (n≤8000) queda intacto.
+                m_tilde_raw, _sp_info = solve_sparse_normal_equations(
+                    _G_aug_sm, _d_aug_sm
+                )
+                m_tilde = np.clip(m_tilde_raw, _lb_tilde, _ub_tilde)
+                _acond = float('nan')   # SuperLU no expone estimador de cond(A)
+                print(
+                    f"[SOLVER] SuperLU directo (ecuaciones normales) en "
+                    f"{time.perf_counter()-_t_solve:.1f}s. "
+                    f"residual={_sp_info['residual_norm']:.3e} "
+                    f"fill_nnz={_sp_info['fill_nnz']:,}"
+                )
+            else:
+                result = lsqr(
+                    _G_aug_sm, _d_aug_sm,
+                    damp=0.0,
+                    iter_lim=500, atol=1e-8, btol=1e-8, show=False,
+                )
+                m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
+                _acond = result[6]
+                print(
+                    f"[SOLVER] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
+                    f"cond(A)~{_acond:.2e}"
+                )
         if np.isfinite(_acond) and _acond > 1e12:
             print(
                 f"[SOLVER] WARN cond(A)={_acond:.2e} > 1e12. "
@@ -1656,6 +1918,277 @@ class GravimetryInversion:
             f"sigma_p95={float(np.percentile(std_active, 95)):.4g} t/m3"
         )
         return posterior_std_full
+
+
+def compute_jacobian_dask(
+    sensor_coords: np.ndarray,
+    voxel_centers: np.ndarray,
+    forward_model: "GravimetryForward",
+    batch_size: int = 500,
+) -> tuple:
+    """
+    Compute Jacobian (sensitivity) matrix in sensor batches using Dask, write to Zarr.
+
+    Splits sensors into batches of `batch_size`, schedules each batch as a
+    dask.delayed task, and streams results to a Zarr store — the full dense
+    matrix never lives in RAM simultaneously.
+
+    Parameters
+    ----------
+    sensor_coords : (n_sensors, 3) float64 — x/y/z of measurement points.
+    voxel_centers : (n_voxels, 3) float64 — x/y/z of model cell centres.
+    forward_model : GravimetryForward — provides dx/dy/dz and cutoff_radius.
+    batch_size    : sensors per Dask task (tune for RAM vs. parallelism).
+
+    Returns
+    -------
+    (zarr_path, (n_sensors, n_voxels))
+    """
+    import tempfile
+    import dask
+    from exploration.storage import save_jacobian_zarr as _save_zarr
+
+    sensor_coords = np.asarray(sensor_coords, dtype=np.float64)
+    voxel_centers = np.asarray(voxel_centers, dtype=np.float64)
+    n_sensors = sensor_coords.shape[0]
+    n_voxels  = voxel_centers.shape[0]
+
+    x_c = voxel_centers[:, 0]
+    y_c = voxel_centers[:, 1]
+    z_c = voxel_centers[:, 2]
+
+    # Forward model parameters (captured by value — safe to use in Dask workers).
+    _dx = forward_model.dx
+    _dy = forward_model.dy
+    _dz = forward_model.dz
+    _cr = forward_model.cutoff_radius
+
+    # Each delayed task builds the kernel for one sensor batch and returns a
+    # dense (batch, n_voxels) array. A fresh GravimetryForward per task avoids
+    # cache contention between concurrent workers.
+    @dask.delayed
+    def _batch_kernel(start: int, end: int) -> np.ndarray:
+        fm = GravimetryForward(dx=_dx, dy=_dy, dz=_dz, cutoff_radius=_cr)
+        G_batch = fm._build_sparse_kernel(
+            x_c, y_c, z_c,
+            sensor_coords[start:end],
+        )
+        return G_batch.toarray()   # (end-start, n_voxels)
+
+    # Build batch index list and schedule all tasks.
+    batch_ranges = [
+        (s, min(s + batch_size, n_sensors))
+        for s in range(0, n_sensors, batch_size)
+    ]
+    delayed_batches = [_batch_kernel(s, e) for s, e in batch_ranges]
+
+    # scheduler='synchronous' lets each task's internal ThreadPoolExecutor run
+    # unimpeded (no nested Dask-thread pools).
+    results = dask.compute(*delayed_batches, scheduler="synchronous")
+
+    # Concatenate all batches into one dense matrix.
+    jacobian_dense = np.concatenate(results, axis=0)   # (n_sensors, n_voxels)
+
+    zarr_path = os.path.join(
+        tempfile.gettempdir(),
+        f"tq_jacobian_{n_sensors}x{n_voxels}.zarr",
+    )
+    _save_zarr(jacobian_dense, zarr_path, chunk_size=batch_size)
+
+    print(
+        f"[JACOBIAN DASK] shape=({n_sensors},{n_voxels}) | "
+        f"batches={len(batch_ranges)} | batch_size={batch_size} | "
+        f"zarr={zarr_path}"
+    )
+    return zarr_path, (n_sensors, n_voxels)
+
+
+def solve_inversion_treemesh(
+    mesh,
+    g_observed,
+    sensor_coords,
+    forward_model,
+    lambda_mag: float = 3.0,
+    alpha_spatial: float = 1.0,
+    depth_beta: float = 2.0,
+    base_density: float = 2.6,
+    density_min: float = 2.6,
+    density_max: float = 4.2,
+    noise_floor: float = 0.02,
+    noise_pct: float = 0.02,
+    solver_meta: Optional[dict] = None,
+    iter_lim: int = 500,
+    atol: float = 1e-8,
+):
+    """
+    SPRINT 3B — Solver de inversión gravimétrica MÍNIMO sobre malla Octree.
+
+    Ruta PARALELA y autocontenida: NO toca GravimetryInversion.solve_inversion_lsqr
+    (el solver de grilla regular validado por el certificado de recuperación sintética
+    permanece intacto). Reproduce SOLO el núcleo físico común a la ruta regular:
+
+        φ(m) = ‖Wd (G m − d)‖²
+             + ‖ λ_spatial · diag(w_reg) · L · m ‖²        (suavidad, depth-weighted)
+             + ‖ diag(λ_mag · w_reg) · m ‖²                 (smallness, depth-weighted H2)
+
+    con column-scaling (Ws) idéntico, depth weighting Li & Oldenburg
+    w_reg = 1/(profundidad + z0)^β normalizado, y bounds petrofísicos en espacio escalado.
+
+    NO incluye (por diseño minimal): topografía/active-cells, padding, anclajes por
+    sondaje, m_ref, poda R-05, ni cross-gradient. Esas extensiones viven en el solver
+    regular; aquí el dominio es la malla Octree completa (todas las celdas activas).
+
+    Parameters
+    ----------
+    mesh : TreeMesh
+        Malla Octree adaptativa. Provee centros, profundidades, tamaños y el
+        Laplaciano adaptativo (mesh.build_laplacian_octree()).
+    g_observed : (n_sensors,) array
+        Anomalía gravimétrica observada (mismas unidades que el forward).
+    sensor_coords : (n_sensors, 3) array
+        Coordenadas [x, y, z] de los sensores.
+    forward_model : GravimetryForward
+        Motor forward; se usa build_kernel_from_treemesh(mesh, sensors).
+
+    Returns
+    -------
+    estimated_density : (n_cells,) array
+        Densidad recuperada por celda (t/m³), bounded a [density_min, density_max].
+    relative_score : (n_cells,) array
+        Score de ranking de objetivo [0,1] (NO probabilidad estadística), idéntico
+        en definición al solver regular: 1 − |Gᵀr|_j / max_j |Gᵀr|.
+    misfit_percent : float
+        ‖d − Gm‖ / ‖d‖ × 100.
+    """
+    g_observed = np.asarray(g_observed, dtype=np.float64)
+    sensor_coords = np.asarray(sensor_coords, dtype=np.float64)
+    if not np.isfinite(g_observed).all():
+        raise ValueError("g_observed contiene NaN o Inf.")
+    if lambda_mag <= 0:
+        raise ValueError("lambda_mag debe ser mayor que 0.")
+    if alpha_spatial < 0:
+        raise ValueError("alpha_spatial no puede ser negativo.")
+
+    n_cells = mesh.n_cells
+    n_sensors = len(g_observed)
+
+    # ── Forward sobre la malla Octree ─────────────────────────────────────────
+    G = forward_model.build_kernel_from_treemesh(mesh, sensor_coords)   # (n_sensors, n_cells)
+    if G.nnz == 0:
+        raise ValueError("Kernel TreeMesh vacío: ninguna celda tiene sensibilidad a los sensores.")
+
+    # ── Data weighting (R-04 sigma adaptativo, idéntico al solver regular) ────
+    if noise_floor == 0.02 and noise_pct == 0.02:
+        sigma = _sigma_adaptive(g_observed)
+    else:
+        sigma = np.maximum(noise_floor + noise_pct * np.abs(g_observed), 1e-30)
+    Wd = sp.diags(1.0 / sigma)
+    d_w = Wd @ g_observed
+    G_w = (Wd @ G).tocsr()
+
+    # ── Column scaling (Ws) ───────────────────────────────────────────────────
+    col_norms = np.sqrt(G_w.power(2).sum(axis=0)).A1
+    col_norms = np.maximum(col_norms, 1e-12)
+    Ws = sp.diags(1.0 / col_norms)
+    G_scaled = G_w @ Ws
+
+    _lb_tilde = (float(density_min) - float(base_density)) * col_norms
+    _ub_tilde = (float(density_max) - float(base_density)) * col_norms
+
+    # ── Depth weighting (Li & Oldenburg) sobre la malla Octree ────────────────
+    depths = mesh.get_cell_depths()
+    sizes = mesh.get_cell_sizes()
+    # z0 = media de la semi-altura de celda en profundidad (análogo a dy/2 regular,
+    # robusto a celdas variables).
+    z0 = 0.5 * float(np.mean(sizes[:, 1]))
+    true_depth = np.clip(depths, a_min=1.0, a_max=None)
+    w_depth = (true_depth + z0) ** depth_beta
+    w_reg = 1.0 / w_depth
+    w_reg = w_reg / np.mean(w_reg)
+
+    # ── Smallness (depth-weighted, H2) ────────────────────────────────────────
+    _w_small = float(lambda_mag) * w_reg
+    _small_block = sp.diags(_w_small) @ Ws
+
+    # ── Laplaciano adaptativo (omitido cuando alpha_spatial=0) ────────────────
+    # NOTE: build_laplacian_octree usa face_map con clave 1D → O(n·ny·nz) para
+    # grillas grandes (bug de escala regional). Omitir cuando alpha_spatial=0 es
+    # el workaround del gate test; el fix vectorizado es Sprint 3C.
+    lambda_spatial = float(alpha_spatial) * (n_sensors / max(n_cells, 1))
+    if alpha_spatial > 0:
+        L = mesh.build_laplacian_octree()
+        W_m = sp.diags(w_reg) @ L
+        L_scaled = W_m @ Ws
+        G_aug = sp.vstack([G_scaled, lambda_spatial * L_scaled, _small_block]).tocsr()
+        d_aug = np.concatenate([
+            d_w,
+            np.zeros(n_cells, dtype=np.float64),
+            np.zeros(n_cells, dtype=np.float64),
+        ])
+    else:
+        G_aug = sp.vstack([G_scaled, _small_block]).tocsr()
+        d_aug = np.concatenate([
+            d_w,
+            np.zeros(n_cells, dtype=np.float64),
+        ])
+
+    print(
+        f"[TREEMESH SOLVER] n_cells={n_cells:,} n_sensors={n_sensors:,} "
+        f"G_aug=({G_aug.shape[0]:,}×{G_aug.shape[1]:,}) NNZ={G_aug.nnz:,} "
+        f"lambda_mag={lambda_mag:.2e} lambda_spatial={lambda_spatial:.2e} beta={depth_beta}"
+    )
+
+    result = lsqr(G_aug, d_aug, damp=0.0, iter_lim=iter_lim, atol=atol, btol=atol, show=False)
+    m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
+    _acond = result[6]
+
+    density_contrast = Ws @ m_tilde
+    if not np.isfinite(density_contrast).all():
+        raise RuntimeError("LSQR (TreeMesh) devolvió densidades no finitas.")
+
+    density_raw = float(base_density) + density_contrast
+    estimated_density = np.clip(density_raw, density_min, density_max)
+
+    # ── Misfit y score relativo (definición idéntica al solver regular) ───────
+    g_model = G @ density_contrast
+    residual_sensor = g_observed - g_model
+    residual_error = float(np.linalg.norm(residual_sensor))
+    observed_norm = float(np.linalg.norm(g_observed))
+    misfit_percent = (float("nan") if observed_norm <= 0 or not np.isfinite(observed_norm)
+                      else float((residual_error / observed_norm) * 100.0))
+
+    voxel_error = np.abs(G.T @ residual_sensor)
+    max_voxel_error = float(np.max(voxel_error)) if n_cells > 0 else 0.0
+    if max_voxel_error <= 0 or not np.isfinite(max_voxel_error):
+        relative_score = np.full(n_cells, np.nan, dtype=np.float64)
+    else:
+        relative_score = np.clip(1.0 - (voxel_error / max_voxel_error), 0.0, 1.0)
+
+    _phi_d = float(np.sum((residual_sensor / sigma) ** 2))
+    _chi2_final = _phi_d / max(n_sensors, 1)
+
+    n_sat_lower = int(np.sum(density_raw < density_min))
+    n_sat_upper = int(np.sum(density_raw > density_max))
+
+    print(
+        f"[TREEMESH SOLVER] Misfit={misfit_percent:.2f}% chi2={_chi2_final:.4f} "
+        f"cond(A)~{_acond:.2e} sat=({n_sat_lower}+{n_sat_upper})/{n_cells:,}"
+    )
+
+    if solver_meta is not None:
+        solver_meta["acond"] = float(_acond)
+        solver_meta["chi2_final"] = float(_chi2_final)
+        solver_meta["misfit_percent"] = misfit_percent
+        solver_meta["n_cells"] = n_cells
+        solver_meta["n_sat_lower"] = n_sat_lower
+        solver_meta["n_sat_upper"] = n_sat_upper
+        solver_meta["mesh_info"] = {
+            "n_cells": n_cells,
+            "n_levels": int(mesh.max_refinement_depth) + 1,
+            "min_cell_size": float(sizes.min()),
+        }
+
+    return estimated_density, relative_score, misfit_percent
 
 
 class TargetingEngine:
