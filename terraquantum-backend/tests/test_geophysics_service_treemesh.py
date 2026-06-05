@@ -25,7 +25,9 @@ def _make_test_input(use_treemesh=False, treemesh_max_refine=2):
     return GeophysicsInvertInput(
         project_id="test_proj",
         run_id="test_run",
-        depth=200,
+        # depth debe caber en la matriz: max_model_depth = ny·block_size = 4·40 = 160 m
+        # (cross-field validado en geophysics_service._validate). 120 m queda holgado dentro.
+        depth=120,
         nir=50,
         fe=30,
         region="desconocida",

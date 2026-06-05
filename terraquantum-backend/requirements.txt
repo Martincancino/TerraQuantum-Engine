@@ -22,6 +22,8 @@ pyevtk==1.6.0
 # Importación de datos
 python-multipart==0.0.27
 pandas==3.0.2
+pyarrow>=12.0.0
+zarr>=2.14.0
 
 # Google Earth Engine / GEE
 earthengine-api==1.7.22
@@ -43,3 +45,7 @@ opentelemetry-exporter-otlp-proto-http==1.42.1
 # Workers asíncronos
 celery==5.6.3
 redis==8.0.0
+
+# Sprint 2 — Dask out-of-core Jacobian (Tier-1 architecture)
+dask[array]>=2023.12.0
+distributed>=2023.12.0

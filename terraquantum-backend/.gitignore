@@ -38,6 +38,12 @@ data/*.parquet
 data/*.csv
 data/*.json
 
+# Test outputs (Parquet/Zarr from synthetic_recovery_benchmark, etc.)
+tests/inv_*.parquet
+tests/inv_*.zarr
+tests/*_benchmark_*.parquet
+tests/*_benchmark_*.zarr
+
 # Keep folders but ignore generated content
 !data/.gitkeep
 !tmp/.gitkeep
