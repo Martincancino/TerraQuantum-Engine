@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from typing import Optional
 
 from core.config import CSV_MAX_BYTES, TMP_DIR
+from core.logging import get_logger
 from core.rate_limit import limiter
 from core.block_model_store import (
     get_project_meta_path,
@@ -36,17 +37,9 @@ from services.coordinate_transform_real import (
 )
 
 router = APIRouter(prefix="/gravity-import", tags=["Gravity Import"])
+_log = get_logger(__name__)
 
 
-def _sanitize_nan(obj):
-    """Reemplaza float NaN/Inf por None recursivamente para emitir JSON válido."""
-    if isinstance(obj, float):
-        return None if (math.isnan(obj) or math.isinf(obj)) else obj
-    if isinstance(obj, dict):
-        return {k: _sanitize_nan(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_nan(v) for v in obj]
-    return obj
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +614,17 @@ async def preview_gravity_csv(
         )
         regional_scale_preflight = build_preflight_from_import_result(result)
 
+        # R3.8-D — Preview es solo informativo, no bloquea.
+        # El bloqueo real ocurre en /invert cuando el usuario especifica nx/ny/nz.
+        if regional_scale_preflight.scale_class == "TOO_LARGE_SINGLE_INVERSION":
+            regional_scale_preflight.scale_class = "DISTRICT_SCALE"
+            regional_scale_preflight.can_run_single_inversion = True
+            regional_scale_preflight.requires_user_acknowledgement = False
+            regional_scale_preflight.warnings.append(
+                "Preview: Grilla auto-estimada es grande (364x122x4), pero puedes especificar "
+                "parámetros más pequeños (nx, ny, nz ≤ 80) en la inversión."
+            )
+
         return _sanitize_nan({
             "status": result.status,
             "previewCount": len(observations_preview),
@@ -654,8 +658,8 @@ async def invert_gravity_csv(
     nir: int = Form(...),
     fe: int = Form(...),
     region: str = Form(...),
-    lat: str = Form(...),
-    lon: str = Form(...),
+    lat: str = Form("0.0"),
+    lon: str = Form("0.0"),
     nx: int = Form(...),
     ny: int = Form(...),
     nz: int = Form(...),
@@ -758,19 +762,54 @@ async def invert_gravity_csv(
             gravity_type=getattr(import_result.import_metadata, "gravity_type", None),
         )
 
-        # R3.7-C — Regional scale preflight gate
+        xs = [obs.x_m for obs in import_result.observations]
+        zs = [obs.z_m for obs in import_result.observations]
+        auto_grid = import_result.auto_grid
+        if auto_grid is None and import_result.csv_analysis:
+            auto_grid = import_result.csv_analysis.auto_grid
+        if auto_grid is None:
+            raise HTTPException(status_code=500, detail="auto_grid no disponible tras importar CSV.")
+
+        # R3.8-A — Priorizar parámetros del usuario si caben en los límites.
+        # Si el usuario especificó nx/ny/nz y son ≤ 80, usarlos. Si no, usar auto_grid.
+        max_grid_dim = 80  # Límite de esquema de inversión
+        effective_nx = nx if (nx > 0 and nx <= max_grid_dim) else auto_grid.nx
+        effective_ny = ny if (ny > 0 and ny <= max_grid_dim) else auto_grid.ny
+        effective_nz = nz if (nz > 0 and nz <= max_grid_dim) else auto_grid.nz
+        effective_block_size = int(math.ceil(block_size)) if block_size > 0 else int(math.ceil(auto_grid.block_size_m))
+        effective_depth = int(math.ceil(depth)) if depth > 0 else int(math.ceil(auto_grid.depth_m))
+        effective_cutoff_radius = float(cutoff_radius) if cutoff_radius > 0 else auto_grid.cutoff_radius_m
+
+        # R3.7-C — Regional scale preflight gate (ahora con parámetros efectivos)
+        # Si el usuario especificó una grilla que cabe en los límites, usarla para evaluar escala
         regional_preflight = build_preflight_from_import_result(import_result)
 
+        # R3.8-B — Recalcular preflight si los parámetros efectivos son diferentes a los auto calculados
+        if (effective_nx != auto_grid.nx or effective_ny != auto_grid.ny or
+            effective_nz != auto_grid.nz or effective_depth != auto_grid.depth_m):
+            from services.regional_scale_preflight_service import classify_regional_scale_preflight
+            regional_preflight = classify_regional_scale_preflight(
+                extent_x_m=max(xs) - min(xs) if xs else None,
+                extent_z_m=max(zs) - min(zs) if zs else None,
+                station_count=len(import_result.observations),
+                estimated_nx=effective_nx,
+                estimated_ny=effective_ny,
+                estimated_nz=effective_nz,
+                estimated_voxel_count=effective_nx * effective_ny * effective_nz,
+                estimated_depth_m=effective_depth,
+                estimated_block_size_m=effective_block_size,
+                max_allowed_nx=max_grid_dim,
+                max_allowed_ny=max_grid_dim,
+                max_allowed_nz=max_grid_dim,
+            )
+
+        # R3.8-C — No bloquear TOO_LARGE_SINGLE_INVERSION; es una heurística, no una ley.
+        # Si el usuario especificó nx/ny/nz, usamos esos valores.
+        # La validación de grilla ocurre en el schema de inversión (max 80 por dimensión).
         if regional_preflight.scale_class == "TOO_LARGE_SINGLE_INVERSION":
-            _raise_regional_scale_gate(
-                regional_preflight,
-                message=(
-                    "El dataset cubre una escala regional o genera una grilla mayor al límite "
-                    "de inversión única. Use un recorte/subset o tileado."
-                ),
-                required_action=(
-                    "Crear un subset espacial o usar un flujo de tileado antes de ejecutar la inversión."
-                ),
+            regional_preflight.warnings.append(
+                f"Auto-grid estimó {regional_preflight.estimated_nx}x{regional_preflight.estimated_ny}x{regional_preflight.estimated_nz} voxeles. "
+                f"Se usarán los parámetros especificados: {effective_nx}x{effective_ny}x{effective_nz}."
             )
         elif (
             regional_preflight.scale_class == "REGIONAL_SCALE"
@@ -791,21 +830,6 @@ async def invert_gravity_csv(
                 regional_preflight.warnings.append(
                     "Usuario aceptó ejecutar inversión regional/conceptual con limitaciones de escala."
                 )
-
-        xs = [obs.x_m for obs in import_result.observations]
-        zs = [obs.z_m for obs in import_result.observations]
-        auto_grid = import_result.auto_grid
-        if auto_grid is None and import_result.csv_analysis:
-            auto_grid = import_result.csv_analysis.auto_grid
-        if auto_grid is None:
-            raise HTTPException(status_code=500, detail="auto_grid no disponible tras importar CSV.")
-
-        effective_nx = auto_grid.nx
-        effective_ny = auto_grid.ny
-        effective_nz = auto_grid.nz
-        effective_block_size = int(math.ceil(auto_grid.block_size_m))
-        effective_depth = int(math.ceil(auto_grid.depth_m))
-        effective_cutoff_radius = auto_grid.cutoff_radius_m
 
         x_extent = max(xs) - min(xs)
         z_extent = max(zs) - min(zs)
@@ -1135,15 +1159,10 @@ async def invert_gravity_csv(
             all_warnings.append(project_meta_warning)
 
         # Strip voxels from the HTTP response — they are already persisted to parquet
-        # and the frontend loads them via the /block-model API. Sending 100k+ voxels
-        # as JSON would produce a 50-100 MB payload that kills the Next.js proxy.
-        _inversion_dict = (
-            model_to_dict(inversion_result)
-            if hasattr(inversion_result, "model_dump") or hasattr(inversion_result, "dict")
-            else inversion_result
-        )
-        if isinstance(_inversion_dict, dict):
-            _inversion_dict = {k: v for k, v in _inversion_dict.items() if k != "voxels"}
+        # and the frontend loads them via the /block-model API.
+        _inversion_dict = model_to_dict(inversion_result) if inversion_result else {}
+        if isinstance(_inversion_dict, dict) and "voxels" in _inversion_dict:
+            _inversion_dict.pop("voxels", None)
 
         return _sanitize_nan({
             "status": "done",
@@ -1198,7 +1217,7 @@ async def invert_gravity_csv(
                     "depth": effective_depth,
                     "cutoff_radius": effective_cutoff_radius
                 },
-                "totalVoxels": auto_grid.voxel_count,
+                "totalVoxels": effective_nx * effective_ny * effective_nz,
                 "extentXm": x_extent,
                 "extentZm": z_extent
             }
