@@ -2,7 +2,9 @@
 
 import math
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
+
+from core.block_model_store import clean_trace_id
 
 
 def sanitize_nan_value(value: Any) -> Any:
@@ -58,3 +60,14 @@ def utc_now_iso(use_z_format: bool = False) -> str:
     if use_z_format:
         return ts.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     return ts.isoformat()
+
+
+def clean_project_id(project_id: str) -> str:
+    """Validate and clean project_id.
+
+    Raises ValueError if project_id is invalid or empty.
+    """
+    result = clean_trace_id(project_id, "project_id")
+    if not result:
+        raise ValueError("project_id es requerido.")
+    return result

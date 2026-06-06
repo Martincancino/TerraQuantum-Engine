@@ -13,7 +13,7 @@ from core.block_model_store import clean_trace_id, load_project_meta
 from core.config import PROJECTS_DIR
 from core.geo_utils import compute_bbox
 from core.logging import get_logger
-from core.utils import utc_now_iso
+from core.utils import utc_now_iso, clean_project_id
 from schemas.spectral_schema import (
     SpectralAoi,
     SpectralImageSelection,
@@ -58,7 +58,7 @@ def get_spectral_indices(
     project_id: str,
     force_refresh: bool = False,
 ) -> SpectralIndicesResponse:
-    clean_project_id = _clean_project_id(project_id)
+    clean_project_id = clean_project_id(project_id)
     context = _build_project_context(clean_project_id)
     cache_path = get_project_spectral_cache_path(clean_project_id)
 
@@ -100,7 +100,7 @@ def load_cached_spectral_indices(project_id: Optional[str]) -> Optional[dict]:
         return None
 
     try:
-        clean_project_id = _clean_project_id(project_id)
+        clean_project_id = clean_project_id(project_id)
         cache_path = get_project_spectral_cache_path(clean_project_id)
         if not cache_path.exists():
             return None
@@ -114,15 +114,8 @@ def load_cached_spectral_indices(project_id: Optional[str]) -> Optional[dict]:
 
 
 def get_project_spectral_cache_path(project_id: str) -> Path:
-    clean_project_id = _clean_project_id(project_id)
+    clean_project_id = clean_project_id(project_id)
     return PROJECTS_DIR / clean_project_id / CACHE_FILENAME
-
-
-def _clean_project_id(project_id: str) -> str:
-    clean_project_id = clean_trace_id(project_id, "project_id")
-    if not clean_project_id:
-        raise ValueError("project_id es requerido.")
-    return clean_project_id
 
 
 def _project_dir(project_id: str) -> Path:

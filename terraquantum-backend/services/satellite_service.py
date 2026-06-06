@@ -10,6 +10,7 @@ from core import block_model_store as store
 from core import gee_client
 from core.geo_utils import METERS_PER_DEG_LAT, _derive_extent_from_csv, compute_bbox
 from core.logging import get_logger
+from core.utils import clean_project_id
 from schemas.terrain_schema import BBoxData, TerrainMetadata, TerrainResponse
 
 
@@ -23,14 +24,6 @@ _log = get_logger(__name__)
 
 
 # ─── Internal helpers ────────────────────────────────────────────────────────
-
-def _clean_project_id(project_id: str) -> str:
-    clean_project_id = store.clean_trace_id(project_id, "project_id")
-
-    if not clean_project_id:
-        raise ValueError("project_id es requerido.")
-
-    return clean_project_id
 
 
 def _project_dir(project_id: str) -> Path:
@@ -545,7 +538,7 @@ def get_terrain_data(
     footprint_override: dict | None = None,
     terrain_margin_factor: float = TERRAIN_MARGIN_FACTOR,
 ) -> TerrainResponse:
-    clean_project_id = _clean_project_id(project_id)
+    clean_project_id = clean_project_id(project_id)
 
     # Read full project meta once
     project_dir = _project_dir(clean_project_id)
