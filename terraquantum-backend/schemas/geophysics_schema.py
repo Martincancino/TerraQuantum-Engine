@@ -195,6 +195,18 @@ class GeophysicsInvertInput(BaseModel):
         description="Profundidad máxima de refinamiento en la malla Octree (0-4). Default 2.",
     )
 
+    @model_validator(mode="after")
+    def _validate_grid_bounds(self):
+        """Cross-field validation: depth must fit dentro de grilla (ny * block_size)."""
+        max_depth = self.ny * self.block_size
+        if self.depth > max_depth:
+            raise ValueError(
+                f"depth ({self.depth}m) supera máximo para grilla: "
+                f"ny × block_size = {self.ny} × {self.block_size} = {max_depth}m. "
+                f"Aumenta ny o block_size."
+            )
+        return self
+
 
 class GeophysicsVoxel(BaseModel):
     """Contrato explícito de un vóxel de salida (gravimétrico, magnético o CONJUNTO).

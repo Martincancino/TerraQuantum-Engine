@@ -432,6 +432,11 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
                 if coord_tuple in seen_coords:
                     exact_duplicate_count += 1
                     rejected_rows += 1
+                    _log.warning(
+                        "csv_duplicate_coords_rejected",
+                        row_num=row_num,
+                        x_m=x, y_m=y, z_m=z,
+                    )
                     if len(dup_coords_log) < 3:
                         dup_coords_log.append(
                             {
@@ -454,8 +459,10 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
                 raw_gravity_values.append(g_val)
                 valid_rows += 1
             except ValueError as e:
-                errors_list.append(str(e))
+                error_msg = str(e)
+                errors_list.append(error_msg)
                 rejected_rows += 1
+                _log.warning("csv_row_rejected", row_num=row_num, reason=error_msg)
         
         csv_analysis = analyze_csv_observations(
             observations=observations,
