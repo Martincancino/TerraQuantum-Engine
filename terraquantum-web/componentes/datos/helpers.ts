@@ -297,3 +297,24 @@ export function qaStatusIcon(status: string | null | undefined): string {
 export function isResidualPoint(p: unknown): p is ResidualPoint {
   return typeof p === "object" && p !== null;
 }
+
+export function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+export function readFiniteRecordNumber(
+  record: Record<string, unknown> | null | undefined,
+  key: string,
+  fallback: number
+): number {
+  const value = Number(record?.[key]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+export function readNumberField(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+export function readStringField(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}

@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { previewGravityCsv, GravityImportPreviewResponse, invertGravityCsv, GravityCsvInvertResponse, GravityCsvInvertPayload, getExplorationBlockModelForRun, CoordinateTransformData, CrsInfo, SpatialReadiness, SpatialReadinessGateError, RegionalScalePreflight, RegionalScaleGateError } from "../lib/terraquantum/frontendApi";
 import { useAppStore } from "../store/useAppStore";
 import { type VoxelMineralModel, type VoxelData } from "../lib/terraQuantumGeology";
+import { isJsonObject, readStringField, readNumberField } from "./datos/helpers";
 
 // ─── Georef UX helpers (R1-FE-3) ──────────────────────────────────────────
 
@@ -125,14 +126,6 @@ function mapPriorityClassLabel(value: string | null | undefined): string {
 // Parámetros legacy enviados al backend; el backend los ignora y usa auto_grid del CSV.
 const LEGACY_INVERSION_PARAMS = { nx: 32, ny: 20, nz: 32, blockSize: 25, depth: 500 } as const;
 
-function isJsonObject(value: unknown): value is JsonObject {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function readStringField(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
 function buildCsvProjectId(filename?: string | null): string {
   const rawName = filename?.replace(/\.[^.]+$/, "") || "import";
   const cleanName = rawName
@@ -177,10 +170,6 @@ function parseCsvInversionProjectRun(inversionResult: unknown): {
       readStringField(rep?.run_id) ??
       readStringField(rep?.runId),
   };
-}
-
-function readNumberField(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
 }
 
 function readArrayProperty(value: unknown, key: string): unknown[] {

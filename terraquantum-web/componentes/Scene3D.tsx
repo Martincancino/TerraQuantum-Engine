@@ -24,7 +24,7 @@ import type { VisualLayer, SliceAxis, ViewMode } from "../store/useAppStore";
 import { buildTerrainTextureProxyUrl } from "../lib/terraquantum/frontendApi";
 import { updateInstancedBuffers } from "../lib/terraQuantumGeology";
 import PostFX from "./viewport/PostFX";
-import { fmtNum, fmtSci } from "./datos/helpers";
+import { fmtNum, fmtSci, asRecord, safeNumber, clamp01, readFiniteRecordNumber } from "./datos/helpers";
 import { motion } from "framer-motion";
 
 // Tipos mínimos locales para las celdas del modelo 3D
@@ -81,21 +81,6 @@ interface BackendPercentileStats {
 
 // Densidad de roca país de referencia (granodiorita). El backend debe proveer el valor específico del sitio.
 const DENSITY_COUNTRY_ROCK_FALLBACK_T_M3 = 2.75;
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, value));
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-
-  return value as Record<string, unknown>;
-}
-
-function safeNumber(value: unknown, fallback = 0): number {
-  const n = Number(value);
-
-  return Number.isFinite(n) ? n : fallback;
-}
 
 function getCellNumber(cell: SceneCell, keys: string[], fallback = 0) {
   for (const key of keys) {
@@ -166,16 +151,6 @@ function getCellVisualScore(cell: unknown): number {
   
   const density = getVoxelModeledDensity(sc);
   return clamp01(Math.max(0, density - DENSITY_COUNTRY_ROCK_FALLBACK_T_M3) / DENSITY_COUNTRY_ROCK_FALLBACK_T_M3);
-}
-
-function readFiniteRecordNumber(
-  record: Record<string, unknown> | null | undefined,
-  key: string,
-  fallback: number
-) {
-  const value = Number(record?.[key]);
-
-  return Number.isFinite(value) ? value : fallback;
 }
 
 function countScoresAtOrAbove(cells: SceneCell[], threshold: number) {
