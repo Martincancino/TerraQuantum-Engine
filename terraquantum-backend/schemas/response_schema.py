@@ -141,6 +141,16 @@ class GeophysicsInversionStartResponse(BaseModel):
 # GET /geophysics-status/{project_id}/{run_id}
 # ─────────────────────────────────────────────────────────────────────────────
 
+class ErrorDetails(BaseModel):
+    """Structured error information for task failures."""
+    code: Optional[str] = None  # e.g. "SOLVER_DIVERGENCE", "FILE_NOT_FOUND", "VALIDATION_ERROR"
+    message: str  # Human-readable error message
+    source: Optional[str] = None  # e.g. "geophysics_service", "gravity_import_service", "block_model_store"
+    stage: Optional[str] = None  # e.g. "import", "preprocessing", "solving", "post-processing"
+    details: Optional[Dict[str, Any]] = None  # Additional context (e.g. {"field": "depth", "reason": "exceeds grid bounds"})
+    traceback: Optional[str] = None  # Python traceback for debugging (only in dev/logged mode)
+
+
 class GeophysicsStatusResponse(BaseModel):
     """Inversion status polling response."""
     status: str = Field(..., pattern="^(queued|processing|done|error)$")
@@ -152,7 +162,9 @@ class GeophysicsStatusResponse(BaseModel):
     # Result (populated when status=="done")
     result: Optional[GravityImportInvertResponse] = None
 
-    # Error (populated when status=="error")
+    # Error (populated when status=="error") — now structured
+    error_details: Optional[ErrorDetails] = None
+    # Backward-compat fields (deprecated, use error_details)
     error: Optional[str] = None
     error_type: Optional[str] = None
     traceback: Optional[str] = None

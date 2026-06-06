@@ -35,7 +35,18 @@ async def _run_inversion_bg(params: GeophysicsInvertInput, project_id: str, run_
     try:
         run_geophysics_inversion(params)
     except Exception as exc:
-        _log.error("bg_inversion_error", project_id=project_id, run_id=run_id, error=str(exc))
+        exc_type = type(exc).__name__
+        exc_message = str(exc)
+        _log.error("bg_inversion_error", project_id=project_id, run_id=run_id, error=exc_message, error_type=exc_type)
+
+        error_details = {
+            "code": exc_type,
+            "message": exc_message,
+            "source": "geophysics_service",
+            "stage": "solving",
+            "details": None,
+        }
+
         try:
             update_run_status(
                 project_id=project_id,
@@ -43,8 +54,9 @@ async def _run_inversion_bg(params: GeophysicsInvertInput, project_id: str, run_
                 status="error",
                 progress=0.0,
                 stage="error",
-                message=f"Error en inversión: {exc}",
-                error=str(exc),
+                message=f"Error en inversión: {exc_message}",
+                error=exc_message,
+                error_details=error_details,
             )
         except ValueError as exc:
             _log.error("bg_update_status_invalid_ids", project_id=project_id, run_id=run_id, error=str(exc))

@@ -634,11 +634,16 @@ def update_run_status(
     message: str,
     metrics: Optional[dict] = None,
     error: Optional[str] = None,
+    error_details: Optional[dict] = None,
 ) -> None:
     """Escribe el estado de la inversión en schedule.json con Atomic Write.
 
     Patrón: escribe a .tmp → fsync → os.replace (sin corrupción de JSON).
     Si project_id/run_id no son válidos, retorna silenciosamente.
+
+    Args:
+        error_details: Structured error info {code, message, source, stage, details}
+                      (from schemas.response_schema.ErrorDetails)
     """
     path = get_run_schedule_path(project_id, run_id)
     if path is None:
@@ -656,6 +661,7 @@ def update_run_status(
         "heartbeat_at": datetime.now(timezone.utc).isoformat(),
         "metrics": metrics,
         "error": error,
+        "error_details": error_details,
     }
 
     tmp_path = path.with_suffix(".tmp")
