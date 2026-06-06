@@ -422,13 +422,74 @@ function finalizeBlockModelResult(
 ): FrontendApiResult<BlockModelResponse> {
   const data = normalizeBlockModelResponse(result.data, fallbackMode);
 
-  if (result.ok) {
+  if (result.ok && result.data) {
+    // Validar schema de respuesta
+    const validation = validateBlockModelResponse(result.data);
+    if (!validation.valid) {
+      console.warn(`[Schema Validation] BlockModelResponse: ${validation.errors.join("; ")}`);
+    }
+
     syncVoxelTraceFromBlockModel(data);
     syncBlockModelElevationMeta(data);
     syncPercentileStats(data);
   }
 
   return { ...result, data };
+}
+
+// ─── Schema Validation Helpers ──────────────────────────────────────────────
+function validateRequiredFields(obj: unknown, requiredFields: string[]): { valid: boolean; missing: string[] } {
+  if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
+    return { valid: false, missing: requiredFields };
+  }
+
+  const data = obj as Record<string, unknown>;
+  const missing = requiredFields.filter((field) => !(field in data) || data[field] === undefined);
+
+  return { valid: missing.length === 0, missing };
+}
+
+function validateBlockModelResponse(data: unknown): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    errors.push("Response must be a JSON object, not array or null");
+    return { valid: false, errors };
+  }
+
+  const obj = data as Record<string, unknown>;
+
+  // Validar campos mínimos
+  const { valid, missing } = validateRequiredFields(obj, ["cells", "total_voxels"]);
+  if (!valid) {
+    errors.push(`Missing required fields: ${missing.join(", ")}`);
+  }
+
+  // Validar que cells sea array
+  if (!Array.isArray(obj.cells)) {
+    errors.push("Field 'cells' must be an array");
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+function validateGeophysicsStatusResponse(data: unknown): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  const { valid, missing } = validateRequiredFields(data, ["status", "progress"]);
+  if (!valid) {
+    errors.push(`Missing required fields: ${missing.join(", ")}`);
+  }
+
+  if (typeof data === "object" && data !== null && !Array.isArray(data)) {
+    const obj = data as Record<string, unknown>;
+    const validStatuses = ["queued", "processing", "done", "error"];
+    if (obj.status && !validStatuses.includes(String(obj.status))) {
+      errors.push(`Invalid status value: ${obj.status}. Must be one of: ${validStatuses.join(", ")}`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
 }
 
 async function fetchInternalJson<T>(options: {
@@ -1049,11 +1110,21 @@ export type GeophysicsStatusResponse = {
 };
 
 export async function getGeophysicsStatus(projectId: string, runId: string) {
-  return fetchInternalJson<GeophysicsStatusResponse>({
+  const result = await fetchInternalJson<GeophysicsStatusResponse>({
     path: `/api/geophysics-status?project_id=${encodeURIComponent(projectId)}&run_id=${encodeURIComponent(runId)}`,
     method: "GET",
     timeoutMs: 15_000,
   });
+
+  // Validar respuesta si exitosa
+  if (result.ok && result.data) {
+    const validation = validateGeophysicsStatusResponse(result.data);
+    if (!validation.valid) {
+      console.warn(`[Schema Validation] GeophysicsStatusResponse: ${validation.errors.join("; ")}`);
+    }
+  }
+
+  return result;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
