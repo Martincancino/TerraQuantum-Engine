@@ -14,6 +14,10 @@ from core.block_model_store import (
     RUN_VTK_FILENAME,
 )
 from schemas.geophysics_schema import GeophysicsInvertInput
+from schemas.response_schema import (
+    GeophysicsInversionStartResponse,
+    GeophysicsStatusResponse,
+)
 from services.geophysics_service import run_geophysics_inversion, run_geophysics_sensitivity_sweep
 
 router = APIRouter()
@@ -46,7 +50,7 @@ async def _run_inversion_bg(params: GeophysicsInvertInput, project_id: str, run_
             pass
 
 
-@router.post("/geophysics-invert")
+@router.post("/geophysics-invert", response_model=GeophysicsInversionStartResponse)
 @limiter.limit("10/minute")
 async def invert_geophysics(
     request: Request,
@@ -77,7 +81,7 @@ async def invert_geophysics(
     return {"status": "queued", "run_id": run_id, "project_id": project_id}
 
 
-@router.get("/geophysics-status/{project_id}/{run_id}")
+@router.get("/geophysics-status/{project_id}/{run_id}", response_model=GeophysicsStatusResponse)
 async def get_geophysics_status(project_id: str, run_id: str):
     _log.info("request_received", endpoint="/geophysics-status",
               project_id=project_id, run_id=run_id)

@@ -25,6 +25,7 @@ from services.elevation_enrichment_service import enrich_block_model_with_elevat
 from core.geo_utils import compute_footprint_from_center
 from schemas.geophysics_schema import GeophysicsInvertInput
 from schemas.gravity_import_schema import SpatialReadiness, RegionalScalePreflight
+from schemas.response_schema import GravityImportPreviewResponse, GravityImportInvertResponse
 from services.gravity_import_service import import_gravity_csv_v1
 from services.regional_scale_preflight_service import build_preflight_from_import_result
 from services.spatial_readiness_service import classify_from_csv_analysis
@@ -536,7 +537,7 @@ def _enforce_spatial_readiness_gate(
     # UTM_WITH_ZONE, GEOGRAPHIC_COORDS, PROFESSIONAL_SURVEY — suficiencia completa, sin bloqueo.
 
 
-@router.post("/preview")
+@router.post("/preview", response_model=GravityImportPreviewResponse)
 async def preview_gravity_csv(
     request: Request,
     file: UploadFile = File(...),
@@ -633,7 +634,7 @@ async def preview_gravity_csv(
             except Exception:
                 pass
 
-@router.post("/invert")
+@router.post("/invert", response_model=GravityImportInvertResponse)
 @limiter.limit("10/minute")
 async def invert_gravity_csv(
     request: Request,

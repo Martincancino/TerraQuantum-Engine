@@ -3,6 +3,7 @@ import io
 from fastapi import APIRouter, Response
 from fastapi.responses import StreamingResponse
 
+from schemas.response_schema import BlockModelResponse
 from services.block_model_service import (
     build_block_model_response,
     build_block_model_arrow_bytes,
@@ -11,7 +12,7 @@ from services.block_model_service import (
 router = APIRouter()
 
 
-@router.get("/block-model")
+@router.get("/block-model", response_model=BlockModelResponse)
 async def get_block_model(
     mode: str = "exploration",
     limit: int = 5000,
