@@ -46,8 +46,10 @@ async def _run_inversion_bg(params: GeophysicsInvertInput, project_id: str, run_
                 message=f"Error en inversión: {exc}",
                 error=str(exc),
             )
-        except Exception:
-            pass
+        except ValueError as exc:
+            _log.error("bg_update_status_invalid_ids", project_id=project_id, run_id=run_id, error=str(exc))
+        except Exception as exc:
+            _log.error("bg_update_status_write_error", project_id=project_id, run_id=run_id, error=str(exc))
 
 
 @router.post("/geophysics-invert", response_model=GeophysicsInversionStartResponse)

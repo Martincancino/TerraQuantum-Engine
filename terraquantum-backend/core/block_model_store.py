@@ -18,6 +18,9 @@ from core.config import (
     RUN_FOCUSING_FILENAME,
     TMP_DIR,
 )
+from core.logging import get_logger
+
+_log = get_logger(__name__)
 
 
 TRACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -139,7 +142,13 @@ def load_project_meta(project_id: str) -> Optional[dict]:
             return None
 
         return json.loads(meta_path.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError as exc:
+        _log.warning("project_meta_corrupted", project_id=project_id, error=str(exc))
+        return None
+    except Exception as exc:
+        _log.error("project_meta_load_error", project_id=project_id, error=str(exc))
         return None
 
 
@@ -575,7 +584,13 @@ def load_terrain_metadata(project_id: str) -> Optional[dict]:
         if not path.exists():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError as exc:
+        _log.warning("terrain_metadata_corrupted", project_id=project_id, error=str(exc))
+        return None
+    except Exception as exc:
+        _log.error("terrain_metadata_load_error", project_id=project_id, error=str(exc))
         return None
 
 
@@ -600,7 +615,13 @@ def load_terrain_dem_matrix(project_id: str) -> Optional[list]:
         if not path.exists():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError as exc:
+        _log.warning("terrain_dem_matrix_corrupted", project_id=project_id, error=str(exc))
+        return None
+    except Exception as exc:
+        _log.error("terrain_dem_matrix_load_error", project_id=project_id, error=str(exc))
         return None
 
 
