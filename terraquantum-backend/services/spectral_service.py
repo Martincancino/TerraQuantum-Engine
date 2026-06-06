@@ -13,6 +13,7 @@ from core.block_model_store import clean_trace_id, load_project_meta
 from core.config import PROJECTS_DIR
 from core.geo_utils import compute_bbox
 from core.logging import get_logger
+from core.utils import utc_now_iso
 from schemas.spectral_schema import (
     SpectralAoi,
     SpectralImageSelection,
@@ -394,7 +395,7 @@ def _compute_spectral_indices_gee(
             source=SOURCE,
             status=status,
             cache_key=context["cache_key"],
-            computed_at=_utc_now_iso(),
+            computed_at=utc_now_iso(use_z_format=True),
             aoi=_aoi(context),
             image_selection=_image_selection(context, image_count=image_count),
             quality=SpectralQuality(
@@ -488,7 +489,7 @@ def _not_evaluated_response(
             source=SOURCE,
             status="not_evaluated",
             cache_key=context["cache_key"],
-            computed_at=_utc_now_iso(),
+            computed_at=utc_now_iso(use_z_format=True),
             aoi=_aoi(context),
             image_selection=_image_selection(context, image_count=image_count),
             quality=SpectralQuality(
@@ -644,10 +645,3 @@ def _round_optional(value: Optional[float], digits: int) -> Optional[float]:
     if value is None:
         return None
     return round(float(value), digits)
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
-        "+00:00",
-        "Z",
-    )

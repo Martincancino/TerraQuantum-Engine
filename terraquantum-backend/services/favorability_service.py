@@ -1,12 +1,12 @@
 import json
 import math
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 import numpy as np
 import polars as pl
 from scipy.ndimage import label
 
+from core.utils import utc_now_iso
 from core.block_model_store import (
     get_run_block_model_reference,
     get_run_focusing_reference,
@@ -93,7 +93,7 @@ def compute_favorability_score(
         },
         "scoring_detail": scoring_detail,
         "warnings": [],
-        "computed_at": _utc_now_iso(),
+        "computed_at": utc_now_iso(use_z_format=True),
     }
 
 
@@ -614,10 +614,3 @@ def _safe_float(value: Any, fallback: float = 0.0) -> float:
 
 def _round(value: float, digits: int) -> float:
     return round(float(value), digits)
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
-        "+00:00",
-        "Z",
-    )

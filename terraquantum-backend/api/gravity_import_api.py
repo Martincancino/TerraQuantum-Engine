@@ -10,7 +10,7 @@ from typing import Optional
 
 from core.config import CSV_MAX_BYTES, TMP_DIR
 from core.logging import get_logger
-from core.utils import sanitize_nan
+from core.utils import sanitize_nan, model_to_dict
 from core.rate_limit import limiter
 from core.block_model_store import (
     get_project_meta_path,
@@ -164,9 +164,6 @@ def _run_r3_post_inversion_enrichment(
         "has_elevation_data": has_elevation_data,
         "warnings": r3_warnings,
     }
-
-def model_to_dict(model):
-    return model.model_dump() if hasattr(model, "model_dump") else model.dict()
 
 
 def _raise_regional_scale_gate(

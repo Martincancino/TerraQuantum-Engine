@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
+from core.utils import model_to_dict, utc_now_iso
 from core.block_model_store import (
     clean_trace_id,
     get_project_meta_path,
@@ -21,13 +22,6 @@ from schemas.project_schema import (
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
-
-def model_to_dict(model):
-    return model.model_dump() if hasattr(model, "model_dump") else model.dict()
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def clean_project_id_or_400(project_id: str) -> str:
