@@ -13,7 +13,7 @@ from core.block_model_store import clean_trace_id, load_project_meta
 from core.config import PROJECTS_DIR
 from core.geo_utils import compute_bbox
 from core.logging import get_logger
-from core.utils import utc_now_iso, clean_project_id
+from core.utils import utc_now_iso, clean_project_id, safe_float
 from schemas.spectral_schema import (
     SpectralAoi,
     SpectralImageSelection,
@@ -131,8 +131,8 @@ def _build_project_context(project_id: str) -> dict:
     if not meta:
         raise ValueError("Proyecto sin coordenadas geoespaciales.")
 
-    center_lat = _safe_float(meta.get("latitude"))
-    center_lon = _safe_float(meta.get("longitude"))
+    center_lat = safe_float(meta.get("latitude"))
+    center_lon = safe_float(meta.get("longitude"))
     if center_lat is None or center_lon is None:
         raise ValueError("Proyecto sin latitude/longitude.")
 
@@ -352,7 +352,7 @@ def _compute_spectral_indices_gee(
         status=status,
         normalized_score=None
         if low_valid_pixels
-        else _score_iron(_safe_float(stats.get("iron_oxide_proxy_p90"))),
+        else _score_iron(safe_float(stats.get("iron_oxide_proxy_p90"))),
     )
     clay_stats = _index_stats(
         stats,
@@ -361,7 +361,7 @@ def _compute_spectral_indices_gee(
         status=status,
         normalized_score=None
         if low_valid_pixels
-        else _score_clay(_safe_float(stats.get("clay_proxy_p90"))),
+        else _score_clay(safe_float(stats.get("clay_proxy_p90"))),
     )
 
     ndvi_mean = ndvi_stats.mean
@@ -420,9 +420,9 @@ def _index_stats(
     normalized_score: Optional[float] = None,
 ) -> SpectralIndexStats:
     return SpectralIndexStats(
-        mean=_round_optional(_safe_float(stats.get(f"{key}_mean")), 6),
-        p90=_round_optional(_safe_float(stats.get(f"{key}_p90")), 6),
-        std_dev=_round_optional(_safe_float(stats.get(f"{key}_stdDev")), 6),
+        mean=_round_optional(safe_float(stats.get(f"{key}_mean")), 6),
+        p90=_round_optional(safe_float(stats.get(f"{key}_p90")), 6),
+        std_dev=_round_optional(safe_float(stats.get(f"{key}_stdDev")), 6),
         valid_pixel_count=_safe_int(stats.get(f"{key}_count"), None),
         normalized_score=_round_optional(normalized_score, 4),
         status=status,
@@ -616,14 +616,6 @@ def _score_clay(value: Optional[float]) -> Optional[float]:
     if value is None:
         return None
     return float(np.clip((float(value) - 1.0) / 0.8, 0.0, 1.0))
-
-
-def _safe_float(value: Any) -> Optional[float]:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if math.isfinite(parsed) else None
 
 
 def _safe_int(value: Any, fallback: Optional[int]) -> Optional[int]:

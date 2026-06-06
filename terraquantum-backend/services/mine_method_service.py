@@ -10,6 +10,7 @@ from core.block_model_store import (
     get_run_report_path,
 )
 from core.logging import get_logger
+from core.utils import safe_float
 from services.block_model_service import get_index_columns
 
 _log = get_logger(__name__)
@@ -56,15 +57,6 @@ def _read_json_file(path) -> dict:
         data = json.load(f)
 
     return data if isinstance(data, dict) else {}
-
-
-def _safe_float(value: Any, fallback: float = 0.0) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return fallback
-
-    return parsed if math.isfinite(parsed) else fallback
 
 
 def evaluate_mine_method(project_id: str, run_id: str) -> dict:
@@ -121,10 +113,10 @@ def evaluate_mine_method(project_id: str, run_id: str) -> dict:
     has_xyz = {"x", "y", "z"}.issubset(set(ore_df.columns))
 
     if has_xyz:
-        depth_m = _safe_float(ore_df["y"].max())
-        x_range = _safe_float(ore_df["x"].max() - ore_df["x"].min()) + 1.0
-        z_range = _safe_float(ore_df["z"].max() - ore_df["z"].min()) + 1.0
-        y_range = _safe_float(ore_df["y"].max() - ore_df["y"].min()) + 1.0
+        depth_m = safe_float(ore_df["y"].max())
+        x_range = safe_float(ore_df["x"].max() - ore_df["x"].min()) + 1.0
+        z_range = safe_float(ore_df["z"].max() - ore_df["z"].min()) + 1.0
+        y_range = safe_float(ore_df["y"].max() - ore_df["y"].min()) + 1.0
     else:
         try:
             ix_col, iy_col, iz_col = get_index_columns(ore_df)
@@ -133,11 +125,11 @@ def evaluate_mine_method(project_id: str, run_id: str) -> dict:
                 "El block model no tiene columnas espaciales ni de índice reconocibles."
             )
 
-        block_size_m = _safe_float(inputs.get("block_size"), 1.0)
-        depth_m = _safe_float(ore_df[iy_col].max()) * block_size_m
-        x_range = (_safe_float(ore_df[ix_col].max() - ore_df[ix_col].min()) + 1.0) * block_size_m
-        z_range = (_safe_float(ore_df[iz_col].max() - ore_df[iz_col].min()) + 1.0) * block_size_m
-        y_range = (_safe_float(ore_df[iy_col].max() - ore_df[iy_col].min()) + 1.0) * block_size_m
+        block_size_m = safe_float(inputs.get("block_size"), 1.0)
+        depth_m = safe_float(ore_df[iy_col].max()) * block_size_m
+        x_range = (safe_float(ore_df[ix_col].max() - ore_df[ix_col].min()) + 1.0) * block_size_m
+        z_range = (safe_float(ore_df[iz_col].max() - ore_df[iz_col].min()) + 1.0) * block_size_m
+        y_range = (safe_float(ore_df[iy_col].max() - ore_df[iy_col].min()) + 1.0) * block_size_m
 
     horizontal_extent = math.sqrt(x_range * z_range)
     aspect_ratio = horizontal_extent / max(y_range, 1.0)
@@ -150,12 +142,12 @@ def evaluate_mine_method(project_id: str, run_id: str) -> dict:
         geometry_type = "narrow_deep"
 
     tonnage_kt = (
-        _safe_float(ore_df["tonnage"].sum()) / 1000.0
+        safe_float(ore_df["tonnage"].sum()) / 1000.0
         if "tonnage" in ore_df.columns
         else 0.0
     )
     avg_grade_proxy = (
-        _safe_float(ore_df["grade"].mean())
+        safe_float(ore_df["grade"].mean())
         if "grade" in ore_df.columns
         else 0.0
     )

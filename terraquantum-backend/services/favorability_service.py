@@ -6,7 +6,7 @@ import numpy as np
 import polars as pl
 from scipy.ndimage import label
 
-from core.utils import utc_now_iso
+from core.utils import utc_now_iso, safe_float
 from core.block_model_store import (
     get_run_block_model_reference,
     get_run_focusing_reference,
@@ -358,7 +358,7 @@ def _factor_satellite_support(project_id: Optional[str]) -> dict:
             ),
         )
 
-    clean_value = _safe_float(value, fallback=-1.0)
+    clean_value = safe_float(value, fallback=-1.0)
     if clean_value < 0:
         return _factor(
             factor_id="satellite_support",
@@ -492,7 +492,7 @@ def _score_level(score: float) -> str:
 
 def _extract_uncertainty_score(report_payload: Optional[dict]) -> float:
     diagnostics = (report_payload or {}).get("uncertaintyDiagnostics") or {}
-    return _safe_float(diagnostics.get("uncertainty_score"), 0.0)
+    return safe_float(diagnostics.get("uncertainty_score"), 0.0)
 
 
 def _resolve_grid_shape(
@@ -602,14 +602,6 @@ def _required_input_value(inputs: dict, key: str) -> Any:
     if key not in inputs:
         raise ValueError(f"inputs.json no contiene {key}.")
     return inputs[key]
-
-
-def _safe_float(value: Any, fallback: float = 0.0) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return fallback
-    return parsed if math.isfinite(parsed) else fallback
 
 
 def _round(value: float, digits: int) -> float:

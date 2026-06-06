@@ -71,3 +71,22 @@ def clean_project_id(project_id: str) -> str:
     if not result:
         raise ValueError("project_id es requerido.")
     return result
+
+
+def safe_float(value: Any, fallback: Optional[float] = None) -> Optional[float]:
+    """Safely parse a float, returning fallback on error or non-finite value.
+
+    Parameters
+    ----------
+    value : Any
+        The value to parse.
+    fallback : float or None
+        Return value if parsing fails or result is NaN/Inf. Defaults to None.
+    """
+    try:
+        parsed = float(value)
+        if math.isfinite(parsed):
+            return parsed
+    except (TypeError, ValueError):
+        pass
+    return fallback
