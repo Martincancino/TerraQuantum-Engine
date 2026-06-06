@@ -22,7 +22,7 @@ from core.block_model_store import (
 )
 from services.satellite_service import get_terrain_data
 from services.elevation_enrichment_service import enrich_block_model_with_elevation
-from core.geo_utils import compute_footprint_from_center
+from core.geo_utils import compute_footprint_from_center, extract_utm_zone_safe
 from schemas.geophysics_schema import GeophysicsInvertInput
 from schemas.gravity_import_schema import SpatialReadiness, RegionalScalePreflight
 from schemas.response_schema import GravityImportPreviewResponse, GravityImportInvertResponse
@@ -44,44 +44,8 @@ _log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# R3.5-K — UTM zone extraction helpers
+# R3.5-K — UTM zone extraction (consolidada en core.geo_utils)
 # ---------------------------------------------------------------------------
-
-def _safe_get(obj, key: str):
-    if obj is None:
-        return None
-    if isinstance(obj, dict):
-        return obj.get(key)
-    return getattr(obj, key, None)
-
-
-def _extract_detected_utm_zone(import_result) -> "str | None":
-    """
-    Extract utm_zone detected in CSV from import_result, trying three paths safely.
-    Returns stripped non-empty string or None.
-    """
-    # 1. coordinate_transform.utm_zone (most authoritative — set by _utm_to_local_meters)
-    ct = _safe_get(import_result, "coordinate_transform")
-    v = _safe_get(ct, "utm_zone")
-    if v and str(v).strip():
-        return str(v).strip()
-
-    # 2. csv_analysis.coordinate_system.utm_zone
-    ca = _safe_get(import_result, "csv_analysis")
-    cs = _safe_get(ca, "coordinate_system")
-    v = _safe_get(cs, "utm_zone")
-    if v and str(v).strip():
-        return str(v).strip()
-
-    # 3. import_metadata.coordinate_transform.utm_zone
-    im = _safe_get(import_result, "import_metadata")
-    ct2 = _safe_get(im, "coordinate_transform")
-    v = _safe_get(ct2, "utm_zone")
-    if v and str(v).strip():
-        return str(v).strip()
-
-    return None
-
 
 def _effective_utm_zone(form_utm_zone: "str | None", import_result) -> "str | None":
     """
@@ -89,7 +53,7 @@ def _effective_utm_zone(form_utm_zone: "str | None", import_result) -> "str | No
     """
     if form_utm_zone and form_utm_zone.strip():
         return form_utm_zone.strip()
-    return _extract_detected_utm_zone(import_result)
+    return extract_utm_zone_safe(import_result)
 
 
 def _run_r3_post_inversion_enrichment(

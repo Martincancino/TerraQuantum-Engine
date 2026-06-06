@@ -1,6 +1,7 @@
 import csv
 import math
 from pathlib import Path
+from typing import Optional
 
 
 METERS_PER_DEG_LAT = 111_320.0
@@ -306,3 +307,51 @@ def sample_dem_elevation(
 
     # bilinear (default)
     return (_bilinear_interp(dem_matrix, row_f, col_f), warning)
+
+
+def _safe_get(obj, key: str) -> Optional[str]:
+    """Safely extract string value from dict or object."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        val = obj.get(key)
+    else:
+        val = getattr(obj, key, None)
+    return str(val).strip() if val else None
+
+
+def extract_utm_zone_safe(import_result) -> Optional[str]:
+    """
+    Consolidada: Extract UTM zone from import_result, trying 3 paths safely.
+    Prioridad:
+    1. coordinate_transform.utm_zone (authoritative)
+    2. csv_analysis.coordinate_system.utm_zone
+    3. import_metadata.coordinate_transform.utm_zone
+    Returns stripped non-empty string or None.
+    """
+    # 1. coordinate_transform.utm_zone
+    ct = _safe_get(import_result, "coordinate_transform") if isinstance(import_result, dict) else getattr(import_result, "coordinate_transform", None)
+    if ct:
+        utm_zone = _safe_get(ct, "utm_zone") if isinstance(ct, dict) else getattr(ct, "utm_zone", None)
+        if utm_zone:
+            return utm_zone
+
+    # 2. csv_analysis.coordinate_system.utm_zone
+    ca = _safe_get(import_result, "csv_analysis") if isinstance(import_result, dict) else getattr(import_result, "csv_analysis", None)
+    if ca:
+        cs = _safe_get(ca, "coordinate_system") if isinstance(ca, dict) else getattr(ca, "coordinate_system", None)
+        if cs:
+            utm_zone = _safe_get(cs, "utm_zone") if isinstance(cs, dict) else getattr(cs, "utm_zone", None)
+            if utm_zone:
+                return utm_zone
+
+    # 3. import_metadata.coordinate_transform.utm_zone
+    im = _safe_get(import_result, "import_metadata") if isinstance(import_result, dict) else getattr(import_result, "import_metadata", None)
+    if im:
+        ct2 = _safe_get(im, "coordinate_transform") if isinstance(im, dict) else getattr(im, "coordinate_transform", None)
+        if ct2:
+            utm_zone = _safe_get(ct2, "utm_zone") if isinstance(ct2, dict) else getattr(ct2, "utm_zone", None)
+            if utm_zone:
+                return utm_zone
+
+    return None
