@@ -1,11 +1,11 @@
 import io
 import logging
-import math
 
 import polars as pl
 
 from core.block_model_store import resolve_block_model_reference
 from core.config import RUN_ANOMALY_FILENAME
+from core.utils import sanitize_nan_value
 
 logger = logging.getLogger(__name__)
 
@@ -411,33 +411,6 @@ def _is_finite_number(value: object) -> bool:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
     return math.isfinite(float(value))
-
-
-def sanitize_nan_value(value: object) -> object:
-    """Convierte NaN, Inf y -Inf a None para JSON serialization."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        try:
-            fval = float(value)
-            if math.isnan(fval) or math.isinf(fval):
-                return None
-            return fval
-        except (ValueError, TypeError, OverflowError):
-            return None
-    return value
-
-
-def deep_sanitize_nan(obj: object) -> object:
-    """Recursivamente sanitiza NaN/Inf en dicts, lists y valores numéricos."""
-    if isinstance(obj, dict):
-        return {k: deep_sanitize_nan(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [deep_sanitize_nan(v) for v in obj]
-    elif isinstance(obj, tuple):
-        return tuple(deep_sanitize_nan(v) for v in obj)
-    else:
-        return sanitize_nan_value(obj)
 
 
 def _r3_has_elevation(df: pl.DataFrame) -> bool:

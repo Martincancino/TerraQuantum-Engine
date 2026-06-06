@@ -1,4 +1,3 @@
-import math
 import uuid
 import os
 import shutil
@@ -11,6 +10,7 @@ from typing import Optional
 
 from core.config import CSV_MAX_BYTES, TMP_DIR
 from core.logging import get_logger
+from core.utils import sanitize_nan
 from core.rate_limit import limiter
 from core.block_model_store import (
     get_project_meta_path,
@@ -167,17 +167,6 @@ def _run_r3_post_inversion_enrichment(
 
 def model_to_dict(model):
     return model.model_dump() if hasattr(model, "model_dump") else model.dict()
-
-
-def _sanitize_nan(obj):
-    """Recursively replace NaN/Inf floats with None so json.dumps never crashes."""
-    if isinstance(obj, dict):
-        return {k: _sanitize_nan(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_nan(v) for v in obj]
-    if isinstance(obj, float) and (obj != obj or obj == float("inf") or obj == float("-inf")):
-        return None
-    return obj
 
 
 def _raise_regional_scale_gate(
@@ -625,7 +614,7 @@ async def preview_gravity_csv(
                 "parámetros más pequeños (nx, ny, nz ≤ 80) en la inversión."
             )
 
-        return _sanitize_nan({
+        return sanitize_nan({
             "status": result.status,
             "previewCount": len(observations_preview),
             "totalObservations": len(result.observations),
@@ -1164,7 +1153,7 @@ async def invert_gravity_csv(
         if isinstance(_inversion_dict, dict) and "voxels" in _inversion_dict:
             _inversion_dict.pop("voxels", None)
 
-        return _sanitize_nan({
+        return sanitize_nan({
             "status": "done",
             "stage": "inversion",
             "project_id": project_id,
