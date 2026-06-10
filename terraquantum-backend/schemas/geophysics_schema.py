@@ -324,13 +324,18 @@ class GeophysicsInvertInput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_grid_bounds(self):
-        """Cross-field validation: depth must fit dentro de grilla (ny * block_size)."""
-        max_depth = self.ny * self.block_size
-        if self.depth > max_depth:
+        """Sanidad de profundidad: cap absoluto de 500 km.
+
+        NO se rechaza depth > ny*block_size: a escala regional (Bushveld,
+        250 km) es legítimo declarar la extensión física objetivo aunque la
+        discretización vertical sea gruesa — esa es una decisión del usuario,
+        no un error. El warning de discretización gruesa lo emite el servicio
+        (no este validador) para no mutar ni bloquear el input en silencio.
+        """
+        if self.depth > 500_000:
             raise ValueError(
-                f"depth ({self.depth}m) supera máximo para grilla: "
-                f"ny × block_size = {self.ny} × {self.block_size} = {max_depth}m. "
-                f"Aumenta ny o block_size."
+                f"depth ({self.depth}m) supera el cap de sanidad de 500 km. "
+                "Verificar unidades (se esperan metros)."
             )
         return self
 

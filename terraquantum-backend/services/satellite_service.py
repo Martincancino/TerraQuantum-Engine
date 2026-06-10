@@ -538,14 +538,16 @@ def get_terrain_data(
     footprint_override: dict | None = None,
     terrain_margin_factor: float = TERRAIN_MARGIN_FACTOR,
 ) -> TerrainResponse:
-    clean_project_id = clean_project_id(project_id)
+    # pid_clean: NO reutilizar el nombre de la función clean_project_id —
+    # el shadowing convertía la función en variable local → UnboundLocalError.
+    pid_clean = clean_project_id(project_id)
 
     # Read full project meta once
-    project_dir = _project_dir(clean_project_id)
+    project_dir = _project_dir(pid_clean)
     if not project_dir.exists():
         raise ValueError("Proyecto no encontrado.")
 
-    meta = store.load_project_meta(clean_project_id)
+    meta = store.load_project_meta(pid_clean)
     if not meta:
         raise ValueError("Proyecto sin coordenadas geoespaciales.")
 
@@ -584,7 +586,7 @@ def get_terrain_data(
                 extent_resolved = True
 
     if not extent_resolved:
-        metadata_extent = _derive_import_metadata_extent(clean_project_id)
+        metadata_extent = _derive_import_metadata_extent(pid_clean)
         if metadata_extent is not None:
             (
                 extent_x_m,
@@ -601,8 +603,8 @@ def get_terrain_data(
                 bbox = _expand_bbox(metadata_bbox, terrain_margin_factor)
 
     if not extent_resolved:
-        extent_x_m, extent_z_m, source = _derive_project_extent(clean_project_id)
-    elif _latest_source_gravity_csv(clean_project_id) is not None:
+        extent_x_m, extent_z_m, source = _derive_project_extent(pid_clean)
+    elif _latest_source_gravity_csv(pid_clean) is not None:
         source = "mock_v1"
 
     if bbox is None:
@@ -633,7 +635,7 @@ def get_terrain_data(
         except Exception as exc:
             _log.warning(
                 "gee_terrain_fallback",
-                project_id=clean_project_id,
+                project_id=pid_clean,
                 error=str(exc)[:200],
             )
             source = "mock_v1_gee_fallback"
@@ -654,7 +656,7 @@ def get_terrain_data(
 
     # ── Persist DEM metadata + matrix for R3-BE-4 ────────────────────────────
     _terrain_metadata_dict = {
-        "project_id": clean_project_id,
+        "project_id": pid_clean,
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "bbox": {
             "min_lat": bbox["min_lat"],
@@ -681,19 +683,19 @@ def get_terrain_data(
         "dem_matrix_path": store.TERRAIN_DEM_MATRIX_FILENAME,
     }
     try:
-        store.save_terrain_metadata(clean_project_id, _terrain_metadata_dict)
-        store.save_terrain_dem_matrix(clean_project_id, dem_matrix)
+        store.save_terrain_metadata(pid_clean, _terrain_metadata_dict)
+        store.save_terrain_dem_matrix(pid_clean, dem_matrix)
     except Exception as _persist_exc:
         _persist_warning = f"No se pudo persistir terrain metadata: {_persist_exc}"
         terrain_warnings.append(_persist_warning)
         _log.warning(
             "terrain_persist_failed",
-            project_id=clean_project_id,
+            project_id=pid_clean,
             error=str(_persist_exc)[:200],
         )
 
     return TerrainResponse(
-        project_id=clean_project_id,
+        project_id=pid_clean,
         dem_matrix=dem_matrix,
         texture_url=texture_url,
         metadata=TerrainMetadata(

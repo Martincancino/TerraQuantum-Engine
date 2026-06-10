@@ -270,6 +270,19 @@ def validate_geophysics_input(params: GeophysicsInvertInput):
     if params.cutoff_radius < params.block_size:
         raise ValueError("cutoff_radius no puede ser menor que block_size.")
 
+    # Discretización vertical gruesa: depth físico mucho mayor que la malla
+    # vertical (ny celdas de block_size). No es error — es decisión del usuario
+    # a escala regional — pero se advierte porque degrada la resolución.
+    _mesh_depth = params.ny * params.block_size
+    if params.depth > 10 * _mesh_depth:
+        _log.warning(
+            "depth_discretization_coarse",
+            depth_m=params.depth,
+            mesh_vertical_m=_mesh_depth,
+            note="depth >> ny*block_size: la malla vertical no resuelve la "
+                 "profundidad declarada; aumentar ny o block_size.",
+        )
+
 
 def build_fit_diagnostics(
     g_observed: np.ndarray,
