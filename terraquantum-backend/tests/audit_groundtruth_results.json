@@ -1,6 +1,6 @@
 {
   "audit": "groundtruth_analytic_sphere",
-  "timestamp_utc": "2026-06-04T02:16:34.203674+00:00",
+  "timestamp_utc": "2026-06-08T11:03:53.609303+00:00",
   "engine": "exploration/gravimetry.py (no reimplementation)",
   "inverse_crime": false,
   "geometry": {
@@ -23,14 +23,14 @@
     "pass": true
   },
   "part_B_inversion": {
-    "lambda": 3.0,
+    "lambda": 0.1,
     "snr_db": 30.45757490560675,
-    "misfit_pct": 0.5837314247271463,
-    "chi2_reduced": 0.037992901823930975,
-    "depth_error_m": 46.03913548755979,
-    "horiz_error_m": 1.0605236853557338,
-    "mass_ratio": 0.8218074491374956,
-    "shape_corr": 0.7004305761717952,
+    "misfit_pct": 1.3893048081106403,
+    "chi2_reduced": 0.21521443395875983,
+    "depth_error_m": 10.382884123449344,
+    "horiz_error_m": 1.6089489782429682,
+    "mass_ratio": 0.9438032041249527,
+    "shape_corr": 0.6600642257826358,
     "pass": true,
     "threshold_note": "esfera-pequeña geometry; threshold 2.5 cells justificado. R=70m @ 140m en malla 25m (5.6 radios de celda): geometría marginal del problema inverso. λ=3.0 (PRECONDITIONED_OPERATING_LAMBDA) redujo depth_error de 57.2→46.0m. Error < 2.5 celdas = recuperación aceptable."
   },

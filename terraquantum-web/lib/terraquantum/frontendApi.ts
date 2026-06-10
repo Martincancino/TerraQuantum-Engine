@@ -607,6 +607,34 @@ export function buildTerrainTextureProxyUrl(rawUrl: string) {
   return `/api/terrain-texture?url=${encodeURIComponent(targetUrl)}`;
 }
 
+// ─── H-C3: Obs vs Calc misfit types ─────────────────────────────────────────
+
+export type MisfitStationData = {
+  x: number | null;
+  y: number | null;
+  z: number | null;
+  d_obs: number;
+  d_pred: number;
+  residual: number;
+};
+
+export type MisfitResponse = {
+  stations: MisfitStationData[];
+  chi2_reduced: number;
+  rmse: number;
+  normalized_rmse: number;
+  r2: number;
+  n_stations: number;
+};
+
+export async function getGeophysicsMisfit(projectId: string, runId: string) {
+  return fetchInternalJson<MisfitResponse>({
+    path: `/api/geophysics-misfit?project_id=${encodeURIComponent(projectId)}&run_id=${encodeURIComponent(runId)}`,
+    method: "GET",
+    timeoutMs: 30_000,
+  });
+}
+
 export async function runGeophysicsInvert(payload: unknown) {
   return fetchInternalJson<BackendInvertResponse>({
     path: "/api/geophysics-invert",
@@ -1127,6 +1155,130 @@ export async function getGeophysicsStatus(projectId: string, runId: string) {
   return result;
 }
 
+// ─── SSE Status Stream (§2.6) ────────────────────────────────────────────────
+
+export type GeophysicsStatusSSEEvent = {
+  stage: string;
+  progress: number;
+  message: string;
+  status?: string;
+  elapsed_s?: number;
+};
+
+/**
+ * Connects to the SSE status stream for an in-progress inversion.
+ * Returns a cleanup function — call it to close the connection early.
+ *
+ * The stream auto-closes when a terminal status is received:
+ * done | error | complete | completed | timeout
+ */
+export function connectGeophysicsStatusStream(
+  projectId: string,
+  runId: string,
+  onEvent: (data: GeophysicsStatusSSEEvent) => void,
+  onTerminal: () => void,
+): () => void {
+  const url = `/api/geophysics-status/stream?project_id=${encodeURIComponent(projectId)}&run_id=${encodeURIComponent(runId)}`;
+  const es = new EventSource(url);
+  const terminal = new Set(["done", "error", "complete", "completed", "timeout"]);
+
+  es.onmessage = (event: MessageEvent) => {
+    try {
+      const data = JSON.parse(event.data as string) as GeophysicsStatusSSEEvent;
+      onEvent(data);
+      if (terminal.has(data.status ?? "") || terminal.has(data.stage ?? "")) {
+        es.close();
+        onTerminal();
+      }
+    } catch {
+      // ignore parse errors from malformed SSE lines
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    onTerminal();
+  };
+
+  return () => es.close();
+}
+
+// ─── Celery Async Inversion (§2.5) ───────────────────────────────────────────
+
+export type AsyncInvertResponse = {
+  task_id: string;
+  run_id: string;
+  project_id: string;
+  status: string;
+  status_url: string;
+};
+
+export type CeleryTaskStatusResponse = {
+  task_id: string;
+  celery_state: string;
+  project_id?: string | null;
+  run_id?: string | null;
+  stage?: string | null;
+  progress?: number | null;
+  error?: string | null;
+};
+
+export async function enqueueGeophysicsInversion(
+  params: Record<string, unknown>
+): Promise<FrontendApiResult<AsyncInvertResponse>> {
+  return fetchInternalJson<AsyncInvertResponse>({
+    path: "/api/async/invert",
+    method: "POST",
+    body: params,
+    timeoutMs: 10_000,
+  });
+}
+
+export async function getCeleryTaskStatus(
+  taskId: string
+): Promise<FrontendApiResult<CeleryTaskStatusResponse>> {
+  return fetchInternalJson<CeleryTaskStatusResponse>({
+    path: `/api/async/tasks/${encodeURIComponent(taskId)}`,
+    method: "GET",
+    timeoutMs: 10_000,
+  });
+}
+
+export function pollInversionStatus(
+  taskId: string,
+  onProgress: (stage: string, progress: number) => void,
+  intervalMs = 3_000
+): { promise: Promise<CeleryTaskStatusResponse>; cancel: () => void } {
+  let intervalId: ReturnType<typeof setInterval> | null = null;
+  let cancelled = false;
+
+  const promise = new Promise<CeleryTaskStatusResponse>((resolve, reject) => {
+    intervalId = setInterval(async () => {
+      if (cancelled) return;
+      const res = await getCeleryTaskStatus(taskId);
+      if (!res.ok || !res.data) {
+        if (intervalId !== null) clearInterval(intervalId);
+        reject(new Error(res.error ?? "Error polling task status"));
+        return;
+      }
+      const data = res.data;
+      onProgress(data.stage ?? data.celery_state ?? "running", data.progress ?? 0);
+      const terminal = ["SUCCESS", "FAILURE", "REVOKED"];
+      if (terminal.includes(data.celery_state)) {
+        if (intervalId !== null) clearInterval(intervalId);
+        resolve(data);
+      }
+    }, intervalMs);
+  });
+
+  const cancel = () => {
+    cancelled = true;
+    if (intervalId !== null) clearInterval(intervalId);
+  };
+
+  return { promise, cancel };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function fetchProjectFootprint(
@@ -1482,5 +1634,95 @@ export async function fetchBlockModelArrowForRun(
     };
   } finally {
     window.clearTimeout(timeout);
+  }
+}
+
+// ─── Gravity Corrections (H-B4) ──────────────────────────────────────────────
+
+export type GravityCorrectionParams = {
+  reduction_density_gcc?: number;
+  dem_type?: "COP30" | "SRTM30" | "SRTM90" | "ALOS" | "NASADEM";
+  terrain_radius_m?: number;
+  apply_lat_correction?: boolean;
+  apply_fac?: boolean;
+  apply_bouguer?: boolean;
+  apply_terrain?: boolean;
+};
+
+export type GravityCorrectedStation = {
+  station_id: string;
+  lat_deg: number;
+  lon_deg: number;
+  elev_m: number;
+  g_obs_mgal: number;
+  gamma_mgal: number | null;
+  fac_mgal: number | null;
+  bc_mgal: number | null;
+  tc_mgal: number | null;
+  g_bouguer_mgal: number;
+  uncertainty_mgal: number;
+  gravity_type: string;
+};
+
+export type GravityCorrectionReport = {
+  n_stations: number;
+  corrections_applied: string[];
+  reduction_density_gcc: number;
+  dem_source: string | null;
+  terrain_radius_m: number | null;
+  fac_min_mgal: number | null;
+  fac_max_mgal: number | null;
+  bc_min_mgal: number | null;
+  bc_max_mgal: number | null;
+  tc_min_mgal: number | null;
+  tc_max_mgal: number | null;
+  g_bouguer_min_mgal: number | null;
+  g_bouguer_max_mgal: number | null;
+  warnings: string[];
+};
+
+export type ApplyCorrectionsRequest = {
+  stations: Record<string, number | string>[];
+  params?: GravityCorrectionParams;
+  gravity_column?: string;
+  gravity_type_in?: "g_raw" | "free_air_anomaly" | "bouguer_anomaly" | "complete_bouguer_anomaly";
+};
+
+export type ApplyCorrectionsResponse = {
+  corrected: GravityCorrectedStation[];
+  report: GravityCorrectionReport;
+  output_gravity_type: string;
+};
+
+export async function applyGravityCorrections(
+  request: ApplyCorrectionsRequest
+): Promise<FrontendApiResult<ApplyCorrectionsResponse>> {
+  try {
+    const res = await fetch("/api/gravity-corrections/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      return { ok: false, status: res.status, data: null, error: "Respuesta no es JSON." };
+    }
+    if (!res.ok) {
+      const d = data !== null && typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : null;
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error: (typeof d?.detail === "string" ? d.detail : null) ?? `Error ${res.status}`,
+      };
+    }
+    return { ok: true, status: res.status, data: data as ApplyCorrectionsResponse, error: null };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, status: 500, data: null, error: message };
   }
 }

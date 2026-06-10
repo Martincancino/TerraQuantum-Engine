@@ -37,6 +37,9 @@ public/models/*.bin
 data/*.parquet
 data/*.csv
 data/*.json
+data/*.vtr
+# Datasets externos de validación (descargados, reproducibles desde la fuente)
+data/external/
 
 # Test outputs (Parquet/Zarr from synthetic_recovery_benchmark, etc.)
 tests/inv_*.parquet

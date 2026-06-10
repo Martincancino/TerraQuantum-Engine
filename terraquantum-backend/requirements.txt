@@ -49,3 +49,9 @@ redis==8.0.0
 # Sprint 2 — Dask out-of-core Jacobian (Tier-1 architecture)
 dask[array]>=2023.12.0
 distributed>=2023.12.0
+
+# Fase 10 — Compresión wavelet del Jacobiano (Farquharson & Oldenburg 2003)
+PyWavelets>=1.6.0
+
+# Fase 11 — PGI: fit_from_model usa GaussianMixture de sklearn
+scikit-learn>=1.3.0

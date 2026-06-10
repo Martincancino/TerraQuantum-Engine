@@ -1,15 +1,16 @@
 import io
 import logging
+import math
 
 import polars as pl
 
 from core.block_model_store import resolve_block_model_reference
 from core.config import RUN_ANOMALY_FILENAME
-from core.utils import sanitize_nan_value
+from core.utils import sanitize_nan_value, sanitize_nan
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_BLOCK_MODEL_MODES = {"exploration", "full", "anomaly", "economic"}
+SUPPORTED_BLOCK_MODEL_MODES = {"exploration", "full", "anomaly", "economic", "doi_reliable", "profile"}
 PERFORMANCE_WARNING_VOXEL_THRESHOLD = 200_000
 DIAGNOSTIC_PERCENTILES = (
     ("p2", 0.02),
@@ -138,12 +139,14 @@ def infer_cell_size(df: pl.DataFrame) -> float:
     return 10.0
 
 
-def read_numeric_row_value(row: dict, key: str, fallback: float) -> float:
+def read_numeric_row_value(row: dict, key: str, fallback=None):
     value = row.get(key)
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
 
+    if fallback is None:
+        return None
     return float(fallback)
 
 
@@ -632,6 +635,26 @@ def build_block_model_response(
                 else df.head(0)
             )
 
+    elif mode_clean == "doi_reliable":
+        # Celdas con doi_index < 0.2 (Li & Oldenburg 1999) — bien constrainadas
+        visual_mode = "density_probability"
+        doi_col = "doi_index" if "doi_index" in df.columns else "doi_raw"
+        if doi_col in df.columns:
+            df_view = (
+                df.filter(pl.col(doi_col) < 0.2)
+                .sort("density", descending=True)
+            )
+        else:
+            warnings.append("doi_index not available; returning exploration subset")
+            df_view = select_limited_exploration_view(df, safe_limit, (ix_col, iy_col, iz_col))
+
+    elif mode_clean == "profile":
+        # Sin parámetros de perfil → devuelve exploración estándar
+        # El endpoint /v2/block-model-profile maneja los parámetros A-A' directamente
+        visual_mode = "density_probability"
+        df_view = select_limited_exploration_view(df, safe_limit, (ix_col, iy_col, iz_col))
+        warnings.append("profile mode via /block-model uses exploration fallback; use /v2/block-model-profile for A-A' sections")
+
     else:
         df_view = select_limited_exploration_view(
             df,
@@ -668,9 +691,13 @@ def build_block_model_response(
         real_grade = sanitize_nan_value(float(row.get("grade", 0.0)))
         domain = int(row.get("domain", 0))
 
-        x_m = read_numeric_row_value(row, "x", (ix * cell_size) + (cell_size / 2.0))
-        y_m = read_numeric_row_value(row, "y", (iy * cell_size) + (cell_size / 2.0))
-        z_m = read_numeric_row_value(row, "z", (iz * cell_size) + (cell_size / 2.0))
+        # v4.0 prefers x_m/y_m/z_m; fall back to x/y/z (v3.0) then to computed value
+        _xv = read_numeric_row_value(row, "x_m")
+        x_m = _xv if _xv is not None else read_numeric_row_value(row, "x", (ix * cell_size) + (cell_size / 2.0))
+        _yv = read_numeric_row_value(row, "y_m")
+        y_m = _yv if _yv is not None else read_numeric_row_value(row, "y", (iy * cell_size) + (cell_size / 2.0))
+        _zv = read_numeric_row_value(row, "z_m")
+        z_m = _zv if _zv is not None else read_numeric_row_value(row, "z", (iz * cell_size) + (cell_size / 2.0))
 
         # Backend: y es profundidad positiva hacia abajo.
         # Three.js: y es vertical positiva hacia arriba.
@@ -705,11 +732,14 @@ def build_block_model_response(
             "dem_source": row.get("dem_source"),
             "dem_sample_method": row.get("dem_sample_method"),
             "spatial_reference_warning": row.get("spatial_reference_warning"),
-            # Multi-physics fields (magnetic + joint schema v3.0)
+            # Multi-physics fields (magnetic + joint schema v3.0/v4.0)
             "susceptibility_si": sanitize_nan_value(row.get("susceptibility_si")),
             "joint_structural_score": sanitize_nan_value(row.get("joint_structural_score")),
             "density_t_m3": sanitize_nan_value(row.get("density_t_m3")),
             "density_contrast_t_m3": sanitize_nan_value(row.get("density_contrast_t_m3")),
+            # v4.0 fields
+            "doi_index": sanitize_nan_value(row.get("doi_index") or row.get("doi_raw")),
+            "density_anomaly_score": sanitize_nan_value(row.get("density_anomaly_score")),
             "run_type": row.get("run_type"),
             "schema_version": row.get("schema_version"),
         }
@@ -761,7 +791,7 @@ def build_block_model_response(
     }
 
     # Sanitizar recursivamente toda la respuesta para eliminar NaN/Inf antes de JSON serialization
-    return deep_sanitize_nan(response)
+    return sanitize_nan(response)
 
 
 # ─── Arrow IPC Transport (R07) ────────────────────────────────────────────────
@@ -778,6 +808,9 @@ _ARROW_MULTIPHYSICS_COLS = (
     "joint_structural_score",
     "density_t_m3",
     "density_contrast_t_m3",
+    "doi_index",
+    "density_anomaly_score",
+    "posterior_std",
 )
 
 
@@ -849,6 +882,10 @@ def build_block_model_arrow_bytes(
     total_returned = len(df)
 
     # Coordenadas centradas + inversión Y para Three.js — puro Polars, sin iter_rows
+    # v4.0 usa x_m/y_m/z_m; v3.0 usaba x/y/z. Normalizar a x/y/z para el transporte Arrow.
+    _cols_set = set(df.columns)
+    if {"x_m", "y_m", "z_m"}.issubset(_cols_set) and not {"x", "y", "z"}.issubset(_cols_set):
+        df = df.rename({"x_m": "x", "y_m": "y", "z_m": "z"})
     has_real_coords = {"x", "y", "z"}.issubset(set(df.columns))
     if has_real_coords:
         x_min = float(df["x"].min())
@@ -915,8 +952,20 @@ def build_block_model_arrow_bytes(
         df = df.with_columns(cast_exprs)
 
     buf = io.BytesIO()
-    df.write_ipc(buf)
-    ipc_bytes = buf.getvalue()
+    try:
+        import pyarrow as _pa
+        import pyarrow.ipc as _pa_ipc
+        _pa_table = _pa.Table.from_pandas(df.to_pandas(), preserve_index=False)
+        _opts = _pa_ipc.IpcWriteOptions(compression="lz4")
+        _sink = _pa.BufferOutputStream()
+        with _pa_ipc.new_stream(_sink, _pa_table.schema, options=_opts) as _writer:
+            _writer.write_table(_pa_table)
+        ipc_bytes = _sink.getvalue().to_pybytes()
+        _lz4_used = True
+    except Exception:
+        df.write_ipc(buf)
+        ipc_bytes = buf.getvalue()
+        _lz4_used = False
 
     headers: dict[str, str] = {
         "X-TQ-Total-Voxels": str(total_returned),
@@ -934,10 +983,151 @@ def build_block_model_arrow_bytes(
     run_id_val = trace_metadata.get("runId")
     if run_id_val:
         headers["X-TQ-Run-Id"] = str(run_id_val)
+    headers["X-TQ-Compression"] = "lz4" if _lz4_used else "none"
 
     logger.info(
-        "[ARROW] mode=%s returned=%d stored=%d bytes=%d has_elevation=%s",
-        mode_clean, total_returned, total_stored, len(ipc_bytes), has_elevation,
+        "[ARROW] mode=%s returned=%d stored=%d bytes=%d has_elevation=%s lz4=%s",
+        mode_clean, total_returned, total_stored, len(ipc_bytes), has_elevation, _lz4_used,
     )
 
     return ipc_bytes, headers
+
+
+# ─── Profile A-A' (Fase 3, §3.4) ─────────────────────────────────────────────
+
+def build_block_model_profile_response(
+    project_id: str,
+    run_id: str,
+    x0_m: float,
+    z0_m: float,
+    x1_m: float,
+    z1_m: float,
+    halfwidth_m: float = 50.0,
+    include_observations: bool = True,
+):
+    """Retorna vóxeles que intersectan la sección A-A' definida por (x0,z0)→(x1,z1)
+    con ancho ±halfwidth_m.  Coordenadas en sistema local del modelo [m].
+
+    Responde:
+        profile_voxels     — lista de celdas dentro de la sección
+        profile_distance_m — distancia de cada celda proyectada sobre el eje A-A'
+        profile_observations — d_obs/d_pred/residual si obs_vs_calc.parquet existe
+        line                — {x0, z0, x1, z1, halfwidth_m}
+        n_voxels            — conteo
+    """
+    import math
+
+    try:
+        block_model_ref = resolve_block_model_reference(project_id=project_id, run_id=run_id)
+    except ValueError as exc:
+        return {"error": str(exc), "profile_voxels": [], "profile_observations": []}
+
+    parquet_path = block_model_ref.path
+    if not parquet_path.exists():
+        return {"error": f"Parquet no encontrado: {parquet_path}", "profile_voxels": [], "profile_observations": []}
+
+    df = pl.read_parquet(str(parquet_path))
+    if len(df) == 0:
+        return {"error": "Block model vacío.", "profile_voxels": [], "profile_observations": []}
+
+    df = ensure_visual_columns(df)
+
+    # Normalizar coords — preferir x_m/z_m (v4.0), caer a x/z (v3.0)
+    x_col = "x_m" if "x_m" in df.columns else "x"
+    z_col = "z_m" if "z_m" in df.columns else "z"
+
+    if x_col not in df.columns or z_col not in df.columns:
+        cell_size = infer_cell_size(df)
+        if "ix" in df.columns:
+            df = df.with_columns([
+                (pl.col("ix").cast(pl.Float64) * cell_size + cell_size / 2.0).alias("_xc"),
+                (pl.col("iz").cast(pl.Float64) * cell_size + cell_size / 2.0).alias("_zc"),
+            ])
+            x_col, z_col = "_xc", "_zc"
+        else:
+            return {"error": "Sin columnas de coordenadas en el parquet.", "profile_voxels": [], "profile_observations": []}
+
+    # Vector de la línea A-A'
+    dx_line = x1_m - x0_m
+    dz_line = z1_m - z0_m
+    line_len = math.sqrt(dx_line ** 2 + dz_line ** 2)
+    if line_len < 1e-6:
+        return {"error": "Línea A-A' de longitud cero.", "profile_voxels": [], "profile_observations": []}
+
+    ux = dx_line / line_len
+    uz = dz_line / line_len
+
+    # Proyección y distancia perpendicular
+    df = df.with_columns([
+        ((pl.col(x_col) - x0_m) * ux + (pl.col(z_col) - z0_m) * uz).alias("_proj_along"),
+        (((pl.col(x_col) - x0_m) * (-uz) + (pl.col(z_col) - z0_m) * ux).abs()).alias("_dist_perp"),
+    ])
+
+    # Filtrar dentro de la sección (en el eje longitudinal + ancho)
+    df_profile = df.filter(
+        (pl.col("_proj_along") >= 0.0)
+        & (pl.col("_proj_along") <= line_len)
+        & (pl.col("_dist_perp") <= halfwidth_m)
+    ).sort("_proj_along")
+
+    profile_voxels = []
+    for row in df_profile.iter_rows(named=True):
+        cell_size_v = infer_cell_size(df)
+        xv = float(row.get(x_col, 0.0))
+        yv = float(row.get("y_m", row.get("y", 0.0)))
+        zv = float(row.get(z_col, 0.0))
+        profile_voxels.append({
+            "x_m": xv,
+            "y_m": yv,
+            "z_m": zv,
+            "profile_distance_m": float(row["_proj_along"]),
+            "perp_distance_m": float(row["_dist_perp"]),
+            "density": sanitize_nan_value(float(row.get("density", 0.0))),
+            "density_t_m3": sanitize_nan_value(float(row.get("density_t_m3", row.get("density", 0.0)))),
+            "density_contrast_t_m3": sanitize_nan_value(row.get("density_contrast_t_m3")),
+            "doi_index": sanitize_nan_value(row.get("doi_index") or row.get("doi_raw")),
+            "posterior_std": sanitize_nan_value(row.get("posterior_std")),
+            "visual_score": sanitize_nan_value(row.get("visual_score")),
+            "ix": int(row.get("ix", 0)),
+            "iy": int(row.get("iy", 0)),
+            "iz": int(row.get("iz", 0)),
+        })
+
+    # Observaciones obs vs calc dentro del perfil
+    profile_observations = []
+    if include_observations:
+        ovc_path = parquet_path.parent / "obs_vs_calc.parquet"
+        if ovc_path.exists():
+            try:
+                df_ovc = pl.read_parquet(str(ovc_path))
+                x_ovc = "x" if "x" in df_ovc.columns else None
+                z_ovc = "z" if "z" in df_ovc.columns else None
+                if x_ovc and z_ovc:
+                    df_ovc = df_ovc.with_columns([
+                        ((pl.col(x_ovc) - x0_m) * ux + (pl.col(z_ovc) - z0_m) * uz).alias("_proj_along"),
+                        (((pl.col(x_ovc) - x0_m) * (-uz) + (pl.col(z_ovc) - z0_m) * ux).abs()).alias("_dist_perp"),
+                    ])
+                    df_ovc_prof = df_ovc.filter(
+                        (pl.col("_proj_along") >= 0.0)
+                        & (pl.col("_proj_along") <= line_len)
+                        & (pl.col("_dist_perp") <= halfwidth_m)
+                    ).sort("_proj_along")
+                    for row in df_ovc_prof.iter_rows(named=True):
+                        profile_observations.append({
+                            "x_m": float(row.get("x", 0.0)),
+                            "z_m": float(row.get("z", 0.0)),
+                            "profile_distance_m": float(row["_proj_along"]),
+                            "d_obs": sanitize_nan_value(row.get("d_obs")),
+                            "d_pred": sanitize_nan_value(row.get("d_pred")),
+                            "residual": sanitize_nan_value(row.get("residual")),
+                        })
+            except Exception:
+                pass
+
+    return {
+        "line": {"x0_m": x0_m, "z0_m": z0_m, "x1_m": x1_m, "z1_m": z1_m, "halfwidth_m": halfwidth_m},
+        "n_voxels": len(profile_voxels),
+        "n_observations": len(profile_observations),
+        "profile_voxels": profile_voxels,
+        "profile_observations": profile_observations,
+    }

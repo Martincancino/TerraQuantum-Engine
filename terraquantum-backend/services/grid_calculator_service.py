@@ -3,6 +3,7 @@ import math
 from typing import Optional
 
 from schemas.gravity_import_schema import AutoGrid
+from services.octree_mesh_builder import compute_octree_params, should_auto_use_treemesh
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,10 @@ def _initial_block_size(
         mean_spacing = MIN_BLOCK_SIZE * 2.0
         warnings.append("Extent u observaciones insuficientes; block_size usa fallback seguro.")
 
-    block_size = _clamp(mean_spacing / 2.0, MIN_BLOCK_SIZE, MAX_BLOCK_SIZE)
+    # Fase 2: MIN_BLOCK_SIZE dinámico — Li & Oldenburg (1998) recomiendan celda ≤ spacing/4
+    # para resolución adecuada. Mínimo absoluto 10 m evita celdas degeneradas en surveys finos.
+    dynamic_min = max(mean_spacing / 4.0, 10.0)
+    block_size = _clamp(mean_spacing / 2.0, dynamic_min, MAX_BLOCK_SIZE)
     return block_size, warnings
 
 
@@ -189,8 +193,25 @@ def compute_auto_grid(
         if safe_x > 0 and safe_z > 0 and safe_count > 0
         else block_size * 2.0
     )
-    cutoff_radius_m = max(block_size * 3.0, mean_spacing * 2.0)
-    rationale.append("cutoff_radius_m = max(block_size_m * 3, mean_spacing_m * 2).")
+    # El cutoff debe cubrir al menos la profundidad del modelo: un vóxel
+    # directamente bajo una estación a profundidad z requiere cutoff >= z para
+    # ser sensado. Con solo max(3·block, 2·spacing), los surveys dispersos
+    # quedaban con >80% de vóxeles muertos y misfit >80% (caso Laguna del Maule).
+    cutoff_radius_m = max(block_size * 3.0, mean_spacing * 2.0, float(depth_m))
+    rationale.append(
+        "cutoff_radius_m = max(block_size_m * 3, mean_spacing_m * 2, depth_m) "
+        "— cubre la profundidad del modelo para evitar voxeles muertos."
+    )
+
+    # Sprint 3 — parámetros Octree calibrados (base, refine, radius, min_cell)
+    oct_p = compute_octree_params(
+        block_size_m=block_size,
+        x_extent_m=safe_x,
+        z_extent_m=safe_z,
+        mean_spacing_m=mean_spacing,
+        n_sensors=safe_count,
+    )
+    recommended_treemesh = should_auto_use_treemesh(voxel_count, safe_x, safe_z)
 
     return AutoGrid(
         block_size_m=block_size,
@@ -206,4 +227,6 @@ def compute_auto_grid(
         r10_iterations=r10_iterations,
         warnings=list(dict.fromkeys(warnings)),
         rationale=rationale,
+        octree_params=oct_p.as_dict(),
+        recommended_use_treemesh=recommended_treemesh,
     )

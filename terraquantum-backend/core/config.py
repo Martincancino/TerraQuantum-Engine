@@ -33,10 +33,41 @@ CORS_ORIGINS: list[str] = [origin.strip() for origin in _cors_raw.split(",") if 
 
 CSV_MAX_BYTES: int = int(os.getenv("CSV_MAX_BYTES", "10485760"))
 
-GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-3.1-pro")
+GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash")
+
+# H-B3: OpenTopography API key for DEM fetch (terrain correction).
+# Obtener en https://portal.opentopography.org/myopentopo
+# Límites: 200 calls/día (académico), 50/día (sin key).
+OPENTOPO_API_KEY: str = os.getenv("OPENTOPO_API_KEY", "")
+
+# Flujo de datos de campo: piso de ruido instrumental por gravímetro [mGal].
+# sigma_i = max(noise_floor, noise_pct * |d_i|) — el piso domina cuando la
+# anomalía está bien corregida y el ruido restante es instrumental.
+# Fuentes: especificaciones de fábrica (repetibilidad en campo).
+GRAVIMETER_NOISE_FLOOR: dict = {
+    "scintrex_cg6": 0.005,      # mGal
+    "zls_burris": 0.002,
+    "lacoste_romberg": 0.010,
+    "unknown": 0.020,           # conservador para gravímetro desconocido
+}
 
 # HITO 5: Solver con bounds (B-06). Env var USE_BOUNDED_SOLVER=false fuerza LSQR+clip (rollback).
 USE_BOUNDED_SOLVER: bool = os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false"
+
+# Sprint 5A: solver directo SuperLU para n_active > 8000. Default OFF (LSQR).
+USE_SPARSE_DIRECT: bool = os.getenv("USE_SPARSE_DIRECT", "false").lower() == "true"
+
+# Fase 10: LSMR para n_active > LSMR_THRESHOLD_N_ACTIVE (default 50K).
+# LSMR tiene mejor convergencia que LSQR para sistemas mal condicionados.
+# Default ON. Rollback: USE_LSMR_LARGE=false.
+USE_LSMR_LARGE: bool = os.getenv("USE_LSMR_LARGE", "true").lower() != "false"
+LSMR_THRESHOLD_N_ACTIVE: int = int(os.getenv("LSMR_THRESHOLD_N_ACTIVE", "50000"))
+
+# Fase 10: Compresión wavelet del Jacobiano G (Farquharson & Oldenburg 2003).
+# Default OFF — activar solo para surveys con n_active > WAVELET_THRESHOLD_N_ACTIVE.
+# Requiere PyWavelets>=1.6.0 en requirements.txt.
+USE_WAVELET_COMPRESSION: bool = os.getenv("USE_WAVELET_COMPRESSION", "false").lower() == "true"
+WAVELET_THRESHOLD_N_ACTIVE: int = int(os.getenv("WAVELET_THRESHOLD_N_ACTIVE", "200000"))
 
 # HITO 7: Cloud storage abstraction.
 # STORAGE_BACKEND env var is read by core/storage.py at import time.

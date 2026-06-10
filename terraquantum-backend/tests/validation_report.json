@@ -1,0 +1,66 @@
+{
+  "terraquantum_version": "2.0.0",
+  "validation_date": "2026-06-10T03:38:23.423413+00:00",
+  "benchmarks": {
+    "sphere_kernel": {
+      "rmse_relative_single": 0.04911,
+      "l2_relative_7sensors": 0.00133,
+      "threshold": 0.05,
+      "gz_modeled_si": 1.879784488835867e-07,
+      "gz_exact_si": 1.9768755729433585e-07,
+      "status": "PASS",
+      "elapsed_s": 0.08
+    },
+    "dipping_dike": {
+      "forward_asymmetry_pass": true,
+      "x_peak_m": 222.7,
+      "x_geom_center_m": 300.0,
+      "top_depth_true_m": 100.0,
+      "top_depth_recovered_m": 45.0,
+      "top_error_m": 55.0,
+      "top_tolerance_m": 60.0,
+      "top_pass": true,
+      "status": "PASS",
+      "elapsed_s": 1.31
+    },
+    "checkerboard_4x4": {
+      "cells_total": 16,
+      "cells_correct_sign": 16,
+      "correct_sign_pct": 1.0,
+      "threshold_pct": 0.8,
+      "status": "PASS",
+      "elapsed_s": 6.72
+    },
+    "two_body": {
+      "body_a_true": {
+        "x_m": 500.0,
+        "y_m": 300.0
+      },
+      "body_a_recovered": {
+        "x_m": 561.6,
+        "y_m": 374.3
+      },
+      "centroid_error_a_m": 96.5,
+      "centroid_a_pass": true,
+      "body_b_true": {
+        "x_m": 1500.0,
+        "y_m": 500.0
+      },
+      "body_b_recovered": {
+        "x_m": 1469.0,
+        "y_m": 504.0
+      },
+      "centroid_error_b_m": 31.2,
+      "centroid_b_pass": true,
+      "centroid_tolerance_m": 150.0,
+      "status": "PASS",
+      "elapsed_s": 2.41
+    },
+    "simpeg_comparison": {
+      "status": "SKIP",
+      "reason": "SimPEG not installed"
+    }
+  },
+  "overall": "VALIDATED_TIER1_LOCAL_SCALE",
+  "total_elapsed_s": 10.5
+}

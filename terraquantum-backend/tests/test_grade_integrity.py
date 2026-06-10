@@ -23,7 +23,7 @@ def _params(expose_demo_grade: bool):
         for i in range(10)
     ]
     return GeophysicsInvertInput(
-        depth=1000, nir=80, fe=70, region="norte_chile", lat="0", lon="0",
+        depth=300, nir=80, fe=70, region="norte_chile", lat="0", lon="0",
         nx=4, ny=4, nz=4, block_size=100, cutoff_radius=800.0,
         lambda_mag=1e-3, alpha_spatial=1.0, observations=obs,
         expose_demo_grade=expose_demo_grade,
@@ -69,10 +69,10 @@ def test_block_model_grade_present_in_demo_mode():
 def _voxels():
     return [
         {"density": 3.4, "is_active": True, "density_proxy_index": 1.2,
-         "probability": 0.9, "modeled_rock_mass_kg": 3.4e6, "anomaly_intensity": 1.2,
+         "probability": 0.9, "modeled_rock_mass_tonnes": 3.4e6, "anomaly_intensity": 1.2,
          "target_score": 0.9, "relative_target_score": 0.9},
         {"density": 3.1, "is_active": True, "density_proxy_index": 0.8,
-         "probability": 0.7, "modeled_rock_mass_kg": 3.1e6, "anomaly_intensity": 0.8,
+         "probability": 0.7, "modeled_rock_mass_tonnes": 3.1e6, "anomaly_intensity": 0.8,
          "target_score": 0.7, "relative_target_score": 0.7},
     ]
 

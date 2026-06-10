@@ -14,6 +14,7 @@ import {
 } from "./datos/helpers";
 import RunFocusingPanel from "./datos/RunFocusingPanel";
 import RunFavorabilityPanel from "./datos/RunFavorabilityPanel";
+import ObsVsCalcPanel from "./datos/ObsVsCalcPanel";
 import {
   downloadTechnicalReport,
   exportBundleUrl,
@@ -437,6 +438,11 @@ export default function DatosView() {
           </Section>
         )}
 
+        {/* ── Joint Metrics (solo inversión conjunta) ── */}
+        {report && report.is_joint_inversion === true && (
+          <JointMetricsSection report={report} />
+        )}
+
         {/* ── Dictamen algorítmico ── */}
         {report && (
           <Section title="Interpretación">
@@ -499,6 +505,13 @@ export default function DatosView() {
         {activeRun.focusing && (
           <Section title="Focusing">
             <RunFocusingPanel focusingData={activeRun.focusing} />
+          </Section>
+        )}
+
+        {/* ── H-C3: Observed vs Calculated ── */}
+        {hasActiveRun && activeRun.projectId && activeRun.runId && (
+          <Section title="Ajuste Observado vs. Calculado">
+            <ObsVsCalcPanel projectId={activeRun.projectId} runId={activeRun.runId} />
           </Section>
         )}
 
@@ -624,5 +637,72 @@ function MetaItem({ label, value, highlight = false }: { label: string; value?: 
         {value ?? "—"}
       </p>
     </div>
+  );
+}
+
+function JointMetricsSection({ report }: { report: GeoReportInfo }) {
+  const jm = asRecord((report as Record<string, unknown>).joint_metrics);
+  const hist = report as Record<string, unknown>;
+  const finalMetrics = asRecord((hist.final as unknown) ?? {});
+
+  if (!jm) return null;
+
+  const eNorm       = readOptionalNumber(jm.E_norm_final);
+  const iterations  = readOptionalNumber(jm.iterations_done);
+  const stopReason  = readOptionalText(jm.stop_reason);
+  const separation  = readOptionalNumber(jm.centroid_separation_m);
+  const misfitG     = readOptionalNumber(finalMetrics?.misfit_gravity_percent);
+  const misfitM     = readOptionalNumber(finalMetrics?.misfit_magnetic_percent);
+
+  const stopLabel: Record<string, string> = {
+    converged_delta_and_E: "Convergió (Δm + ΔE)",
+    E_norm_below_absolute_tol: "Alineación estructural alcanzada",
+    max_iter_reached: "Límite de iteraciones",
+  };
+
+  return (
+    <Section title="Inversión conjunta (joint)">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <KpiCard
+          label="Disimilitud E_norm"
+          value={eNorm !== undefined ? eNorm.toFixed(4) : "—"}
+          unit="cellwise"
+          highlight={eNorm !== undefined && eNorm < 0.1}
+        />
+        <KpiCard
+          label="Iteraciones"
+          value={iterations ?? "—"}
+          unit="Gauss-Newton"
+        />
+        <KpiCard
+          label="Misfit gravedad"
+          value={misfitG !== undefined ? `${misfitG.toFixed(2)}` : "—"}
+          unit="%"
+        />
+        <KpiCard
+          label="Misfit magnético"
+          value={misfitM !== undefined ? `${misfitM.toFixed(2)}` : "—"}
+          unit="%"
+        />
+      </div>
+      <div className="bg-neutral-950/50 border border-neutral-800 rounded-2xl p-4 space-y-2 text-[9px]">
+        <div className="flex justify-between">
+          <span className="text-neutral-500">Criterio de parada</span>
+          <span className="text-white font-mono">
+            {stopReason ? (stopLabel[stopReason] ?? stopReason) : "—"}
+          </span>
+        </div>
+        {separation !== undefined && (
+          <div className="flex justify-between">
+            <span className="text-neutral-500">Desfase centroide ρ↔χ</span>
+            <span className="text-white font-mono">{separation.toFixed(1)} m</span>
+          </div>
+        )}
+        <div className="border-t border-neutral-800/60 pt-2 text-[8px] text-neutral-600 leading-relaxed">
+          E_norm=0 → gradientes de densidad y susceptibilidad completamente alineados (misma estructura geológica).
+          Desfase centroide: separación espacial entre el centro de masa de densidad y el de susceptibilidad.
+        </div>
+      </div>
+    </Section>
   );
 }

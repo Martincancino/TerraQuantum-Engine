@@ -448,9 +448,7 @@ def export_block_model_to_ubc(
     -------
     dict con claves "mesh_path", "model_path", "n_cells"
     """
-    from datetime import datetime, timezone
     NODATA = -9999.0
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     density_arr = np.asarray(density, dtype=np.float64)
     n_cells = nx * ny * nz
@@ -474,12 +472,14 @@ def export_block_model_to_ubc(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     mesh_path  = out_dir / f"{run_prefix}.msh"
-    model_path = out_dir / f"{run_prefix}.mod"
+    # .den: convención GRAV3D para modelos de densidad (compatible SimPEG/discretize).
+    model_path = out_dir / f"{run_prefix}.den"
 
     # ── 1. Archivo de malla (.msh) ───────────────────────────────────────────
-    # UBC-GIF: nE nN nZ en primera línea; origin NW-superior; hE hN hZ
+    # UBC-GIF: nE nN nZ en primera línea; origin NW-superior; hE hN hZ.
+    # SIN líneas de comentario: discretize.TensorMesh.read_UBC y np.loadtxt
+    # no toleran headers '!'; los metadatos van en run_manifest.json.
     with mesh_path.open("w", encoding="ascii") as f:
-        f.write(f"! TerraQuantum UBC-mesh | project={project_id} run={run_id} | {ts}\n")
         f.write(f"{nx} {ny} {nz}\n")
         # Origen UBC: esquina superior-noroeste
         # Z UBC = positivo hacia arriba → origin_z + nz*dz es la cota más alta
@@ -490,7 +490,7 @@ def export_block_model_to_ubc(
         f.write(" ".join([f"{dy:.4f}"] * ny) + "\n")
         f.write(" ".join([f"{dz:.4f}"] * nz) + "\n")
 
-    # ── 2. Archivo de modelo (.mod) ───────────────────────────────────────────
+    # ── 2. Archivo de modelo (.den) ───────────────────────────────────────────
     # Orden UBC-GIF (z varía más rápido, luego y, luego x):
     # El modelo interno TerraQuantum usa Fortran order (x varía más rápido).
     # Necesitamos reordenar: flatten en orden C luego transponer ejes.
@@ -506,7 +506,6 @@ def export_block_model_to_ubc(
     active_ubc  = active_3d[:,  :, ::-1]
 
     with model_path.open("w", encoding="ascii") as f:
-        f.write(f"! TerraQuantum UBC-model | project={project_id} run={run_id} | {ts}\n")
         for ix in range(nx):
             for iy in range(ny):
                 for iz in range(nz):
@@ -795,9 +794,11 @@ def _build_bundle_manifest(
         "run_manifest_provenance": _run_manifest_provenance,
         "bundle_contents": [
             {"file": "model.vtr",      "format": "VTK RectilinearGrid XML",    "software": ["ParaView", "Leapfrog Geo"]},
-            {"file": "model.mod",      "format": "UBC-GIF Density Model",      "software": ["UBC-GIF Grav3D", "SimPEG"]},
+            {"file": "model.den",      "format": "UBC-GIF GRAV3D Density Model (.den)",  "software": ["UBC-GIF Grav3D", "SimPEG"]},
             {"file": "model.msh",      "format": "UBC-GIF Mesh Definition",    "software": ["UBC-GIF Grav3D", "SimPEG"]},
             {"file": "model.gslib",    "format": "Stanford GSLIB / SGeMS",     "software": ["SGeMS", "ISATIS"]},
+            {"file": "model.dfn",      "format": "ASEG-GDF2 Definition File",  "software": ["Oasis Montaj", "Geosoft"]},
+            {"file": "model.dat",      "format": "ASEG-GDF2 Data File",        "software": ["Oasis Montaj", "Geosoft"]},
             {"file": "manifest.json",  "format": "Audit Trail JSON Fase 11",   "note": "Trazabilidad completa"},
             {"file": "run_manifest.json", "format": "Run Provenance HITO 2",   "note": "SHA-256 parquet+CSV, solver_stats, schema_version"},
         ],
@@ -848,6 +849,10 @@ def create_run_bundle_zip(project_id: str, run_id: str) -> "tuple[bytes, str]":
     gslib = _gslib_text(dens, nx, ny, nz, bs)
     mfst  = _json.dumps(manifest, indent=2, ensure_ascii=False)
 
+    utm_zone = inputs.get("utm_zone") or inputs.get("utm_zone_detected") or "19S"
+    aseg_dfn = _aseg_gdf2_dfn_text(nx, ny, nz, bs, str(utm_zone))
+    aseg_dat = _aseg_gdf2_dat_text(dens, nx, ny, nz, bs)
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         vtr_path = run_dir / RUN_VTK_FILENAME
@@ -859,13 +864,112 @@ def create_run_bundle_zip(project_id: str, run_id: str) -> "tuple[bytes, str]":
                 f"VTK no disponible para {clean_rid}. Ejecutar con export_vtk=true.\n",
             )
         zf.writestr("model.msh", msh)
-        zf.writestr("model.mod", mod)
+        zf.writestr("model.den", mod)
         zf.writestr("model.gslib", gslib)
+        zf.writestr("model.dfn", aseg_dfn)
+        zf.writestr("model.dat", aseg_dat)
         zf.writestr("manifest.json", mfst)
 
     safe = lambda s: "".join(c if c.isalnum() or c in {"-", "_"} else "_" for c in s)[:32]
     filename = f"terraquantum_bundle_{safe(clean_pid)}_{safe(clean_rid)}.zip"
     return buf.getvalue(), filename
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FASE 6 — ASEG-GDF2 Export (entrega regulatoria Australia / NZ)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _aseg_gdf2_dfn_text(
+    nx: int,
+    ny: int,
+    nz: int,
+    bs: float,
+    utm_zone: str = "19S",
+) -> str:
+    """
+    FASE 6 — Genera el archivo .dfn de definición ASEG-GDF2.
+
+    ASEG-GDF2 (Australian Society of Exploration Geophysicists — Geophysical
+    Data Format version 2) es el estándar de entrega regulatoria en Australia
+    y Nueva Zelanda, y ampliamente reconocido en Latinoamérica (Oasis Montaj).
+
+    El .dfn describe los campos del .dat con tipos, anchos y metadatos de CRS.
+
+    Datum: GDA94 (Geocentric Datum of Australia 1994) — requerido por estándar
+    ASEG. Para otros sistemas de referencia, el campo DATUM debe actualizarse.
+    """
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    n_total = nx * ny * nz
+    fields = [
+        ("X_m",                "D", "15.2", "m",       "Easting (local SW-origin)"),
+        ("Y_m",                "D", "15.2", "m",       "Northing (local SW-origin)"),
+        ("Z_m",                "D", "12.2", "m",       "Depth positive downward"),
+        ("Density_gcm3",       "D", "12.6", "g/cm3",   "Absolute density"),
+        ("Density_Contrast",   "D", "12.6", "g/cm3",   "Density minus 2.6 g/cm3 base"),
+        ("Sensitivity",        "D", "12.6", "",         "DOI sensitivity proxy [0,1]"),
+        ("Is_Active",          "I",  "3",   "",         "1=rock 0=air"),
+    ]
+    lines = [
+        f"! TerraQuantum ASEG-GDF2 Definition | project nx={nx} ny={ny} nz={nz} bs={bs}m | {ts}",
+        "! NO-JORC/NI-43-101 EXPLORATION ONLY",
+        f"DEFN 1 ST=RECD,RT=; END DEFN",
+        f"DEFN 2 ST=RECD,RT=; DATUM=GDA94",
+        f"DEFN 3 ST=RECD,RT=; PROJECTION=UTM",
+        f"DEFN 4 ST=RECD,RT=; COORDSYS_ZONE={utm_zone}",
+        f"DEFN 5 ST=RECD,RT=; NROW={n_total}",
+    ]
+    for i, (name, typ, width, units, comment) in enumerate(fields, start=6):
+        unit_str = f",{units}" if units else ""
+        lines.append(f"DEFN {i} ST=RECD,RT=; {name},{typ},{width}{unit_str}  ! {comment}")
+    lines.append("END DEFN")
+    return "\n".join(lines) + "\n"
+
+
+def _aseg_gdf2_dat_text(
+    densities: "list[float]",
+    nx: int,
+    ny: int,
+    nz: int,
+    bs: float,
+) -> str:
+    """
+    FASE 6 — Genera el archivo .dat de datos ASEG-GDF2.
+
+    Columnas: X_m, Y_m, Z_m, Density_gcm3, Density_Contrast, Sensitivity, Is_Active
+    Nodata: -9999.000000 para celdas de aire.
+    """
+    NODATA = -9999.0
+    BASE_DENSITY = 2.6
+    hdr_lines = [
+        "! TerraQuantum ASEG-GDF2 Data",
+        "! Columns: X_m Y_m Z_m Density_gcm3 Density_Contrast Sensitivity Is_Active",
+        "! See model.dfn for field definitions and CRS metadata",
+        "! NODATA=-9999.000000",
+    ]
+    rows: list[str] = list(hdr_lines)
+    idx = 0
+    for iz in range(nz):
+        for iy in range(ny):
+            for ix in range(nx):
+                x = (ix + 0.5) * bs
+                y = (iy + 0.5) * bs
+                z = (iz + 0.5) * bs
+                d = densities[idx] if idx < len(densities) else None
+                bad = d is None or (isinstance(d, float) and _math.isnan(d))
+                if bad:
+                    rows.append(
+                        f"{x:.2f} {y:.2f} {z:.2f} "
+                        f"{NODATA:.6f} {NODATA:.6f} 0.000000 0"
+                    )
+                else:
+                    contrast = float(d) - BASE_DENSITY
+                    rows.append(
+                        f"{x:.2f} {y:.2f} {z:.2f} "
+                        f"{float(d):.6f} {contrast:.6f} 1.000000 1"
+                    )
+                idx += 1
+    return "\n".join(rows) + "\n"
 
 
 def get_run_qa_diagnostics(project_id: str, run_id: str) -> "dict[str, Any]":

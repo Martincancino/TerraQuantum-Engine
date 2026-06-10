@@ -37,25 +37,37 @@ from schemas.geophysics_schema import GeophysicsInvertInput
 from services.favorability_service import compute_favorability_score
 from services.export_service import export_core_to_vtr
 
+# ── Fase 2 §2.1: módulos aislados (re-exportados para compatibilidad) ─────────
+from services.inversion_kernel_service import (
+    build_voxel_grid,
+    build_tensor_mesh_with_padding,
+    build_sensor_arrays,
+    build_observation_qaqc_report,
+)
+from services.inversion_solver_service import _run_lsqr_with_heartbeat
+from services.inversion_postprocess_service import (
+    estimate_grade_from_geophysics,
+    build_full_block_model_dataframe,
+    build_anomaly_dataframe,
+)
+
 _log = get_logger(__name__)
 
 
 # ── FASE 4 (causa J): Operating point fijo de lambda_mag ──────────────────────
-# La inversión gravimétrica es severamente SUB-DETERMINADA (n_modelo ≫ n_datos):
-# los datos se ajustan con casi cualquier λ por debajo del óptimo, así que los
-# selectores data-driven (L-curve, chi²-target/discrepancy, GCV) TODOS sub-
-# regularizan (pearson 0.74-0.80 vs óptimo ~0.95 en ground-truth sintético).
-# Como Wd=1/σ (σ adaptivo, invariante de escala) + Ws (columnas unitarias)
-# precondicionan el sistema, lambda_mag vive en un espacio normalizado donde el
-# óptimo de recuperación es O(1-10). Por eso el default robusto es un operating
-# point fijo, validado contra tests/synthetic_recovery_benchmark.py (λ≈3 → r≈0.95).
+# La inversión gravimétrica es severamente SUB-DETERMINADA (n_modelo ≫ n_datos).
+# Con el solver W_z formal (H-A0: cambio de variable m = Wz_inv @ m_tilde con
+# normalización de columnas) el espacio del parámetro es diferente al sistema
+# antiguo (column-scaling Ws):
+#   - Con W_z formal, columnas de G_scaled son unitarias DESPUÉS de Wz_inv @ W_col
+#   - El lambda óptimo para el benchmark (8×4×8, 49 sensores, n_active=256) es 0.1
+#   - Sweep empírico (H-A1): lambda sweep [0.01–3.0] → Pearson máximo en lambda=0.1 (r=0.73)
+#   - A lambda=3.0 el chi²=33 (sobre-regularización severa)
 #
-# ADVERTENCIA: validado en el benchmark sintético (n_obs≈49, n_active≈256). El
-# óptimo puede depender del ratio n_obs/n_active, NO verificado aún a escala
-# regional real (1552 m, n_active~14K). Es ~1000× mejor que el λ≈1e-3 previo
-# (sub-regularizado), pero requiere calibración en un run real. Ver memoria
-# project_fase4_h2_depth_smallness.
-PRECONDITIONED_OPERATING_LAMBDA = 3.0
+# ADVERTENCIA: calibrado en n_active=256 (benchmark sintético 8×4×8). El scaling
+# lambda_eff = lambda * sqrt(n_active / 256) ajusta a otros tamaños de problema.
+# No verificado a escala regional real. Ver memoria project_fase4_h2_depth_smallness.
+PRECONDITIONED_OPERATING_LAMBDA = 0.1
 
 
 class PriorityClass(str, Enum):
@@ -259,262 +271,6 @@ def validate_geophysics_input(params: GeophysicsInvertInput):
         raise ValueError("cutoff_radius no puede ser menor que block_size.")
 
 
-
-def build_voxel_grid(params: GeophysicsInvertInput):
-    nx = params.nx
-    ny = params.ny
-    nz = params.nz
-    dx = params.block_size
-
-    grid_x, grid_y, grid_z = np.mgrid[0:nx, 0:ny, 0:nz]
-
-    ix = grid_x.flatten(order="F")  # order="F" para coherencia con GravimetryInversion / reshape(..., order="F")
-    iy = grid_y.flatten(order="F")
-    iz = grid_z.flatten(order="F")
-
-    x_c = (ix * dx) + (dx / 2)
-    y_c = (iy * dx) + (dx / 2)
-    z_c = (iz * dx) + (dx / 2)
-
-    return ix, iy, iz, x_c, y_c, z_c
-
-
-def build_tensor_mesh_with_padding(
-    params: GeophysicsInvertInput,
-    n_pad: int = 5,
-    pad_factor: float = 1.3,
-) -> dict:
-    """
-    F0.9 — Tensor Mesh con Padding Geométrico.
-
-    Construye una grilla 3D con un bloque CORE uniforme (nx×ny×nz celdas de tamaño dx)
-    y n_pad capas de padding en cada cara (+X, -X, +Y, -Y, +Z, -Z).
-    Las celdas de padding crecen geométricamente hacia afuera:
-        h_{i+1} = h_i * pad_factor
-
-    Los centros de las celdas CORE se alinean exactamente con los de build_voxel_grid:
-        x_core_k = (k + 0.5) * dx  para k = 0..nx-1
-
-    Retorna un dict con:
-    ─────────────────────────────────────────────────────────────────────────
-    Grilla COMPLETA (Core + Padding) — para el solver LSQR:
-      x_c, y_c, z_c   : centros de TODAS las celdas, Fortran order flat
-      hx, hy, hz       : arrays 1D de anchos de celda (para Laplaciano no-uniforme)
-      nx_total, ny_total, nz_total : dimensiones totales
-
-    Grilla CORE — para diagnósticos, focusing y block model:
-      ix_core, iy_core, iz_core : índices 0..n-1 (Fortran order)
-      x_c_core, y_c_core, z_c_core : centros de celdas core únicamente
-      is_core : máscara booleana global (True para celdas Core, False para padding)
-    ─────────────────────────────────────────────────────────────────────────
-    """
-    nx, ny, nz = params.nx, params.ny, params.nz
-    dx = float(params.block_size)
-
-    def make_padded_widths(n_core: int, h_core: float) -> np.ndarray:
-        # Celdas de padding saliendo del Core:  h, h·f, h·f², …, h·f^(n_pad-1)
-        pad_out = np.array([h_core * (pad_factor ** i) for i in range(n_pad)], dtype=np.float64)
-        left_pad  = pad_out[::-1].copy()         # más ancha primero → más angosta en el borde core
-        core_widths = np.full(n_core, h_core, dtype=np.float64)
-        right_pad = pad_out.copy()               # más angosta en el borde core → más ancha afuera
-        return np.concatenate([left_pad, core_widths, right_pad])
-
-    hx = make_padded_widths(nx, dx)
-    hy = make_padded_widths(ny, dx)
-    hz = make_padded_widths(nz, dx)
-
-    nx_total = len(hx)   # nx + 2*n_pad
-    ny_total = len(hy)
-    nz_total = len(hz)
-
-    def cell_centers_from_widths(h: np.ndarray) -> np.ndarray:
-        """Centros de celdas desde el borde izquierdo absoluto (borde = 0)."""
-        edges = np.concatenate([[0.0], np.cumsum(h)])
-        return 0.5 * (edges[:-1] + edges[1:])
-
-    x_centers_raw = cell_centers_from_widths(hx)
-    y_centers_raw = cell_centers_from_widths(hy)
-    z_centers_raw = cell_centers_from_widths(hz)
-
-    # Offset: alinear primer centro Core con (dx/2), igual que build_voxel_grid.
-    # x_centers_raw[n_pad] = sum(left_pad_widths) + dx/2  → offset = dx/2 - x_centers_raw[n_pad]
-    x_centers = x_centers_raw + (dx / 2.0 - x_centers_raw[n_pad])
-    y_centers = y_centers_raw + (dx / 2.0 - y_centers_raw[n_pad])
-    z_centers = z_centers_raw + (dx / 2.0 - z_centers_raw[n_pad])
-
-    # ── Grilla 3D completa (Core + Padding), Fortran order ───────────────────
-    grid_x, grid_y, grid_z = np.mgrid[0:nx_total, 0:ny_total, 0:nz_total]
-    ix_full = grid_x.flatten(order="F").astype(np.int32)
-    iy_full = grid_y.flatten(order="F").astype(np.int32)
-    iz_full = grid_z.flatten(order="F").astype(np.int32)
-
-    x_c_full = x_centers[ix_full]
-    y_c_full = y_centers[iy_full]
-    z_c_full = z_centers[iz_full]
-
-    # ── Máscara booleana: Core = True ────────────────────────────────────────
-    is_core = (
-        (ix_full >= n_pad) & (ix_full < n_pad + nx) &
-        (iy_full >= n_pad) & (iy_full < n_pad + ny) &
-        (iz_full >= n_pad) & (iz_full < n_pad + nz)
-    )
-
-    # ── Arrays Core (sin padding) ─────────────────────────────────────────────
-    ix_core   = ix_full[is_core] - n_pad    # 0..nx-1, Fortran order
-    iy_core   = iy_full[is_core] - n_pad    # 0..ny-1
-    iz_core   = iz_full[is_core] - n_pad    # 0..nz-1
-    x_c_core  = x_c_full[is_core]
-    y_c_core  = y_c_full[is_core]
-    z_c_core  = z_c_full[is_core]
-
-    total_padded = nx_total * ny_total * nz_total
-    print(
-        f"[F0.9 TENSOR MESH] Core: {nx}×{ny}×{nz} ({nx*ny*nz:,} celdas) | "
-        f"Total c/padding: {nx_total}×{ny_total}×{nz_total} ({total_padded:,}) | "
-        f"n_pad={n_pad} | factor={pad_factor}"
-    )
-
-    return {
-        # Grilla completa (solver)
-        "x_c":      x_c_full,
-        "y_c":      y_c_full,
-        "z_c":      z_c_full,
-        "hx":       hx,
-        "hy":       hy,
-        "hz":       hz,
-        "nx_total": nx_total,
-        "ny_total": ny_total,
-        "nz_total": nz_total,
-        # Core (diagnósticos + frontend)
-        "ix_core":   ix_core,
-        "iy_core":   iy_core,
-        "iz_core":   iz_core,
-        "x_c_core":  x_c_core,
-        "y_c_core":  y_c_core,
-        "z_c_core":  z_c_core,
-        "is_core":   is_core,
-    }
-
-
-def build_sensor_arrays(params: GeophysicsInvertInput):
-    sensor_coords = np.array(
-        [[obs.x_m, obs.y_m, obs.z_m] for obs in params.observations],
-        dtype=float,
-    )
-
-    g_observed = np.array(
-        [obs.g for obs in params.observations],
-        dtype=float,
-    )
-
-    if not np.isfinite(sensor_coords).all():
-        raise ValueError(
-            "Las coordenadas de sensores contienen valores inválidos: NaN o Inf."
-        )
-
-    if not np.isfinite(g_observed).all():
-        raise ValueError(
-            "Las observaciones gravimétricas contienen valores inválidos: NaN o Inf."
-        )
-
-    if np.allclose(g_observed, 0.0):
-        raise ValueError(
-            "Las observaciones gravimétricas son todas cercanas a cero. No hay señal suficiente para invertir."
-        )
-
-    # Separación regional-residual (opcional, OFF por defecto → comportamiento intacto).
-    # Gap industrial #2: resta una tendencia regional polinómica antes de invertir.
-    if getattr(params, "remove_regional", False):
-        from services.gravity_preprocessing_service import separate_regional_residual
-
-        g_observed, regional_meta = separate_regional_residual(
-            sensor_coords, g_observed, order=getattr(params, "regional_order", 2)
-        )
-        _log.info(
-            "[INVERSIÓN] Regional-residual aplicado (poly-%d): residual std=%.4g",
-            regional_meta["regional_order"], regional_meta["residual_std"],
-        )
-
-    return sensor_coords, g_observed
-
-
-def build_observation_qaqc_report(params: GeophysicsInvertInput, sensor_coords: np.ndarray, g_observed: np.ndarray):
-    x = sensor_coords[:, 0]
-    y = sensor_coords[:, 1]
-    z = sensor_coords[:, 2]
-
-    observation_count = len(g_observed)
-
-    x_min, x_max = float(np.min(x)), float(np.max(x))
-    y_min, y_max = float(np.min(y)), float(np.max(y))
-    z_min, z_max = float(np.min(z)), float(np.max(z))
-    g_min, g_max = float(np.min(g_observed)), float(np.max(g_observed))
-    
-    g_mean = float(np.mean(g_observed))
-    g_std = float(np.std(g_observed))
-    g_rms = float(np.sqrt(np.mean(g_observed**2)))
-
-    domain_x = float(params.nx * params.block_size)
-    domain_y = float(params.ny * params.block_size)
-    domain_z = float(params.nz * params.block_size)
-
-    span_x = float(x_max - x_min)
-    span_y = float(y_max - y_min)
-    span_z = float(z_max - z_min)
-
-    coverage_ratio_x = float(span_x / max(domain_x, 1e-9))
-    coverage_ratio_z = float(span_z / max(domain_z, 1e-9))
-
-    signal_dynamic_range = float(g_max - g_min)
-
-    warnings = []
-    
-    if coverage_ratio_x < 0.35:
-        warnings.append("Cobertura espacial baja en X.")
-    if coverage_ratio_z < 0.35:
-        warnings.append("Cobertura espacial baja en Z.")
-    
-    if signal_dynamic_range <= 1e-6:
-        warnings.append("Señal gravimétrica con bajo rango dinámico.")
-        
-    if observation_count < 20:
-        warnings.append("Cantidad mínima de observaciones: resultado sensible al ruido.")
-        
-    if coverage_ratio_x < 0.2 and coverage_ratio_z < 0.2:
-        warnings.append("Observaciones concentradas en una zona pequeña del dominio.")
-
-    if len(warnings) == 0:
-        quality_level = "GOOD"
-        quality_score = 1.0
-    elif len(warnings) <= 2:
-        quality_level = "MEDIUM"
-        quality_score = 0.6
-    else:
-        quality_level = "LOW"
-        quality_score = 0.3
-
-    return {
-        "observation_count": observation_count,
-        "x_min": x_min, "x_max": x_max,
-        "y_min": y_min, "y_max": y_max,
-        "z_min": z_min, "z_max": z_max,
-        "g_min": g_min, "g_max": g_max,
-        "g_mean": g_mean, "g_std": g_std, "g_rms": g_rms,
-        "spatial_span_x": span_x,
-        "spatial_span_y": span_y,
-        "spatial_span_z": span_z,
-        "domain_x": domain_x,
-        "domain_y": domain_y,
-        "domain_z": domain_z,
-        "coverage_ratio_x": coverage_ratio_x,
-        "coverage_ratio_z": coverage_ratio_z,
-        "signal_dynamic_range": signal_dynamic_range,
-        "quality_score": quality_score,
-        "quality_level": quality_level,
-        "warnings": warnings,
-    }
-
-
 def build_fit_diagnostics(
     g_observed: np.ndarray,
     kernel_sparse,
@@ -558,7 +314,8 @@ def build_fit_diagnostics(
         _sigma = np.maximum(0.02 * np.abs(g_observed), 0.01 * _data_range)
         _sigma = np.maximum(_sigma, 1e-30)
     else:
-        _sigma = noise_floor + noise_pct * np.abs(g_observed)
+        # Piso instrumental: misma fórmula que _sigma_parametric del solver.
+        _sigma = np.maximum(noise_floor, noise_pct * np.abs(g_observed))
         _sigma = np.maximum(_sigma, 1e-30)
 
     # chi²_inicial: modelo de referencia (contraste = 0 → g_pred = 0)
@@ -761,142 +518,6 @@ def normalize_array(values: np.ndarray):
     return np.clip((values - v_min) / v_range, 0.0, 1.0)
 
 
-def estimate_grade_from_geophysics(
-    density: np.ndarray,
-    probability: np.ndarray,
-    nir: int,
-    fe: int,
-    region: str,
-):
-    density_score = np.clip((density - 2.6) / max(4.2 - 2.6, 1e-9), 0.0, 1.0)
-    probability_score = np.clip(probability, 0.0, 1.0)
-
-    nir_score = np.clip(float(nir) / 100.0, 0.0, 1.0)
-    fe_score = np.clip(float(fe) / 100.0, 0.0, 1.0)
-
-    region_factor = {
-        "norte_chile": 1.15,
-        "andes_central": 1.08,
-        "canada": 0.92,
-        "desconocida": 1.0,
-    }.get(str(region).lower().strip(), 1.0)
-
-    raw_grade = (
-        0.08
-        + 1.85 * density_score
-        + 1.15 * probability_score
-        + 0.45 * nir_score
-        + 0.35 * fe_score
-    ) * region_factor
-
-    # Los bloques realmente débiles quedan bajo cutoff.
-    weak_mask = (density_score < 0.18) | (probability_score < 0.15)
-    raw_grade = np.where(weak_mask, raw_grade * 0.18, raw_grade)
-
-    return np.clip(raw_grade, 0.0, 5.0)
-
-
-def build_full_block_model_dataframe(
-    params: GeophysicsInvertInput,
-    ix: np.ndarray,
-    iy: np.ndarray,
-    iz: np.ndarray,
-    x_c: np.ndarray,
-    y_c: np.ndarray,
-    z_c: np.ndarray,
-    est_density: np.ndarray,
-    probability: np.ndarray,
-):
-    dx = params.block_size
-
-    density = np.asarray(est_density, dtype=float)
-    probability = np.asarray(probability, dtype=float)
-
-    # Máscara de celdas activas (NaN = celda de aire)
-    is_active = np.isfinite(density) & np.isfinite(probability)
-
-    # Usar valores seguros (0 para NaN) en cálculos escalares para evitar propagación
-    density_safe = np.where(is_active, density, 0.0)
-    probability_safe = np.where(is_active, probability, 0.0)
-
-    # Integridad científica (gap #1): la "ley" (grade) es un proxy heurístico no físico.
-    # Solo se fabrica en modo demo explícito (expose_demo_grade=True). Por defecto queda
-    # como NaN → null en el payload; el contraste de densidad (física real) se conserva.
-    if getattr(params, "expose_demo_grade", False):
-        grade = estimate_grade_from_geophysics(
-            density=density_safe,
-            probability=probability_safe,
-            nir=params.nir,
-            fe=params.fe,
-            region=params.region,
-        )
-        grade = np.where(is_active, grade, np.nan)
-    else:
-        grade = np.full(density.shape[0], np.nan, dtype=float)
-
-    block_volume_m3 = float(dx * dx * dx)
-    modeled_rock_mass_kg = np.where(is_active, density_safe * block_volume_m3, np.nan)
-
-    density_score = np.clip((density_safe - 2.6) / max(4.2 - 2.6, 1e-9), 0.0, 1.0)
-    probability_score = np.clip(probability_safe, 0.0, 1.0)
-    visual_score = np.where(is_active, density_score * probability_score, np.nan)
-
-    density_zone_flag = np.where(is_active & (density_safe >= 2.75), 1, 0).astype(int)
-
-    density_confidence_tier = np.where(probability_score >= 0.7, 1, 2).astype(int)
-    density_confidence_tier = np.where(probability_score < 0.35, 3, density_confidence_tier)
-    density_confidence_tier = np.where(is_active, density_confidence_tier, 0).astype(int)
-
-    df_full = pl.DataFrame(
-        {
-            "x": x_c.astype(float),
-            "y": y_c.astype(float),
-            "z": z_c.astype(float),
-            "ix": ix.astype(int),
-            "iy": iy.astype(int),
-            "iz": iz.astype(int),
-            "density": density.astype(float),
-            "rho": density.astype(float),
-            "probability": probability.astype(float),
-            "relative_target_score": probability.astype(float),
-            "visual_score": visual_score.astype(float),
-            "grade": grade.astype(float),
-            "modeled_rock_mass_kg": modeled_rock_mass_kg.astype(float),
-            "density_zone_flag": density_zone_flag.astype(int),
-            "density_confidence_tier": density_confidence_tier.astype(int),
-            "is_active": is_active.astype(bool),
-        }
-    )
-
-    return df_full
-
-
-def build_anomaly_dataframe(df_full: pl.DataFrame, cutoff_density: float):
-    if len(df_full) == 0:
-        return df_full
-
-    # Filtro físico de anomalías: basado en señal primaria de inversión gravimétrica.
-    # - density >= cutoff_density: contraste de densidad significativo.
-    # - visual_score >= 0.35: combinación normalizada de densidad × probabilidad.
-    #
-    # NOTA: `grade` es una heurística interpretativa (estimate_grade_from_geophysics)
-    # que combina densidad, probabilidad, NIR, Fe y factor regional. NO debe decidir
-    # por sí sola la pertenencia al conjunto de anomalías físicas, porque infla el
-    # conteo cuando los parámetros geoquímicos satelitales (nir, fe) son altos.
-    # `grade` se conserva como columna informativa en el block model y en la salida
-    # de vóxeles, pero no participa en la selección de anomalías.
-    df_anomaly = (
-        df_full
-        .filter(
-            (pl.col("density") >= cutoff_density)
-            | (pl.col("visual_score") >= 0.35)
-        )
-        .sort("visual_score", descending=True)
-    )
-
-    return df_anomaly
-
-
 _GRADE_PROVENANCE = {
     "grade_source": "heuristic_gravity_proxy",
     "assay_supported": False,
@@ -918,7 +539,7 @@ def build_voxel_output(df_anomaly: pl.DataFrame, block_size: float, cutoff_densi
             density = float(raw_density)
             density_proxy_index = float(row["grade"]) if row.get("grade") is not None and np.isfinite(float(row["grade"])) else None
             probability = float(row["probability"]) if row.get("probability") is not None and np.isfinite(float(row["probability"])) else None
-            modeled_rock_mass_kg_val = float(row["modeled_rock_mass_kg"]) if row.get("modeled_rock_mass_kg") is not None and np.isfinite(float(row["modeled_rock_mass_kg"])) else None
+            modeled_rock_mass_kg_val = float(row["modeled_rock_mass_tonnes"]) if row.get("modeled_rock_mass_tonnes") is not None and np.isfinite(float(row["modeled_rock_mass_tonnes"])) else None
             density_anomaly_score = min(1.0, max(0.0, density - cutoff_density) / max(cutoff_density, 1e-9))
             sens_raw = row.get("sensitivity_proxy", 0.0)
             sensitivity_proxy = float(sens_raw) if sens_raw is not None and np.isfinite(float(sens_raw)) else 0.0
@@ -951,7 +572,7 @@ def build_voxel_output(df_anomaly: pl.DataFrame, block_size: float, cutoff_densi
                 "z_m": float(row["z"]),
                 "density": density,
                 "density_proxy_index": density_proxy_index,
-                "modeled_rock_mass_kg": modeled_rock_mass_kg_val,
+                "modeled_rock_mass_tonnes": modeled_rock_mass_kg_val,
                 "density_zone_flag": density_zone_flag_val,
                 "is_demo_grade": True,
                 "provenance": _GRADE_PROVENANCE,
@@ -975,11 +596,13 @@ def build_best_target(voxels, technical_summary: dict = None, uncertainty_diagno
     if not voxels:
         return None
 
+    # `or 0.0` en todas las claves: con topografía activa los vóxeles pueden
+    # traer probability/density = None (NaN sanitizado), no solo clave ausente.
     best = max(
         voxels,
         key=lambda v: (
-            float(v.get("probability", 0.0))
-            * max(float(v.get("density", 2.6)) - 2.6, 0.0)
+            float(v.get("probability") or 0.0)
+            * max(float(v.get("density") or 2.6) - 2.6, 0.0)
             * max(float(v.get("density_proxy_index") or 0.0), 0.01)
         ),
     )
@@ -1407,7 +1030,7 @@ def build_geophysics_report(
     densities = np.array([float(v["density"]) for v in active_voxels], dtype=float)
     grades = np.array([float(v.get("density_proxy_index") or 0.0) for v in active_voxels], dtype=float)
     probabilities = np.array([float(v["probability"] or 0.0) for v in active_voxels], dtype=float)
-    tonnages = np.array([float(v.get("modeled_rock_mass_kg") or 0.0) for v in active_voxels], dtype=float)
+    tonnages = np.array([float(v.get("modeled_rock_mass_tonnes") or 0.0) for v in active_voxels], dtype=float)
 
     min_density = float(np.min(densities))
     avg_density = float(np.mean(densities))
@@ -1528,91 +1151,6 @@ def _run_checkerboard_qa_fast(
     }
 
 
-def _run_lsqr_with_heartbeat(
-    inversor,
-    g_observed,
-    kernel_sparse,          # obsoleto — pasar None; conservado para compatibilidad de firma
-    y_c,
-    lambda_mag: float,
-    alpha_spatial: float,
-    project_id,
-    run_id,
-    forward_model=None,     # F0.2 HPC requerido
-    sensor_coords=None,     # F0.2 HPC requerido
-    x_c=None,               # F0.2 HPC requerido
-    z_c=None,               # F0.2 HPC requerido
-    topography_elevations=None,
-    # ── F0.9: Tensor Mesh — anchos de celda para Laplaciano no-uniforme ──────
-    hx=None,
-    hy=None,
-    hz=None,
-    # ── DOI: modelo de referencia (Li & Oldenburg 1999) ──────────────────────
-    m_ref=None,
-    # ── Bound petrofísico de densidad (t/m³) — P2: configurable desde API ────
-    density_min: float = 2.6,
-    density_max: float = 4.2,
-    # ── R-02: Penalización diferencial de padding (auditoría R-A1) ───────────
-    padding_mask=None,     # shape=(total_voxels,) bool; True = celda de padding
-    padding_kappa=1e5,     # κ = factor de penalización (1e5 post-auditoría R-A1)
-    # ── FASE 8 (Q4): Anclaje por sondajes (boreholes) ─────────────────────────
-    boreholes=None,        # array (n,5) [x_m, z_m, y_from_m, y_to_m, density_t_m3] o None
-    anchor_kappa=1e4,      # strong soft constraint (NO 1e6: preserva cond(A))
-    laplacian_relax_alpha=0.2,  # relajación de filas del Laplaciano en vóxeles anclados
-    # ── Diagnósticos del solver (OUT) ─────────────────────────────────────────
-    solver_meta=None,      # dict mutable; el solver escribe acond, chi2_final, etc.
-):
-    """Ejecuta solve_inversion_lsqr (Motor HPC F0.2 + Tensor Mesh F0.9) con heartbeat cada 5 s."""
-    stop_event = threading.Event()
-
-    def _heartbeat():
-        while not stop_event.is_set():
-            if project_id and run_id:
-                try:
-                    update_run_status(
-                        project_id=project_id,
-                        run_id=run_id,
-                        status="running",
-                        progress=0.40,
-                        stage="solving_lsqr",
-                        message="LSQR solver HPC F0.2 + Tensor Mesh F0.9 en progreso...",
-                    )
-                except Exception:
-                    pass
-            stop_event.wait(timeout=5.0)
-
-    hb_thread = threading.Thread(target=_heartbeat, daemon=True)
-    hb_thread.start()
-    try:
-        result = inversor.solve_inversion_lsqr(
-            g_observed,
-            None,                       # kernel_sparse — HPC F0.2 exclusivo; no se usa
-            y_c=y_c,
-            lambda_mag=lambda_mag,
-            alpha_spatial=alpha_spatial,
-            topography_elevations=topography_elevations,
-            forward_model=forward_model,
-            sensor_coords=sensor_coords,
-            x_c=x_c,
-            z_c=z_c,
-            hx=hx,                      # F0.9: Laplaciano no-uniforme
-            hy=hy,
-            hz=hz,
-            m_ref=m_ref,                # DOI: modelo de referencia (None = sin referencia)
-            density_min=density_min,    # P2: bound petrofísico configurable desde API
-            density_max=density_max,
-            padding_mask=padding_mask,  # R-02: penalización diferencial de padding
-            padding_kappa=padding_kappa,
-            boreholes=boreholes,        # FASE 8: anclaje por sondajes
-            anchor_kappa=anchor_kappa,
-            laplacian_relax_alpha=laplacian_relax_alpha,
-            solver_meta=solver_meta,    # OUT: acond, chi2_final, saturación
-        )
-    finally:
-        stop_event.set()
-        hb_thread.join(timeout=2.0)
-    return result
-
-
 def run_magnetic_inversion(params: GeophysicsInvertInput):
     """
     FASE 9A — Orquestación del motor magnético INDEPENDIENTE.
@@ -1704,6 +1242,48 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         if _rows:
             boreholes_arr = np.asarray(_rows, dtype=np.float64)
 
+    # ── FASE 12: Remanencia — construir kernel total J_ind + Q·J_rem si aplica ──
+    _rem = getattr(params, "remanence", None)
+    _use_remanence = (
+        _rem is not None
+        and _rem.enabled
+        and _rem.inversion_mode in ("total_field", "amplitude")
+        and _rem.q_ratio > 0.0
+    )
+    _override_kernel = None
+    _q_sweep_result = None
+
+    if _use_remanence and _rem.inversion_mode == "total_field":
+        _update("running", 0.35, "building_kernel_rem", f"Construyendo kernel total J_ind + {_rem.q_ratio:.2f}·J_rem...")
+        # Necesitamos las celdas activas para construir el kernel; usamos grilla completa
+        # (sin topografía en este punto — topography_elevations=None → todas activas)
+        _override_kernel = forward.build_kernel_with_remanence(
+            x_c, y_c, z_c,
+            sensor_coords,
+            q_ratio=_rem.q_ratio,
+            inc_rem_deg=_rem.remanence_inc_deg,
+            dec_rem_deg=_rem.remanence_dec_deg,
+        )
+
+        if _rem.do_q_sweep:
+            from exploration.magnetometry import sweep_q_ratio
+            _update("running", 0.38, "q_sweep", "Barriendo Q para estimación óptima...")
+            _q_sweep_result = sweep_q_ratio(
+                forward=forward,
+                inversor=inversor,
+                x_c_act=x_c,
+                y_c_act=y_c,
+                z_c_act=z_c,
+                sensor_coords=sensor_coords,
+                d_observed=mag,
+                inc_rem_deg=_rem.remanence_inc_deg,
+                dec_rem_deg=_rem.remanence_dec_deg,
+                lambda_mag=(params.lambda_mag if params.lambda_mag > 0 else 1e-4),
+                alpha_spatial=params.alpha_spatial,
+                susc_min=params.susc_min,
+                susc_max=params.susc_max,
+            )
+
     _update("running", 0.4, "solving_lsqr", "Resolviendo inversión magnética LSQR + Tikhonov...")
     solver_meta = {}
     susc_full, score_full, misfit_percent, sens_full = inversor.solve_magnetic_inversion_lsqr(
@@ -1720,6 +1300,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         susc_max=params.susc_max,
         boreholes=boreholes_arr,
         solver_meta=solver_meta,
+        override_kernel=_override_kernel,
     )
 
     _update("running", 0.85, "building_payload", "Construyendo payload de susceptibilidad...")
@@ -1757,9 +1338,24 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             "relative_target_score": _b["relative_target_score"],
         }
 
+    _remanence_report = None
+    if _use_remanence and _rem is not None:
+        _remanence_report = {
+            "enabled": True,
+            "inversion_mode": _rem.inversion_mode,
+            "q_ratio": _rem.q_ratio,
+            "remanence_inc_deg": _rem.remanence_inc_deg,
+            "remanence_dec_deg": _rem.remanence_dec_deg,
+            "q_sweep": _q_sweep_result,
+        }
+
     report = {
         "method": "magnetic_dipole_tmi_phase9a",
-        "engine": "MagnetometryInversion (magnetización inducida, sin remanencia)",
+        "engine": (
+            f"MagnetometryInversion (J_ind + {_rem.q_ratio:.2f}·J_rem, Fase 12)"
+            if _use_remanence and _rem is not None
+            else "MagnetometryInversion (magnetización inducida, sin remanencia)"
+        ),
         "is_joint_inversion": False,
         "field": {
             "inclination_deg": params.inclination_deg,
@@ -1768,6 +1364,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             "field_unit_vector_xyz": solver_meta.get("field_unit_vector"),
             "axis_convention": "x=Norte, z=Este, y=profundidad(+abajo)",
         },
+        "remanence": _remanence_report,
         "susceptibility_bounds_si": [params.susc_min, params.susc_max],
         "solver": {
             "cond_A": solver_meta.get("acond"),
@@ -1822,7 +1419,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             "sensitivity_proxy": sens_full.astype(float).tolist(),
             "is_active": _active_mag.tolist(),
             "run_type": ["magnetic"] * _nC_mag,
-            "schema_version": ["v3.0"] * _nC_mag,
+            "schema_version": ["v4.0"] * _nC_mag,
         })
 
         _mag_ref = get_run_block_model_reference(
@@ -1866,7 +1463,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         _mag_parquet_path = _mag_ref_manifest.path
         _csv_path_mag = _mag_run_dir / RUN_SOURCE_GRAVITY_FILENAME
         write_run_manifest(_mag_run_dir, {
-            "schema_version": "v3.0",
+            "schema_version": "v4.0",
             "run_type": "magnetic",
             "code_version": _mag_git_hash_short(),
             "rng_seed": None,
@@ -2035,19 +1632,38 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             "La matriz forward no coincide con la cantidad de observaciones gravimétricas."
         )
 
-    # ── SPRINT 3C: TreeMesh branch (opt-in, separate path from regular grid) ──
-    _use_treemesh = getattr(params, "use_treemesh", False)
+    # ── Sprint 3 cierre: TreeMesh — auto-default para surveys grandes/regionales ──
+    # Auto-select: se activa cuando el survey supera 50 km de extensión O la grilla
+    # regular excede 50k celdas (RAM/compute costoso). El flag use_treemesh del schema
+    # puede forzar True (siempre TreeMesh) o False (siempre grilla regular).
+    from services.octree_mesh_builder import should_auto_use_treemesh, build_treemesh_from_survey
+    _x_extent_m = float(nx * dx)
+    _z_extent_m = float(nz * dx)
+    _treemesh_flag = getattr(params, "use_treemesh", False)
+    _use_treemesh = _treemesh_flag or should_auto_use_treemesh(total_voxels, _x_extent_m, _z_extent_m)
+
     if _use_treemesh:
-        from exploration.treemesh import TreeMesh
         from exploration.gravimetry import solve_inversion_treemesh
 
         _update("running", 0.35, "treemesh_build", "Construyendo malla Octree adaptativa...")
 
-        mesh = TreeMesh.from_regular_grid(
+        _mean_spacing_m = float(
+            np.sqrt((_x_extent_m * _z_extent_m) / max(len(g_observed), 1))
+        )
+        _max_refine_override = getattr(params, "treemesh_max_refine", None)
+        if isinstance(_max_refine_override, int) and _max_refine_override == 2 \
+                and not getattr(params, "use_treemesh", False):
+            # Default schema value (2) no es override explícito — dejar al builder calibrar
+            _max_refine_override = None
+
+        mesh, _oct_p = build_treemesh_from_survey(
+            block_size_m=dx,
             nx=nx, ny=ny, nz=nz,
-            block_size=dx,
-            max_refinement_depth=getattr(params, "treemesh_max_refine", 2),
+            x_extent_m=_x_extent_m,
+            z_extent_m=_z_extent_m,
+            mean_spacing_m=_mean_spacing_m,
             sensor_coords=sensor_coords,
+            max_refine_override=_max_refine_override,
         )
 
         _update("running", 0.40, "treemesh_solve", f"Resolviendo inversión sobre TreeMesh ({mesh.n_cells:,} celdas)...")
@@ -2089,6 +1705,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             'max_cell_size_m': float(np.max(mesh.get_cell_sizes())),
             'base_cell_size_m': float(mesh.base_cell_size),
             'sensor_guided_refine': True,
+            'auto_selected': not _treemesh_flag,
+            'octree_params': _oct_p.as_dict(),
         }
 
         _update("done", 1.0, "completed", f"TreeMesh inversión completada ({mesh.n_cells} celdas).",
@@ -2188,6 +1806,36 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             recommendation="Si el resultado es rugoso, aumentar alpha_spatial.",
         )
 
+    # ── Fase 2: extraer noise params del input (v2 los aporta; v1 usa defaults) ──
+    # noise_floor_mgal (mGal) → m/s² (unidades del pipeline de import). 1 mGal = 1e-5 m/s².
+    # Default 0.02 activa _sigma_adaptive interna (sentinel del solver, comportamiento v1).
+    _noise_floor_mgal = getattr(params, "noise_floor_mgal", None)
+    _noise_pct = getattr(params, "noise_pct_v2", None)
+    _gravimeter_type = getattr(params, "gravimeter_type", "unknown") or "unknown"
+    if _noise_floor_mgal is not None:
+        # Sigma explícito (v2 o σ por estación desde el CSV): piso parametric.
+        # noise_pct None → 0 (piso puro).
+        _noise_floor_solver = float(_noise_floor_mgal) * 1e-5   # mGal → m/s²
+        _noise_pct_solver = float(_noise_pct) if _noise_pct is not None else 0.0
+    elif _gravimeter_type != "unknown":
+        # Flujo de datos de campo: piso instrumental desde la tabla por gravímetro.
+        # sigma_i = max(noise_floor, noise_pct·|d_i|); noise_pct=0 → piso puro,
+        # chi²_red interpretable contra el ruido real del instrumento.
+        from core.config import GRAVIMETER_NOISE_FLOOR
+        _noise_floor_solver = float(
+            GRAVIMETER_NOISE_FLOOR.get(_gravimeter_type, GRAVIMETER_NOISE_FLOOR["unknown"])
+        ) * 1e-5  # mGal → m/s²
+        _noise_pct_solver = 0.0
+        _log.info(
+            "sigma_gravimeter_floor",
+            gravimeter_type=_gravimeter_type,
+            noise_floor_mgal=_noise_floor_solver * 1e5,
+        )
+    else:
+        # v1 path: sentinel 0.02/0.02 activa _sigma_adaptive invariante de escala
+        _noise_floor_solver = 0.02
+        _noise_pct_solver = 0.02
+
     # ── Solver sobre grilla completa (Core + Padding) ─────────────────────────
     _solver_meta = {}   # recibe acond, chi2_final, saturación del solver
     est_density_full, probability_full, misfit_percent, sensitivity_full = _run_lsqr_with_heartbeat(
@@ -2210,6 +1858,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         padding_mask=_padding_mask_r02, # R-02: κ=1e5 post-auditoría R-A1
         padding_kappa=_kappa,
         boreholes=boreholes_arr,        # FASE 8: anclaje por sondajes (None si no hay)
+        noise_floor=_noise_floor_solver, # Fase 2: sigma calibrado por gravímetro
+        noise_pct=_noise_pct_solver,
         solver_meta=_solver_meta,       # OUT: acond, chi2_final, sat_*
     )
 
@@ -2219,6 +1869,143 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             misfit_percent=misfit_percent,
             note="Posible datos sintéticos o lambda sub-óptima. Las observaciones NO son modificadas.",
         )
+
+    # ── FASE 11: Inversión Guiada Petrológica (PGI — Astic & Oldenburg 2019) ─
+    # Bucle alternado: m_PGI = MAP_GMM(m^k) → resolver con bloque PGI extra →
+    # verificar convergencia. Se inyecta vía extra_reg_blocks con
+    # prune_observable_domain=False (conformable con n_active total sin podar).
+    _pgi_p = getattr(params, "pgi_params", None)
+    if _pgi_p is not None:
+        from exploration.pgi_engine import PGIEngine
+
+        # Inicializar motor PGI
+        if _pgi_p.fit_from_model:
+            _init_finite = est_density_full[np.isfinite(est_density_full)]
+            _init_contrast = _init_finite - inversor_padded.base_density
+            _pgi_engine = PGIEngine.fit_from_model(
+                m_contrast=_init_contrast,
+                n_components=_pgi_p.n_components_auto,
+                alpha_pgi=_pgi_p.alpha_pgi,
+                base_density=inversor_padded.base_density,
+            )
+        else:
+            _pgi_engine = PGIEngine(
+                means=[c.mean_density_t_m3 for c in _pgi_p.components],
+                stds=[c.std_density_t_m3 for c in _pgi_p.components],
+                weights=[c.weight for c in _pgi_p.components],
+                alpha_pgi=_pgi_p.alpha_pgi,
+                base_density=inversor_padded.base_density,
+            )
+
+        print(
+            f"[FASE 11 PGI] Motor iniciado — K={_pgi_engine.K}, "
+            f"α={_pgi_engine.alpha_pgi}, max_iter={_pgi_p.max_iter}"
+        )
+        _log.info("pgi_start", k=_pgi_engine.K, alpha=_pgi_engine.alpha_pgi,
+                  max_iter=_pgi_p.max_iter, fit_from_model=_pgi_p.fit_from_model)
+
+        # n_active para prune_observable_domain=False: todas las celdas sub-topográficas
+        _pgi_topo = (
+            np.zeros(len(y_c_full), dtype=np.float64)
+            if _topography_elevations_padded is None
+            else np.asarray(_topography_elevations_padded, dtype=np.float64)
+        )
+        _pgi_voxel_top = y_c_full - (inversor_padded.dy / 2.0)
+        _pgi_active_mask = _pgi_voxel_top >= _pgi_topo   # bool, longitud total padded
+        n_active_pgi = int(_pgi_active_mask.sum())
+
+        # Estado inicial del modelo para el bucle
+        _curr_density_full = est_density_full.copy()
+        _curr_contrast_active = np.nan_to_num(
+            _curr_density_full[_pgi_active_mask] - inversor_padded.base_density, nan=0.0
+        )
+        m_pgi_prev = _pgi_engine.compute_m_pgi(_curr_contrast_active)
+
+        _pgi_conv = 1.0  # convergencia entre iteraciones
+        _pgi_iters_done = 0
+
+        for _pgi_iter in range(_pgi_p.max_iter):
+            _pgi_iters_done = _pgi_iter + 1
+            _update(
+                "running",
+                0.65 + 0.20 * (_pgi_iter / max(_pgi_p.max_iter, 1)),
+                "pgi_iteration",
+                f"PGI iteración {_pgi_iters_done}/{_pgi_p.max_iter} (conv={_pgi_conv:.4e})...",
+            )
+
+            # Construir bloque PGI (A_pgi, b_pgi) con modelo del paso anterior
+            _curr_contrast_active = np.nan_to_num(
+                _curr_density_full[_pgi_active_mask] - inversor_padded.base_density, nan=0.0
+            )
+            A_pgi, b_pgi = _pgi_engine.build_pgi_block(_curr_contrast_active, n_active_pgi)
+
+            # Resolver con término PGI inyectado
+            _pgi_meta = {}
+            _density_pgi_full, _prob_pgi, _misfit_pgi, _sens_pgi = (
+                inversor_padded.solve_inversion_lsqr(
+                    g_observed, None, y_c=y_c_full,
+                    lambda_mag=_lambda_mag,
+                    alpha_spatial=params.alpha_spatial,
+                    topography_elevations=_topography_elevations_padded,
+                    forward_model=forward,
+                    sensor_coords=sensor_coords,
+                    x_c=x_c_full,
+                    z_c=z_c_full,
+                    hx=hx, hy=hy, hz=hz,
+                    density_min=params.density_min,
+                    density_max=params.density_max,
+                    padding_mask=_padding_mask_r02,
+                    padding_kappa=_kappa,
+                    boreholes=boreholes_arr,
+                    noise_floor=_noise_floor_solver,
+                    noise_pct=_noise_pct_solver,
+                    extra_reg_blocks=[A_pgi],
+                    extra_reg_rhs=[b_pgi],
+                    prune_observable_domain=False,
+                    solver_meta=_pgi_meta,
+                )
+            )
+            _density_pgi_full = np.asarray(_density_pgi_full, dtype=np.float64)
+
+            # Actualizar m_pgi y verificar convergencia
+            _new_contrast_active = np.nan_to_num(
+                _density_pgi_full[_pgi_active_mask] - inversor_padded.base_density, nan=0.0
+            )
+            m_pgi_new = _pgi_engine.compute_m_pgi(_new_contrast_active)
+            _pgi_conv = _pgi_engine.convergence_norm(m_pgi_prev, m_pgi_new)
+
+            print(
+                f"[FASE 11 PGI] iter={_pgi_iters_done}, "
+                f"misfit={_misfit_pgi:.2f}%, conv={_pgi_conv:.4e}"
+            )
+            _log.info("pgi_iter", iter=_pgi_iters_done, misfit=float(_misfit_pgi),
+                      conv=float(_pgi_conv))
+
+            _curr_density_full = _density_pgi_full
+            m_pgi_prev = m_pgi_new
+
+            if _pgi_conv < _pgi_p.convergence_tol:
+                print(
+                    f"[FASE 11 PGI] Convergencia en iter={_pgi_iters_done} "
+                    f"(conv={_pgi_conv:.2e} < tol={_pgi_p.convergence_tol})"
+                )
+                break
+
+        # Modelo PGI final reemplaza el resultado principal
+        est_density_full = _curr_density_full
+        probability_full = _prob_pgi
+        misfit_percent   = _misfit_pgi
+        sensitivity_full = _sens_pgi
+        _solver_meta.update({
+            "pgi_iters": _pgi_iters_done,
+            "pgi_conv":  float(_pgi_conv),
+            "pgi_k":     _pgi_engine.K,
+            "pgi_alpha": _pgi_engine.alpha_pgi,
+        })
+
+        _log.info("pgi_complete", iters=_pgi_iters_done, final_misfit=float(_misfit_pgi),
+                  final_conv=float(_pgi_conv))
+        print(f"[FASE 11 PGI] Completo. Iters={_pgi_iters_done}, misfit={_misfit_pgi:.2f}%")
 
     # ── F0.9: Descartar Padding — solo celdas Core al frontend ───────────────
     est_density          = est_density_full[is_core]
@@ -2330,7 +2117,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     r03_saturation = {}
     try:
         _DMIN = _solver_meta.get("density_min", 2.6)
-        _DMAX = _solver_meta.get("density_max", 4.2)
+        _DMAX = _solver_meta.get("density_max", 5.5)
         _eps  = 1e-5
         _density_fin  = np.isfinite(est_density_full)
         _n_active_tot = int(np.sum(_density_fin))
@@ -2405,7 +2192,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     r06_padding_saturation_audit = {}
     try:
         _DMIN_r06     = _solver_meta.get("density_min", 2.6)
-        _DMAX_r06     = _solver_meta.get("density_max", 4.2)
+        _DMAX_r06     = _solver_meta.get("density_max", 5.5)   # H-A0 Bug 3
         _eps_r06      = 1e-5
         _chi2_orig_r06 = _solver_meta.get("chi2_final")
 
@@ -2596,6 +2383,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             density_min=params.density_min,
             density_max=params.density_max,
             boreholes=boreholes_arr,       # FASE 8: anclar igual que pass-1 → doi_raw coherente
+            noise_floor=_noise_floor_solver,
+            noise_pct=_noise_pct_solver,
         )
 
         # m1, m2 reducidos a la grilla Core (padding descartado).
@@ -2648,6 +2437,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     fit_diagnostics["chi2_final_solver"]   = _solver_meta.get("chi2_final")
     fit_diagnostics["cond_A_solver"]       = _solver_meta.get("acond")
     fit_diagnostics["lambda_used"]         = _lambda_mag
+    fit_diagnostics["lambda_effective"]    = _solver_meta.get("lambda_effective", _lambda_mag)
     # R-01, R-02, R-A1, R-A2, OBJETIVO 3
     fit_diagnostics["r01_kernel_dual_consistency"] = r01_consistency
     fit_diagnostics["r02_padding_leak"]            = r02_padding_leak
@@ -2730,7 +2520,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             "scale_status":          [focus_result.scale_status] * _n_focus,
             "use_mode":              [focus_result.use_mode] * _n_focus,
             "run_type":              ["gravity"] * _n_focus,
-            "schema_version":        ["v3.0"] * _n_focus,
+            "schema_version":        ["v4.0"] * _n_focus,
         })
 
         focusing_ref  = get_run_focusing_reference(
@@ -2788,14 +2578,17 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         z_c=z_c,
         est_density=est_density,
         probability=probability,
+        base_density=float(inversor_core.base_density),
+        cutoff_density=float(cutoff_density),
     )
     df_full = df_full.with_columns(
         pl.Series("sensitivity_proxy", normalized_sensitivity.astype(float))
     )
-    # DOI (Li & Oldenburg 1999): sensibilidad del modelo recuperado al modelo de referencia.
-    df_full = df_full.with_columns(
-        pl.Series("doi_raw", doi_raw.astype(float))
-    )
+    # DOI (Li & Oldenburg 1999) — v4.0 usa doi_index; doi_raw se mantiene como alias.
+    df_full = df_full.with_columns([
+        pl.Series("doi_index", doi_raw.astype(float)),  # v4.0 canonical
+        pl.Series("doi_raw",   doi_raw.astype(float)),  # v3.0 backward compat
+    ])
     # Track 3 / T3.1: σ posterior (Hutchinson) por vóxel — NaN si no se calculó.
     df_full = df_full.with_columns(
         pl.Series("posterior_std", posterior_std.astype(float))
@@ -2804,7 +2597,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     n_full = len(df_full)
     df_full = df_full.with_columns([
         pl.Series("run_type", ["gravity"] * n_full),
-        pl.Series("schema_version", ["v3.0"] * n_full),
+        pl.Series("schema_version", ["v4.0"] * n_full),
     ])
 
     df_anomaly = build_anomaly_dataframe(
@@ -2841,6 +2634,30 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     anomaly_ref.path.parent.mkdir(parents=True, exist_ok=True)
     df_anomaly.write_parquet(str(anomaly_ref.path))
 
+    # ── H-C1: persistir obs_vs_calc.parquet ───────────────────────────────────
+    try:
+        _d_obs   = _solver_meta.get("d_obs")
+        _d_pred  = _solver_meta.get("d_pred")
+        _resids  = _solver_meta.get("residuals")
+        _sc      = _solver_meta.get("station_coords")
+        if _d_obs is not None and _d_pred is not None and _resids is not None:
+            _ovc_cols: dict = {}
+            if _sc is not None:
+                _sc_arr = np.asarray(_sc, dtype=np.float64)
+                if _sc_arr.ndim == 2 and _sc_arr.shape[1] >= 3:
+                    _ovc_cols["x"] = _sc_arr[:, 0]
+                    _ovc_cols["y"] = _sc_arr[:, 1]
+                    _ovc_cols["z"] = _sc_arr[:, 2]
+            _ovc_cols["d_obs"]    = np.asarray(_d_obs, dtype=np.float64)
+            _ovc_cols["d_pred"]   = np.asarray(_d_pred, dtype=np.float64)
+            _ovc_cols["residual"] = np.asarray(_resids, dtype=np.float64)
+            df_ovc = pl.DataFrame(_ovc_cols)
+            _ovc_path = block_model_ref.path.parent / "obs_vs_calc.parquet"
+            df_ovc.write_parquet(str(_ovc_path))
+            _log.info("obs_vs_calc_written", n_stations=len(_d_obs), path=str(_ovc_path))
+    except Exception as _ovc_exc:
+        _log.warning("obs_vs_calc_nonfatal", error=str(_ovc_exc))
+
     # ── HITO 2: Run Manifest (provenance audit trail) ─────────────────────────
     try:
         def _git_hash_short() -> str:
@@ -2855,7 +2672,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         _run_dir_manifest = block_model_ref.path.parent
         _csv_path_manifest = _run_dir_manifest / RUN_SOURCE_GRAVITY_FILENAME
         write_run_manifest(_run_dir_manifest, {
-            "schema_version": "v3.0",
+            "schema_version": "v4.0",
             "run_type": "gravity",
             "code_version": _git_hash_short(),
             "rng_seed": None,
@@ -2918,7 +2735,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         df_full.write_parquet(str(DEFAULT_BLOCK_MODEL_PATH))
 
     voxels = build_voxel_output(df_anomaly, dx, cutoff_density=cutoff_density)
-    total_tonnage = float(df_full["modeled_rock_mass_kg"].fill_nan(0.0).sum())
+    total_tonnage = float(df_full["modeled_rock_mass_tonnes"].fill_nan(0.0).sum())
 
     technical_summary = build_geophysical_technical_summary(qaqc_report, fit_diagnostics)
     uncertainty_diagnostics = build_uncertainty_diagnostics(qaqc_report, fit_diagnostics, technical_summary)
@@ -3043,6 +2860,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         "r03_decision":           _r03_decision,
         "r03_saturation":         r03_saturation,
         "lambda_used":            _lambda_mag,
+        "lambda_effective":       _solver_meta.get("lambda_effective", _lambda_mag),
         "lambda_spatial_approx":  round(_lambda_spatial_eff, 8),
         "kappa_used":             _kappa,
         "chi2_final":             _solver_meta.get("chi2_final"),

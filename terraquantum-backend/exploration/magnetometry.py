@@ -187,8 +187,8 @@ class MagnetometryForward:
         _fx, _fy, _fz = float(self.f_hat[0]), float(self.f_hat[1]), float(self.f_hat[2])
         _C = self.C
 
-        def _sensor_row(i):
-            """Triplets (rows, cols, data) para el sensor i — sin escrituras compartidas."""
+        def _sensor_row_for_fhat(i, fx, fy, fz):
+            """Triplets (rows, cols, data) para el sensor i con f_hat=(fx,fy,fz)."""
             sx, sy, sz = sensor_coords[i]
             idx = np.asarray(cutoff_lists[i], dtype=np.int32)
             if len(idx) == 0:
@@ -200,15 +200,21 @@ class MagnetometryForward:
             dxv = _x[idx] - sx
             dyv = _y[idx] - sy
             dzv = _z[idx] - sz
-            r2 = dxv * dxv + dyv * dyv + dzv * dzv + eps     # eps anti-singularidad
-            fdot = _fx * dxv + _fy * dyv + _fz * dzv
-            r5 = r2 ** 2.5                                    # |r|⁵
-            data = _C * (3.0 * fdot * fdot - r2) / r5         # nT por unidad de κ
+            r2 = dxv * dxv + dyv * dyv + dzv * dzv + eps
+            fdot = fx * dxv + fy * dyv + fz * dzv
+            r5 = r2 ** 2.5
+            data = _C * (3.0 * fdot * fdot - r2) / r5
             return (
                 np.full(len(idx), i, dtype=np.int32),
                 idx,
                 data.astype(np.float64),
             )
+
+        # Cierra sobre self.f_hat para el kernel inducido (comportamiento heredado)
+        _fx, _fy, _fz = float(self.f_hat[0]), float(self.f_hat[1]), float(self.f_hat[2])
+
+        def _sensor_row(i):
+            return _sensor_row_for_fhat(i, _fx, _fy, _fz)
 
         t_k0 = time.perf_counter()
         rows_chunks, cols_chunks, data_chunks = [], [], []
@@ -249,7 +255,89 @@ class MagnetometryForward:
         )
         self._kernel_cache_mat = G_active
         self.kernel_build_count += 1
+
+        # Guarda la info de cutoff_lists y eps para reutilizarla en build_kernel_with_remanence
+        self._last_cutoff_lists = cutoff_lists
+        self._last_sensor_coords = sensor_coords.copy()
+        self._last_x = _x
+        self._last_y = _y
+        self._last_z = _z
+        self._last_eps = eps
+        self._last_C = _C
+        self._last_n_obs = n_obs
+        self._last_n_active = n_active
+        self._last_max_workers = max_workers
+        self._sensor_row_fn = _sensor_row_for_fhat
+
         return G_active
+
+    def build_kernel_with_remanence(
+        self,
+        x_c_act: np.ndarray,
+        y_c_act: np.ndarray,
+        z_c_act: np.ndarray,
+        sensor_coords: np.ndarray,
+        q_ratio: float,
+        inc_rem_deg: float,
+        dec_rem_deg: float,
+    ) -> "sp.csr_matrix":
+        """
+        FASE 12 — Kernel total J = J_ind + Q·J_rem.
+
+        Construye G_ind (via _build_sparse_kernel, cacheado) y G_rem (kernel con
+        la dirección de remanencia Inc_rem/Dec_rem), retorna G_ind + Q * G_rem.
+
+        Para q_ratio=0: retorna G_ind directamente (sin coste adicional).
+        La convención de ejes es la del backend (x=Norte, z=Este, y=profundidad).
+        """
+        G_ind = self._build_sparse_kernel(x_c_act, y_c_act, z_c_act, sensor_coords)
+
+        if q_ratio == 0.0:
+            return G_ind
+
+        f_rem = field_unit_vector(inc_rem_deg, dec_rem_deg)
+        frx, fry, frz = float(f_rem[0]), float(f_rem[1]), float(f_rem[2])
+
+        cutoff_lists = self._last_cutoff_lists
+        _x = self._last_x
+        _y = self._last_y
+        _z = self._last_z
+        eps = self._last_eps
+        _C = self._last_C
+        n_obs = self._last_n_obs
+        n_active = self._last_n_active
+        max_workers = self._last_max_workers
+        _sensor_row_for_fhat = self._sensor_row_fn
+
+        def _sensor_row_rem(i):
+            return _sensor_row_for_fhat(i, frx, fry, frz)
+
+        rows_chunks, cols_chunks, data_chunks = [], [], []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_sensor_row_rem, i) for i in range(n_obs)]
+            for fut in futures:
+                r, c, d = fut.result()
+                rows_chunks.append(r)
+                cols_chunks.append(c)
+                data_chunks.append(d)
+
+        rows_arr = np.concatenate(rows_chunks) if rows_chunks else np.empty(0, np.int32)
+        cols_arr = np.concatenate(cols_chunks) if cols_chunks else np.empty(0, np.int32)
+        data_arr = np.concatenate(data_chunks) if data_chunks else np.empty(0, np.float64)
+
+        G_rem = sp.csr_matrix(
+            (data_arr, (rows_arr, cols_arr)),
+            shape=(n_obs, n_active),
+            dtype=np.float64,
+        )
+
+        G_total = G_ind + q_ratio * G_rem
+        print(
+            f"[MAG FASE 12] Kernel total J=J_ind+{q_ratio:.2f}·J_rem | "
+            f"Inc_rem={inc_rem_deg:.1f}° Dec_rem={dec_rem_deg:.1f}° | "
+            f"NNZ_ind={G_ind.nnz:,} NNZ_rem={G_rem.nnz:,}"
+        )
+        return G_total
 
     def build_sparse_kernel(self, x_vox, y_vox, z_vox, sensor_coords):
         """API pública: trata TODOS los vóxeles como activos. Delega en _build_sparse_kernel."""
@@ -370,6 +458,10 @@ class MagnetometryInversion:
         x_c=None,
         z_c=None,
         forward_model=None,             # MagnetometryForward (requerido)
+        # ── FASE 12: kernel pre-construido (J_ind + Q·J_rem). Si se provee, se
+        # omite la construcción interna del kernel y se usa este directamente.
+        # Shape debe ser (n_obs, n_active). Backward-compatible: None → comportamiento heredado.
+        override_kernel=None,           # Optional[sp.csr_matrix]
         # ── Bound petrofísico sobre la susceptibilidad recuperada (SI) ───────
         susc_min: float = 0.0,
         susc_max: float = 1.0,
@@ -467,10 +559,21 @@ class MagnetometryInversion:
         z_c_arr = np.asarray(z_c, dtype=np.float64)
 
         # ── Kernel directo sobre celdas activas ──────────────────────────────
-        G_active = forward_model._build_sparse_kernel(
-            x_c_arr[active_cells], y_c_active, z_c_arr[active_cells],
-            np.asarray(sensor_coords, dtype=np.float64),
-        )
+        # FASE 12: si se provee override_kernel (J_ind + Q·J_rem ya combinado),
+        # se usa directamente; de lo contrario se construye el kernel inducido puro.
+        if override_kernel is not None:
+            G_active = override_kernel
+            if G_active.shape != (n_sensors, n_active):
+                raise ValueError(
+                    f"override_kernel shape {G_active.shape} no coincide con "
+                    f"(n_obs={n_sensors}, n_active={n_active})."
+                )
+            print(f"[MAG FASE 12] Usando kernel pre-construido (shape={G_active.shape}).")
+        else:
+            G_active = forward_model._build_sparse_kernel(
+                x_c_arr[active_cells], y_c_active, z_c_arr[active_cells],
+                np.asarray(sensor_coords, dtype=np.float64),
+            )
         if G_active.nnz == 0:
             raise ValueError("Kernel magnético vacío: ningún vóxel activo es sensible a los sensores.")
 
@@ -763,6 +866,76 @@ class MagnetometryInversion:
             solver_meta["field_unit_vector"] = [float(v) for v in forward_model.f_hat]
 
         return susceptibility_full, relative_score_full, misfit_percent, normalized_sensitivity
+
+
+def sweep_q_ratio(
+    forward: "MagnetometryForward",
+    x_c_act: np.ndarray,
+    y_c_act: np.ndarray,
+    z_c_act: np.ndarray,
+    sensor_coords: np.ndarray,
+    d_observed: np.ndarray,
+    inc_rem_deg: float,
+    dec_rem_deg: float,
+    q_values: Optional[np.ndarray] = None,
+    lambda_reg: float = 1e-3,
+) -> dict:
+    """
+    FASE 12 — Estimación de Q óptimo por barrido de misfit (§12.5).
+
+    Para cada Q en `q_values`, resuelve LSQR en espacio de celdas activas con
+    damp=lambda_reg y calcula el misfit relativo ||G(Q)m − d|| / ||d||.
+    El Q con menor misfit es el óptimo.
+
+    Opera en espacio de celdas activas directamente (sin full-grid): acepta
+    coordenadas x_c_act/y_c_act/z_c_act de longitud n_active.
+
+    Args:
+        q_values: array de Q a probar. Default: [0, 0.5, 1, 2, 3, 5, 7, 10].
+
+    Returns:
+        dict con keys:
+            q_optimal   — Q con menor misfit
+            q_values    — lista de Q evaluados
+            misfits_pct — misfit relativo (%) por Q
+    """
+    if q_values is None:
+        q_values = np.array([0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0])
+
+    d_norm = float(np.linalg.norm(d_observed))
+    if d_norm <= 0:
+        raise ValueError("d_observed es todo cero: no hay señal para el sweep.")
+
+    misfits = []
+    for q in q_values:
+        G_total = forward.build_kernel_with_remanence(
+            x_c_act, y_c_act, z_c_act, sensor_coords,
+            q_ratio=float(q),
+            inc_rem_deg=inc_rem_deg,
+            dec_rem_deg=dec_rem_deg,
+        )
+        result = lsqr(G_total, d_observed, damp=float(lambda_reg),
+                      iter_lim=300, atol=1e-8, btol=1e-8, show=False)
+        m_inv = result[0]
+        d_pred = G_total @ m_inv
+        misfit_pct = float(np.linalg.norm(d_observed - d_pred)) / d_norm * 100.0
+        misfits.append(misfit_pct)
+
+    misfits_arr = np.array(misfits, dtype=np.float64)
+    best_idx = int(np.argmin(misfits_arr))
+    q_optimal = float(q_values[best_idx])
+
+    print(
+        f"[MAG FASE 12 Q-SWEEP] Q_optimal={q_optimal:.3f} (misfit={misfits_arr[best_idx]:.2f}%) "
+        f"en {len(q_values)} puntos."
+    )
+
+    return {
+        "q_optimal": q_optimal,
+        "q_values": q_values.tolist(),
+        "misfits_pct": misfits_arr.tolist(),
+        "best_idx": best_idx,
+    }
 
 
 if __name__ == "__main__":

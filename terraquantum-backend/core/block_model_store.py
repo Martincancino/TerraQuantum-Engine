@@ -673,11 +673,20 @@ def update_run_status(
     os.replace(str(tmp_path), str(path))
 
 
-_PARQUET_SCHEMA_VERSION = "v3.0"
+_PARQUET_SCHEMA_VERSION = "v4.0"
+_PARQUET_SCHEMA_VERSION_LEGACY = "v3.0"
 
 _REQUIRED_COLUMNS_ALL = {"run_type", "schema_version"}
 
 _REQUIRED_COLUMNS_BY_RUN_TYPE = {
+    # v4.0: coordenadas unificadas con sufijo _m, density_t_m3 canónico
+    "gravity": {"x_m", "y_m", "z_m", "density_t_m3"},
+    "magnetic": {"x_m", "y_m", "z_m", "susceptibility_si"},
+    "joint": {"x_m", "y_m", "z_m", "density_t_m3", "susceptibility_si"},
+}
+
+# v3.0 backward compat: parquets pre-v4.0 tienen columnas sin sufijo _m
+_REQUIRED_COLUMNS_LEGACY_BY_RUN_TYPE = {
     "gravity": {"x", "y", "z", "density"},
     "magnetic": {"x_m", "y_m", "z_m", "susceptibility_si"},
     "joint": {"x_m", "y_m", "z_m", "density_t_m3", "susceptibility_si"},
@@ -723,15 +732,22 @@ def validate_parquet_schema(path: Path, expected_run_type: Optional[str] = None)
         except Exception:
             pass
 
-    if schema_version_val and schema_version_val != _PARQUET_SCHEMA_VERSION:
-        errors.append(f"schema_version_mismatch: got={schema_version_val}, expected={_PARQUET_SCHEMA_VERSION}")
+    _valid_versions = {_PARQUET_SCHEMA_VERSION, _PARQUET_SCHEMA_VERSION_LEGACY}
+    if schema_version_val and schema_version_val not in _valid_versions:
+        errors.append(f"schema_version_mismatch: got={schema_version_val}, expected one of {sorted(_valid_versions)}")
 
     if run_type_val and run_type_val not in _VALID_RUN_TYPES:
         errors.append(f"invalid_run_type: {run_type_val}")
 
     effective_run_type = expected_run_type or run_type_val
     if effective_run_type in _REQUIRED_COLUMNS_BY_RUN_TYPE:
-        missing_typed = _REQUIRED_COLUMNS_BY_RUN_TYPE[effective_run_type] - columns
+        is_legacy = schema_version_val == _PARQUET_SCHEMA_VERSION_LEGACY
+        req_cols = (
+            _REQUIRED_COLUMNS_LEGACY_BY_RUN_TYPE.get(effective_run_type, set())
+            if is_legacy
+            else _REQUIRED_COLUMNS_BY_RUN_TYPE[effective_run_type]
+        )
+        missing_typed = req_cols - columns
         if missing_typed:
             errors.append(f"missing_{effective_run_type}_columns: {sorted(missing_typed)}")
 

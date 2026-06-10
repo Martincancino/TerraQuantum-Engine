@@ -30,6 +30,7 @@ _log = get_logger(__name__)
 ALLOWED_UNITS = {"m/s2", "m/s²", "mGal", "uGal", "µGal"}
 ALLOWED_GRAVITY_TYPES = {
     "absolute_gravity",
+    "g_raw",            # alias de absolute_gravity (datos de campo sin corregir)
     "corrected_gravity",
     "free_air_anomaly",
     "free_air_mgal",
@@ -122,6 +123,7 @@ def _resolve_coordinate_columns(
             "coord_type": "legacy",
             "x_col": x_col, "y_col": y_col, "z_col": z_col,
             "utm_zone_col": None,
+            "elev_col": _find_first_alias(headers_lower, headers, _ELEVATION_SURFACE_ALIASES),
             "errors": errors, "warnings": warnings,
             "raw_cols": {"x_m": x_col, "z_m": z_col},
         }
@@ -147,6 +149,7 @@ def _resolve_coordinate_columns(
             "coord_type": "latlon",
             "x_col": lon_col, "y_col": y_col, "z_col": lat_col,
             "utm_zone_col": None,
+            "elev_col": elev_col,  # H-B2: preserved for corrections service
             "errors": errors, "warnings": warnings,
             "raw_cols": {"lat": lat_col, "lon": lon_col},
         }
@@ -172,6 +175,7 @@ def _resolve_coordinate_columns(
             "coord_type": "utm",
             "x_col": east_col, "y_col": y_col, "z_col": north_col,
             "utm_zone_col": utm_zone_col,
+            "elev_col": elev_col,  # topografía activa (sensor_elevations_masl)
             "errors": errors, "warnings": warnings,
             "raw_cols": {"easting": east_col, "northing": north_col},
         }
@@ -197,6 +201,7 @@ def _resolve_coordinate_columns(
             "coord_type": "local",
             "x_col": local_x_col, "y_col": y_col, "z_col": local_z_col,
             "utm_zone_col": None,
+            "elev_col": _find_first_alias(headers_lower, headers, _ELEVATION_SURFACE_ALIASES),
             "errors": errors, "warnings": warnings,
             "raw_cols": {"x": local_x_col, "z": local_z_col},
         }
@@ -312,13 +317,19 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
             
         observations = []
         raw_gravity_values = []
+        raw_latlon_elev_list: "list[dict]" = []  # H-B2: per-station lat/lon/elev (latlon surveys)
+        # Topografía activa + sigma por estación (cualquier tipo de coordenada)
+        station_elev_list: "list[float]" = []      # m s.n.m. (NaN si ausente)
+        station_unc_list: "list[float]" = []       # mGal (NaN si ausente)
+        _elev_col_any = coord_map.get("elev_col")
+        _unc_col_any = _find_first_alias(headers_lower, headers, UNCERTAINTY_ALIASES)
         dup_coords_log = []
         seen_coords = set()
         exact_duplicate_count = 0
         row_count = 0
         valid_rows = 0
         rejected_rows = 0
-        
+
         first_unit = None
         first_gravity_type = None
         first_utm_zone: "str | None" = None
@@ -458,6 +469,43 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
                 observations.append(obs)
                 raw_gravity_values.append(g_val)
                 valid_rows += 1
+
+                # Elevación de estación (m s.n.m.) — paralela a observations
+                _st_elev = float("nan")
+                if _elev_col_any:
+                    _ev = row.get(_elev_col_any, "").strip()
+                    try:
+                        _st_elev = float(_ev) if _ev else float("nan")
+                    except (ValueError, TypeError):
+                        _st_elev = float("nan")
+                station_elev_list.append(_st_elev)
+
+                # Incertidumbre por estación → mGal (misma unidad declarada que g)
+                _st_unc = float("nan")
+                if _unc_col_any:
+                    _uv = row.get(_unc_col_any, "").strip()
+                    try:
+                        _st_unc = convert_to_ms2(float(_uv), unit) * 1e5 if _uv else float("nan")
+                    except (ValueError, TypeError):
+                        _st_unc = float("nan")
+                station_unc_list.append(_st_unc)
+
+                # H-B2: capture raw lat/lon/elev for corrections service (latlon surveys only)
+                if coord_map.get("coord_type") == "latlon":
+                    _elev_col = coord_map.get("elev_col")
+                    if _elev_col:
+                        _raw_elev_str = row.get(_elev_col, "").strip()
+                        try:
+                            _raw_elev = float(_raw_elev_str) if _raw_elev_str else float("nan")
+                        except (ValueError, TypeError):
+                            _raw_elev = float("nan")
+                    else:
+                        _raw_elev = float("nan")
+                    raw_latlon_elev_list.append({
+                        "lat_deg": z,   # z slot = latitude before transform
+                        "lon_deg": x,   # x slot = longitude before transform
+                        "elev_m": _raw_elev,
+                    })
             except ValueError as e:
                 error_msg = str(e)
                 errors_list.append(error_msg)
@@ -631,18 +679,47 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
                 conversion_applied=conversion_applied, is_demo=is_demo,
                 coordinate_transform=coordinate_transform, auto_grid=auto_grid,
             )
+        # Gravedad absoluta (~9.8e5 mGal) solo es válida en el flujo de datos de
+        # campo (allow_g_raw + tipo crudo), donde las correcciones FAC/BC/TC se
+        # aplican después del import. En cualquier otro caso sigue siendo error.
+        _is_raw_type = (
+            (first_gravity_type or "").strip() in ("g_raw", "absolute_gravity")
+            or (gravity_col or "").lower() == "g_raw"
+        )
         if np.any(np.abs(g_mgal) > 1000.0):
-            errors_list.append(
-                "Anomalía supera los 1000 mGal. Se requiere Anomalía de Bouguer o Residual, no Gravedad Absoluta"
-            )
-            return _build_error_result(
-                path.name, errors_list, warnings_list,
-                csv_analysis=csv_analysis, row_count=row_count, valid_rows=valid_rows,
-                rejected_rows=rejected_rows, unit_original=first_unit,
-                gravity_column_used=gravity_col, gravity_type=first_gravity_type,
-                conversion_applied=conversion_applied, is_demo=is_demo,
-                coordinate_transform=coordinate_transform, auto_grid=auto_grid,
-            )
+            if allow_g_raw and _is_raw_type:
+                # Plausibilidad física: gravedad en superficie terrestre
+                # ≈ 976 000–983 000 mGal (con elevaciones 0–9 km).
+                if np.any((g_mgal < 970_000.0) | (g_mgal > 990_000.0)):
+                    errors_list.append(
+                        "Valores de gravedad absoluta fuera del rango físico terrestre "
+                        "[970000, 990000] mGal. Verificar unidades y columna de gravedad."
+                    )
+                    return _build_error_result(
+                        path.name, errors_list, warnings_list,
+                        csv_analysis=csv_analysis, row_count=row_count, valid_rows=valid_rows,
+                        rejected_rows=rejected_rows, unit_original=first_unit,
+                        gravity_column_used=gravity_col, gravity_type=first_gravity_type,
+                        conversion_applied=conversion_applied, is_demo=is_demo,
+                        coordinate_transform=coordinate_transform, auto_grid=auto_grid,
+                    )
+                warnings_list.append(
+                    "Gravedad absoluta detectada (~9.8e5 mGal). Se requieren "
+                    "correcciones GRS80/FAC/BC/TC antes de invertir; el flujo "
+                    "/v2/gravity-import/invert-with-corrections las aplica automáticamente."
+                )
+            else:
+                errors_list.append(
+                    "Anomalía supera los 1000 mGal. Se requiere Anomalía de Bouguer o Residual, no Gravedad Absoluta"
+                )
+                return _build_error_result(
+                    path.name, errors_list, warnings_list,
+                    csv_analysis=csv_analysis, row_count=row_count, valid_rows=valid_rows,
+                    rejected_rows=rejected_rows, unit_original=first_unit,
+                    gravity_column_used=gravity_col, gravity_type=first_gravity_type,
+                    conversion_applied=conversion_applied, is_demo=is_demo,
+                    coordinate_transform=coordinate_transform, auto_grid=auto_grid,
+                )
         if np.any(np.abs(g_mgal) > 100.0):
             warnings_list.append(
                 "Large gravity anomaly detected (>100 mGal). Verify Bouguer/residual correction."
@@ -671,6 +748,10 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
             auto_grid=auto_grid
         )
         
+        # Topografía/sigma por estación: solo si hay al menos un valor real
+        _has_elev_vals = any(not math.isnan(v) for v in station_elev_list)
+        _has_unc_vals = any(not math.isnan(v) for v in station_unc_list)
+
         return GravityImportResult(
             status="ok",
             observations=observations,
@@ -679,7 +760,11 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
             errors=errors_list,
             csv_analysis=csv_analysis,
             coordinate_transform=coordinate_transform,
-            auto_grid=auto_grid
+            auto_grid=auto_grid,
+            # H-B2: only populated for latlon surveys; None otherwise
+            raw_latlon_elev=raw_latlon_elev_list if raw_latlon_elev_list else None,
+            station_elevations=station_elev_list if _has_elev_vals else None,
+            station_uncertainties=station_unc_list if _has_unc_vals else None,
         )
         
     except Exception as e:
@@ -884,3 +969,507 @@ def _build_error_result(
         coordinate_transform=coordinate_transform,
         auto_grid=auto_grid
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Flujo de datos de campo — CSV crudo → FAC/BC/TC/GRS80 → inversión → UBC-GIF
+# (POST /v2/gravity-import/invert-with-corrections)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Tipos que YA traen las correcciones aplicadas (no se re-corrigen).
+_FIELD_ALREADY_CORRECTED = {
+    "free_air_anomaly", "free_air_mgal",
+    "bouguer_anomaly", "bouguer_mgal",
+    "complete_bouguer_anomaly", "terrain_corrected_bouguer",
+    "residual_anomaly", "residual_gravity",
+    "corrected_gravity", "synthetic_demo",
+}
+
+# Mapeo gravity_type del CSV → Literal de GeophysicsInvertInputV2.
+_FIELD_TYPE_TO_V2 = {
+    "free_air_anomaly": "free_air_anomaly",
+    "free_air_mgal": "free_air_anomaly",
+    "bouguer_anomaly": "bouguer_anomaly",
+    "bouguer_mgal": "bouguer_anomaly",
+    "complete_bouguer_anomaly": "complete_bouguer_anomaly",
+    "terrain_corrected_bouguer": "complete_bouguer_anomaly",
+}
+
+# Correcciones del meta del servicio → Literal del schema V2.
+_CORR_META_TO_V2 = {
+    "latitude_grs80": "latitude",
+    "free_air": "free_air",
+    "bouguer": "bouguer",
+    "terrain": "terrain",
+}
+
+
+async def _fetch_terrain_correction(
+    lats: np.ndarray,
+    lons: np.ndarray,
+    elevs: np.ndarray,
+    dem_type: str,
+    terrain_radius_m: float,
+    reduction_density_gcc: float,
+    warnings_out: List[str],
+) -> "Optional[np.ndarray]":
+    """TC best-effort vía OpenTopography. None si DEM/API no disponible."""
+    try:
+        from services.opentopo_service import fetch_dem_for_survey, compute_tc_from_dem
+        buffer_deg = terrain_radius_m / 111_000.0 + 0.01
+        lat_1d, lon_1d, elev_2d, cell_deg, _src = await fetch_dem_for_survey(
+            south=float(np.min(lats)), north=float(np.max(lats)),
+            west=float(np.min(lons)), east=float(np.max(lons)),
+            dem_type=dem_type, buffer_deg=buffer_deg,
+        )
+        tc = compute_tc_from_dem(
+            stations_lat=lats, stations_lon=lons, stations_elev_m=elevs,
+            dem_lat_1d=lat_1d, dem_lon_1d=lon_1d, dem_elev_2d=elev_2d,
+            dem_cell_size_deg=cell_deg,
+            terrain_radius_m=terrain_radius_m,
+            reduction_density_gcc=reduction_density_gcc,
+        )
+        return np.asarray(tc, dtype=np.float64)
+    except Exception as exc:
+        warnings_out.append(
+            f"Corrección de terreno (TC) omitida: {exc}. "
+            "La anomalía resultante es Bouguer simple (FAC+BC sin TC)."
+        )
+        return None
+
+
+async def run_field_data_inversion_with_corrections(
+    csv_path: "str | Path",
+    project_id: str,
+    run_id: str,
+    gravimeter_type: str = "unknown",
+    reduction_density_gcc: float = 2.67,
+    apply_terrain: bool = True,
+    terrain_radius_m: float = 22000.0,
+    dem_type: str = "COP30",
+    noise_pct: float = 0.0,
+    inversion_overrides: Optional[dict] = None,
+) -> dict:
+    """
+    Flujo completo de datos de campo (Plan Industrial Fase 1 + H-B2 producción):
+
+        CSV crudo → FAC+BC+TC+GRS80 automáticas → sigma = piso del gravímetro
+        → inversión W_z formal → obs vs calc → UBC-GIF → inversion_report.json
+
+    - gravity_type crudo (g_raw / absolute_gravity) + lat/lon/elev → correcciones
+      automáticas con reduction_density_gcc; CSV corregido persiste en
+      runs/{rid}/gravity_corrected.csv.
+    - gravity_type ya corregido (bouguer/complete_bouguer/...) → se usa tal cual.
+    - sigma_i = max(GRAVIMETER_NOISE_FLOOR[gravimeter_type], noise_pct·|d_i|).
+
+    Devuelve dict con corrections_summary, inversion_results, validation y exports.
+    Lanza ValueError en errores de input (la API lo mapea a 422).
+    """
+    from core.config import (
+        GRAVIMETER_NOISE_FLOOR,
+        RUN_BLOCK_MODEL_FILENAME,
+    )
+
+    overrides = dict(inversion_overrides or {})
+    warnings_out: List[str] = []
+
+    # ── 1. Import + detección de columnas ────────────────────────────────────
+    import_result = import_gravity_csv_v1(csv_path, strict=False, allow_g_raw=True)
+    if import_result.status != "ok":
+        raise ValueError(
+            "Import CSV falló: " + "; ".join(import_result.errors[:5])
+        )
+    warnings_out.extend(import_result.warnings)
+
+    gravity_type_in = (import_result.import_metadata.gravity_type or "").strip()
+    raw_obs = import_result.observations
+    n_stations = len(raw_obs)
+    g_raw_mgal = np.array([o.g for o in raw_obs], dtype=np.float64) * 1e5
+
+    has_latlon = (
+        import_result.raw_latlon_elev is not None
+        and len(import_result.raw_latlon_elev) == n_stations
+    )
+
+    # ── 2. Correcciones automáticas ───────────────────────────────────────────
+    corrections_applied_v2: List[str] = []
+    corrections_summary: dict = {}
+    corr_meta: dict = {}
+    effective_observations = list(raw_obs)
+    g_corrected_mgal = g_raw_mgal.copy()
+    output_gravity_type = _FIELD_TYPE_TO_V2.get(gravity_type_in, "bouguer_anomaly")
+
+    needs_corrections = gravity_type_in not in _FIELD_ALREADY_CORRECTED
+
+    if needs_corrections and not has_latlon:
+        warnings_out.append(
+            "gravity_type crudo pero el CSV no trae lat/lon por estación: "
+            "correcciones FAC/BC/TC NO aplicadas. La inversión usa los datos tal cual. "
+            "Para el flujo completo, incluir columnas lat, lon y elev_m."
+        )
+    elif needs_corrections:
+        from services.gravity_corrections_service import (
+            apply_all_corrections,
+            compute_normal_gravity_mgal,
+            compute_free_air_correction,
+            compute_bouguer_correction,
+        )
+
+        lats = np.array([s["lat_deg"] for s in import_result.raw_latlon_elev])
+        lons = np.array([s["lon_deg"] for s in import_result.raw_latlon_elev])
+        elevs_raw = np.array([s["elev_m"] for s in import_result.raw_latlon_elev])
+
+        has_elev = not np.all(np.isnan(elevs_raw)) and not np.all(elevs_raw == 0.0)
+        elevs = np.where(np.isnan(elevs_raw), 0.0, elevs_raw)
+        if not has_elev:
+            warnings_out.append(
+                "Sin columna de elevación con valores: FAC/BC/TC omitidas "
+                "(solo corrección de latitud GRS80)."
+            )
+
+        tc_values = None
+        if apply_terrain and has_elev:
+            tc_values = await _fetch_terrain_correction(
+                lats, lons, elevs, dem_type, terrain_radius_m,
+                reduction_density_gcc, warnings_out,
+            )
+
+        g_corrected_mgal, corr_meta = apply_all_corrections(
+            lats_deg=lats,
+            lons_deg=lons,
+            elevs_m=elevs,
+            g_obs_mgal=g_raw_mgal,
+            gravity_type_in=gravity_type_in or "g_raw",
+            reduction_density_gcc=reduction_density_gcc,
+            apply_lat=True,
+            apply_fac=has_elev,
+            apply_bouguer=has_elev,
+            apply_terrain=tc_values is not None,
+            tc_values_mgal=tc_values,
+        )
+
+        effective_observations = [
+            GravityObservation(x_m=o.x_m, y_m=o.y_m, z_m=o.z_m, g=float(gc) * 1e-5)
+            for o, gc in zip(raw_obs, g_corrected_mgal)
+        ]
+        corrections_applied_v2 = [
+            _CORR_META_TO_V2[c] for c in corr_meta.get("corrections_applied", [])
+            if c in _CORR_META_TO_V2
+        ]
+        output_gravity_type = _FIELD_TYPE_TO_V2.get(
+            corr_meta.get("output_gravity_type", ""), "bouguer_anomaly"
+        )
+
+        # Resumen por componente (mismas fórmulas que apply_all_corrections)
+        delta_cba_mean = float(np.mean(g_corrected_mgal - g_raw_mgal))
+        corrections_summary = {
+            "gamma_grs80_mean_mgal": round(float(np.mean(compute_normal_gravity_mgal(lats))), 2),
+            "fac_mean_mgal": round(float(np.mean(compute_free_air_correction(elevs, lats))), 4) if has_elev else None,
+            "bc_mean_mgal": round(float(np.mean(compute_bouguer_correction(elevs, reduction_density_gcc))), 4) if has_elev else None,
+            "tc_mean_mgal": round(float(np.mean(tc_values)), 4) if tc_values is not None else None,
+            "total_correction_mgal": round(delta_cba_mean, 4),
+            "reduction_density_gcc": reduction_density_gcc,
+            "cba_mean_mgal": round(float(np.mean(g_corrected_mgal)), 4),
+            "cba_std_mgal": round(float(np.std(g_corrected_mgal)), 4),
+        }
+        _log.info(
+            "field_corrections_applied",
+            corrections=corr_meta.get("corrections_applied", []),
+            delta_cba_mean_mgal=round(delta_cba_mean, 4),
+            n_stations=n_stations,
+        )
+        print(
+            f"[FIELD FLOW] Correcciones aplicadas: "
+            f"{', '.join(corr_meta.get('corrections_applied', []))} — "
+            f"delta_CBA media = {delta_cba_mean:.2f} mGal"
+        )
+    else:
+        warnings_out.append(
+            f"gravity_type='{gravity_type_in}' ya está corregido: se usa tal cual "
+            "(sin re-aplicar FAC/BC/TC)."
+        )
+
+    # ── 3. Persistir CSV corregido en el run dir ──────────────────────────────
+    from core.block_model_store import get_run_source_gravity_csv_path
+    source_csv_path = get_run_source_gravity_csv_path(project_id, run_id)
+    run_dir = source_csv_path.parent
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    import shutil as _shutil
+    _shutil.copyfile(str(csv_path), str(source_csv_path))
+
+    corrected_csv_path = run_dir / "gravity_corrected.csv"
+    with open(corrected_csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "station_id", "x_m", "y_m", "z_m",
+            "lat", "lon", "elev_m",
+            "g_raw_mgal", "g_corrected_mgal", "unit", "gravity_type",
+        ])
+        for i, o in enumerate(effective_observations):
+            _ll = import_result.raw_latlon_elev[i] if has_latlon else {}
+            writer.writerow([
+                f"ST_{i + 1:06d}",
+                o.x_m, o.y_m, o.z_m,
+                _ll.get("lat_deg", ""), _ll.get("lon_deg", ""), _ll.get("elev_m", ""),
+                round(float(g_raw_mgal[i]), 6),
+                round(float(g_corrected_mgal[i]), 6),
+                "mGal",
+                corr_meta.get("output_gravity_type", gravity_type_in or "unknown"),
+            ])
+
+    # ── 4. Construir input de inversión (grid auto + overrides del usuario) ──
+    auto_grid = import_result.auto_grid
+    if auto_grid is None and import_result.csv_analysis:
+        auto_grid = import_result.csv_analysis.auto_grid
+    if auto_grid is None:
+        raise ValueError("auto_grid no disponible tras importar CSV.")
+
+    _max_dim = 80
+
+    def _eff(name: str, auto_val, cast=int, max_val=None):
+        v = overrides.get(name)
+        if v is None or (isinstance(v, (int, float)) and v <= 0):
+            v = auto_val
+        v = cast(math.ceil(v)) if cast is int else cast(v)
+        if max_val is not None and v > max_val:
+            v = cast(max_val)
+        return v
+
+    nx = _eff("nx", auto_grid.nx, max_val=_max_dim)
+    ny = _eff("ny", auto_grid.ny, max_val=_max_dim)
+    nz = _eff("nz", auto_grid.nz, max_val=_max_dim)
+    block_size = _eff("block_size", auto_grid.block_size_m)
+    depth = _eff("depth", auto_grid.depth_m, max_val=ny * block_size)
+    cutoff_radius = _eff("cutoff_radius", auto_grid.cutoff_radius_m, cast=float)
+    lambda_mag = float(overrides.get("lambda_mag") or 3.0)   # operating point validado
+    alpha_spatial = float(overrides.get("alpha_spatial") or 1.0)
+
+    # Sigma: σ por estación (columna uncertainty del CSV) > piso por gravímetro.
+    noise_floor_mgal = float(
+        GRAVIMETER_NOISE_FLOOR.get(gravimeter_type, GRAVIMETER_NOISE_FLOOR["unknown"])
+    )
+    sigma_source = f"gravimeter_table[{gravimeter_type}]"
+    _unc_list = import_result.station_uncertainties
+    if _unc_list:
+        _unc_finite = sorted(u for u in _unc_list if u == u and u > 0.0)
+        if len(_unc_finite) >= max(3, len(_unc_list) // 2):
+            noise_floor_mgal = float(_unc_finite[len(_unc_finite) // 2])
+            sigma_source = "csv_uncertainty_column_median"
+            warnings_out.append(
+                f"Sigma fijado desde la columna uncertainty del CSV: piso = "
+                f"{noise_floor_mgal:.4g} mGal (mediana por estación, prioridad "
+                "sobre la tabla de gravímetros)."
+            )
+
+    # Topografía activa: elevaciones por estación si el relieve es significativo.
+    sensor_elevations = None
+    _se_list = import_result.station_elevations
+    if _se_list and len(_se_list) == len(effective_observations):
+        _se_finite = [v for v in _se_list if v == v]
+        if len(_se_finite) == len(_se_list) and (max(_se_finite) - min(_se_finite)) >= 10.0:
+            sensor_elevations = [float(v) for v in _se_list]
+            warnings_out.append(
+                f"Topografía activa: elevaciones {min(_se_finite):.0f}–{max(_se_finite):.0f} m "
+                "aplicadas como máscara topográfica."
+            )
+
+    from schemas.geophysics_schema import GeophysicsInvertInputV2
+    invert_input = GeophysicsInvertInputV2(
+        project_id=project_id,
+        run_id=run_id,
+        depth=depth,
+        nir=0,
+        fe=0,
+        region=str(overrides.get("region") or "field_data"),
+        lat=str(overrides["lat"]) if overrides.get("lat") is not None else None,
+        lon=str(overrides["lon"]) if overrides.get("lon") is not None else None,
+        nx=nx, ny=ny, nz=nz,
+        block_size=block_size,
+        cutoff_radius=cutoff_radius,
+        lambda_mag=lambda_mag,
+        alpha_spatial=alpha_spatial,
+        observations=effective_observations,
+        enable_focusing=True,
+        gravity_type=output_gravity_type,
+        corrections_applied=corrections_applied_v2,
+        noise_floor_mgal=noise_floor_mgal,
+        noise_pct=float(noise_pct),
+        sensor_elevations_masl=sensor_elevations,
+        gravimeter_type=gravimeter_type,
+        lambda_strategy="fixed",
+        lambda_fixed=lambda_mag,
+        auto_lambda=False,
+        # Default industrial v2: 0.0 (permite contrastes negativos). Con
+        # no-negatividad estricta (density_min=base=2.6) el LSQR+clip degrada
+        # el misfit ~35% en cuerpos compactos (lóbulos negativos recortados).
+        density_min=float(overrides.get("density_min", 0.0)),
+        density_max=float(overrides.get("density_max", 5.5)),
+        auto_params_metadata={
+            "version": "field_data_flow_v1",
+            "gravity_corrections": corr_meta,
+            "gravimeter_type": gravimeter_type,
+            "noise_floor_mgal": noise_floor_mgal,
+            "noise_pct": float(noise_pct),
+            "corrected_csv": str(corrected_csv_path),
+        },
+    )
+
+    # ── 5. Inversión (W_z formal, sigma = piso instrumental) ─────────────────
+    from services.geophysics_service import run_geophysics_inversion
+    inversion_result = run_geophysics_inversion(invert_input)
+    report = inversion_result.get("report", {}) or {}
+    fit = report.get("fitDiagnostics", {}) or {}
+
+    # ── 6. Validación obs vs calc (r²) ────────────────────────────────────────
+    obs_vs_calc_path = run_dir / "obs_vs_calc.parquet"
+    obs_vs_calc_r2 = None
+    if obs_vs_calc_path.exists():
+        try:
+            import polars as _pl
+            _df_ovc = _pl.read_parquet(str(obs_vs_calc_path))
+            _do = _df_ovc["d_obs"].to_numpy()
+            _dp = _df_ovc["d_pred"].to_numpy()
+            _ss_res = float(np.sum((_do - _dp) ** 2))
+            _ss_tot = float(np.sum((_do - np.mean(_do)) ** 2))
+            obs_vs_calc_r2 = round(1.0 - _ss_res / max(_ss_tot, 1e-30), 6)
+        except Exception as _r2_exc:
+            warnings_out.append(f"No fue posible calcular r² obs vs calc: {_r2_exc}")
+    else:
+        warnings_out.append("obs_vs_calc.parquet no generado por el solver.")
+
+    # ── 7. Export UBC-GIF (.msh + .den) desde el block model persistido ──────
+    ubc_paths: dict = {}
+    try:
+        import polars as _pl
+        _bm_path = run_dir / RUN_BLOCK_MODEL_FILENAME
+        _df_bm = _pl.read_parquet(str(_bm_path))
+        _idx = (
+            _df_bm["ix"].to_numpy()
+            + nx * _df_bm["iy"].to_numpy()
+            + nx * ny * _df_bm["iz"].to_numpy()
+        )
+        _density_full = np.full(nx * ny * nz, np.nan, dtype=np.float64)
+        _density_full[_idx] = _df_bm["density_t_m3"].to_numpy()
+
+        # Permutación de ejes TerraQuantum → UBC-GIF:
+        # TQ: (x=Este, y=profundidad hacia abajo, z=Norte), Fortran (nx, ny, nz).
+        # UBC: (Este, Norte, Z hacia arriba). El exportador hace flip del último
+        # eje, así que se entrega con índice 0 = fondo (Z-up).
+        _arr3d = _density_full.reshape((nx, ny, nz), order="F")      # (E, depth, N)
+        _arr_ubc = np.transpose(_arr3d, (0, 2, 1))[:, :, ::-1]       # (E, N, Z-up)
+
+        from services.export_service import export_core_to_ubc
+        _ubc = export_core_to_ubc(
+            output_dir=str(run_dir),
+            run_prefix="model",
+            nx=nx, ny=nz, nz=ny,                     # UBC: nE, nN, nZ
+            dx=float(block_size),
+            est_density=np.ascontiguousarray(_arr_ubc).ravel(order="F"),
+            origin_z=-float(ny * block_size),        # techo del modelo = superficie (0 m)
+            project_id=project_id,
+            run_id=run_id,
+        )
+        if _ubc:
+            ubc_paths = {
+                "ubc_msh_path": _ubc.get("mesh_path"),
+                "ubc_den_path": _ubc.get("model_path"),
+                "n_cells": _ubc.get("n_cells"),
+            }
+        else:
+            warnings_out.append("Export UBC-GIF no disponible para esta corrida.")
+    except Exception as _ubc_exc:
+        warnings_out.append(f"Export UBC-GIF falló: {_ubc_exc}")
+
+    # ── 8. Reporte JSON con limitaciones honestas ─────────────────────────────
+    chi2_red = report.get("chi2_final")
+    rmse_ms2 = fit.get("residual_rmse")
+    nrmse_pct = (
+        round(float(fit.get("normalized_rmse", 0.0)) * 100.0, 4)
+        if fit.get("normalized_rmse") is not None else None
+    )
+    n_active = (report.get("r05_geometry_audit") or {}).get("observable_voxels")
+
+    # Guard de degradación (mismo criterio que la ruta v1)
+    _mis_v2 = inversion_result.get("misfit_error_percent")
+    if _mis_v2 is not None and float(_mis_v2) > 50.0:
+        warnings_out.append(
+            f"MODELO DEGRADADO: misfit {float(_mis_v2):.0f}% — NO usar para interpretación. "
+            "Revisar cutoff_radius, lambda, bounds de densidad y correcciones."
+        )
+    _obs_ratio_v2 = (report.get("r05_geometry_audit") or {}).get("observable_ratio")
+    if _obs_ratio_v2 is not None and float(_obs_ratio_v2) < 0.5:
+        warnings_out.append(
+            f"COBERTURA INSUFICIENTE: solo {float(_obs_ratio_v2) * 100:.0f}% de los vóxeles "
+            "activos es sensado (cutoff_radius pequeño para el espaciamiento del survey)."
+        )
+
+    response: dict = {
+        "status": "success",
+        "project_id": project_id,
+        "run_id": run_id,
+        "gravity_type_in": gravity_type_in or "unknown",
+        "gravity_type_used": output_gravity_type,
+        "gravimeter_type": gravimeter_type,
+        "corrections_applied": corr_meta.get("corrections_applied", []),
+        "corrections_summary": corrections_summary,
+        "sigma_model": {
+            "formula": "sigma_i = max(noise_floor, noise_pct * |d_i|)",
+            "noise_floor_mgal": noise_floor_mgal,
+            "noise_pct": float(noise_pct),
+            "source": sigma_source,
+        },
+        "inversion_results": {
+            "chi_squared_reduced": chi2_red,
+            "rmse_ms2": rmse_ms2,
+            "nrmse_pct": nrmse_pct,
+            "misfit_error_percent": inversion_result.get("misfit_error_percent"),
+            "n_observations": n_stations,
+            "n_active_voxels": n_active,
+            "lambda_used": report.get("lambda_used"),
+            "grid": {"nx": nx, "ny": ny, "nz": nz, "block_size_m": block_size, "depth_m": depth},
+        },
+        "validation": {
+            "obs_vs_calc_r2": obs_vs_calc_r2,
+            "obs_vs_calc_parquet": str(obs_vs_calc_path) if obs_vs_calc_path.exists() else None,
+            "depth_weighting": {
+                "scheme": "W_z formal Li & Oldenburg: (depth+z0)^(beta/2), beta=2.0",
+                "verified_by": "tests/test_field_data_complete_flow.py (esfera 400m, error <15%)",
+            },
+            "kernel": {
+                "type": "prisma rectangular (Nagy 1966) / HPC KDTree",
+                "verified_by": "tests/audit_groundtruth_validation.py (H-A2)",
+            },
+        },
+        "exports": {
+            **ubc_paths,
+            "block_model_parquet": str(run_dir / RUN_BLOCK_MODEL_FILENAME),
+            "report_json": str(run_dir / "inversion_report.json"),
+        },
+        "limitations": [
+            "La inversión gravimétrica es intrínsecamente no-única: la profundidad "
+            "recuperada depende del depth weighting y de restricciones externas.",
+            "Validado a escala local (<10 km). A escala regional (>50 km) se requiere "
+            "separación regional-residual y restricciones geológicas.",
+            "El modelo de densidad NO constituye una estimación de recursos "
+            "JORC/NI 43-101; es un insumo de exploración temprana.",
+            "TC por prismas usa aproximación de masa puntual en campo lejano; "
+            "para terreno abrupto (>500 m de relieve local) validar con TC dedicado.",
+            "La inversión suaviza en profundidad (smearing): la profundidad del "
+            "pico de densidad es más confiable que el centroide del cuerpo recuperado.",
+            "Con no-negatividad estricta (density_min=2.6) el solver LSQR+clip puede "
+            "degradar el misfit en cuerpos compactos; el default v2 (density_min=0.0) "
+            "permite contrastes negativos y ajusta al nivel del ruido.",
+        ],
+        "warnings": warnings_out,
+    }
+
+    report_json_path = run_dir / "inversion_report.json"
+    try:
+        import json as _json
+        with open(report_json_path, "w", encoding="utf-8") as f:
+            _json.dump(response, f, indent=2, ensure_ascii=False, default=str)
+    except Exception as _rep_exc:
+        warnings_out.append(f"inversion_report.json no persistido: {_rep_exc}")
+
+    return response

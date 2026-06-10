@@ -30,6 +30,24 @@ def _sigma_adaptive(g_observed: np.ndarray) -> np.ndarray:
     return np.maximum(sigma, 1e-30)
 
 
+def _sigma_parametric(g_observed: np.ndarray, noise_floor: float, noise_pct: float) -> np.ndarray:
+    """
+    Sigma con piso instrumental explícito (flujo de datos de campo).
+
+        sigma_i = max(noise_floor, noise_pct * |d_obs_i|)
+
+    noise_floor es un PISO (no se suma): para anomalías de Bouguer bien
+    corregidas el ruido restante es instrumental (CG-6 ≈ 0.005 mGal) y el
+    término relativo solo domina cuando |d| es grande. La forma aditiva
+    anterior (floor + pct·|d|) sobreestimaba sigma ~|d|/floor veces para
+    datos de campo, colapsando chi²_red a ~0.
+
+    Unidades: las mismas de g_observed (el caller convierte mGal → m/s²).
+    """
+    sigma = np.maximum(float(noise_floor), float(noise_pct) * np.abs(g_observed))
+    return np.maximum(sigma, 1e-30)
+
+
 def hutchinson_diag_inv(
     A,
     n_probes: int = 32,
@@ -726,8 +744,7 @@ class GravimetryInversion:
         if noise_floor == 0.02 and noise_pct == 0.02:
             sigma = _sigma_adaptive(g_observed)
         else:
-            sigma = noise_floor + noise_pct * np.abs(g_observed)
-            sigma = np.maximum(sigma, 1e-30)
+            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
         Wd    = _sp.diags(1.0 / sigma)
         G_w   = Wd @ G_active
         d_w   = Wd @ g_observed
@@ -1107,10 +1124,10 @@ class GravimetryInversion:
         # ── DOI: Modelo de Referencia (Li & Oldenburg 1999) ──────────────────
         m_ref: Optional[np.ndarray] = None,
         # ── Bound petrofísico EXPLÍCITO sobre la densidad recuperada (t/m³) ───
-        # Constraint duro, configurable y documentado (antes era un clip silencioso
-        # [2.6, 4.2] embebido). Los defaults preservan el comportamiento histórico.
+        # H-A0 Bug 3: density_max subido a 5.5 para cubrir magnetita (5.0-5.2),
+        # cromita (4.5-4.8) y pirita masiva (4.5-5.0) — minerales objetivo en Chile.
         density_min: float = 2.6,
-        density_max: float = 4.2,
+        density_max: float = 5.5,
         # ── R-02: Penalización diferencial de celdas de padding ──────────────
         # padding_mask: array bool (total_voxels,); True = celda de padding.
         # κ = 10^5 penaliza la smallness del padding 10^5 veces más que el core,
@@ -1358,8 +1375,7 @@ class GravimetryInversion:
         if noise_floor == 0.02 and noise_pct == 0.02:
             sigma = _sigma_adaptive(g_observed)
         else:
-            sigma = noise_floor + noise_pct * np.abs(g_observed)
-            sigma = np.maximum(sigma, 1e-30)
+            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
         Wd    = sp.diags(1.0 / sigma)
         G_w   = Wd @ G_active
         d_w   = Wd @ g_observed
@@ -1376,19 +1392,6 @@ class GravimetryInversion:
         else:
             sensitivity_active = _sensitivity_obs
             normalized_sensitivity_active = _norm_sens_obs
-
-        # ── Column Scaling (Ws) ───────────────────────────────────────────────
-        col_norms = np.sqrt(G_w.power(2).sum(axis=0)).A1
-        col_norms = np.maximum(col_norms, 1e-12)
-        Ws = sp.diags(1.0 / col_norms)
-        G_scaled = G_w @ Ws
-
-        # ── HITO 5 — Bounds en espacio escalado m_tilde ──────────────────────────
-        # density = base_density + Ws @ m_tilde, con Ws = diag(1/col_norms),
-        # por lo que m_tilde_i = (density_i - base_density) * col_norms_i.
-        # Los bounds físicos [density_min, density_max] se transforman a m_tilde.
-        _lb_tilde = (float(density_min) - self.base_density) * col_norms
-        _ub_tilde = (float(density_max) - self.base_density) * col_norms
 
         # ── Laplaciano no-uniforme reducido a celdas activas — F0.9 ──────────
         # Si hx/hy/hz provienen del tensor mesh, los pesos reales de arista
@@ -1409,31 +1412,50 @@ class GravimetryInversion:
             _lap_row_scale[_anchor_active] = float(laplacian_relax_alpha)
             L_active = (sp.diags(_lap_row_scale) @ L_active).tocsr()
 
-        # ── Depth Weighting Topográfico (Li & Oldenburg) ──────────────────────
+        # ── H-A0 Bug 1: W_z formal (Li & Oldenburg 1998) — cambio de variable ─
+        # Reemplaza column scaling (Ws) + depth weighting separado (w_reg).
+        # Wz_inv = diag((depth+z0)^{+β/2}) aplica simétricamente en datos
+        # Y regularización → elimina la doble compensación de profundidad.
+        # Referencia: test sintético 2026-06-07, pico a 775m vs 400m real (FAIL).
         z0 = self.dy / 2.0
         true_depth = y_c_active - _topo_sol
-        true_depth = np.clip(true_depth, a_min=1.0, a_max=None)  # Near-field protection
+        true_depth = np.clip(true_depth, a_min=1.0, a_max=None)
 
-        w_depth = (true_depth + z0) ** depth_beta   # Li & Oldenburg 1998: β configurable (default=2.0)
-        w_reg = 1.0 / w_depth
-        w_reg = w_reg / np.mean(w_reg)
-        W_m = sp.diags(w_reg) @ L_active
-        L_scaled = W_m @ Ws
+        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
+        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)   # escala global ~1
+        Wz_inv = sp.diags(wz_inv_diag)
+
+        # Bounds en espacio m_tilde: density = base_density + Wz_inv @ m_tilde
+        _lb_tilde = (float(density_min) - self.base_density) / np.maximum(wz_inv_diag, 1e-12)
+        _ub_tilde = (float(density_max) - self.base_density) / np.maximum(wz_inv_diag, 1e-12)
+
+        G_scaled = G_w @ Wz_inv
+        L_scaled = L_active @ Wz_inv
+
+        # ── Column normalization sobre W_z (Li & Oldenburg 1998, combinado) ──
+        # Sin normalización, las columnas de G_w@Wz_inv tienen magnitudes SI
+        # gravedad (~1e-2 después de Wd), haciendo que lambda=3.0 domine los
+        # datos ~14 000×. W_col lleva las columnas a norma unitaria, preservando
+        # la calibración N_CALIB=256 del operating point fijo.
+        # Cambio de variable combinado: m = Wz_inv_orig @ W_col @ m_tilde.
+        _col_norms_wz = np.sqrt(G_scaled.power(2).sum(axis=0)).A1
+        _col_norms_wz = np.maximum(_col_norms_wz, 1e-12)
+        _W_col        = sp.diags(1.0 / _col_norms_wz)
+        G_scaled  = G_scaled @ _W_col
+        L_scaled  = L_scaled @ _W_col
+        _lb_tilde = _lb_tilde * _col_norms_wz   # bounds en nuevo m_tilde
+        _ub_tilde = _ub_tilde * _col_norms_wz
+        Wz_inv    = Wz_inv @ _W_col             # m = Wz_inv_combined @ m_tilde
 
         # ── Sistema augmentado ────────────────────────────────────────────────
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
 
         # ── Modelo de referencia m_ref (Li & Oldenburg 1999) ──────────────────
-        # Funcional con referencia:  φ(m) = ‖Wd(Gm−d)‖² + λ²‖W_m(m−m_ref)‖²
-        # El bloque LHS de regularización es INVARIANTE: en el espacio escalado por
-        # columnas (m = Ws·m_tilde) se cumple
-        #     λ_spatial·L_scaled·m_tilde = λ_spatial·W_m·Ws·m_tilde = λ_spatial·W_m·m,
-        # de modo que el residual de regularización es λ_spatial·W_m·(m − m_ref).
-        # Por tanto SOLO se desplaza el RHS de las filas de regularización:
-        #     0  →  λ_spatial · (W_m · m_ref).
-        # G_aug, el conditioning, el scaling y la estabilidad LSQR no se alteran.
+        # L_scaled = L_active @ Wz_inv; m = Wz_inv @ m_tilde.
+        # Residual de regularización: λ_spatial · L_active · (m − m_ref).
+        # RHS de las filas de regularización: λ_spatial · L_active · m_ref.
         # m_ref is None → d_reg = 0 → idéntico al solver sin referencia.
-        # m_ref base (DOI / Li&Oldenburg). m_ref_sol vive en espacio observable.
+        # m_ref_sol vive en espacio observable (densidad contraste).
         if m_ref is None:
             m_ref_sol = None
         else:
@@ -1467,15 +1489,15 @@ class GravimetryInversion:
         if m_ref_sol is None:
             d_reg = np.zeros(_n_active_sol, dtype=np.float64)
         else:
-            d_reg = lambda_spatial * (W_m @ m_ref_sol)
+            d_reg = lambda_spatial * (L_active @ m_ref_sol)
 
         G_aug = sp.vstack([G_scaled, lambda_spatial * L_scaled]).tocsr()
         d_aug = np.concatenate([d_w, d_reg])
 
         # ── FASE 9C-1: inyección de regularización externa (cross-gradient) ───
         # Los bloques llegan en ESPACIO FÍSICO del modelo (m); el solver trabaja en
-        # la variable escalada m_tilde con m = Ws·m_tilde, de modo que cada bloque B
-        # se convierte vía B·Ws (igual que L_scaled = W_m·Ws). El RHS se apila tal
+        # la variable escalada m_tilde con m = Wz_inv·m_tilde, de modo que cada bloque B
+        # se convierte vía B·Wz_inv (igual que L_scaled = L_active·Wz_inv). El RHS se apila tal
         # cual (vive en el espacio de residual del bloque). Requiere
         # prune_observable_domain=False para que las columnas (n_active) conformen.
         if extra_reg_blocks:
@@ -1483,13 +1505,13 @@ class GravimetryInversion:
             _xg_rhs  = [d_aug]
             for _bi, _blk in enumerate(extra_reg_blocks):
                 _blk = sp.csr_matrix(_blk)
-                if _blk.shape[1] != Ws.shape[0]:
+                if _blk.shape[1] != Wz_inv.shape[0]:
                     raise ValueError(
                         f"extra_reg_blocks[{_bi}] tiene {_blk.shape[1]} columnas; "
-                        f"se esperaban {Ws.shape[0]} (modelo activo). "
+                        f"se esperaban {Wz_inv.shape[0]} (modelo activo). "
                         f"¿Olvidaste prune_observable_domain=False?"
                     )
-                _xg_mats.append(_blk @ Ws)
+                _xg_mats.append(_blk @ Wz_inv)
                 if extra_reg_rhs is not None and _bi < len(extra_reg_rhs):
                     _xg_rhs.append(np.asarray(extra_reg_rhs[_bi], dtype=np.float64).ravel())
                 else:
@@ -1498,38 +1520,37 @@ class GravimetryInversion:
             d_aug = np.concatenate(_xg_rhs)
             print(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
 
+        # H-A0 Bug 2: lambda scaling con n_active (calibrado a N_CALIB=256).
+        # Con Wz_inv la smallness es uniforme en m_tilde; solo se escala la magnitud.
+        _N_CALIB = 256
+        lambda_mag_eff = float(lambda_mag) * np.sqrt(float(_n_active_sol) / _N_CALIB)
+
         print(
-            f"[INVERSIÓN F0.2] Ejecutando LSQR. "
-            f"lambda_mag={lambda_mag:.2e} | lambda_spatial={lambda_spatial:.2e}"
+            f"[INVERSIÓN F0.2] Ejecutando LSQR (H-A0: W_z formal). "
+            f"lambda_mag={lambda_mag:.2e} | lambda_mag_eff={lambda_mag_eff:.2e} "
+            f"| lambda_spatial={lambda_spatial:.2e} | depth_beta={depth_beta}"
         )
 
-        # ── Regularización compuesta (objetivo de modelo tipo Li & Oldenburg) ─
-        #   φ_m(m) = ‖ lambda_spatial · W_m · (m − m_ref) ‖²    (suavidad, en G_aug)
-        #          + ‖ diag(w_small) · m ‖²                      (smallness / orden cero)
-        # FASE 4 (H2 — causa J): el depth weighting w_reg que ya pondera la suavidad
-        # (W_m = diag(w_reg)·L_active) AHORA también pondera la smallness del core.
-        # Antes el core usaba un peso uniforme lambda_mag (vía damp sobre m_tilde, que
-        # de hecho lo ponderaba implícitamente por col_norms), de modo que el depth
-        # weighting de Li & Oldenburg actuaba SOLO sobre la suavidad y la masa somera
-        # quedaba sub-penalizada. Con w_small_core = lambda_mag · w_reg ambos términos
-        # del objetivo de modelo comparten la MISMA ponderación en profundidad y se
-        # unifican las dos rutas (con/sin padding-anclajes) en un único solver.
-        # padding (R-02) y anclajes (FASE 8) conservan su peso ABSOLUTO (κ·lambda_mag):
-        # son restricciones fuertes que NO deben relajarse por profundidad.
-        _w_small = float(lambda_mag) * w_reg            # H2: smallness depth-weighted (= suavidad)
+        # ── Regularización compuesta (objetivo de modelo Li & Oldenburg 1998) ─
+        #   φ_m = ‖ lambda_spatial · L_active · Wz_inv · (m_tilde − m_ref_tilde) ‖²   (suavidad)
+        #       + ‖ diag(lambda_mag_eff) · m_tilde ‖²   (smallness en espacio transformado)
+        # El depth weighting vive en Wz_inv (cambio de variable); el bloque smallness
+        # es identidad en m_tilde para no reintroducir doble compensación.
+        # padding (R-02) y anclajes (FASE 8) usan RHS en espacio m_tilde.
+        _w_small = np.full(_n_active_sol, lambda_mag_eff, dtype=np.float64)
         if _padding_active is not None:
             _w_small = np.where(
                 _padding_active,
-                float(padding_kappa) * float(lambda_mag),
+                float(padding_kappa) * lambda_mag_eff,
                 _w_small,
             )
         if _has_anchors:
             _w_small = np.where(
                 _anchor_active,
-                float(anchor_kappa) * float(lambda_mag),
+                float(anchor_kappa) * lambda_mag_eff,
                 _w_small,
             )
-        _small_block = sp.diags(_w_small) @ Ws          # incluye column scaling
+        _small_block = sp.diags(_w_small)   # identidad en m_tilde (no Wz_inv)
         # RHS de smallness: 0 (core/padding → hacia base_density) excepto celdas
         # ancladas, que apuntan al contraste medido del sondaje. El residual de la
         # fila i es w_i·(contraste_i − target_i), por lo que d_small_i = w_i·target_i.
@@ -1541,15 +1562,24 @@ class GravimetryInversion:
         _d_aug_sm  = np.concatenate([d_aug, _d_small])
 
         from core.config import USE_BOUNDED_SOLVER as _USE_BC
+        from core.config import USE_LSMR_LARGE as _USE_LSMR, LSMR_THRESHOLD_N_ACTIVE as _LSMR_THRESH
         # Benchmark empírico (2026-06-01): TRF+LSMR ~40s con NNZ≈213K y n_active≈14K;
         # LSQR <0.1s. Umbral 8000 (HITO 5): demo (~800), medium CSV (~5K) y DOI test
         # (~5K) usan TRF bounded; auto_grid (>8K) usa LSQR+clip como fallback.
+        # Fase 10: LSMR para n_active > 50K (mejor convergencia en sistemas mal condicionados).
         _use_trf = _USE_BC and _n_active_sol <= 8_000
+        _use_lsmr = (not _use_trf) and _USE_LSMR and (_n_active_sol > _LSMR_THRESH)
+        if _use_trf:
+            _solver_label = "TRF/bounded"
+        elif _use_lsmr:
+            _solver_label = f"LSMR (Fase10, n>{_LSMR_THRESH:,})"
+        else:
+            _solver_label = "LSQR+clip"
         print(
             f"[SOLVER] G_aug=({_G_aug_sm.shape[0]:,}×{_G_aug_sm.shape[1]:,}) "
             f"n_active_sol={_n_active_sol:,} NNZ={_G_aug_sm.nnz:,} "
-            f"smallness=depth-weighted(H2) "
-            f"-> {'TRF/bounded' if _use_trf else 'LSQR+clip (auto-fallback n>8K)'}"
+            f"smallness=W_z-formal(H-A0) lambda_eff={lambda_mag_eff:.2e} "
+            f"-> {_solver_label}"
         )
         _t_solve = time.perf_counter()
         if _use_trf:
@@ -1580,6 +1610,21 @@ class GravimetryInversion:
                     f"residual={_sp_info['residual_norm']:.3e} "
                     f"fill_nnz={_sp_info['fill_nnz']:,}"
                 )
+            elif _use_lsmr:
+                # Fase 10: LSMR para n_active > 50K.
+                # Fong & Saunders (2011): residuo ||r|| monotónicamente decreciente,
+                # mejor estabilidad numérica que LSQR para sistemas mal condicionados.
+                # NO forma A^T A explícitamente (lección Sprint 5A).
+                from exploration.solver_preconditioned import solve_inversion_lsmr as _lsmr_solve
+                m_tilde, _acond = _lsmr_solve(
+                    _G_aug_sm, _d_aug_sm, _lb_tilde, _ub_tilde,
+                    maxiter=1000, tol=1e-8,
+                )
+                print(
+                    f"[SOLVER] LSMR (Fase 10) convergido en "
+                    f"{time.perf_counter()-_t_solve:.1f}s. "
+                    f"cond(A)~{_acond:.2e}"
+                )
             else:
                 result = lsqr(
                     _G_aug_sm, _d_aug_sm,
@@ -1599,7 +1644,7 @@ class GravimetryInversion:
                 f"o lambda_mag={lambda_mag:.2e}."
             )
 
-        density_contrast_active = Ws @ m_tilde
+        density_contrast_active = Wz_inv @ m_tilde
 
         if len(density_contrast_active) != _n_active_sol:
             raise RuntimeError("LSQR devolvió un vector de densidad activo con tamaño incorrecto.")
@@ -1680,7 +1725,7 @@ class GravimetryInversion:
 
         # ── chi² reducido final ────────────────────────────────────────────────
         _sigma_diag = _sigma_adaptive(g_observed) if (noise_floor == 0.02 and noise_pct == 0.02) \
-            else np.maximum(noise_floor + noise_pct * np.abs(g_observed), 1e-30)
+            else _sigma_parametric(g_observed, noise_floor, noise_pct)
         _phi_d = float(np.sum((residual_sensor / _sigma_diag) ** 2))
         _chi2_final = _phi_d / max(len(g_observed), 1)
 
@@ -1718,6 +1763,13 @@ class GravimetryInversion:
             solver_meta["n_anchored_voxels"]    = int(np.sum(_anchor_active)) if _anchor_active is not None else 0
             solver_meta["anchor_kappa"]         = float(anchor_kappa) if _has_anchors else None
             solver_meta["laplacian_relax_alpha"] = float(laplacian_relax_alpha) if _has_anchors else None
+            solver_meta["lambda_effective"]      = float(lambda_mag_eff)
+            # H-C1: datos observed vs calculated para persistir en obs_vs_calc.parquet
+            solver_meta["d_obs"]          = g_observed
+            solver_meta["d_pred"]         = g_model
+            solver_meta["residuals"]      = residual_sensor
+            solver_meta["rmse"]           = float(np.sqrt(np.mean(residual_sensor ** 2)))
+            solver_meta["station_coords"] = sensor_coords  # (n_sensors, 3) or None
 
         return estimated_density_full, relative_score_full, misfit_percent, normalized_sensitivity
 
@@ -1803,8 +1855,7 @@ class GravimetryInversion:
         if noise_floor == 0.02 and noise_pct == 0.02:
             sigma = _sigma_adaptive(g_observed)
         else:
-            sigma = noise_floor + noise_pct * np.abs(g_observed)
-            sigma = np.maximum(sigma, 1e-30)
+            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
         Wd = sp.diags(1.0 / sigma)
         G_w = Wd @ G_active
         col_norms = np.sqrt(G_w.power(2).sum(axis=0)).A1
@@ -1910,23 +1961,33 @@ def compute_jacobian_dask(
     ]
     delayed_batches = [_batch_kernel(s, e) for s, e in batch_ranges]
 
-    # scheduler='synchronous' lets each task's internal ThreadPoolExecutor run
-    # unimpeded (no nested Dask-thread pools).
-    results = dask.compute(*delayed_batches, scheduler="synchronous")
-
-    # Concatenate all batches into one dense matrix.
-    jacobian_dense = np.concatenate(results, axis=0)   # (n_sensors, n_voxels)
-
+    # Fase 10 §10.4 — Out-of-core: cada batch se escribe DIRECTAMENTE a Zarr
+    # sin materializar la matriz completa en RAM.
+    # Peak RAM = batch_size × n_voxels × 8 bytes (un batch float64 a la vez).
+    # En disco: float32 (4 bytes) → 50% menos espacio vs Sprint 2 float64.
     zarr_path = os.path.join(
         tempfile.gettempdir(),
         f"tq_jacobian_{n_sensors}x{n_voxels}.zarr",
     )
-    _save_zarr(jacobian_dense, zarr_path, chunk_size=batch_size)
+    import zarr as _zarr
+    z = _zarr.open_array(
+        zarr_path,
+        mode="w",
+        shape=(n_sensors, n_voxels),
+        dtype="float32",
+        chunks=(min(batch_size, n_sensors), n_voxels),
+    )
+    for _i, (s, e) in enumerate(batch_ranges):
+        # Computa un batch a la vez (synchronous = sin pool anidado)
+        batch_result = dask.compute(delayed_batches[_i], scheduler="synchronous")[0]
+        z[s:e, :] = batch_result.astype(np.float32)
+        del batch_result   # libera inmediatamente
 
+    disk_mb = n_sensors * n_voxels * 4 / 1e6
     print(
-        f"[JACOBIAN DASK] shape=({n_sensors},{n_voxels}) | "
+        f"[JACOBIAN DASK/OOC] shape=({n_sensors},{n_voxels}) | "
         f"batches={len(batch_ranges)} | batch_size={batch_size} | "
-        f"zarr={zarr_path}"
+        f"disco={disk_mb:.1f} MB (float32) | zarr={zarr_path}"
     )
     return zarr_path, (n_sensors, n_voxels)
 
@@ -1941,7 +2002,7 @@ def solve_inversion_treemesh(
     depth_beta: float = 2.0,
     base_density: float = 2.6,
     density_min: float = 2.6,
-    density_max: float = 4.2,
+    density_max: float = 5.5,
     noise_floor: float = 0.02,
     noise_pct: float = 0.02,
     solver_meta: Optional[dict] = None,
@@ -2009,7 +2070,7 @@ def solve_inversion_treemesh(
     if noise_floor == 0.02 and noise_pct == 0.02:
         sigma = _sigma_adaptive(g_observed)
     else:
-        sigma = np.maximum(noise_floor + noise_pct * np.abs(g_observed), 1e-30)
+        sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
     Wd = sp.diags(1.0 / sigma)
     d_w = Wd @ g_observed
     G_w = (Wd @ G).tocsr()

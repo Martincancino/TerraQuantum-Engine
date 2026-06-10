@@ -991,12 +991,13 @@ function MineralComplex({
 
   if (!model || count === 0) return null;
 
-  // Transparencia física (transmission) solo cuando la malla es ligera y translúcida:
-  // refractar/transmitir cuesta un render-target extra, inviable en modelos densos
-  // (modo full/anomaly hasta 250k). En modo exploración (≤5k) y vista debug translúcida
-  // sí podemos permitirla para un look "mineral" premium.
+  // LOD material: meshPhysicalMaterial (clearcoat+transmission) para modelos ligeros (≤5k),
+  // meshStandardMaterial (sin clearcoat) para modelos medianos (5k-50k).
+  // > 50k ya usa WebWorker (LOD_WORKER_THRESHOLD).
+  const useLightMaterial = count <= 5000;
+  // Transparencia física (transmission) solo en tier ligero y modo exploración.
   const useTransmission =
-    isExplorationMode && !effectiveProfessionalMode && count > 0 && count <= 20000;
+    isExplorationMode && !effectiveProfessionalMode && count > 0 && useLightMaterial;
   const cellRef = model.cellSize || 10;
 
   return (
@@ -1033,22 +1034,33 @@ function MineralComplex({
       }}
     >
       <boxGeometry args={[1, 1, 1]} />
-      <meshPhysicalMaterial
-        roughness={effectiveProfessionalMode ? 0.48 : 0.4}
-        metalness={0.12}
-        clearcoat={0.35}
-        clearcoatRoughness={0.4}
-        ior={1.45}
-        specularIntensity={0.6}
-        envMapIntensity={0.9}
-        transparent={!effectiveProfessionalMode && isExplorationMode}
-        opacity={!effectiveProfessionalMode && isExplorationMode ? voxelOpacity : 1}
-        transmission={useTransmission ? 0.32 : 0}
-        thickness={useTransmission ? cellRef : 0}
-        attenuationDistance={useTransmission ? cellRef * 10 : Infinity}
-        attenuationColor="#dfe7ee"
-        clippingPlanes={clippingPlanes}
-      />
+      {useLightMaterial ? (
+        <meshPhysicalMaterial
+          roughness={effectiveProfessionalMode ? 0.48 : 0.4}
+          metalness={0.12}
+          clearcoat={0.35}
+          clearcoatRoughness={0.4}
+          ior={1.45}
+          specularIntensity={0.6}
+          envMapIntensity={0.9}
+          transparent={!effectiveProfessionalMode && isExplorationMode}
+          opacity={!effectiveProfessionalMode && isExplorationMode ? voxelOpacity : 1}
+          transmission={useTransmission ? 0.32 : 0}
+          thickness={useTransmission ? cellRef : 0}
+          attenuationDistance={useTransmission ? cellRef * 10 : Infinity}
+          attenuationColor="#dfe7ee"
+          clippingPlanes={clippingPlanes}
+        />
+      ) : (
+        <meshStandardMaterial
+          roughness={effectiveProfessionalMode ? 0.48 : 0.4}
+          metalness={0.12}
+          envMapIntensity={0.9}
+          transparent={!effectiveProfessionalMode && isExplorationMode}
+          opacity={!effectiveProfessionalMode && isExplorationMode ? voxelOpacity : 1}
+          clippingPlanes={clippingPlanes}
+        />
+      )}
     </instancedMesh>
   );
 }
@@ -1173,7 +1185,7 @@ function VoxelTooltip({
 
   const density = num("density") ?? num("modeled_density_index") ?? num("rho");
   const sigma = num("posterior_std");
-  const doi = num("doi_raw");
+  const doi = num("doi_index") ?? num("doi_raw");
   const target = num("target_score") ?? num("probability");
   const anomaly = num("density_anomaly_score");
   const x = num("x_m") ?? num("x");
@@ -1195,7 +1207,19 @@ function VoxelTooltip({
       <div className="space-y-0.5">
         {density !== null && <TooltipRow label="Densidad" value={`${fmtNum(density, 3)} t/m³`} accent />}
         {sigma !== null && <TooltipRow label="Posterior σ" value={`${fmtSci(sigma)} t/m³`} />}
-        {doi !== null && <TooltipRow label="DOI" value={fmtNum(doi, 3)} />}
+        {doi !== null && (
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-white/45">DOI fiabilidad</span>
+            <div className="flex items-center gap-1">
+              <span style={{ color: doi < 0.1 ? "#4ade80" : doi < 0.2 ? "#fbbf24" : "#f87171" }}>●</span>
+              <span className="text-white/85">{fmtNum(doi, 3)}</span>
+              <span style={{ color: doi < 0.1 ? "#4ade80" : doi < 0.2 ? "#fbbf24" : "#f87171" }}
+                    className="text-[6px] uppercase tracking-wide">
+                {doi < 0.1 ? "alta" : doi < 0.2 ? "media" : "baja"}
+              </span>
+            </div>
+          </div>
+        )}
         {target !== null && <TooltipRow label="Target score" value={fmtNum(target, 3)} />}
         {anomaly !== null && <TooltipRow label="Anom. densidad" value={fmtNum(anomaly, 3)} />}
         {(x !== null || z !== null) && (
@@ -1248,6 +1272,23 @@ const SLICE_AXIS_COLOR: Record<"x" | "y" | "z", string> = {
   z: "#60a5fa",
 };
 
+// Paleta Viridis (5 anclas) para el mapa de calor de la sección.
+const VIRIDIS_ANCHORS: [number, number, number][] = [
+  [68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 97], [253, 231, 37],
+];
+function viridisColor(t: number): [number, number, number] {
+  const c = Math.max(0, Math.min(1, t));
+  const seg = c * (VIRIDIS_ANCHORS.length - 1);
+  const lo = Math.floor(seg);
+  const hi = Math.min(lo + 1, VIRIDIS_ANCHORS.length - 1);
+  const f = seg - lo;
+  return [
+    Math.round(VIRIDIS_ANCHORS[lo][0] + (VIRIDIS_ANCHORS[hi][0] - VIRIDIS_ANCHORS[lo][0]) * f),
+    Math.round(VIRIDIS_ANCHORS[lo][1] + (VIRIDIS_ANCHORS[hi][1] - VIRIDIS_ANCHORS[lo][1]) * f),
+    Math.round(VIRIDIS_ANCHORS[lo][2] + (VIRIDIS_ANCHORS[hi][2] - VIRIDIS_ANCHORS[lo][2]) * f),
+  ];
+}
+
 function SlicePlane({
   modelBounds,
   modelCenter,
@@ -1257,6 +1298,85 @@ function SlicePlane({
 }) {
   const sliceAxis = useAppStore((s) => s.sliceAxis);
   const slicePosition = useAppStore((s) => s.slicePosition);
+  const model = useAppStore((s) => s.model);
+
+  // Mapa de calor 2D: textura DataTexture con densidades proyectadas al plano de corte.
+  const heatMapTexture = useMemo((): THREE.DataTexture | null => {
+    if (sliceAxis === "none" || !model?.cells?.length || !modelBounds) return null;
+
+    const TEX = 64;
+    const data = new Uint8Array(TEX * TEX * 4);
+
+    const cells = model.cells as SceneCell[];
+    const halfCell = (model.cellSize || 10) * 0.75;
+
+    let uKeys: string[], vKeys: string[], axisKeys: string[];
+    let uMin: number, uMax: number, vMin: number, vMax: number;
+
+    if (sliceAxis === "x") {
+      axisKeys = ["x", "cx"];
+      uKeys = ["z", "cz"]; vKeys = ["y", "cy"];
+      uMin = modelBounds.minZ; uMax = modelBounds.maxZ;
+      vMin = modelBounds.minY; vMax = modelBounds.maxY;
+    } else if (sliceAxis === "y") {
+      axisKeys = ["y", "cy"];
+      uKeys = ["x", "cx"]; vKeys = ["z", "cz"];
+      uMin = modelBounds.minX; uMax = modelBounds.maxX;
+      vMin = modelBounds.minZ; vMax = modelBounds.maxZ;
+    } else {
+      axisKeys = ["z", "cz"];
+      uKeys = ["x", "cx"]; vKeys = ["y", "cy"];
+      uMin = modelBounds.minX; uMax = modelBounds.maxX;
+      vMin = modelBounds.minY; vMax = modelBounds.maxY;
+    }
+
+    const uRange = uMax - uMin || 1;
+    const vRange = vMax - vMin || 1;
+
+    // Rango de densidad para normalizar el colormap
+    let dMin = Infinity, dMax = -Infinity;
+    for (const cell of cells) {
+      if (Math.abs(getCellNumber(cell, axisKeys, 0) - slicePosition) > halfCell) continue;
+      const d = getCellNumber(cell, ["density", "modeled_density_index", "rho"], 0);
+      if (d < dMin) dMin = d;
+      if (d > dMax) dMax = d;
+    }
+    if (!Number.isFinite(dMin) || dMax <= dMin) return null;
+    const dRange = dMax - dMin;
+
+    for (const cell of cells) {
+      if (Math.abs(getCellNumber(cell, axisKeys, 0) - slicePosition) > halfCell) continue;
+
+      const uVal = getCellNumber(cell, uKeys, uMin);
+      const vVal = getCellNumber(cell, vKeys, vMin);
+      const density = getCellNumber(cell, ["density", "modeled_density_index", "rho"], dMin);
+
+      const u = Math.max(0, Math.min(1, (uVal - uMin) / uRange));
+      const v = Math.max(0, Math.min(1, (vVal - vMin) / vRange));
+      const t = (density - dMin) / dRange;
+      const [r, g, b] = viridisColor(t);
+
+      const px = Math.floor(u * (TEX - 1));
+      const py = Math.floor((1 - v) * (TEX - 1)); // invertir V para coords de textura
+      const idx = (py * TEX + px) * 4;
+      data[idx] = r;
+      data[idx + 1] = g;
+      data[idx + 2] = b;
+      data[idx + 3] = 210;
+    }
+
+    const tex = new THREE.DataTexture(data, TEX, TEX, THREE.RGBAFormat);
+    tex.needsUpdate = true;
+    return tex;
+  }, [sliceAxis, slicePosition, model, modelBounds]);
+
+  // Liberar textura anterior cuando cambia
+  const prevTextureRef = useRef<THREE.DataTexture | null>(null);
+  useEffect(() => {
+    const prev = prevTextureRef.current;
+    prevTextureRef.current = heatMapTexture;
+    return () => { prev?.dispose(); };
+  }, [heatMapTexture]);
 
   if (sliceAxis === "none" || !modelBounds) return null;
 
@@ -1294,13 +1414,23 @@ function SlicePlane({
     <group position={position} rotation={rotation} renderOrder={2}>
       <mesh>
         <planeGeometry args={size} />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={0.08}
-          side={THREE.DoubleSide}
-          depthWrite={false}
-        />
+        {heatMapTexture ? (
+          <meshBasicMaterial
+            map={heatMapTexture}
+            transparent
+            opacity={0.82}
+            side={THREE.DoubleSide}
+            depthWrite={false}
+          />
+        ) : (
+          <meshBasicMaterial
+            color={color}
+            transparent
+            opacity={0.08}
+            side={THREE.DoubleSide}
+            depthWrite={false}
+          />
+        )}
         <Edges color={color} />
       </mesh>
     </group>
@@ -1498,6 +1628,12 @@ export default function Scene3D() {
     2,
     Math.floor(safeNumber(terrainData?.metadata.dem_cols, 32))
   );
+  // Terrain LOD: reducir segmentos para surveys grandes → mantener 30 FPS.
+  // < 5km → hasta 64 segs, 5-50km → 32 segs, > 50km → 16 segs.
+  const terrainLodCap = Math.max(terrainWidth, terrainDepth) < 5000
+    ? 64 : Math.max(terrainWidth, terrainDepth) < 50_000 ? 32 : 16;
+  const terrainLodCols = Math.min(terrainCols, terrainLodCap + 1);
+  const terrainLodRows = Math.min(terrainRows, terrainLodCap + 1);
   const fallbackTerrainWidth = (model?.domainL || 200) * 1.3;
   const fallbackTerrainDepth = (model?.domainW || 200) * 1.3;
   const terrainWidth = Math.max(
@@ -1762,12 +1898,12 @@ export default function Scene3D() {
             receiveShadow
           >
             <planeGeometry
-              key={`terrain-${terrainCols}-${terrainRows}-${terrainWidth}-${terrainDepth}`}
+              key={`terrain-${terrainLodCols}-${terrainLodRows}-${terrainWidth}-${terrainDepth}`}
               args={[
                 terrainWidth,
                 terrainDepth,
-                terrainCols - 1,
-                terrainRows - 1,
+                terrainLodCols - 1,
+                terrainLodRows - 1,
               ]}
             />
             {terrainTextureUrl ? (

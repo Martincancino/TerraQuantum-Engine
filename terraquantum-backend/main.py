@@ -1,5 +1,20 @@
 import logging
 import os
+from pathlib import Path
+
+# Load .env.local before any config imports so os.getenv picks up local values.
+# Uses stdlib only — no python-dotenv dependency required.
+_ENV_FILE = Path(__file__).parent / ".env.local"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or "=" not in _line:
+            continue
+        _k, _v = _line.split("=", 1)
+        _k = _k.strip()
+        _v = _v.strip().strip('"').strip("'")
+        if _k and _k not in os.environ:
+            os.environ[_k] = _v
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -16,6 +31,7 @@ from api.block_model_api import router as block_model_router
 from api.pit_design_api import router as pit_design_router
 from api.scenario_sweep_api import router as scenario_sweep_router
 from api.gravity_import_api import router as gravity_import_router
+from api.gravity_import_api import router_v2 as gravity_import_router_v2
 from api.mine_method_api import router as mine_method_router
 from api.report_api import router as report_router
 from api.project_api import router as project_router
@@ -24,6 +40,7 @@ from api.favorability_api import router as favorability_router
 from api.spectral_api import router as spectral_router
 from api.export_api import router as export_router
 from api.chat_api import router as chat_router
+from api.gravity_corrections_api import router as gravity_corrections_router
 
 from core.config import (
     APP_TITLE,
@@ -91,6 +108,7 @@ app.include_router(system_router)
 app.include_router(geophysics_router)
 app.include_router(block_model_router)
 app.include_router(gravity_import_router)
+app.include_router(gravity_import_router_v2)
 app.include_router(report_router)
 app.include_router(project_router)
 app.include_router(terrain_router)
@@ -98,6 +116,7 @@ app.include_router(favorability_router)
 app.include_router(spectral_router)
 app.include_router(export_router)
 app.include_router(chat_router)
+app.include_router(gravity_corrections_router)
 
 # ── Routers económicos — ocultos del OpenAPI en producción ───────────────────
 # ENABLE_ECONOMIC_FEATURES=true para activar en entornos con opt-in explícito.

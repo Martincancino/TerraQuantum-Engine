@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from core.block_model_store import (
+    get_run_dir,
     get_run_favorability_path,
+    get_run_gravity_import_metadata_path,
     get_run_inputs_path,
     get_run_metrics_path,
     get_run_report_path,
@@ -213,6 +215,14 @@ def generate_technical_report_html(
     )
 
     chi_squared_section = _chi_squared_section_html(fit_diagnostics)
+
+    # FASE 6 — Obs vs Calc section (reads obs_vs_calc.parquet)
+    ovc_data = _read_obs_vs_calc(project_id, run_id)
+    obs_vs_calc_section = _obs_vs_calc_section_html(ovc_data)
+
+    # FASE 6 — Corrections summary from gravity_import_metadata.json
+    gravity_meta = _read_optional_json(get_run_gravity_import_metadata_path(project_id, run_id))
+    corrections_section = _corrections_section_html(gravity_meta)
 
     # FASE 11 — Disclaimer con version interpolada
     disclaimer_full = DISCLAIMER_TEXT.replace("{version}", APP_VERSION)
@@ -581,6 +591,10 @@ def generate_technical_report_html(
   </section>
 
 {chi_squared_section}
+
+{obs_vs_calc_section}
+
+{corrections_section}
 
   <section>
     <h2>4. Target Geofísico Principal</h2>
@@ -1402,6 +1416,218 @@ def _chi_squared_section_html(fit_diagnostics: "dict[str, Any]") -> str:
       <div style="margin-top:10px; color:#4a7a52; font-size:10px; border-top:1px solid #1a3a20; padding-top:8px;">
         χ² &lt; 1.5 = ÓPTIMO &nbsp;|&nbsp; 1.5 – 3.0 = ALERTA &nbsp;|&nbsp; &gt; 3.0 = PELIGRO &nbsp;|&nbsp; N/A = run histórico sin esta métrica
       </div>
+    </div>
+  </section>
+"""
+
+
+def _read_obs_vs_calc(project_id: str, run_id: str) -> "dict | None":
+    """FASE 6 — Lee obs_vs_calc.parquet y retorna estadísticas de misfit."""
+    try:
+        import math
+        import numpy as np
+        run_dir = get_run_dir(project_id, run_id)
+        ovc_path = run_dir / "obs_vs_calc.parquet"
+        if not ovc_path.exists():
+            return None
+        import polars as pl
+        df = pl.read_parquet(str(ovc_path))
+        if "d_obs" not in df.columns or "d_pred" not in df.columns:
+            return None
+        d_obs = df["d_obs"].to_numpy()
+        d_pred = df["d_pred"].to_numpy()
+        res = d_obs - d_pred
+        n = len(d_obs)
+        rmse = float(np.sqrt(np.mean(res ** 2)))
+        data_range = float(np.max(d_obs) - np.min(d_obs))
+        nrmse = (rmse / data_range * 100.0) if data_range > 0 else 0.0
+        bias = float(np.mean(res))
+        mae = float(np.mean(np.abs(res)))
+        sigma = max(rmse, 1e-12)
+        chi2_red = float(np.mean((res / sigma) ** 2))
+        # Sample up to 80 points for scatter display
+        step = max(1, n // 80)
+        sample_obs  = d_obs[::step].tolist()
+        sample_pred = d_pred[::step].tolist()
+        return {
+            "n_stations": n,
+            "rmse": rmse,
+            "nrmse_pct": nrmse,
+            "bias": bias,
+            "mae": mae,
+            "chi2_red": chi2_red,
+            "sample_obs": sample_obs,
+            "sample_pred": sample_pred,
+        }
+    except Exception:
+        return None
+
+
+def _obs_vs_calc_section_html(ovc: "dict | None") -> str:
+    """FASE 6 — Sección HTML Observed vs Calculated con métricas y SVG scatter."""
+    if ovc is None:
+        return (
+            '\n  <section id="obs-vs-calc">\n'
+            "    <h2>3a. Observed vs. Calculated</h2>\n"
+            '    <div class="sr-legacy">'
+            f"{_escape('obs_vs_calc.parquet no disponible para esta corrida.')}"
+            "</div>\n"
+            "  </section>\n"
+        )
+
+    chi2 = ovc["chi2_red"]
+    if chi2 < 1.5:
+        chi2_status, chi2_color = "ÓPTIMO", "#22c55e"
+    elif chi2 <= 3.0:
+        chi2_status, chi2_color = "ACEPTABLE", "#facc15"
+    else:
+        chi2_status, chi2_color = "REVISAR", "#ef4444"
+
+    scatter_svg = _obs_vs_calc_svg(ovc["sample_obs"], ovc["sample_pred"])
+
+    return f"""
+  <section id="obs-vs-calc">
+    <h2>3a. Observed vs. Calculated</h2>
+    <div style="font-size:12px;color:#5f6f61;margin-bottom:12px;">
+      {_escape("Comparación entre datos observados y respuesta predicha del modelo 3D. "
+               "Chi² ≈ 1.0 = ajuste óptimo al nivel de ruido.")}
+    </div>
+    <div class="grid" style="grid-template-columns: repeat(5, minmax(0,1fr));">
+      {_metric_card("N Estaciones", _number(ovc["n_stations"]))}
+      {_metric_card("RMSE", f"{ovc['rmse']:.2e} m/s²")}
+      {_metric_card("NRMSE", f"{ovc['nrmse_pct']:.2f} %")}
+      {_metric_card("Bias", f"{ovc['bias']:.2e} m/s²")}
+      {_metric_card("MAE", f"{ovc['mae']:.2e} m/s²")}
+    </div>
+    <div style="margin:10px 0;padding:8px 14px;background:#0f1a11;border:2px solid {chi2_color};
+                font-family:monospace;font-size:12px;color:#c2d8c4;">
+      <strong style="color:{chi2_color};">χ²_red = {chi2:.4f} — {_escape(chi2_status)}</strong>
+      &nbsp;|&nbsp; Criterio: &lt;1.5 ÓPTIMO &nbsp;|&nbsp; 1.5–3.0 ACEPTABLE &nbsp;|&nbsp; &gt;3.0 REVISAR
+    </div>
+    <div style="margin-top:14px;">
+      <h3>Scatter: Observed vs. Calculated ({len(ovc["sample_obs"])} puntos muestreados)</h3>
+      {scatter_svg}
+    </div>
+  </section>
+"""
+
+
+def _obs_vs_calc_svg(
+    sample_obs: "list[float]",
+    sample_pred: "list[float]",
+    size: int = 320,
+) -> str:
+    """FASE 6 — Genera SVG simple del scatter Obs vs Calc con línea ideal."""
+    if not sample_obs or not sample_pred:
+        return f"<p>{_escape('Sin datos de scatter.')}</p>"
+    import math
+    all_vals = sample_obs + sample_pred
+    vmin = min(all_vals)
+    vmax = max(all_vals)
+    span = vmax - vmin if vmax > vmin else 1.0
+    pad = 30
+    w = size
+    h = size
+
+    def scale_x(v: float) -> float:
+        return pad + (v - vmin) / span * (w - 2 * pad)
+
+    def scale_y(v: float) -> float:
+        return (h - pad) - (v - vmin) / span * (h - 2 * pad)
+
+    # Ideal line y=x
+    x0, y0 = scale_x(vmin), scale_y(vmin)
+    x1, y1 = scale_x(vmax), scale_y(vmax)
+
+    circles = []
+    for obs, pred in zip(sample_obs, sample_pred):
+        cx = scale_x(obs)
+        cy = scale_y(pred)
+        if not (math.isfinite(cx) and math.isfinite(cy)):
+            continue
+        circles.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="3" fill="#4a9f58" opacity="0.65"/>')
+
+    pts_svg = "\n      ".join(circles)
+    axis_label = f"{vmin:.3e}…{vmax:.3e}"
+
+    return f"""<svg width="{w}" height="{h}" xmlns="http://www.w3.org/2000/svg"
+     style="border:1px solid #c9d8cb;background:#f8fbf8;">
+  <!-- axes -->
+  <line x1="{pad}" y1="{h-pad}" x2="{w-pad}" y2="{h-pad}" stroke="#ccc" stroke-width="1"/>
+  <line x1="{pad}" y1="{pad}"   x2="{pad}"   y2="{h-pad}" stroke="#ccc" stroke-width="1"/>
+  <!-- ideal line y=x -->
+  <line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}"
+        stroke="#aaa" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <!-- data points -->
+  {pts_svg}
+  <!-- labels -->
+  <text x="{w//2}" y="{h-6}" text-anchor="middle" font-size="9" fill="#5f6f61">
+    Observed [{_escape(axis_label)}]
+  </text>
+  <text x="10" y="{h//2}" text-anchor="middle" font-size="9" fill="#5f6f61"
+        transform="rotate(-90,10,{h//2})">
+    Calculated
+  </text>
+  <text x="{w-4}" y="{pad+10}" text-anchor="end" font-size="8" fill="#aaa">ideal y=x</text>
+</svg>"""
+
+
+def _corrections_section_html(gravity_meta: "dict | None") -> str:
+    """FASE 6 — Sección HTML con resumen de correcciones de gravedad aplicadas."""
+    if not gravity_meta:
+        return ""
+
+    corrections = gravity_meta.get("corrections_applied") or []
+    gtype_out   = gravity_meta.get("output_gravity_type") or gravity_meta.get("gravity_type") or ""
+    rho         = gravity_meta.get("reduction_density_gcc")
+    dem_source  = gravity_meta.get("dem_source")
+    fac_min     = gravity_meta.get("fac_min_mgal")
+    fac_max     = gravity_meta.get("fac_max_mgal")
+    bc_min      = gravity_meta.get("bc_min_mgal")
+    bc_max      = gravity_meta.get("bc_max_mgal")
+    tc_min      = gravity_meta.get("tc_min_mgal")
+    tc_max      = gravity_meta.get("tc_max_mgal")
+    n_stations  = gravity_meta.get("n_observations") or gravity_meta.get("n_stations")
+
+    if not corrections and not gtype_out:
+        return ""
+
+    corrections_list = corrections if isinstance(corrections, list) else []
+    corrections_str = ", ".join(corrections_list) if corrections_list else "Ninguna registrada"
+
+    fac_range_str = (
+        f"{fac_min:.3f} a {fac_max:.3f} mGal"
+        if fac_min is not None and fac_max is not None else "—"
+    )
+    bc_range_str = (
+        f"{bc_min:.3f} a {bc_max:.3f} mGal"
+        if bc_min is not None and bc_max is not None else "—"
+    )
+    tc_range_str = (
+        f"{tc_min:.3f} a {tc_max:.3f} mGal"
+        if tc_min is not None and tc_max is not None else "—"
+    )
+
+    nettleton_note = (
+        "Análisis de Nettleton disponible vía POST /gravity-corrections/nettleton "
+        "para optimizar la densidad de reducción."
+    )
+
+    return f"""
+  <section id="corrections-summary">
+    <h2>Resumen de Correcciones de Gravedad Aplicadas</h2>
+    <table>
+      {_row("Correcciones aplicadas", corrections_str)}
+      {_row("Tipo de dato de salida", gtype_out)}
+      {_row("Densidad de reducción", _number(rho, " g/cm³") if rho else "—")}
+      {_row("Fuente DEM (terreno)", dem_source or "—")}
+      {_row("FAC rango", fac_range_str)}
+      {_row("BC rango", bc_range_str)}
+      {_row("TC rango", tc_range_str)}
+      {_row("N estaciones corregidas", _number(n_stations))}
+    </table>
+    <div class="georef-disclaimer">
+      <strong>{_escape("Nota Nettleton:")}</strong> {_escape(nettleton_note)}
     </div>
   </section>
 """

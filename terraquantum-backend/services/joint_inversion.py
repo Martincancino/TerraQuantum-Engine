@@ -39,7 +39,7 @@ import polars as pl
 import scipy.sparse as sp
 from fastapi import HTTPException
 
-from core.config import ensure_runtime_dirs
+from core.config import ensure_runtime_dirs, RUN_BLOCK_MODEL_FILENAME
 from core.block_model_store import (
     RUN_SOURCE_GRAVITY_FILENAME,
     get_run_block_model_reference,
@@ -268,7 +268,7 @@ def _persist_joint_parquet(
         "susceptibility_si": chi_kept.tolist(),
         "joint_structural_score": score_kept.tolist(),
         "run_type": ["joint"] * n,
-        "schema_version": ["v3.0"] * n,
+        "schema_version": ["v4.0"] * n,
     })
 
     joint_ref = get_run_block_model_reference(
@@ -287,6 +287,15 @@ def _persist_joint_parquet(
             getattr(params, "run_id", "unknown"),
             validation["errors"],
         )
+
+    # También escribir a block_model.parquet (ruta estándar de /block-model) para que
+    # el visor 3D sirva los datos joint sin cambios en el frontend ni en la API.
+    std_ref = get_run_block_model_reference(
+        project_id=params.project_id,
+        run_id=params.run_id,
+        filename=RUN_BLOCK_MODEL_FILENAME,
+    )
+    df.write_parquet(str(std_ref.path))
 
     return str(joint_ref.path)
 

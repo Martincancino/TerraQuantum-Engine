@@ -1,3 +1,4 @@
+import math
 import uuid
 import os
 import shutil
@@ -19,6 +20,7 @@ from core.block_model_store import (
     get_terrain_metadata_path,
     get_terrain_dem_matrix_path,
     save_project_meta,
+    update_run_status,
 )
 from services.satellite_service import get_terrain_data
 from services.elevation_enrichment_service import enrich_block_model_with_elevation
@@ -38,6 +40,9 @@ from services.coordinate_transform_real import (
 )
 
 router = APIRouter(prefix="/gravity-import", tags=["Gravity Import"])
+# Flujo de datos de campo (correcciones automáticas + inversión + UBC-GIF).
+# Registrado por separado en main.py para exponer /v2/gravity-import/*.
+router_v2 = APIRouter(prefix="/v2/gravity-import", tags=["Gravity Import v2"])
 _log = get_logger(__name__)
 
 
@@ -53,6 +58,11 @@ def _effective_utm_zone(form_utm_zone: "str | None", import_result) -> "str | No
     """
     if form_utm_zone and form_utm_zone.strip():
         return form_utm_zone.strip()
+    return extract_utm_zone_safe(import_result)
+
+
+def _extract_detected_utm_zone(import_result) -> "str | None":
+    """Return the UTM zone detected from the CSV (no form override)."""
     return extract_utm_zone_safe(import_result)
 
 
@@ -201,6 +211,8 @@ def build_auto_params_metadata(
             "adjusted_for_r10": auto_grid_dict.get("adjusted_for_r10"),
             "warnings": auto_grid_dict.get("warnings", []),
             "rationale": auto_grid_dict.get("rationale", []),
+            "octree_params": auto_grid_dict.get("octree_params"),
+            "recommended_use_treemesh": auto_grid_dict.get("recommended_use_treemesh", False),
         },
         "legacy_frontend_params": {
             "present": True,
@@ -576,6 +588,10 @@ async def preview_gravity_csv(
                 "parámetros más pequeños (nx, ny, nz ≤ 80) en la inversión."
             )
 
+        _auto_grid_dict = model_to_dict(result.auto_grid) if result.auto_grid else None
+        _octree_params_top = (
+            _auto_grid_dict.get("octree_params") if _auto_grid_dict else None
+        )
         return sanitize_nan({
             "status": result.status,
             "previewCount": len(observations_preview),
@@ -584,7 +600,8 @@ async def preview_gravity_csv(
             "importMetadata": model_to_dict(result.import_metadata),
             "csv_analysis": model_to_dict(result.csv_analysis) if result.csv_analysis else None,
             "coordinate_transform": model_to_dict(result.coordinate_transform) if result.coordinate_transform else None,
-            "auto_grid": model_to_dict(result.auto_grid) if result.auto_grid else None,
+            "auto_grid": _auto_grid_dict,
+            "octree_params": _octree_params_top,
             "georef_preview": georef_preview,
             "spatial_readiness": model_to_dict(spatial_readiness_preview),
             "regional_scale_preflight": model_to_dict(regional_scale_preflight),
@@ -597,6 +614,149 @@ async def preview_gravity_csv(
                 os.remove(temp_path)
             except Exception:
                 pass
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Flujo de datos de campo — POST /v2/gravity-import/invert-with-corrections
+# CSV crudo → FAC+BC+TC+GRS80 automáticas → sigma por gravímetro → inversión
+# W_z formal → obs vs calc → UBC-GIF (.msh + .den) → inversion_report.json
+# ═════════════════════════════════════════════════════════════════════════════
+
+_VALID_GRAVIMETERS = {"scintrex_cg6", "zls_burris", "lacoste_romberg", "unknown"}
+
+
+@router_v2.post("/invert-with-corrections")
+@limiter.limit("5/minute")
+async def invert_with_corrections(
+    request: Request,
+    file: UploadFile = File(...),
+    project_id: Optional[str] = Form(None),
+    run_id: Optional[str] = Form(None),
+    gravimeter_type: str = Form("unknown"),
+    reduction_density: float = Form(2.67),
+    apply_terrain: bool = Form(True),
+    terrain_radius: float = Form(22000.0),
+    dem_type: str = Form("COP30"),
+    noise_pct: float = Form(0.0),
+    # Parámetros de inversión: 0 / no provisto = usar auto_grid del CSV
+    nx: int = Form(0),
+    ny: int = Form(0),
+    nz: int = Form(0),
+    block_size: int = Form(0),
+    depth: int = Form(0),
+    cutoff_radius: float = Form(0.0),
+    lambda_mag: float = Form(0.0),
+    alpha_spatial: float = Form(0.0),
+    density_min: float = Form(0.0),
+    density_max: float = Form(5.5),
+    lat: Optional[str] = Form(None),
+    lon: Optional[str] = Form(None),
+):
+    """
+    Flujo completo de datos de campo reales (Plan Industrial Fase 1 + H-B2):
+    correcciones geofísicas automáticas + sigma instrumental + inversión + export.
+
+    - gravity_type crudo (g_raw/absolute_gravity) + lat/lon/elev → FAC/BC/TC/GRS80
+      automáticas con reduction_density (CSV corregido persiste en el run dir).
+    - gravity_type ya corregido (bouguer_anomaly, complete_bouguer_anomaly...) → tal cual.
+    - sigma_i = max(noise_floor[gravimeter_type], noise_pct·|d_i|):
+      scintrex_cg6=0.005 mGal, zls_burris=0.002, lacoste_romberg=0.010, unknown=0.020.
+    """
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="File must end with .csv")
+    if gravimeter_type not in _VALID_GRAVIMETERS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"gravimeter_type inválido: '{gravimeter_type}'. "
+                   f"Valores soportados: {sorted(_VALID_GRAVIMETERS)}.",
+        )
+    if not (1.0 <= reduction_density <= 4.0):
+        raise HTTPException(
+            status_code=422,
+            detail=f"reduction_density={reduction_density} fuera de rango físico [1.0, 4.0] g/cm³.",
+        )
+
+    project_id = project_id or f"field_{uuid.uuid4().hex[:8]}"
+    run_id = run_id or uuid.uuid4().hex[:16]
+
+    temp_filename = f"{uuid.uuid4()}.csv"
+    temp_path = Path(TMP_DIR) / temp_filename
+
+    try:
+        content = await file.read()
+        if len(content) > CSV_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Archivo CSV demasiado grande. Máximo permitido: {CSV_MAX_BYTES // 1048576} MB.",
+            )
+        with open(temp_path, "wb") as f:
+            f.write(content)
+
+        try:
+            update_run_status(
+                project_id=project_id, run_id=run_id,
+                status="queued", progress=0.0, stage="queued",
+                message="Flujo de datos de campo en cola (correcciones + inversión).",
+            )
+        except Exception:
+            pass
+
+        from services.gravity_import_service import run_field_data_inversion_with_corrections
+
+        _overrides = {
+            "nx": nx, "ny": ny, "nz": nz,
+            "block_size": block_size, "depth": depth,
+            "cutoff_radius": cutoff_radius,
+            "lambda_mag": lambda_mag if lambda_mag > 0 else None,
+            "alpha_spatial": alpha_spatial if alpha_spatial > 0 else None,
+            "density_min": density_min, "density_max": density_max,
+            "lat": lat, "lon": lon,
+        }
+
+        try:
+            result = await run_field_data_inversion_with_corrections(
+                csv_path=temp_path,
+                project_id=project_id,
+                run_id=run_id,
+                gravimeter_type=gravimeter_type,
+                reduction_density_gcc=reduction_density,
+                apply_terrain=apply_terrain,
+                terrain_radius_m=terrain_radius,
+                dem_type=dem_type,
+                noise_pct=noise_pct,
+                inversion_overrides=_overrides,
+            )
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "FIELD_FLOW_INPUT_VALIDATION",
+                    "message": str(exc),
+                    "original_filename": file.filename,
+                },
+            ) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            import traceback as _tb
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "FIELD_FLOW_RUNTIME_ERROR",
+                    "message": str(exc),
+                    "type": type(exc).__name__,
+                    "traceback": _tb.format_exc()[-2000:],
+                },
+            ) from exc
+
+        return sanitize_nan(result)
+    finally:
+        if temp_path.exists():
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
 
 @router.post("/invert", response_model=GravityImportInvertResponse)
 @limiter.limit("10/minute")
@@ -623,6 +783,12 @@ async def invert_gravity_csv(
     utm_zone: Optional[str] = Form(None),
     acknowledge_spatial_risk: bool = Form(False),
     acknowledge_regional_scale: bool = Form(False),
+    # Bounds petrofísicos (t/m³ absolutos; base=2.6). density_min < 2.6 permite
+    # contrastes NEGATIVOS (magma, sal, cavidades). Default 0.0 = bound físico
+    # mínimo (recomendación industrial v2; el clip de no-negatividad estricta
+    # degrada el misfit ~35% en cuerpos compactos).
+    density_min: float = Form(0.0),
+    density_max: float = Form(5.5),
 ):
     if not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must end with .csv")
@@ -713,8 +879,84 @@ async def invert_gravity_csv(
             gravity_type=getattr(import_result.import_metadata, "gravity_type", None),
         )
 
-        xs = [obs.x_m for obs in import_result.observations]
-        zs = [obs.z_m for obs in import_result.observations]
+        # H-B2 — Apply gravity corrections when data is g_raw and lat/lon/elev available.
+        # Corrections (GRS80 latitude, FAC, Bouguer) are applied in-place on a new
+        # observations list; the original import_result is not mutated.
+        _corrections_meta: dict = {}
+        _corrections_warnings: list[str] = []
+        _gravity_type_raw = getattr(import_result.import_metadata, "gravity_type", None) or ""
+        _effective_observations = list(import_result.observations)
+
+        _ALREADY_CORRECTED = {"bouguer_anomaly", "complete_bouguer_anomaly", "synthetic_demo"}
+        if (
+            _gravity_type_raw not in _ALREADY_CORRECTED
+            and import_result.raw_latlon_elev is not None
+            and len(import_result.raw_latlon_elev) == len(import_result.observations)
+        ):
+            try:
+                import numpy as _np
+                from services.gravity_corrections_service import apply_all_corrections
+                from schemas.geophysics_schema import GravityObservation as _GravObs
+
+                _lats = _np.array([s["lat_deg"] for s in import_result.raw_latlon_elev])
+                _lons = _np.array([s["lon_deg"] for s in import_result.raw_latlon_elev])
+                _elevs_raw = _np.array([s["elev_m"] for s in import_result.raw_latlon_elev])
+                _g_ms2 = _np.array([obs.g for obs in import_result.observations])
+                _g_mgal = _g_ms2 * 1e5  # m/s² → mGal
+
+                _has_elevations = (
+                    not _np.all(_np.isnan(_elevs_raw))
+                    and not _np.all(_elevs_raw == 0.0)
+                )
+                _elevs = _np.where(_np.isnan(_elevs_raw), 0.0, _elevs_raw)
+
+                _g_corrected_mgal, _corr_meta = apply_all_corrections(
+                    lats_deg=_lats,
+                    lons_deg=_lons,
+                    elevs_m=_elevs,
+                    g_obs_mgal=_g_mgal,
+                    gravity_type_in=_gravity_type_raw if _gravity_type_raw else "g_raw",
+                    apply_lat=True,
+                    apply_fac=_has_elevations,
+                    apply_bouguer=_has_elevations,
+                    apply_terrain=False,
+                )
+
+                _effective_observations = [
+                    _GravObs(x_m=obs.x_m, y_m=obs.y_m, z_m=obs.z_m, g=float(gc) / 1e5)
+                    for obs, gc in zip(import_result.observations, _g_corrected_mgal)
+                ]
+                _corrections_meta = _corr_meta
+                _corrections_meta["has_elevations"] = _has_elevations
+                _applied = _corr_meta.get("corrections_applied", [])
+                _out_type = _corr_meta.get("output_gravity_type", "unknown")
+                _corrections_warnings.append(
+                    f"[H-B2] Correcciones aplicadas: {_applied}. "
+                    f"Tipo salida: {_out_type}. "
+                    f"{'FAC+BC aplicados.' if _has_elevations else 'Sin FAC/BC (elevación no disponible).'}"
+                )
+                _log.info(
+                    "gravity_corrections_applied",
+                    n_stations=len(_effective_observations),
+                    corrections=_applied,
+                    output_type=_out_type,
+                    has_elevations=_has_elevations,
+                )
+            except Exception as _corr_exc:
+                _corrections_warnings.append(
+                    f"[H-B2] Correcciones de gravedad no aplicadas: {_corr_exc}. "
+                    "Inversión continúa con datos originales."
+                )
+                _log.warning("gravity_corrections_failed", error=str(_corr_exc))
+        elif _gravity_type_raw not in _ALREADY_CORRECTED and import_result.raw_latlon_elev is None:
+            _corrections_warnings.append(
+                "[H-B2] Correcciones de gravedad omitidas: el CSV no es de tipo latlon "
+                "o no contiene columnas de lat/lon. Para aplicar FAC/BC/TC proporcionar "
+                "un CSV con columnas lat, lon y elev_m."
+            )
+
+        xs = [obs.x_m for obs in _effective_observations]
+        zs = [obs.z_m for obs in _effective_observations]
         auto_grid = import_result.auto_grid
         if auto_grid is None and import_result.csv_analysis:
             auto_grid = import_result.csv_analysis.auto_grid
@@ -805,6 +1047,36 @@ async def invert_gravity_csv(
         # R3.7-C — pass regional_scale_preflight for report persistence
         auto_params_metadata["regional_scale_preflight"] = model_to_dict(regional_preflight)
         auto_params_metadata["acknowledge_regional_scale"] = acknowledge_regional_scale
+        # H-B2 — record corrections applied (empty dict = no corrections)
+        auto_params_metadata["gravity_corrections"] = _corrections_meta
+
+        # ── Topografía activa: elevaciones de estación (cualquier coord type) ──
+        # Solo si todas las estaciones tienen elevación y el relieve supera 10 m
+        # (bajo eso, la máscara topográfica no aporta y solo mete ruido numérico).
+        _sensor_elevs_v1: "Optional[list[float]]" = None
+        _se_list = import_result.station_elevations
+        if _se_list and len(_se_list) == len(_effective_observations):
+            _se_finite = [v for v in _se_list if v == v]  # NaN != NaN
+            if len(_se_finite) == len(_se_list) and (max(_se_finite) - min(_se_finite)) >= 10.0:
+                _sensor_elevs_v1 = [float(v) for v in _se_list]
+                _corrections_warnings.append(
+                    f"Topografía activa: elevaciones de estación "
+                    f"({min(_se_finite):.0f}–{max(_se_finite):.0f} m) aplicadas como "
+                    "máscara topográfica del modelo."
+                )
+
+        # ── Sigma por estación: mediana de la columna uncertainty [mGal] ────────
+        # Prioridad: σ por estación > piso por gravímetro > sentinel adaptivo.
+        _noise_floor_from_unc: "Optional[float]" = None
+        _unc_list = import_result.station_uncertainties
+        if _unc_list:
+            _unc_finite = sorted(u for u in _unc_list if u == u and u > 0.0)
+            if len(_unc_finite) >= max(3, len(_unc_list) // 2):
+                _noise_floor_from_unc = float(_unc_finite[len(_unc_finite) // 2])
+                _corrections_warnings.append(
+                    f"Sigma del solver fijado desde la columna uncertainty del CSV: "
+                    f"piso = {_noise_floor_from_unc:.4g} mGal (mediana por estación)."
+                )
 
         try:
             invert_input = GeophysicsInvertInput(
@@ -823,9 +1095,13 @@ async def invert_gravity_csv(
                 cutoff_radius=effective_cutoff_radius,
                 lambda_mag=lambda_mag,
                 alpha_spatial=alpha_spatial,
-                observations=import_result.observations,
+                observations=_effective_observations,  # H-B2: corrected observations
                 enable_focusing=True,
                 auto_params_metadata=auto_params_metadata,
+                density_min=density_min,
+                density_max=density_max,
+                sensor_elevations_masl=_sensor_elevs_v1,
+                noise_floor_mgal=_noise_floor_from_unc,
             )
         except ValidationError as exc:
             raise HTTPException(
@@ -835,6 +1111,21 @@ async def invert_gravity_csv(
                     "errors": exc.errors(),
                 },
             ) from exc
+
+        # Crear run_dir inmediatamente para que el SSE stream pueda conectar
+        # antes de que run_geophysics_inversion escriba el primer heartbeat.
+        if project_id and run_id:
+            try:
+                update_run_status(
+                    project_id=project_id,
+                    run_id=run_id,
+                    status="queued",
+                    progress=0.0,
+                    stage="queued",
+                    message="Inversión en cola.",
+                )
+            except Exception:
+                pass  # No abortar si falla la persistencia del estado
 
         try:
             inversion_result = run_geophysics_inversion(invert_input)
@@ -1098,11 +1389,35 @@ async def invert_gravity_csv(
                 "La inversión modela distribución de densidades a escala regional. "
                 "El pit design conceptual opera sobre una subgrilla normalizada."
             )
+        # ── Guard de degradación: el 3D no debe verse "presentable" en silencio ──
+        # cuando el ajuste es malo o la mayoría de la malla no fue sensada.
+        _degradation_warnings: list[str] = []
+        try:
+            _mis_g = (inversion_result or {}).get("misfit_error_percent")
+            if _mis_g is not None and float(_mis_g) > 50.0:
+                _degradation_warnings.append(
+                    f"MODELO DEGRADADO: misfit {float(_mis_g):.0f}% — el modelo explica menos de "
+                    "la mitad de la señal observada. NO usar para interpretación. Revisar "
+                    "cutoff_radius, lambda, bounds de densidad y correcciones."
+                )
+            _r05_g = ((inversion_result or {}).get("report") or {}).get("r05_geometry_audit") or {}
+            _obs_ratio_g = _r05_g.get("observable_ratio")
+            if _obs_ratio_g is not None and float(_obs_ratio_g) < 0.5:
+                _degradation_warnings.append(
+                    f"COBERTURA INSUFICIENTE: solo {float(_obs_ratio_g) * 100:.0f}% de los vóxeles "
+                    "activos es sensado por las estaciones (cutoff_radius demasiado pequeño "
+                    "para el espaciamiento del survey)."
+                )
+        except Exception:
+            pass
+
         all_warnings = (
             import_result.warnings
             + regional_warnings
             + georef_warnings
             + r3_enrichment_result.get("warnings", [])
+            + _corrections_warnings
+            + _degradation_warnings
         )
         if _utm_zone_mismatch_warning:
             all_warnings.append(_utm_zone_mismatch_warning)

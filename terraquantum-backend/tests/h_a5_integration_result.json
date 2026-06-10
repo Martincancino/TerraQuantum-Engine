@@ -1,0 +1,19 @@
+{
+  "misfit_error_percent": 1.3512,
+  "report": {
+    "fitDiagnostics": {
+      "misfit_error_percent": 1.3512,
+      "normalized_rmse": 0.004571,
+      "chi_squared": 4.2013,
+      "residual_rmse": 1e-08,
+      "residual_bias": -0.0
+    }
+  },
+  "best_target": {
+    "x_m": 262.5,
+    "y_m": 112.5,
+    "z_m": 262.5,
+    "density": 2.784638579709341
+  },
+  "voxel_count": 4800
+}

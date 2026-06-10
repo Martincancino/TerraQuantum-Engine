@@ -43,7 +43,10 @@ def model_to_dict(model: Any) -> dict:
     """Convert a Pydantic model to dict.
 
     Handles both model_dump() (Pydantic v2) and dict() (v1) methods.
+    Plain dicts pass through unchanged (run_geophysics_inversion returns dict).
     """
+    if isinstance(model, dict):
+        return model
     return model.model_dump() if hasattr(model, "model_dump") else model.dict()
 
 

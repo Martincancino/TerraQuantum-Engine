@@ -1,5 +1,92 @@
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
+
+
+class GmmComponent(BaseModel):
+    """Una componente de la Mixtura Gaussiana petrológica (Fase 11 — PGI)."""
+    mean_density_t_m3: float = Field(
+        ..., ge=0.5, le=8.0,
+        description="Densidad media de la litología (t/m³).",
+    )
+    std_density_t_m3: float = Field(
+        ..., gt=0.0, le=2.0,
+        description="Desviación estándar de la densidad (t/m³).",
+    )
+    weight: float = Field(
+        ..., gt=0.0, le=1.0,
+        description="Proporción volumétrica de la litología (suma de pesos debe ser ~1).",
+    )
+
+
+class PgiParams(BaseModel):
+    """Parámetros de la Inversión Guiada Petrológica — Fase 11 (Astic & Oldenburg 2019).
+
+    El GMM ancla el modelo invertido a K clases petrológicas con distribuciones
+    Gaussianas conocidas (de sondaje o bibliografía). Mínimo 2 componentes.
+    Cuando `fit_from_model=True`, los campos components son ignorados y el GMM
+    se estima automáticamente de la inversión inicial (baja confiabilidad).
+    """
+    components: List[GmmComponent] = Field(
+        ..., min_length=2, max_length=10,
+        description="Componentes del GMM (K ≥ 2). Pesos normalizados internamente.",
+    )
+    alpha_pgi: float = Field(
+        default=0.1, gt=0.0, le=100.0,
+        description="Peso del término PGI en la función objetivo (mayor = más adherencia al GMM).",
+    )
+    max_iter: int = Field(
+        default=10, ge=1, le=50,
+        description="Iteraciones máximas del bucle de actualización m_PGI (criterio de parada).",
+    )
+    convergence_tol: float = Field(
+        default=1e-3, gt=0.0,
+        description="Tolerancia relativa de convergencia ||Δm_pgi|| / ||m_pgi||.",
+    )
+    fit_from_model: bool = Field(
+        default=False,
+        description="Si True, estima el GMM desde la inversión inicial (ignora components).",
+    )
+    n_components_auto: int = Field(
+        default=3, ge=2, le=10,
+        description="Número de componentes del GMM cuando fit_from_model=True.",
+    )
+
+
+class MagneticRemanenceParams(BaseModel):
+    """Parámetros de remanencia magnética — Fase 12 (Koenigsberger Q).
+
+    Activa el motor J = J_ind + Q·J_rem en la inversión magnética.
+    Con enabled=False o q_ratio=0: comportamiento heredado (solo inducida).
+    """
+    enabled: bool = Field(
+        default=False,
+        description="Activar remanencia magnética. False = solo magnetización inducida (comportamiento histórico).",
+    )
+    q_ratio: float = Field(
+        default=1.0, ge=0.0, le=100.0,
+        description="Ratio de Koenigsberger Q = |J_rem| / |J_ind|. Q>1: remanencia domina.",
+    )
+    remanence_inc_deg: float = Field(
+        default=-45.0, ge=-90.0, le=90.0,
+        description="Inclinación de la remanencia [°]. Para magnetita chilena invertida: ~−60° a −30°.",
+    )
+    remanence_dec_deg: float = Field(
+        default=0.0, ge=-180.0, le=180.0,
+        description="Declinación de la remanencia [°]. Para remanencia reversa típica: 180°.",
+    )
+    inversion_mode: Literal["induced_only", "total_field", "amplitude"] = Field(
+        default="induced_only",
+        description=(
+            "Modo de inversión magnética. "
+            "'induced_only': solo J_ind (default, sin remanencia). "
+            "'total_field': kernel total G_ind + Q·G_rem con Inc_rem/Dec_rem explícitos. "
+            "'amplitude': inversión de amplitud |J_total| dirección-independiente."
+        ),
+    )
+    do_q_sweep: bool = Field(
+        default=False,
+        description="Si True, barrer Q ∈ [0, q_ratio] en 10 pasos y reportar Q óptimo por misfit.",
+    )
 
 
 class GravityObservation(BaseModel):
@@ -96,17 +183,19 @@ class GeophysicsInvertInput(BaseModel):
         description="Calcular σ posterior por vóxel (Hutchinson). Costo extra; OFF por defecto",
     )
     # Bound petrofísico explícito sobre la densidad recuperada (t/m³).
-    # Defaults preservan el comportamiento histórico (clip implícito [2.6, 4.2]).
-    # Para depósitos de magnetita masiva o cromita (densidad > 4.2) aumentar density_max.
+    # H-A0 Bug 3: density_max subido a 5.5 para cubrir magnetita (5.0-5.2),
+    # cromita (4.5-4.8) y pirita masiva (4.5-5.0).
     density_min: float = Field(
         2.6,
-        ge=0.5, le=5.0,
-        description="Densidad mínima permitida en la inversión (t/m³). Default: 2.6 (roca huésped granítica)",
+        ge=-5.0, le=5.0,
+        description="Densidad mínima permitida en la inversión (t/m³). Default: 2.6 (roca huésped "
+                    "granítica = contraste ≥ 0). Valores < 2.6 permiten contrastes NEGATIVOS "
+                    "(magma, sal, cavidades): ej. 2.0 ≡ contraste ≥ -0.6 t/m³.",
     )
     density_max: float = Field(
-        4.2,
+        5.5,
         ge=1.0, le=8.0,
-        description="Densidad máxima permitida en la inversión (t/m³). Default: 4.2. Usar 5.2 para magnetita masiva.",
+        description="Densidad máxima permitida en la inversión (t/m³). Default: 5.5 (cubre magnetita, cromita, pirita masiva).",
     )
     # R-A2: Selección automática de lambda vía scan chi²-target (post-auditoría).
     # Cuando True (o lambda_mag==0), escanea [1e-3…1e-6] y elige el lambda que
@@ -114,6 +203,28 @@ class GeophysicsInvertInput(BaseModel):
     auto_lambda: bool = Field(
         False,
         description="Selección automática de lambda via scan chi²-target (R-A2). Ignora lambda_mag cuando True.",
+    )
+    # ── Flujo de datos de campo: sigma por instrumento ─────────────────────────
+    # Cuando != "unknown" y el caller no fija noise_floor_mgal explícito (v2),
+    # el servicio usa GRAVIMETER_NOISE_FLOOR[gravimeter_type] como piso de sigma:
+    # sigma_i = max(noise_floor, noise_pct·|d_i|). "unknown" conserva el
+    # comportamiento histórico (sigma adaptivo invariante de escala).
+    gravimeter_type: Literal["scintrex_cg6", "zls_burris", "lacoste_romberg", "unknown"] = Field(
+        "unknown",
+        description="Instrumento usado en el survey. Fija el piso de ruido sigma: "
+                    "CG-6=0.005 mGal, ZLS Burris=0.002, LaCoste&Romberg=0.010, unknown=0.020.",
+    )
+    # Sigma explícito (None = no provisto). Prioridad en el servicio:
+    # noise_floor_mgal explícito > gravimeter_type > sentinel adaptivo.
+    # La capa de import los puebla automáticamente desde la columna `uncertainty`
+    # del CSV (mediana por estación) cuando existe.
+    noise_floor_mgal: Optional[float] = Field(
+        None, ge=0.0001, le=10.0,
+        description="Piso de ruido sigma [mGal]. None = derivar de gravimeter_type o sentinel.",
+    )
+    noise_pct_v2: Optional[float] = Field(
+        None, ge=0.0, le=0.10,
+        description="Término relativo de sigma: max(noise_floor, noise_pct·|d|). None = 0 implícito.",
     )
     # ── FASE 8 (Q4): Constraints geológicos por sondaje (boreholes) ───────────
     # Intervalos de densidad medida que anclan la inversión (strong soft constraint).
@@ -194,6 +305,22 @@ class GeophysicsInvertInput(BaseModel):
         ge=0, le=4,
         description="Profundidad máxima de refinamiento en la malla Octree (0-4). Default 2.",
     )
+    # ── FASE 11: Inversión Guiada Petrológica (PGI — Astic & Oldenburg 2019) ──
+    # Cuando se provee, el solver ejecuta el bucle alternado PGI: después de cada
+    # inversión estándar, se actualiza el modelo de referencia m_PGI asignando cada
+    # celda a su litología GMM más probable (MAP), y se re-invierte con el término
+    # α_PGI·||m − m_PGI||² adicional. None → comportamiento intacto (sin PGI).
+    pgi_params: Optional[PgiParams] = Field(
+        default=None,
+        description="Parámetros PGI (GMM + α + iteraciones). None = inversión estándar sin guía petrológica.",
+    )
+    # ── FASE 12: Remanencia Magnética (J = J_ind + J_rem) ────────────────────────
+    # Activada cuando magnetic_nt está presente Y remanence.enabled=True.
+    # Con remanence=None o remanence.enabled=False: comportamiento heredado (solo inducida).
+    remanence: Optional[MagneticRemanenceParams] = Field(
+        default=None,
+        description="Parámetros de remanencia magnética (Q, Inc_rem, Dec_rem). None = solo inducida (Fase 9A).",
+    )
 
     @model_validator(mode="after")
     def _validate_grid_bounds(self):
@@ -245,6 +372,89 @@ class GeophysicsVoxel(BaseModel):
     # Inversión conjunta (Fase 9C-2): score estructural combinado ρ+χ normalizado.
     joint_structural_score: Optional[float] = None
     is_active: Optional[bool] = None
+
+
+class GeophysicsInvertInputV2(GeophysicsInvertInput):
+    """Endpoint v2 — Inversión con validaciones industriales estrictas.
+
+    Extiende v1 añadiendo:
+    - Rechazo de g_raw (datos de campo sin corregir).
+    - Confirmación explícita de correcciones aplicadas.
+    - Sigma de ruido configurable por tipo de gravímetro.
+    - Estrategia de selección de lambda declarable.
+    - density_min permite contrastes negativos (cuerpos menos densos que el host).
+    """
+
+    # ── Correcciones físicas (obligatorio declarar cuáles fueron aplicadas) ──
+    corrections_applied: List[Literal["latitude", "free_air", "bouguer", "terrain"]] = Field(
+        default_factory=list,
+        description="Correcciones aplicadas antes de la inversión. Lista vacía solo si "
+                    "gravity_type ya es complete_bouguer_anomaly o free_air_anomaly.",
+    )
+    gravity_type_v2: Literal["complete_bouguer_anomaly", "bouguer_anomaly", "free_air_anomaly"] = Field(
+        ...,
+        alias="gravity_type",
+        description="Tipo de anomalía. g_raw rechazado: debe haberse aplicado al menos FAC. "
+                    "bouguer_anomaly = FAC+BC sin corrección de terreno (TC).",
+    )
+
+    # ── Parámetros de ruido del gravímetro ───────────────────────────────────
+    noise_floor_mgal: float = Field(
+        default=0.02,
+        ge=0.0001, le=1.0,
+        description="Ruido de piso del gravímetro [mGal]. "
+                    "Scintrex CG-6: 0.005. ZLS Burris: 0.002. LaCoste&Romberg G: 0.010. "
+                    "Default 0.02 = conservador para gravímetro desconocido.",
+    )
+    noise_pct_v2: float = Field(
+        default=0.01,
+        ge=0.0, le=0.10,
+        alias="noise_pct",
+        description="Ruido relativo (fracción de amplitud). Típico BA corregida: 0.005-0.02.",
+    )
+
+    # ── Estrategia de regularización ─────────────────────────────────────────
+    lambda_strategy: Literal["fixed", "lcurve", "chi2"] = Field(
+        default="chi2",
+        description="Método de selección de lambda: 'fixed' usa lambda_fixed, "
+                    "'lcurve' busca la esquina de la L-curve, 'chi2' target chi²≈1.",
+    )
+    lambda_fixed: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="Valor fijo de lambda (solo si lambda_strategy='fixed').",
+    )
+
+    # ── density_min ampliado: permite contrastes negativos ────────────────────
+    density_min: float = Field(  # type: ignore[assignment]  # override parent field
+        default=0.0,
+        ge=-5.0, le=5.0,
+        description="Contraste mínimo permitido (t/m³). Negativo: detecta cuerpos menos "
+                    "densos que el host (cavidades, rocas alteradas, sal). "
+                    "0 = no-negatividad (exploración mineral típica).",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="after")
+    def _v2_cross_validate(self):
+        # density_min < density_max
+        if self.density_min >= self.density_max:
+            raise ValueError(
+                f"density_min ({self.density_min}) debe ser menor que density_max ({self.density_max})."
+            )
+        # len(magnetic_nt) == len(observations) cuando ambos presentes
+        if self.magnetic_nt is not None and len(self.magnetic_nt) != len(self.observations):
+            raise ValueError(
+                f"magnetic_nt tiene {len(self.magnetic_nt)} elementos pero observations tiene "
+                f"{len(self.observations)}. Deben tener la misma longitud."
+            )
+        # lambda_fixed requerido cuando strategy='fixed'
+        if self.lambda_strategy == "fixed" and self.lambda_fixed is None:
+            raise ValueError(
+                "lambda_fixed es obligatorio cuando lambda_strategy='fixed'."
+            )
+        return self
 
 
 class GeophysicsInvertResponse(BaseModel):

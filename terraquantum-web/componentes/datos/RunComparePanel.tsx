@@ -1,7 +1,6 @@
 "use client";
 import { readText, compareDeltaFields } from "./helpers";
 import type { SelectedRun, CompareResult } from "./types";
-import RunCompareSideBySide from "../analytics/RunCompareSideBySide";
 
 interface RunComparePanelProps {
   baseRun: SelectedRun | null;
@@ -33,9 +32,6 @@ export default function RunComparePanel({
         </div>
       </div>
 
-      {baseRun && compareRun ? (
-        <RunCompareSideBySide baseRun={baseRun} compareRun={compareRun} />
-      ) : null}
 
       {loadingCompare ? (
         <p className="text-[10px] text-neutral-500">Comparando corridas...</p>

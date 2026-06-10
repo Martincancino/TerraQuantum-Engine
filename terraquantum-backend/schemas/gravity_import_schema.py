@@ -100,6 +100,12 @@ class AutoGrid(BaseModel):
     r10_iterations: int = 0
     warnings: List[str] = Field(default_factory=list)
     rationale: List[str] = Field(default_factory=list)
+    # Sprint 3 — parámetros Octree calibrados para construir un TreeMesh de producción.
+    # None cuando el survey no fue analizado por compute_octree_params (legado).
+    octree_params: Optional[Dict[str, Any]] = None
+    # True cuando el survey es regional (>50 km) o la grilla supera 50k celdas.
+    # El frontend puede usarlo para pre-seleccionar TreeMesh en la UI.
+    recommended_use_treemesh: bool = False
 
 
 class CsvAnalysisResult(BaseModel):
@@ -155,6 +161,16 @@ class GravityImportResult(BaseModel):
     auto_grid: Optional[AutoGrid] = None
     # R3.5-C — populated by API layer after classify_from_csv_analysis
     spatial_readiness: Optional["SpatialReadiness"] = None
+    # H-B2 — per-station raw lat/lon/elev captured before coord transform (latlon surveys only)
+    # Shape: [{"lat_deg": float, "lon_deg": float, "elev_m": float}] or None
+    raw_latlon_elev: Optional[List[Dict[str, Any]]] = None
+    # Topografía activa — elevación de estación (m s.n.m.) para CUALQUIER tipo de
+    # coordenada, paralela a observations. NaN donde la columna esté vacía.
+    # None = el CSV no trae columna de elevación.
+    station_elevations: Optional[List[float]] = None
+    # Sigma por estación [mGal] desde la columna uncertainty/sigma. NaN si vacía.
+    # Prioridad de sigma del solver: σ por estación > piso por gravímetro > adaptivo.
+    station_uncertainties: Optional[List[float]] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

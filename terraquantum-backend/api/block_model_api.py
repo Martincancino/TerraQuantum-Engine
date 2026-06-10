@@ -7,6 +7,7 @@ from schemas.response_schema import BlockModelResponse
 from services.block_model_service import (
     build_block_model_response,
     build_block_model_arrow_bytes,
+    build_block_model_profile_response,
 )
 
 router = APIRouter()
@@ -71,3 +72,32 @@ async def get_block_model_arrow(
         response.headers[key] = val
 
     return response
+
+
+@router.get("/v2/block-model-profile")
+async def get_block_model_profile(
+    project_id: str,
+    run_id: str,
+    x0_m: float,
+    z0_m: float,
+    x1_m: float,
+    z1_m: float,
+    halfwidth_m: float = 50.0,
+    include_observations: bool = True,
+):
+    """Sección A-A' del modelo de bloques.
+
+    Retorna vóxeles dentro del plano definido por (x0,z0)→(x1,z1) con ancho ±halfwidth_m.
+    Incluye d_obs/d_pred/residual de las estaciones dentro del perfil si están disponibles.
+    Coordenadas en sistema local del modelo [m].
+    """
+    return build_block_model_profile_response(
+        project_id=project_id,
+        run_id=run_id,
+        x0_m=x0_m,
+        z0_m=z0_m,
+        x1_m=x1_m,
+        z1_m=z1_m,
+        halfwidth_m=halfwidth_m,
+        include_observations=include_observations,
+    )

@@ -17,7 +17,7 @@ export interface GeoVoxel {
   visual_score?: number;
   sensitivity_proxy?: number;
   density_proxy_index?: number;
-  modeled_rock_mass_kg?: number;
+  modeled_rock_mass_tonnes?: number;
   density_zone_flag?: number;
   is_demo_grade?: boolean;
   provenance?: { grade_source: string; assay_supported: boolean; economically_validated: boolean };

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { previewGravityCsv, GravityImportPreviewResponse, invertGravityCsv, GravityCsvInvertResponse, GravityCsvInvertPayload, getExplorationBlockModelForRun, CoordinateTransformData, CrsInfo, SpatialReadiness, SpatialReadinessGateError, RegionalScalePreflight, RegionalScaleGateError } from "../lib/terraquantum/frontendApi";
+import { previewGravityCsv, GravityImportPreviewResponse, invertGravityCsv, GravityCsvInvertResponse, GravityCsvInvertPayload, getExplorationBlockModelForRun, CoordinateTransformData, CrsInfo, SpatialReadiness, SpatialReadinessGateError, RegionalScalePreflight, RegionalScaleGateError, GravityCorrectionReport, connectGeophysicsStatusStream } from "../lib/terraquantum/frontendApi";
 import { useAppStore } from "../store/useAppStore";
+import GravityCorrectionWizard from "./GravityCorrectionWizard";
 import { type VoxelMineralModel, type VoxelData } from "../lib/terraQuantumGeology";
 import { isJsonObject, readStringField, readNumberField } from "./datos/helpers";
 
@@ -123,8 +124,11 @@ function mapPriorityClassLabel(value: string | null | undefined): string {
   return v || "N/A";
 }
 
-// Parámetros legacy enviados al backend; el backend los ignora y usa auto_grid del CSV.
-const LEGACY_INVERSION_PARAMS = { nx: 32, ny: 20, nz: 32, blockSize: 25, depth: 500 } as const;
+// Parámetros de grilla: 0 = el backend usa el auto_grid calculado del CSV.
+// NO enviar valores fijos aquí: desde R3.8-A el backend PRIORIZA cualquier
+// valor > 0 del formulario, y una grilla fija (ej. 32×20×32 @ 25 m) rompe
+// surveys reales (kernel vacío → 422) cuya extensión no calza con esa caja.
+const LEGACY_INVERSION_PARAMS = { nx: 0, ny: 0, nz: 0, blockSize: 0, depth: 0 } as const;
 
 function buildCsvProjectId(filename?: string | null): string {
   const rawName = filename?.replace(/\.[^.]+$/, "") || "import";
@@ -267,6 +271,18 @@ function buildVoxelModelFromBackend(data: unknown): BackendVoxelModel | null {
   };
 }
 
+const INVERT_STAGE_LABELS: Record<string, string> = {
+  queued: "En cola...",
+  building_kernel: "Construyendo kernel de sensibilidad...",
+  running_lsqr: "Ejecutando inversor LSQR...",
+  computing_uq: "Calculando incertidumbre...",
+  exporting_model: "Exportando modelo 3D...",
+  running: "Ejecutando inversión...",
+  done: "Inversión completa",
+  completed: "Inversión completa",
+  error: "Error en inversión",
+};
+
 export default function GravityCsvPreviewPanel() {
   const {
     fileGravimetry, setFileGravimetry,
@@ -290,10 +306,16 @@ export default function GravityCsvPreviewPanel() {
 
   const [invertLoading, setInvertLoading] = useState(false);
   const [invertErrorMsg, setInvertErrorMsg] = useState<string | null>(null);
+  const [invertStage, setInvertStage] = useState<string | null>(null);
+  const [invertProgress, setInvertProgress] = useState<number>(0);
 
   const [loading3D, setLoading3D] = useState(false);
   const [load3DError, setLoad3DError] = useState<string | null>(null);
   const [load3DMessage, setLoad3DMessage] = useState<string | null>(null);
+
+  const [showCorrectionWizard, setShowCorrectionWizard] = useState(false);
+  const [correctedFile, setCorrectedFile] = useState<File | null>(null);
+  const [correctionReport, setCorrectionReport] = useState<GravityCorrectionReport | null>(null);
 
   const [utmZone, setUtmZone] = useState<string>("");
   const [acknowledgeSpatialRisk, setAcknowledgeSpatialRisk] = useState(false);
@@ -323,8 +345,12 @@ export default function GravityCsvPreviewPanel() {
     nir: 83,
     fe: 79,
     region: "norte_chile",
-    cutoffRadius: 300,
-    lambdaMag: 0.00005,
+    // 0 = auto: el backend deriva cutoff_radius del auto_grid (cubre la
+    // profundidad del modelo) y lambda del operating point validado.
+    // Un cutoff fijo (300 m) dejaba >80% de vóxeles muertos en surveys
+    // regionales, y lambda=5e-5 era el valor legacy pre-preconditioning.
+    cutoffRadius: 0,
+    lambdaMag: 0,
     alphaSpatial: 1.0,
   });
 
@@ -409,6 +435,9 @@ export default function GravityCsvPreviewPanel() {
       setSpatialGateError(null);
       setAcknowledgeRegionalScale(false);
       setRegionalGateError(null);
+      setCorrectedFile(null);
+      setCorrectionReport(null);
+      setShowCorrectionWizard(false);
       clearActiveRun();
     }
   };
@@ -431,7 +460,8 @@ export default function GravityCsvPreviewPanel() {
     setLoad3DError(null);
     setLoad3DMessage(null);
 
-    const res = await previewGravityCsv(file, { strict, allowGRaw, previewLimit });
+    const effectiveFile = correctedFile ?? file;
+    const res = await previewGravityCsv(effectiveFile, { strict, allowGRaw: allowGRaw || correctedFile !== null, previewLimit });
     setLoading(false);
 
     if (!res.ok) {
@@ -552,6 +582,8 @@ export default function GravityCsvPreviewPanel() {
     setInvertResult(null);
     setLoad3DError(null);
     setLoad3DMessage(null);
+    setInvertStage("queued");
+    setInvertProgress(0);
 
     // Señalamos inicio de inversión en activeRun
     const projectId = buildCsvProjectId(file.name);
@@ -566,6 +598,19 @@ export default function GravityCsvPreviewPanel() {
       importMetadata: result?.importMetadata ?? null,
       observationsSummary: buildObservationsSummary(result),
     });
+
+    // SSE stream para progreso en tiempo real (§2.6)
+    const closeStream = connectGeophysicsStatusStream(
+      projectId,
+      runId,
+      (ev) => {
+        setInvertStage(ev.stage ?? ev.status ?? null);
+        setInvertProgress(typeof ev.progress === "number" ? ev.progress : 0);
+      },
+      () => {
+        // terminal — nada extra; invertGravityCsv() resolverá la promesa
+      },
+    );
 
     const payloadWithFlags = {
       ...invertPayloadBase,
@@ -585,8 +630,15 @@ export default function GravityCsvPreviewPanel() {
       acknowledgeRegionalScale,
     };
 
-    const res = await invertGravityCsv(file, payloadWithFlags);
+    const effectiveFile = correctedFile ?? file;
+    const res = await invertGravityCsv(effectiveFile, {
+      ...payloadWithFlags,
+      allowGRaw: payloadWithFlags.allowGRaw || correctedFile !== null,
+    });
+    closeStream();
     setInvertLoading(false);
+    setInvertStage(null);
+    setInvertProgress(0);
 
     if (!res.ok) {
       const rawData = res.data as unknown;
@@ -1141,6 +1193,68 @@ export default function GravityCsvPreviewPanel() {
           </div>
         </div>
         
+        {/* ── Correcciones geofísicas (H-B4) ──────────────────────────────── */}
+        {file && !showCorrectionWizard && (
+          <div>
+            {correctionReport ? (
+              <div className="flex items-start justify-between gap-2 p-2.5 border border-amber-600/30 bg-amber-900/20 rounded">
+                <div className="min-w-0">
+                  <p className="text-[9px] uppercase tracking-widest text-amber-400 font-bold mb-1">
+                    Correcciones aplicadas
+                  </p>
+                  <p className="text-[10px] text-white font-mono">
+                    {correctionReport.corrections_applied.join(" · ")}
+                  </p>
+                  <p className="text-[9px] text-neutral-400 mt-0.5">
+                    {correctionReport.n_stations} estaciones — ρ={correctionReport.reduction_density_gcc} g/cm³
+                    {correctionReport.fac_min_mgal !== null &&
+                      correctionReport.fac_max_mgal !== null && (
+                        <span>
+                          {" "}— FAC [{correctionReport.fac_min_mgal.toFixed(1)}–{correctionReport.fac_max_mgal.toFixed(1)} mGal]
+                        </span>
+                      )}
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setCorrectedFile(null);
+                    setCorrectionReport(null);
+                    setResult(null);
+                  }}
+                  className="text-[10px] text-neutral-500 hover:text-red-400 shrink-0 px-1.5 py-0.5 border border-neutral-700/40 rounded"
+                  title="Quitar correcciones y volver al CSV original"
+                >
+                  ✕ Quitar
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowCorrectionWizard(true)}
+                className="w-full text-left px-3 py-2 border border-neutral-700/40 hover:border-amber-600/40 bg-neutral-900/40 hover:bg-amber-900/10 rounded text-[11px] text-neutral-400 hover:text-amber-400 transition-colors"
+              >
+                <span className="font-semibold">+ Aplicar correcciones geofísicas</span>
+                <span className="text-[10px] ml-2 text-neutral-600">
+                  FAC · Bouguer · Terreno (GRS80)
+                </span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {file && showCorrectionWizard && (
+          <GravityCorrectionWizard
+            file={file}
+            onComplete={(corrFile, report) => {
+              setCorrectedFile(corrFile);
+              setCorrectionReport(report);
+              setShowCorrectionWizard(false);
+              setResult(null);
+              setErrorMsg(null);
+            }}
+            onCancel={() => setShowCorrectionWizard(false)}
+          />
+        )}
+
         <div className="flex flex-col gap-2 justify-center min-w-0">
           <label className="flex items-center gap-2 text-[10px] uppercase text-neutral-400 tracking-widest cursor-pointer min-w-0">
             <input type="checkbox" checked={strict} onChange={(e) => setStrict(e.target.checked)} className="accent-[#C2D8C4]" />
@@ -1493,6 +1607,30 @@ export default function GravityCsvPreviewPanel() {
                 </p>
               )}
             </div>
+
+            {invertLoading && (
+              <div className="mb-4">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-[9px] font-mono text-neutral-400 uppercase tracking-widest">
+                    {invertStage
+                      ? INVERT_STAGE_LABELS[invertStage] ?? invertStage.replace(/_/g, " ")
+                      : "Preparando inversión..."}
+                  </span>
+                  <span className="text-[9px] font-mono text-neutral-500">
+                    {invertProgress > 0 ? `${Math.round(invertProgress * 100)}%` : ""}
+                  </span>
+                </div>
+                <div className="w-full h-1 bg-neutral-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-purple-500 rounded-full transition-all duration-500"
+                    style={{
+                      width: invertProgress > 0 ? `${Math.round(invertProgress * 100)}%` : "30%",
+                      animation: invertProgress === 0 ? "pulse 1.5s infinite" : undefined,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
 
             {load3DMessage && (
               <div className="mb-4 p-3 border border-[#C2D8C4]/40 bg-[#C2D8C4]/10 text-[#C2D8C4] text-[10px] font-mono rounded break-words">

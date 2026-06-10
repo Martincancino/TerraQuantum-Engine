@@ -1,6 +1,6 @@
 """Response schemas for FastAPI endpoints — strict validation contracts."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, Dict, List, Optional
 from schemas.gravity_import_schema import (
     SpatialReadiness,
@@ -18,7 +18,14 @@ from schemas.gravity_import_schema import (
 
 class GravityImportPreviewResponse(BaseModel):
     """CSV preview response: analysis + gates, no inversion."""
-    status: str = Field(..., pattern="^(done|error)$")
+    # extra="allow": el endpoint emite campos adicionales (auto_grid,
+    # georef_preview, octree_params, importMetadata camelCase…) que el frontend
+    # consume; un response_model estricto los filtraría rompiendo el contrato.
+    model_config = ConfigDict(extra="allow")
+
+    # /preview emite status="ok" históricamente (import_gravity_csv_v1); el
+    # patrón debe aceptarlo o todo preview válido revienta con 500.
+    status: str = Field(..., pattern="^(ok|done|error)$")
     stage: str = Field(default="preview", pattern="^(preview|import)$")
 
     # Core analysis
@@ -26,6 +33,9 @@ class GravityImportPreviewResponse(BaseModel):
     coordinate_transform: Optional[CoordinateTransform] = None
     spatial_readiness: Optional[SpatialReadiness] = None
     regional_scale_preflight: Optional[RegionalScalePreflight] = None
+
+    # Sprint 3 — Octree params surfaced at top level for direct frontend access
+    octree_params: Optional[Dict[str, Any]] = None
 
     # Import metadata
     import_metadata: Optional[GravityImportMetadata] = None
@@ -43,7 +53,8 @@ class R3EnrichmentStatus(BaseModel):
     """R3 Enrichment (elevation/DEM integration) status."""
     attempted: bool = False
     terrain_persisted: bool = False
-    enrichment_status: str = Field(default="skipped", pattern="^(success|skipped|error)$")
+    # None = enrichment no intentado (sin project_id/run_id o georef MISSING)
+    enrichment_status: Optional[str] = Field(default="skipped", pattern="^(success|skipped|error)$")
     has_elevation_data: bool = False
     warnings: List[str] = Field(default_factory=list)
 
@@ -87,6 +98,10 @@ class InversionMetadata(BaseModel):
 
 class GravityImportInvertResponse(BaseModel):
     """Inversion response: complete pipeline result."""
+    # extra="allow": el endpoint emite campos legacy camelCase (importMetadata,
+    # inversionResult, gridAutoAdapt, georef…) consumidos por el frontend.
+    model_config = ConfigDict(extra="allow")
+
     status: str = Field(..., pattern="^(done|error)$")
     stage: str = Field(default="inversion", pattern="^(import|inversion)$")
 
@@ -216,6 +231,8 @@ class VoxelData(BaseModel):
     target_score: Optional[float] = None
     modeled_density_index: Optional[float] = None
     density_anomaly_score: Optional[float] = None
+    doi_index: Optional[float] = None
+    posterior_std: Optional[float] = None
     joint_structural_score: Optional[float] = None
     real_grade: Optional[float] = None
 
@@ -293,3 +310,27 @@ class BlockModelArrowMetadata(BaseModel):
 # NOTE: BlockModelArrowResponse is actually bytes (Apache Arrow IPC format)
 # Returned with Content-Type: application/vnd.apache.arrow.stream
 # Headers include BlockModelArrowMetadata fields (X-TQ-Total-Voxels, X-TQ-Bounds-Min-X, etc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /geophysics-misfit/{project_id}/{run_id}  — H-C2
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MisfitStationData(BaseModel):
+    """Observed vs. calculated data for a single gravity station."""
+    x: Optional[float] = None
+    y: Optional[float] = None
+    z: Optional[float] = None
+    d_obs: float
+    d_pred: float
+    residual: float
+
+
+class MisfitResponse(BaseModel):
+    """Full misfit report: per-station obs/calc + aggregate fit statistics."""
+    stations: List[MisfitStationData]
+    chi2_reduced: float
+    rmse: float
+    normalized_rmse: float
+    r2: float
+    n_stations: int
