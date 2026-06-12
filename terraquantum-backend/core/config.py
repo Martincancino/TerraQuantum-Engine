@@ -54,6 +54,12 @@ GRAVIMETER_NOISE_FLOOR: dict = {
 # HITO 5: Solver con bounds (B-06). Env var USE_BOUNDED_SOLVER=false fuerza LSQR+clip (rollback).
 USE_BOUNDED_SOLVER: bool = os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false"
 
+# Tier 1 A1: FISTA proyectado refina la solución LSQR/LSMR+clip para n>8K,
+# respetando los bounds petrofísicos SIN clip destructivo (el clip degradaba
+# el misfit ~35% en cuerpos compactos). USE_PROJECTED_SOLVER=false = rollback
+# exacto al comportamiento clip.
+USE_PROJECTED_SOLVER: bool = os.getenv("USE_PROJECTED_SOLVER", "true").lower() != "false"
+
 # Sprint 5A: solver directo SuperLU para n_active > 8000. Default OFF (LSQR).
 USE_SPARSE_DIRECT: bool = os.getenv("USE_SPARSE_DIRECT", "false").lower() == "true"
 

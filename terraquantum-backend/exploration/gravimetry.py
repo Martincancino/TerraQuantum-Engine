@@ -1637,6 +1637,25 @@ class GravimetryInversion:
                     f"[SOLVER] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
                     f"cond(A)~{_acond:.2e}"
                 )
+
+            # ── Tier 1 A1: FISTA proyectado (bounds reales para n>8K) ─────────
+            # El clip post-hoc descarta masa fuera del box sin redistribuir
+            # (misfit degradado ~35% en cuerpos compactos). FISTA parte del
+            # clip como warm start → el objetivo solo puede mejorar; rollback
+            # exacto con USE_PROJECTED_SOLVER=false.
+            from core.config import USE_PROJECTED_SOLVER as _USE_PGD
+            if _USE_PGD:
+                from exploration.solver_preconditioned import solve_inversion_pgd_fista
+                _t_pgd = time.perf_counter()
+                m_tilde, _pgd_info = solve_inversion_pgd_fista(
+                    _G_aug_sm, _d_aug_sm, _lb_tilde, _ub_tilde, x0=m_tilde,
+                )
+                print(
+                    f"[SOLVER] FISTA proyectado en {time.perf_counter()-_t_pgd:.1f}s "
+                    f"(post-{'LSMR' if _use_lsmr else 'LSQR'}+warm-start)."
+                )
+                if solver_meta is not None:
+                    solver_meta["pgd"] = _pgd_info
         if np.isfinite(_acond) and _acond > 1e12:
             print(
                 f"[SOLVER] WARN cond(A)={_acond:.2e} > 1e12. "
