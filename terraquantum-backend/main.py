@@ -28,11 +28,8 @@ from api.metrics_api import router as metrics_router
 from api.system_api import router as system_router
 from api.geophysics_api import router as geophysics_router
 from api.block_model_api import router as block_model_router
-from api.pit_design_api import router as pit_design_router
-from api.scenario_sweep_api import router as scenario_sweep_router
 from api.gravity_import_api import router as gravity_import_router
 from api.gravity_import_api import router_v2 as gravity_import_router_v2
-from api.mine_method_api import router as mine_method_router
 from api.report_api import router as report_router
 from api.project_api import router as project_router
 from api.terrain_api import router as terrain_router
@@ -59,9 +56,9 @@ from core.observability import init_tracing, instrument_app
 from core.rate_limit import limiter
 from middleware.api_key_middleware import ApiKeyMiddleware
 
-# Feature flags — default 'false' en producción para cumplir compliance JORC/NI 43-101.
-# Activar explícitamente en entornos de desarrollo o demo con opt-in del usuario.
-_ENABLE_ECONOMIC = os.environ.get("ENABLE_ECONOMIC_FEATURES", "false").lower() == "true"
+# Los módulos económicos/mineros (pit design, escenarios, métodos de minado,
+# flota FMS) fueron ELIMINADOS del producto (2026-06-10): TerraQuantum es una
+# plataforma de exploración geofísica — solo modelo 3D, sin NPV/LOM.
 # ENABLE_FOCUSING: reservado para un futuro router de focusing MS-IRLS dedicado.
 # El focusing actual corre internamente en geophysics_service; esta flag prepara
 # la arquitectura para exponerlo como endpoint independiente cuando sea necesario.
@@ -117,15 +114,6 @@ app.include_router(spectral_router)
 app.include_router(export_router)
 app.include_router(chat_router)
 app.include_router(gravity_corrections_router)
-
-# ── Routers económicos — ocultos del OpenAPI en producción ───────────────────
-# ENABLE_ECONOMIC_FEATURES=true para activar en entornos con opt-in explícito.
-# Cuando están desactivados, /api/pit-design, /api/mine-method y /api/scenario-sweep
-# devuelven 404 (router no registrado → no aparece en OpenAPI/Swagger).
-if _ENABLE_ECONOMIC:
-    app.include_router(pit_design_router)
-    app.include_router(scenario_sweep_router)
-    app.include_router(mine_method_router)
 
 # Middleware order matters: last add_middleware = outermost layer.
 # Stack: CORS (outer) → ApiKey → Prometheus (inner) → routes.

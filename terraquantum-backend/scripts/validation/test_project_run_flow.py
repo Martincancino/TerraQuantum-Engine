@@ -48,10 +48,8 @@ def main():
         list_project_runs,
     )
     from schemas.geophysics_schema import GeophysicsInvertInput
-    from schemas.pit_design_schema import PitRequest
     from services.block_model_service import build_block_model_response
     from services.geophysics_service import run_geophysics_inversion
-    from services.pit_design_service import generate_pit_design
 
     run_dir = REPO_ROOT / "data" / "projects" / PROJECT_ID / "runs" / RUN_ID
     block_model_path = run_dir / "block_model.parquet"
@@ -126,47 +124,8 @@ def main():
     check(block_model.get("returnedCells", 0) > 0, "block model returnedCells > 0")
     check(block_model.get("storageMode") == "project_run", "block model storageMode is project_run")
 
-    pit_request = PitRequest(
-        project_id=PROJECT_ID,
-        run_id=RUN_ID,
-        file="block_model_001.parquet",
-        price=8500,
-        recovery=0.88,
-        mining_cost=2.2,
-        processing_cost=14.0,
-        pit_angle=45,
-        bench_height=10,
-        berm_width=8,
-        haulage_cost_per_m=0.002,
-        ramp_gradient=0.10,
-        block_size_x=10,
-        block_size_y=10,
-        block_size_z=10,
-        exclude_inferred=False,
-        p_cap=80000000,
-        discount_rate=0.10,
-        fleet_size=20,
-    )
-
-    pit_result = generate_pit_design(pit_request)
-
-    check(pit_result.get("status") == "done", "pit design status is done")
-    check(bool(pit_result.get("modelUrl")), "pit design modelUrl exists")
-    check("npv" in pit_result.get("metrics", {}), "pit design metrics contains npv")
-    check(pit_result.get("storageMode") == "project_run", "pit design storageMode is project_run")
-    check(metrics_path.exists(), f"created {metrics_path}")
-    check(schedule_path.exists(), f"created {schedule_path}")
-
-    metrics_data = json.loads(metrics_path.read_text(encoding="utf-8"))
-    schedule_data = json.loads(schedule_path.read_text(encoding="utf-8"))
-
-    check("npv" in metrics_data, "metrics json contains npv")
-    check("tonnage" in metrics_data, "metrics json contains tonnage")
-    check("schedule" in metrics_data, "metrics json contains schedule")
-    check(isinstance(schedule_data, list), "schedule json is a list")
-    check(len(schedule_data) >= 1, "schedule json has at least 1 year")
-    check(metrics_data.get("projectId") == PROJECT_ID, "metrics projectId matches")
-    check(metrics_data.get("runId") == RUN_ID, "metrics runId matches")
+    # Bloque pit design eliminado (2026-06-10): los módulos de diseño de mina
+    # y economía fueron retirados del producto (solo modelo 3D geofísico).
     check(legacy_path.exists(), f"legacy block model still exists at {legacy_path}")
 
     project_runs = list_project_runs()

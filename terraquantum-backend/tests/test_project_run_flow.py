@@ -1,5 +1,5 @@
 """
-Test end-to-end del flujo project_run: inversión geofísica → persistencia → pit design.
+Test end-to-end del flujo project_run: inversión geofísica → persistencia → block model.
 """
 import pytest
 
@@ -96,60 +96,5 @@ def test_block_model_response_con_project_run(test_project_id, test_run_id):
     assert block_model.get("storageMode") == "project_run"
 
 
-@pytest.mark.integration
-def test_pit_design_after_inversion(test_project_id, test_run_id):
-    from schemas.geophysics_schema import GeophysicsInvertInput
-    from schemas.pit_design_schema import PitRequest
-    from services.geophysics_service import run_geophysics_inversion
-    from services.pit_design_service import generate_pit_design
-
-    params = GeophysicsInvertInput(
-        project_id=test_project_id,
-        run_id=test_run_id,
-        depth=100,
-        nir=83,
-        fe=79,
-        region="norte_chile",
-        lat="-22.28",
-        lon="-68.89",
-        nx=10,
-        ny=10,
-        nz=10,
-        block_size=10,
-        cutoff_radius=800,
-        lambda_mag=0.00005,
-        alpha_spatial=1.5,
-        observations=_observations_grid_10x10(),
-    )
-
-    run_geophysics_inversion(params)
-
-    pit_req = PitRequest(
-        project_id=test_project_id,
-        run_id=test_run_id,
-        price=8500,
-        recovery=0.88,
-        mining_cost=2.2,
-        processing_cost=24.0,
-        pit_angle=45,
-        bench_height=10,
-        berm_width=8,
-        haulage_cost_per_m=0.002,
-        ramp_gradient=0.10,
-        block_size_x=10,
-        block_size_y=10,
-        block_size_z=10,
-        exclude_inferred=False,
-        p_cap=80_000_000,
-        discount_rate=0.10,
-        fleet_size=20,
-    )
-
-    result = generate_pit_design(pit_req)
-
-    assert result.get("status") == "done", (
-        f"pit design status esperado 'done', recibido: {result.get('status')} — "
-        f"detail: {result.get('detail', '')}"
-    )
-    assert bool(result.get("modelUrl"))
-    assert "npv" in result.get("metrics", {})
+# test_pit_design_after_inversion eliminado (2026-06-10): los módulos de
+# diseño de mina/economía fueron retirados del producto (solo modelo 3D).

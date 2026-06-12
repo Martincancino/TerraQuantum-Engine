@@ -10,7 +10,8 @@ from core.utils import sanitize_nan_value, sanitize_nan
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_BLOCK_MODEL_MODES = {"exploration", "full", "anomaly", "economic", "doi_reliable", "profile"}
+# Mode "economic" eliminado (2026-06-10): sin módulos de economía minera.
+SUPPORTED_BLOCK_MODEL_MODES = {"exploration", "full", "anomaly", "doi_reliable", "profile"}
 PERFORMANCE_WARNING_VOXEL_THRESHOLD = 200_000
 DIAGNOSTIC_PERCENTILES = (
     ("p2", 0.02),
@@ -599,18 +600,7 @@ def build_block_model_response(
     density_min = float(_dens_series.min()) if len(_dens_series) > 0 else None
     density_max = float(_dens_series.max()) if len(_dens_series) > 0 else None
 
-    if mode_clean == "economic":
-        cutoff_grade = 0.3
-
-        df_view = (
-            df.filter(pl.col("grade") > cutoff_grade)
-            .sort("grade", descending=True)
-            .head(safe_limit)
-        )
-
-        visual_mode = "economic_grade"
-
-    elif mode_clean == "full":
+    if mode_clean == "full":
         df_view = df
         visual_mode = "density_probability"
 
@@ -744,11 +734,8 @@ def build_block_model_response(
             "schema_version": row.get("schema_version"),
         }
 
-        if mode_clean == "economic":
-            cell["grade"] = real_grade
-        else:
-            cell["real_grade"] = real_grade
-            cell["visual_score"] = sanitize_nan_value(float(row.get("visual_score", 0.0)))
+        cell["real_grade"] = real_grade
+        cell["visual_score"] = sanitize_nan_value(float(row.get("visual_score", 0.0)))
 
         cells.append(cell)
 
