@@ -1242,7 +1242,10 @@ async def run_field_data_inversion_with_corrections(
     block_size = _eff("block_size", auto_grid.block_size_m)
     depth = _eff("depth", auto_grid.depth_m, max_val=ny * block_size)
     cutoff_radius = _eff("cutoff_radius", auto_grid.cutoff_radius_m, cast=float)
-    lambda_mag = float(overrides.get("lambda_mag") or 3.0)   # operating point validado
+    # λ: override explícito = fijo; sin override = 0 → selección automática por
+    # Morozov (en este flujo el sigma SIEMPRE es explícito: σ por estación o
+    # piso del gravímetro, así que chi²_red es interpretable).
+    lambda_mag = float(overrides.get("lambda_mag") or 0.0)
     alpha_spatial = float(overrides.get("alpha_spatial") or 1.0)
 
     # Sigma: σ por estación (columna uncertainty del CSV) > piso por gravímetro.
@@ -1297,9 +1300,9 @@ async def run_field_data_inversion_with_corrections(
         noise_pct=float(noise_pct),
         sensor_elevations_masl=sensor_elevations,
         gravimeter_type=gravimeter_type,
-        lambda_strategy="fixed",
-        lambda_fixed=lambda_mag,
-        auto_lambda=False,
+        lambda_strategy="fixed" if lambda_mag > 0 else "chi2",
+        lambda_fixed=lambda_mag if lambda_mag > 0 else None,
+        auto_lambda=(lambda_mag == 0.0),
         # Default industrial v2: 0.0 (permite contrastes negativos). Con
         # no-negatividad estricta (density_min=base=2.6) el LSQR+clip degrada
         # el misfit ~35% en cuerpos compactos (lóbulos negativos recortados).

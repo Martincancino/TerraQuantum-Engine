@@ -1785,24 +1785,39 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     # chi²-target permanece disponible en gravimetry.py para diagnóstico.
     _lambda_mag = params.lambda_mag
     _lambda_scan_meta = {}
+    _use_morozov = False
     if getattr(params, "auto_lambda", False) or params.lambda_mag == 0.0:
-        _lambda_mag = PRECONDITIONED_OPERATING_LAMBDA
-        _lambda_scan_meta = {
-            "selection_method": "fixed_preconditioned_operating_point",
-            "lambda_selected":  _lambda_mag,
-            "rationale": (
-                "underdetermined inversion: data-driven selectors (L-curve, "
-                "chi2-target, GCV) under-regularize. Preconditioned optimum O(1-10), "
-                "validated vs synthetic ground-truth (lambda~3 -> pearson~0.95)."
-            ),
-        }
-        _update("running", 0.30, "lambda_set",
-                f"Lambda operativo fijo (preconditioned) = {_lambda_mag:.2f}")
-        _log.info(
-            "auto_lambda_fixed_operating_point",
-            lambda_selected=_lambda_mag,
-            method="fixed_preconditioned_operating_point",
+        # Tier 1 A2: cuando el sigma es EXPLÍCITO (noise_floor declarado o
+        # gravímetro conocido), chi²_red es físicamente interpretable y el
+        # principio de discrepancia de Morozov (chi²→1) es el selector correcto.
+        # Con sigma sentinel adaptivo, chi² no es confiable → operating point.
+        _sigma_is_explicit = (
+            getattr(params, "noise_floor_mgal", None) is not None
+            or (getattr(params, "gravimeter_type", "unknown") or "unknown") != "unknown"
         )
+        if _sigma_is_explicit:
+            _use_morozov = True
+            _update("running", 0.30, "lambda_scan",
+                    "Selección de lambda por discrepancia de Morozov (chi²→1)...")
+            _log.info("auto_lambda_morozov_scan_started")
+        else:
+            _lambda_mag = PRECONDITIONED_OPERATING_LAMBDA
+            _lambda_scan_meta = {
+                "selection_method": "fixed_preconditioned_operating_point",
+                "lambda_selected":  _lambda_mag,
+                "rationale": (
+                    "underdetermined inversion: data-driven selectors (L-curve, "
+                    "chi2-target, GCV) under-regularize. Preconditioned optimum O(1-10), "
+                    "validated vs synthetic ground-truth (lambda~3 -> pearson~0.95)."
+                ),
+            }
+            _update("running", 0.30, "lambda_set",
+                    f"Lambda operativo fijo (preconditioned) = {_lambda_mag:.2f}")
+            _log.info(
+                "auto_lambda_fixed_operating_point",
+                lambda_selected=_lambda_mag,
+                method="fixed_preconditioned_operating_point",
+            )
 
     # P1-2: Diagnóstico de lambda_spatial efectivo (auditoría R09).
     # lambda_spatial = alpha_spatial * (n_sensors / n_active). Para grillas grandes
@@ -1851,30 +1866,116 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
 
     # ── Solver sobre grilla completa (Core + Padding) ─────────────────────────
     _solver_meta = {}   # recibe acond, chi2_final, saturación del solver
-    est_density_full, probability_full, misfit_percent, sensitivity_full = _run_lsqr_with_heartbeat(
-        inversor=inversor_padded,
-        g_observed=g_observed,
-        kernel_sparse=None,             # HPC F0.2 exclusivo; no se usa
-        y_c=y_c_full,
-        lambda_mag=_lambda_mag,
-        alpha_spatial=params.alpha_spatial,
-        project_id=project_id,
-        run_id=run_id,
-        forward_model=forward,          # F0.2: KDTree directo sobre active_cells
-        sensor_coords=sensor_coords,
-        x_c=x_c_full,
-        z_c=z_c_full,
-        topography_elevations=_topography_elevations_padded,  # HITO 5: activo si MASL provisto
-        hx=hx, hy=hy, hz=hz,           # F0.9: Laplaciano no-uniforme
-        density_min=params.density_min, # P2: bound petrofísico configurable desde API
-        density_max=params.density_max,
-        padding_mask=_padding_mask_r02, # R-02: κ=1e5 post-auditoría R-A1
-        padding_kappa=_kappa,
-        boreholes=boreholes_arr,        # FASE 8: anclaje por sondajes (None si no hay)
-        noise_floor=_noise_floor_solver, # Fase 2: sigma calibrado por gravímetro
-        noise_pct=_noise_pct_solver,
-        solver_meta=_solver_meta,       # OUT: acond, chi2_final, sat_*
-    )
+
+    def _solve_full_grid(_lam: float, _meta_out: dict):
+        """Un solve completo del sistema con lambda dado (kernel cacheado por geometría)."""
+        return _run_lsqr_with_heartbeat(
+            inversor=inversor_padded,
+            g_observed=g_observed,
+            kernel_sparse=None,             # HPC F0.2 exclusivo; no se usa
+            y_c=y_c_full,
+            lambda_mag=_lam,
+            alpha_spatial=params.alpha_spatial,
+            project_id=project_id,
+            run_id=run_id,
+            forward_model=forward,          # F0.2: KDTree directo sobre active_cells
+            sensor_coords=sensor_coords,
+            x_c=x_c_full,
+            z_c=z_c_full,
+            topography_elevations=_topography_elevations_padded,  # HITO 5: activo si MASL provisto
+            hx=hx, hy=hy, hz=hz,           # F0.9: Laplaciano no-uniforme
+            density_min=params.density_min, # P2: bound petrofísico configurable desde API
+            density_max=params.density_max,
+            padding_mask=_padding_mask_r02, # R-02: κ=1e5 post-auditoría R-A1
+            padding_kappa=_kappa,
+            boreholes=boreholes_arr,        # FASE 8: anclaje por sondajes (None si no hay)
+            noise_floor=_noise_floor_solver, # Fase 2: sigma calibrado por gravímetro
+            noise_pct=_noise_pct_solver,
+            solver_meta=_meta_out,          # OUT: acond, chi2_final, sat_*
+        )
+
+    if _use_morozov:
+        # ── Tier 1 A2: discrepancia de Morozov sobre el SOLVER REAL ────────────
+        # NOTA: select_lambda_chi2_target (gravimetry.py) usa la maquinaria
+        # pre-W_z (column scaling viejo + sigma adaptivo hardcodeado) — su
+        # chi²(λ) no corresponde al operador actual. Aquí el scan llama al
+        # path de producción (kernel cacheado → costo ≈ 1 solve por candidato)
+        # y ADOPTA directamente la mejor solución: ≤ 6 solves en total.
+        _morozov_candidates = [0.01, 0.05623, 0.31623, 1.77828, 10.0]  # logspace(-2,1,5)
+        _morozov_trials: list = []
+        _morozov_best: "dict | None" = None
+
+        def _morozov_try(_lam: float) -> float:
+            nonlocal _morozov_best
+            _meta_i: dict = {}
+            _out_i = _solve_full_grid(_lam, _meta_i)
+            _chi2_i = _meta_i.get("chi2_final")
+            _chi2_i = float(_chi2_i) if _chi2_i is not None else float("nan")
+            _score_i = (
+                abs(np.log10(_chi2_i)) if np.isfinite(_chi2_i) and _chi2_i > 0
+                else float("inf")
+            )
+            _morozov_trials.append({"lambda": _lam, "chi2_red": _chi2_i})
+            if _morozov_best is None or _score_i < _morozov_best["score"]:
+                _morozov_best = {
+                    "score": _score_i, "lambda": _lam,
+                    "out": _out_i, "meta": _meta_i, "chi2": _chi2_i,
+                }
+            return _chi2_i
+
+        _chi2_scan = [_morozov_try(_lam_c) for _lam_c in _morozov_candidates]
+
+        # Bisección geométrica del bracket de chi²=1 (chi² crece con λ): 1 solve extra.
+        for _i_b in range(len(_morozov_candidates) - 1):
+            _c1, _c2 = _chi2_scan[_i_b], _chi2_scan[_i_b + 1]
+            if np.isfinite(_c1) and np.isfinite(_c2) and (_c1 - 1.0) * (_c2 - 1.0) < 0:
+                _morozov_try(float(np.sqrt(
+                    _morozov_candidates[_i_b] * _morozov_candidates[_i_b + 1]
+                )))
+                break
+
+        _morozov_warnings: list = []
+        _finite_scan = [c for c in _chi2_scan if np.isfinite(c)]
+        if _finite_scan and all(c > 1.0 for c in _finite_scan):
+            _morozov_warnings.append(
+                "morozov_underfit_floor: ni λ=0.01 alcanza chi²≤1 — los datos no son "
+                "ajustables al nivel del sigma declarado (revisar correcciones/sigma)."
+            )
+        if _finite_scan and all(c < 1.0 for c in _finite_scan):
+            _morozov_warnings.append(
+                "morozov_overfit_ceiling: incluso λ=10 da chi²<1 — sigma declarado "
+                "posiblemente mayor que el ruido real."
+            )
+
+        _lambda_mag = float(_morozov_best["lambda"])
+        _solver_meta = _morozov_best["meta"]
+        est_density_full, probability_full, misfit_percent, sensitivity_full = _morozov_best["out"]
+        _lambda_scan_meta = {
+            "selection_method": "morozov_chi2_discrepancy",
+            "lambda_selected": _lambda_mag,
+            "chi2_achieved": _morozov_best["chi2"],
+            "n_solves": len(_morozov_trials),
+            "trials": _morozov_trials,
+            "warnings": _morozov_warnings,
+            "rationale": (
+                "Sigma explícito (gravímetro/uncertainty) → chi²_red interpretable; "
+                "se elige λ con |log10(chi²)| mínimo (discrepancia de Morozov), "
+                "scan sobre el solver de producción (bounds GPCG incluidos)."
+            ),
+        }
+        _update("running", 0.55, "lambda_scan",
+                f"Morozov: λ={_lambda_mag:.4g} (chi²_red={_morozov_best['chi2']:.3g}, "
+                f"{len(_morozov_trials)} solves)")
+        _log.info(
+            "auto_lambda_morozov_selected",
+            lambda_selected=_lambda_mag,
+            chi2_red=_morozov_best["chi2"],
+            n_solves=len(_morozov_trials),
+        )
+    else:
+        est_density_full, probability_full, misfit_percent, sensitivity_full = _solve_full_grid(
+            _lambda_mag, _solver_meta
+        )
 
     if float(misfit_percent) <= 0.01:
         _log.warning(

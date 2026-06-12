@@ -805,9 +805,18 @@ async def invert_gravity_csv(
     # degrada el misfit ~35% en cuerpos compactos).
     density_min: float = Form(0.0),
     density_max: float = Form(5.5),
+    # Instrumento del survey: fija el piso de sigma y habilita la selección de
+    # lambda por Morozov cuando lambda_mag=0 (sigma explícito → chi² interpretable).
+    gravimeter_type: str = Form("unknown"),
 ):
     if not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must end with .csv")
+    if gravimeter_type not in _VALID_GRAVIMETERS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"gravimeter_type inválido: '{gravimeter_type}'. "
+                   f"Valores soportados: {sorted(_VALID_GRAVIMETERS)}.",
+        )
 
     temp_filename = f"{uuid.uuid4()}.csv"
     temp_path = Path(TMP_DIR) / temp_filename
@@ -1125,6 +1134,7 @@ async def invert_gravity_csv(
                 density_max=density_max,
                 sensor_elevations_masl=_sensor_elevs_v1,
                 noise_floor_mgal=_noise_floor_from_unc,
+                gravimeter_type=gravimeter_type,
             )
         except ValidationError as exc:
             raise HTTPException(
