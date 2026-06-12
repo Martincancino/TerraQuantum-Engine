@@ -66,6 +66,10 @@ export interface GeoReportInfo {
   estimatedAnomalyTonnage?: number;
   rankingTargets?: GeoRankingTarget[];
   recomendacionPerforacion?: boolean;
+  // DV-02: run degenerado (misfit indefinido + sin best_target). Declarado
+  // explícito: si cae al index signature unknown, el guard JSX
+  // `{report?.isDegraded && ...}` tipa unknown y rompe el build.
+  isDegraded?: boolean;
   [key: string]: unknown;
 }
 

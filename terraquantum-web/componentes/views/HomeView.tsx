@@ -29,13 +29,13 @@ export default function HomeView() {
                 <h1 className="text-4xl xl:text-6xl font-black tracking-[-0.06em] text-white leading-[0.95]">
                   Del dato físico
                   <br />
-                  al diseño minero.
+                  al modelo 3D.
                 </h1>
 
                 <p className="mt-6 max-w-2xl text-neutral-400 text-sm leading-7 font-mono">
-                  Plataforma experimental que conecta inversión gravimétrica,
-                  block model 3D, telemetría MWD, diseño de rajo abierto,
-                  Life of Mine y evaluación económica en un solo flujo visual.
+                  Plataforma de exploración que conecta datos gravimétricos de
+                  campo, correcciones geofísicas, inversión 3D con incertidumbre
+                  y block model industrial en un solo flujo visual.
                 </p>
               </div>
 
@@ -48,19 +48,18 @@ export default function HomeView() {
                 </button>
 
                 <button
-                  onClick={() => setView("diseño mina")}
-                  title="Requiere corrida activa desde Figura 3D"
+                  onClick={() => setView("datos")}
                   className="px-7 py-4 bg-neutral-900 border border-neutral-700 text-white rounded-full text-[10px] uppercase tracking-[0.25em] font-black hover:bg-white hover:text-black transition-all active:scale-95"
                 >
-                  Ver Diseño Mina
+                  Ver Datos y Calidad
                 </button>
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-4">
                 <MetricCard label="Geofísica" value="LSQR" />
                 <MetricCard label="Modelo" value="3D Voxels" />
-                <MetricCard label="Mina" value="Open Pit" />
-                <MetricCard label="Economía" value="LOM + NPV" />
+                <MetricCard label="Validación" value="Obs vs Calc" />
+                <MetricCard label="Export" value="UBC + VTK" />
               </div>
             </div>
 
@@ -83,11 +82,11 @@ export default function HomeView() {
               </div>
 
               <div className="relative z-10 space-y-3">
-                <PipelineStep index="01" title="Survey gravimétrico" desc="Observaciones físicas del terreno" />
-                <PipelineStep index="02" title="Inversión 3D" desc="Densidad, probabilidad y anomalía" />
-                <PipelineStep index="03" title="Block model" desc="Parquet industrial para mina" />
-                <PipelineStep index="04" title="Diseño de rajo" desc="Optimización LG + GLB" />
-                <PipelineStep index="05" title="LOM conceptual" desc="NPV preliminar, anomalía/fondo y strip ratio" />
+                <PipelineStep index="01" title="Survey gravimétrico" desc="CSV de campo: g_raw o anomalía corregida" />
+                <PipelineStep index="02" title="Correcciones" desc="GRS80, Free-Air, Bouguer y terreno" />
+                <PipelineStep index="03" title="Inversión 3D" desc="Densidad, DOI e incertidumbre" />
+                <PipelineStep index="04" title="Block model" desc="Parquet industrial + Obs vs Calc" />
+                <PipelineStep index="05" title="Export" desc="UBC-GIF (SimPEG), VTK (ParaView), reporte" />
               </div>
 
               <div className="relative z-10 grid grid-cols-3 gap-3">
@@ -109,19 +108,19 @@ export default function HomeView() {
           />
 
           <InfoPanel
-            title="Planificación"
-            subtitle="Diseño Mina"
-            text="Convierte el block model en un rajo abierto optimizado con fases, modelo GLB, métricas LOM y NPV."
-            button="Abrir Diseño Mina"
-            onClick={() => setView("diseño mina")}
+            title="Calidad"
+            subtitle="Datos y Misfit"
+            text="Revisa observaciones, correcciones aplicadas, ajuste Observed vs Calculated y diagnósticos de incertidumbre del modelo."
+            button="Abrir Datos"
+            onClick={() => setView("datos")}
           />
 
           <InfoPanel
-            title="Operación"
-            subtitle="Flota FMS"
-            text="Base para conectar telemetría operacional, camiones, productividad y cumplimiento diario de flota minera."
-            button="Abrir Flota FMS"
-            onClick={() => setView("flota fms")}
+            title="Trazabilidad"
+            subtitle="Historial"
+            text="Compara corridas, recupera modelos anteriores y audita parámetros de inversión de cada run del proyecto."
+            button="Abrir Historial"
+            onClick={() => setView("historial")}
           />
         </section>
 
@@ -135,8 +134,8 @@ export default function HomeView() {
                 Flujo completo para exploración técnica
               </h3>
               <p className="text-neutral-500 text-xs font-mono mt-3 max-w-3xl leading-6">
-                Cargar CSV gravimétrico → Validar e invertir → Generar modelo 3D preliminar →
-                Analizar anomalía/fondo → Continuar a Diseño Mina → Crear escenario conceptual.
+                Cargar CSV gravimétrico → Aplicar correcciones → Validar e invertir →
+                Analizar modelo 3D y DOI → Revisar Obs vs Calc → Exportar UBC/VTK y reporte.
               </p>
             </div>
 

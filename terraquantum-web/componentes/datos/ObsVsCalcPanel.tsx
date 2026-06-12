@@ -120,7 +120,7 @@ function ScatterObsCalc({ stations }: { stations: MisfitStationData[] }) {
           <Tooltip
             cursor={{ strokeDasharray: "3 3", stroke: "#ffffff33" }}
             contentStyle={{ background: "#111", border: "1px solid #333", fontSize: 9, color: "#ccc" }}
-            formatter={(v: number) => [v.toExponential(4), ""]}
+            formatter={(v) => [Number(v).toExponential(4), ""]}
           />
           {/* 1:1 reference line as a second scatter series with line=true */}
           <Scatter
@@ -157,7 +157,7 @@ function ResidualHistogram({ residuals }: { residuals: number[] }) {
           <YAxis tick={{ fontSize: 7, fill: "#ffffff55" }} width={28} />
           <Tooltip
             contentStyle={{ background: "#111", border: "1px solid #333", fontSize: 9, color: "#ccc" }}
-            formatter={(v: number) => [v, "count"]}
+            formatter={(v) => [Number(v), "count"]}
           />
           <Bar dataKey="count" radius={[2, 2, 0, 0]}>
             {bins.map((b, i) => (

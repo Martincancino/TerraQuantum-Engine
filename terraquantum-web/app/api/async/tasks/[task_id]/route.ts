@@ -3,10 +3,11 @@ import { fetchBackendJson } from "../../../_lib/backend";
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { task_id: string } }
+  // Next 15+: los params de rutas dinámicas llegan como Promise y se await-ean.
+  { params }: { params: Promise<{ task_id: string }> }
 ) {
   try {
-    const taskId = params.task_id;
+    const { task_id: taskId } = await params;
     if (!taskId) {
       return NextResponse.json({ detail: "task_id es requerido." }, { status: 400 });
     }
@@ -25,10 +26,10 @@ export async function GET(
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { task_id: string } }
+  { params }: { params: Promise<{ task_id: string }> }
 ) {
   try {
-    const taskId = params.task_id;
+    const { task_id: taskId } = await params;
     const result = await fetchBackendJson({
       path: `/api/async/tasks/${encodeURIComponent(taskId)}`,
       method: "GET",

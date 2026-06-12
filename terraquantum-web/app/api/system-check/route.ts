@@ -74,7 +74,6 @@ export async function GET() {
     geophysicsInvert: Boolean(paths["/geophysics-invert"]),
     blockModel: Boolean(paths["/block-model"]),
     generate: Boolean(paths["/generate"]),
-    scenarioSweep: Boolean(paths["/scenario-sweep"]),
   };
 
   const blockModelJson = asRecord(blockModelResult.data) || {};

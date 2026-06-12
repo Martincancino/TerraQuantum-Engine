@@ -4,14 +4,14 @@ Frontend industrial de TerraQuantum construido con Next.js, React, Zustand, Thre
 
 Este frontend conecta con el backend Python/FastAPI para visualizar:
 
-- Modelo geofísico 3D
-- Inversión gravimétrica
-- Block model exploratorio
-- Telemetría MWD
-- Diseño matemático de rajo abierto
-- Modelo GLB del pit
-- Métricas LOM y NPV
+- Modelo geofísico 3D (densidad, DOI, incertidumbre)
+- Inversión gravimétrica con correcciones de campo (GRS80/FAC/BC/TC)
+- Block model exploratorio (Parquet/Arrow)
+- Observed vs Calculated (misfit, chi², r²)
+- Historial y comparación de corridas
 - Diagnóstico de conexión backend/frontend
+
+El frontend NO calcula física: solo visualiza y consume APIs del backend.
 
 ---
 
@@ -21,13 +21,16 @@ Este frontend conecta con el backend Python/FastAPI para visualizar:
 terraquantum-web/
 │
 ├─ app/
-│  ├─ api/
+│  ├─ api/                      # BFF: proxy tipado hacia el backend
 │  │  ├─ _lib/
 │  │  │  └─ backend.ts
 │  │  ├─ backend-health/
 │  │  ├─ block-model/
-│  │  ├─ generate-pit/
 │  │  ├─ geophysics-invert/
+│  │  ├─ geophysics-misfit/
+│  │  ├─ geophysics-status/
+│  │  ├─ gravity-import/
+│  │  ├─ gravity-corrections/
 │  │  └─ system-check/
 │  │
 │  ├─ page.tsx
@@ -36,25 +39,24 @@ terraquantum-web/
 │
 ├─ componentes/
 │  ├─ views/
+│  │  ├─ HomeView.tsx
 │  │  ├─ Exploration3DView.tsx
-│  │  └─ MineDesignView.tsx
+│  │  ├─ HistorialView.tsx
+│  │  └─ IAChatView.tsx
 │  │
-│  ├─ huds/
-│  │  ├─ BackendStatusBadge.tsx
-│  │  ├─ BottomControls.tsx
-│  │  ├─ MwdLiveLink.tsx
-│  │  └─ TelemetryConsole.tsx
+│  ├─ datos/
+│  │  ├─ ObsVsCalcPanel.tsx
+│  │  └─ RunComparePanel.tsx
 │  │
 │  ├─ Scene3D.tsx
-│  ├─ MineDesign3D.tsx
-│  └─ PitMetricsPanel.tsx
+│  ├─ GravityCsvPreviewPanel.tsx
+│  └─ GravityCorrectionWizard.tsx
 │
 ├─ lib/
 │  ├─ terraquantum/
 │  │  ├─ frontendApi.ts
 │  │  ├─ geophysicsModel.ts
-│  │  ├─ geophysicsSurvey.ts
-│  │  └─ pitDesignModel.ts
+│  │  └─ geophysicsSurvey.ts
 │  │
 │  └─ terraQuantumGeology.ts
 │
@@ -69,3 +71,4 @@ terraquantum-web/
 ├─ .env.example
 ├─ .gitignore
 └─ README_FRONTEND.md
+```

@@ -728,16 +728,6 @@ export async function getTerrainData(projectId: string) {
   });
 }
 
-export async function getEconomicBlockModel(limit = 5000) {
-  const result = await fetchInternalJson<JsonValue>({
-    path: `/api/block-model?mode=economic&limit=${limit}`,
-    method: "GET",
-    timeoutMs: 60_000,
-  });
-
-  return finalizeBlockModelResult(result, "economic");
-}
-
 export async function getProjectRuns() {
   return fetchInternalJson<JsonValue>({
     path: "/api/project-runs",

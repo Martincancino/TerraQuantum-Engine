@@ -10,7 +10,9 @@ import type {
   ResidualPoint,
 } from "./types";
 
-export function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+// Acepta unknown: un type guard debe poder examinar cualquier valor (los
+// payloads del backend llegan tipados como unknown antes de validarse).
+export function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 

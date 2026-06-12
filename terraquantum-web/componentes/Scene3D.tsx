@@ -1628,12 +1628,6 @@ export default function Scene3D() {
     2,
     Math.floor(safeNumber(terrainData?.metadata.dem_cols, 32))
   );
-  // Terrain LOD: reducir segmentos para surveys grandes → mantener 30 FPS.
-  // < 5km → hasta 64 segs, 5-50km → 32 segs, > 50km → 16 segs.
-  const terrainLodCap = Math.max(terrainWidth, terrainDepth) < 5000
-    ? 64 : Math.max(terrainWidth, terrainDepth) < 50_000 ? 32 : 16;
-  const terrainLodCols = Math.min(terrainCols, terrainLodCap + 1);
-  const terrainLodRows = Math.min(terrainRows, terrainLodCap + 1);
   const fallbackTerrainWidth = (model?.domainL || 200) * 1.3;
   const fallbackTerrainDepth = (model?.domainW || 200) * 1.3;
   const terrainWidth = Math.max(
@@ -1646,6 +1640,14 @@ export default function Scene3D() {
       fallbackTerrainDepth,
     fallbackTerrainDepth
   );
+  // Terrain LOD: reducir segmentos para surveys grandes → mantener 30 FPS.
+  // < 5km → hasta 64 segs, 5-50km → 32 segs, > 50km → 16 segs.
+  // (Debe declararse DESPUÉS de terrainWidth/terrainDepth: usarlas antes era
+  // un TDZ ReferenceError en runtime al renderizar terreno.)
+  const terrainLodCap = Math.max(terrainWidth, terrainDepth) < 5000
+    ? 64 : Math.max(terrainWidth, terrainDepth) < 50_000 ? 32 : 16;
+  const terrainLodCols = Math.min(terrainCols, terrainLodCap + 1);
+  const terrainLodRows = Math.min(terrainRows, terrainLodCap + 1);
   const terrainSurfaceClearance = Math.max(
     safeNumber(model?.cellSize, 10) / 2,
     0.5
