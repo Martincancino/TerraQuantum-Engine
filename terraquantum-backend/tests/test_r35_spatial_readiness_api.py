@@ -157,11 +157,13 @@ def test_preview_local_meters_no_anchor_level_local_unanchored(client):
 
 
 def test_preview_unknown_coords_returns_no_spatial_data(client):
-    """CSV con coords > 1M (detectadas como unknown) → NO_SPATIAL_DATA en preview."""
+    """R3.5-K: columnas x_m/z_m son evidencia autoritativa de coords locales,
+    aunque los valores superen 1M (la inferencia por rango fallaba en surveys
+    regionales). Sin anchor en preview → LOCAL_UNANCHORED, no NO_SPATIAL_DATA."""
     resp = _post_preview(client, _make_csv_unknown_coords())
     assert resp.status_code == 200
     sr = resp.json()["spatial_readiness"]
-    assert sr["level"] == "NO_SPATIAL_DATA", f"Esperado NO_SPATIAL_DATA, got: {sr['level']}"
+    assert sr["level"] == "LOCAL_UNANCHORED", f"Esperado LOCAL_UNANCHORED, got: {sr['level']}"
 
 
 def test_preview_has_version_field(client):

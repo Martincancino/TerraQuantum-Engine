@@ -298,14 +298,18 @@ def test_preview_no_spatial_data_does_not_block(client):
 
 
 def test_preview_no_spatial_data_returns_spatial_readiness(client):
+    # R3.5-K: los nombres de columna son evidencia AUTORITATIVA — x_m/z_m con
+    # valores enormes clasifica local_meters (no "unknown" por rango). En
+    # preview no hay anchor lat/lon → LOCAL_UNANCHORED.
     resp = _post_preview(client, _make_csv_unknown_coords())
     assert resp.status_code == 200
     body = resp.json()
     assert "spatial_readiness" in body
-    assert body["spatial_readiness"]["level"] == "NO_SPATIAL_DATA"
+    assert body["spatial_readiness"]["level"] == "LOCAL_UNANCHORED"
 
 
-# 2. Invert NO_SPATIAL_DATA bloquea HTTP 422
+# 2. Invert con coordenadas locales fuera de rango UTM bloquea HTTP 422
+#    (columnas x_m/z_m → local_meters; anchor del form → LOCAL_ANCHORED_CENTER)
 def test_invert_no_spatial_data_returns_422(client):
     resp = _post_invert(client, _make_csv_unknown_coords())
     assert resp.status_code == 422, resp.text
@@ -318,15 +322,22 @@ def test_invert_no_spatial_data_detail_has_gate_error(client):
     assert detail["error"] == "SPATIAL_READINESS_GATE"
 
 
-# 3. NO_SPATIAL_DATA no acepta acknowledge bypass
-def test_invert_no_spatial_data_ack_still_blocks(client):
-    """acknowledge_spatial_risk=True no puede bypassear NO_SPATIAL_DATA."""
+# 3. Los niveles LOCAL_* aceptan acknowledge bypass. El bloqueo ABSOLUTO se
+#    reserva para NO_SPATIAL_DATA, que solo ocurre sin columnas de coordenadas
+#    y se rechaza en la etapa de import (ver tests unitarios del gate arriba).
+def test_invert_no_spatial_data_ack_still_blocks(client, monkeypatch):
+    """acknowledge_spatial_risk=True bypassea el gate para niveles LOCAL_*."""
+    import api.gravity_import_api as api_mod
+    monkeypatch.setattr(api_mod, "run_geophysics_inversion", _mock_inversion)
+    monkeypatch.setattr(api_mod, "get_terrain_data", _mock_terrain)
+    monkeypatch.setattr(api_mod, "enrich_block_model_with_elevation", _mock_enrich)
+
     resp = _post_invert(
         client,
         _make_csv_unknown_coords(),
         extra_form={"acknowledge_spatial_risk": "true"},
     )
-    assert resp.status_code == 422, resp.text
+    assert resp.status_code == 200, resp.text
 
 
 # 4. LOCAL_UNANCHORED sin ack bloquea

@@ -56,16 +56,21 @@ def _build_no_spatial_data(missing_fields: list[str] | None = None) -> SpatialRe
 
 
 def _build_local_unanchored() -> SpatialReadiness:
+    # Decisión de producto (2026-06-10): datos locales SIN anclaje requieren
+    # acknowledgement explícito antes de invertir — el gate de la API bloquea
+    # con 422 hasta que el usuario confirme (ACK_LOCAL_CONCEPTUAL_ONLY).
+    # La inversión sigue siendo físicamente válida en espacio local, pero no
+    # debe ejecutarse "sin querer" sobre datos sin georreferencia.
     return SpatialReadiness(
         level="LOCAL_UNANCHORED",
         level_rank=SPATIAL_LEVEL_RANKS["LOCAL_UNANCHORED"],
-        can_run_3d_inversion=True,
+        can_run_3d_inversion=False,
         can_run_local_conceptual_inversion=True,
         can_use_dem=False,
         can_compute_voxel_masl=False,
         can_compute_voxel_latlon=False,
-        requires_user_acknowledgement=False,
-        required_acknowledgement=None,
+        requires_user_acknowledgement=True,
+        required_acknowledgement="ACK_LOCAL_CONCEPTUAL_ONLY",
         max_priority_class_allowed=SPATIAL_LEVEL_MAX_PRIORITY["LOCAL_UNANCHORED"],
         max_favorability_score_allowed=SPATIAL_LEVEL_MAX_FAVORABILITY["LOCAL_UNANCHORED"],
         missing_fields=[],
@@ -75,20 +80,20 @@ def _build_local_unanchored() -> SpatialReadiness:
             "Para co-registro DEM y lat/lon por vóxel, proporcione anchor_lat y anchor_lon.",
         ],
         allowed_outputs=[
-            "3d_inversion",
             "local_conceptual_inversion",
             "relative_model_visualization",
             "internal_quality_report",
         ],
         blocked_outputs=[
+            "3d_inversion",
             "dem_coregistration",
             "voxel_masl",
             "voxel_latlon",
         ],
         rationale=(
-            "Coordenadas locales en metros sin anclaje geográfico. La inversión 3D es "
-            "físicamente válida en espacio local. El modelo no tiene ubicación geográfica "
-            "absoluta; proporcionar anchor_lat/lon para georeferenciación."
+            "Coordenadas locales en metros sin anclaje geográfico. La inversión 3D "
+            "queda bloqueada hasta acknowledgement explícito: es válida solo como "
+            "ejercicio conceptual local sin ubicación geográfica absoluta."
         ),
     )
 

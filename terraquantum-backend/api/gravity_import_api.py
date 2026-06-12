@@ -498,9 +498,32 @@ def _enforce_spatial_readiness_gate(
             required_action="Agregar columnas de coordenadas (x/y/z, lat/lon, o Easting/Northing) al CSV.",
         )
 
-    # LOCAL_UNANCHORED y LOCAL_ANCHORED_CENTER: permitidos sin bloqueo (solo warning)
-    # Estos niveles son aceptables para datos experimentales/operacionales (gravímetros sin georef).
-    # El bloqueo se reserva para NO_SPATIAL_DATA (sin ninguna coordenada).
+    # LOCAL_UNANCHORED / LOCAL_ANCHORED_CENTER: bloqueados salvo acknowledgement
+    # explícito (decisión de producto 2026-06-10: datos sin georreferencia no
+    # deben invertirse "sin querer"; el UI expone el checkbox de riesgo).
+    if level == "LOCAL_UNANCHORED" and not acknowledge_spatial_risk:
+        _raise(
+            "Coordenadas locales sin anclaje geográfico. El modelo 3D no tendrá "
+            "ubicación absoluta y solo es válido como ejercicio conceptual local.",
+            required_acknowledgement=(
+                spatial_readiness.required_acknowledgement or "ACK_LOCAL_CONCEPTUAL_ONLY"
+            ),
+            required_action=(
+                "Confirmar acknowledge_spatial_risk=true o proporcionar anchor_lat/lon."
+            ),
+        )
+
+    if level == "LOCAL_ANCHORED_CENTER" and not acknowledge_spatial_risk:
+        _raise(
+            "Coordenadas locales ancladas solo a un punto central declarado: "
+            "orientación y escala real no verificadas.",
+            required_acknowledgement=(
+                spatial_readiness.required_acknowledgement or "ACK_LOCAL_ANCHORED_GEOREF"
+            ),
+            required_action=(
+                "Confirmar acknowledge_spatial_risk=true o entregar coordenadas por estación."
+            ),
+        )
 
     if level == "UTM_NO_ZONE" and not acknowledge_spatial_risk:
         _raise(
@@ -577,16 +600,9 @@ async def preview_gravity_csv(
         )
         regional_scale_preflight = build_preflight_from_import_result(result)
 
-        # R3.8-D — Preview es solo informativo, no bloquea.
-        # El bloqueo real ocurre en /invert cuando el usuario especifica nx/ny/nz.
-        if regional_scale_preflight.scale_class == "TOO_LARGE_SINGLE_INVERSION":
-            regional_scale_preflight.scale_class = "DISTRICT_SCALE"
-            regional_scale_preflight.can_run_single_inversion = True
-            regional_scale_preflight.requires_user_acknowledgement = False
-            regional_scale_preflight.warnings.append(
-                "Preview: Grilla auto-estimada es grande (364x122x4), pero puedes especificar "
-                "parámetros más pequeños (nx, ny, nz ≤ 80) en la inversión."
-            )
+        # R3.7 (restaurado 2026-06-10): el preview REPORTA la clase real
+        # (incluido TOO_LARGE_SINGLE_INVERSION con sugerencias de subset/tile)
+        # sin bloquear — el bloqueo ocurre en /invert.
 
         _auto_grid_dict = model_to_dict(result.auto_grid) if result.auto_grid else None
         _octree_params_top = (
@@ -973,11 +989,26 @@ async def invert_gravity_csv(
         effective_depth = int(math.ceil(depth)) if depth > 0 else int(math.ceil(auto_grid.depth_m))
         effective_cutoff_radius = float(cutoff_radius) if cutoff_radius > 0 else auto_grid.cutoff_radius_m
 
-        # R3.7-C — Regional scale preflight gate (ahora con parámetros efectivos)
-        # Si el usuario especificó una grilla que cabe en los límites, usarla para evaluar escala
+        # R3.7-C (restaurado 2026-06-10) — Regional scale preflight gate.
+        # TOO_LARGE_SINGLE_INVERSION se evalúa sobre la EXTENSIÓN del survey
+        # (auto-grid): si la grilla necesaria excede los límites por dimensión,
+        # ninguna caja chica especificada por el usuario produce un modelo
+        # físicamente significativo (modo de fallo "kernel vacío"). Se bloquea
+        # con guía de subset/tile — sin bypass por acknowledgement.
         regional_preflight = build_preflight_from_import_result(import_result)
+        if regional_preflight.scale_class == "TOO_LARGE_SINGLE_INVERSION":
+            _raise_regional_scale_gate(
+                regional_preflight,
+                message=(
+                    "El survey excede el tamaño máximo para una inversión única: "
+                    "la grilla necesaria supera los límites por dimensión. "
+                    "Use un subset local o procese por tiles."
+                ),
+                required_action=regional_preflight.recommended_action,
+            )
 
-        # R3.8-B — Recalcular preflight si los parámetros efectivos son diferentes a los auto calculados
+        # R3.8-B — Recalcular preflight con los parámetros efectivos del usuario
+        # (solo informativo/ack para clases ≤ REGIONAL_SCALE).
         if (effective_nx != auto_grid.nx or effective_ny != auto_grid.ny or
             effective_nz != auto_grid.nz or effective_depth != auto_grid.depth_m):
             from services.regional_scale_preflight_service import classify_regional_scale_preflight
@@ -996,15 +1027,7 @@ async def invert_gravity_csv(
                 max_allowed_nz=max_grid_dim,
             )
 
-        # R3.8-C — No bloquear TOO_LARGE_SINGLE_INVERSION; es una heurística, no una ley.
-        # Si el usuario especificó nx/ny/nz, usamos esos valores.
-        # La validación de grilla ocurre en el schema de inversión (max 80 por dimensión).
-        if regional_preflight.scale_class == "TOO_LARGE_SINGLE_INVERSION":
-            regional_preflight.warnings.append(
-                f"Auto-grid estimó {regional_preflight.estimated_nx}x{regional_preflight.estimated_ny}x{regional_preflight.estimated_nz} voxeles. "
-                f"Se usarán los parámetros especificados: {effective_nx}x{effective_ny}x{effective_nz}."
-            )
-        elif (
+        if (
             regional_preflight.scale_class == "REGIONAL_SCALE"
             and regional_preflight.requires_user_acknowledgement
         ):

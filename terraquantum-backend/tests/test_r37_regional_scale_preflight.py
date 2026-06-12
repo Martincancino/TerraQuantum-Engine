@@ -73,6 +73,38 @@ def _latlon_csv(
     return path
 
 
+def _latlon_grid_csv(
+    path: Path,
+    *,
+    lat_span: float = 2.0,
+    lon_span: float = 20.0,
+    n_lat: int = 10,
+    n_lon: int = 100,
+) -> Path:
+    """Survey DENSO y alargado que genuinamente excede los límites por dimensión.
+
+    El auto-grid scale-aware (HITO 5) deriva block_size del espaciamiento medio:
+    un survey ralo de 10°×10° con 12 estaciones produce celdas de ~77 km y
+    nx≈14 (clasifica REGIONAL_SCALE, no TOO_LARGE). Para ejercitar
+    TOO_LARGE_SINGLE_INVERSION se necesita densidad real: 20°×2° con grilla
+    100×10 → spacing ~21 km → block ~10 km → nx≈190 > 80, sin que R-10 lo
+    reduzca (voxel_count queda muy bajo el límite por ny pequeño).
+    """
+    lines = ["station_id,lat,lon,unit,g_mgal,gravity_type"]
+    idx = 0
+    for i in range(n_lat):
+        lat = -25.0 + lat_span * (i / max(n_lat - 1, 1))
+        for j in range(n_lon):
+            lon = -70.0 + lon_span * (j / max(n_lon - 1, 1))
+            lines.append(
+                f"st_{idx},{lat:.8f},{lon:.8f},mGal,"
+                f"{5.0 + (idx % 50) * 0.1:.3f},bouguer_anomaly"
+            )
+            idx += 1
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
 def _post_preview(client: TestClient, csv_path: Path):
     return client.post(
         "/gravity-import/preview",
@@ -209,7 +241,7 @@ def test_preview_includes_preflight_and_preserves_status_and_spatial_readiness(
 
 
 def test_preview_full_like_reports_too_large_without_blocking_preview(client, tmp_path):
-    csv_path = _latlon_csv(tmp_path / "full_like.csv", lat_span=10.0, lon_span=10.0)
+    csv_path = _latlon_grid_csv(tmp_path / "full_like.csv")
 
     response = _post_preview(client, csv_path)
 
@@ -270,7 +302,7 @@ def test_full_like_invert_blocked_by_r37_too_large_gate(
     # R3.7-C: TOO_LARGE_SINGLE_INVERSION fires before schema validation now.
     import api.gravity_import_api as api_mod
 
-    csv_path = _latlon_csv(tmp_path / "full_invert.csv", lat_span=10.0, lon_span=10.0)
+    csv_path = _latlon_grid_csv(tmp_path / "full_invert.csv")
 
     def _solver_must_not_run(*_args, **_kwargs):
         pytest.fail("TOO_LARGE CSV should be blocked by R3.7 gate before solver")
@@ -332,7 +364,7 @@ def test_local_survey_has_no_suggested_tile_size():
 
 
 def test_preview_full_like_includes_suggested_tile_size_m(client, tmp_path):
-    csv_path = _latlon_csv(tmp_path / "full_tile.csv", lat_span=10.0, lon_span=10.0)
+    csv_path = _latlon_grid_csv(tmp_path / "full_tile.csv")
     response = _post_preview(client, csv_path)
     assert response.status_code == 200
     preflight = response.json()["regional_scale_preflight"]
@@ -342,7 +374,7 @@ def test_preview_full_like_includes_suggested_tile_size_m(client, tmp_path):
 
 
 def test_preview_full_like_includes_suggested_subset_bbox(client, tmp_path):
-    csv_path = _latlon_csv(tmp_path / "full_bbox.csv", lat_span=10.0, lon_span=10.0)
+    csv_path = _latlon_grid_csv(tmp_path / "full_bbox.csv")
     response = _post_preview(client, csv_path)
     assert response.status_code == 200
     preflight = response.json()["regional_scale_preflight"]
