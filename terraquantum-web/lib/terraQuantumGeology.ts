@@ -478,7 +478,12 @@ export function updateInstancedBuffers({
     let visible = false;
     if (effectiveProfessionalMode) {
       const config = getGeologicalVoxelConfig(visualScore, professionalScoreStats);
-      if (config.scale === 0) { dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue; }
+      // visualScore es PROSPECTIVIDAD (sesgada a denso = objetivo de mena). Un
+      // déficit de masa de fuerte contraste es estructura geológica REAL y debe
+      // verse: sin esto, el modo profesional nunca muestra azul (era la causa de
+      // "no hay vóxeles azules" — el modo por defecto es profesional).
+      const passesContrast = _contrastMag >= ANOMALY_CONTRAST_VISIBLE;
+      if (config.scale === 0 && !passesContrast) { dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue; }
       visible = true;
       if (visualScore >= professionalScoreStats.threshold) highlightedCount++;
     } else if (isExplorationMode) {

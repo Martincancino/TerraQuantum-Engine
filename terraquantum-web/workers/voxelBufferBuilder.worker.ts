@@ -336,7 +336,10 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
     // ── Visibilidad ───────────────────────────────────────────────────────────
     let visible = false;
     if (p.effectiveProfessionalMode) {
-      if (visualScore < p.professionalScoreStats.threshold) {
+      // visualScore es prospectividad (sesgada a denso). Un déficit de masa de
+      // fuerte contraste es estructura real -> también visible (sin esto el modo
+      // profesional nunca muestra azul). Debe coincidir con terraQuantumGeology.ts.
+      if (visualScore < p.professionalScoreStats.threshold && _contrastMag < ANOMALY_CONTRAST_VISIBLE) {
         writeMatrix(matricesF32, mb, 0, 0, 0, rx_visual, ry_visual, rz_visual);
         colorsF32[cb] = 0; colorsF32[cb + 1] = 0; colorsF32[cb + 2] = 0;
         continue;
