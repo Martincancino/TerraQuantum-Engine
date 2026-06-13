@@ -730,6 +730,12 @@ def build_block_model_response(
             # v4.0 fields
             "doi_index": sanitize_nan_value(row.get("doi_index") or row.get("doi_raw")),
             "density_anomaly_score": sanitize_nan_value(row.get("density_anomaly_score")),
+            # Sensibilidad / DOI por celda. El visor 3D OCULTA toda celda con
+            # sensitivity_proxy < 0.05 (gate de profundidad de investigación) y
+            # trata null como 0.0 -> si no se mapea, el modelo entero queda
+            # invisible aunque la física sea correcta.
+            "sensitivity_proxy": sanitize_nan_value(row.get("sensitivity_proxy")),
+            "normalized_sensitivity": sanitize_nan_value(row.get("normalized_sensitivity")),
             "run_type": row.get("run_type"),
             "schema_version": row.get("schema_version"),
         }

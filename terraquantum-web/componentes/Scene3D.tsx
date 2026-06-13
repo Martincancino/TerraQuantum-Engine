@@ -23,7 +23,6 @@ import { useAppStore } from "../store/useAppStore";
 import type { VisualLayer, SliceAxis, ViewMode } from "../store/useAppStore";
 import { buildTerrainTextureProxyUrl } from "../lib/terraquantum/frontendApi";
 import { updateInstancedBuffers } from "../lib/terraQuantumGeology";
-import PostFX from "./viewport/PostFX";
 import { fmtNum, fmtSci, asRecord, safeNumber, clamp01, readFiniteRecordNumber } from "./datos/helpers";
 import { motion } from "framer-motion";
 
@@ -1933,8 +1932,6 @@ export default function Scene3D() {
         blur={2.5}
         far={10}
       />
-
-      <PostFX />
     </>
   );
 }

@@ -54,7 +54,9 @@ class R3EnrichmentStatus(BaseModel):
     attempted: bool = False
     terrain_persisted: bool = False
     # None = enrichment no intentado (sin project_id/run_id o georef MISSING)
-    enrichment_status: Optional[str] = Field(default="skipped", pattern="^(success|skipped|error)$")
+    # "ok" es el status real que devuelve elevation_enrichment_service; "success"
+    # se mantiene por compatibilidad histórica con clientes que lo esperasen.
+    enrichment_status: Optional[str] = Field(default="skipped", pattern="^(ok|success|skipped|error)$")
     has_elevation_data: bool = False
     warnings: List[str] = Field(default_factory=list)
 
@@ -268,6 +270,15 @@ class BlockModelStats(BaseModel):
 
 class BlockModelResponse(BaseModel):
     """Block model JSON response (voxels as JSON array)."""
+    # extra="allow": build_block_model_response emite campos de geometría y
+    # estadística (domainL/H/W, cellSize, visualMode, densityMin/Max,
+    # diagnosticStats/densityStats camelCase, percentile_stats, returnedScoreStats…)
+    # que el visor 3D NECESITA para escalar los vóxeles y calcular la esfera de
+    # frustum culling. Un response_model estricto los filtraba: el frontend
+    # recibía cellSize=10 (real 520 m) y domainL=0, por lo que Three.js
+    # descartaba toda la malla y solo se veía la caja del dominio.
+    model_config = ConfigDict(extra="allow")
+
     cells: List[VoxelData] = Field(default_factory=list)
 
     # Voxel counts
@@ -275,6 +286,17 @@ class BlockModelResponse(BaseModel):
     returned_voxels: int = 0
     stored_voxels: int = 0
     anomaly_voxels: int = 0
+
+    # Geometría del dominio (la usa el visor 3D para escala y culling)
+    domainL: Optional[float] = None
+    domainH: Optional[float] = None
+    domainW: Optional[float] = None
+    cellSize: Optional[float] = None
+    visualMode: Optional[str] = None
+
+    # Rango de densidad (colormap físico)
+    densityMin: Optional[float] = None
+    densityMax: Optional[float] = None
 
     # Diagnostics
     diagnostic_stats: Optional[BlockModelStats] = None

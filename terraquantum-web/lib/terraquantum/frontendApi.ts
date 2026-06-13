@@ -958,6 +958,10 @@ export type GravityCsvInvertPayload = {
   utmZone?: string | null;
   acknowledgeSpatialRisk?: boolean;
   acknowledgeRegionalScale?: boolean;
+  // Tier 1 B6 — parámetros físicos (los valida el backend)
+  densityMin?: number;
+  densityMax?: number;
+  gravimeterType?: string;
 };
 
 export type InversionResultPayload = {
@@ -1070,6 +1074,10 @@ export async function invertGravityCsv(
   if (payload.acknowledgeRegionalScale === true) {
     formData.append("acknowledge_regional_scale", "true");
   }
+  // Tier 1 B6 — parámetros físicos opcionales
+  if (payload.densityMin !== undefined) formData.append("density_min", String(payload.densityMin));
+  if (payload.densityMax !== undefined) formData.append("density_max", String(payload.densityMax));
+  if (payload.gravimeterType) formData.append("gravimeter_type", payload.gravimeterType);
 
   try {
     const res = await fetch("/api/gravity-import/invert", {

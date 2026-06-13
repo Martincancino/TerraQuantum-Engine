@@ -318,6 +318,13 @@ export default function GravityCsvPreviewPanel() {
   const [correctionReport, setCorrectionReport] = useState<GravityCorrectionReport | null>(null);
 
   const [utmZone, setUtmZone] = useState<string>("");
+  // Tier 1 B6 — controles físicos. El frontend solo recolecta y valida forma;
+  // la física (bounds, sigma, selección de λ) la resuelve el backend.
+  const [densityMin, setDensityMin] = useState<string>("0.0");
+  const [densityMax, setDensityMax] = useState<string>("5.5");
+  const [gravimeterType, setGravimeterType] = useState<string>("unknown");
+  const [lambdaMode, setLambdaMode] = useState<"auto" | "custom">("auto");
+  const [lambdaCustom, setLambdaCustom] = useState<string>("0.1");
   const [acknowledgeSpatialRisk, setAcknowledgeSpatialRisk] = useState(false);
   const [spatialGateError, setSpatialGateError] = useState<SpatialReadinessGateError | null>(null);
   const [acknowledgeRegionalScale, setAcknowledgeRegionalScale] = useState(false);
@@ -575,6 +582,19 @@ export default function GravityCsvPreviewPanel() {
       return;
     }
 
+    // Validación de forma de los controles físicos (los rangos finos los valida el backend)
+    const dMinNum = Number(densityMin);
+    const dMaxNum = Number(densityMax);
+    if (!Number.isFinite(dMinNum) || !Number.isFinite(dMaxNum) || dMinNum >= dMaxNum) {
+      setGeoError("Bounds de densidad inválidos: density_min debe ser un número menor que density_max.");
+      return;
+    }
+    const lambdaValNum = lambdaMode === "custom" ? Number(lambdaCustom) : 0;
+    if (lambdaMode === "custom" && (!Number.isFinite(lambdaValNum) || lambdaValNum <= 0)) {
+      setGeoError("Lambda personalizado debe ser un número mayor que 0.");
+      return;
+    }
+
     setInvertLoading(true);
     setInvertErrorMsg(null);
     setSpatialGateError(null);
@@ -622,6 +642,12 @@ export default function GravityCsvPreviewPanel() {
       nz: LEGACY_INVERSION_PARAMS.nz,
       blockSize: LEGACY_INVERSION_PARAMS.blockSize,
       depth: LEGACY_INVERSION_PARAMS.depth,
+      // Controles físicos (B6): λ=0 dispara selección automática en backend
+      // (Morozov si el gravímetro declarado hace el chi² interpretable).
+      lambdaMag: lambdaValNum,
+      densityMin: dMinNum,
+      densityMax: dMaxNum,
+      gravimeterType,
       runId,
       strict,
       allowGRaw,
@@ -1265,6 +1291,93 @@ export default function GravityCsvPreviewPanel() {
             <span className="min-w-0 break-words">Permitir g_raw</span>
             {allowGRaw && <span className="text-red-400 ml-1 lowercase break-words">(menor exactitud)</span>}
           </label>
+        </div>
+
+        {/* ── Parámetros físicos (Tier 1 B6) ─────────────────────────────── */}
+        <div className="w-full border border-neutral-800 rounded p-2.5 flex flex-col gap-2">
+          <p className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">
+            Parámetros físicos de inversión
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">
+                Densidad mín (t/m³)
+              </label>
+              <input
+                type="number"
+                step="0.05"
+                value={densityMin}
+                onChange={(e) => setDensityMin(e.target.value)}
+                title="Bound inferior absoluto. < 2.6 permite contrastes negativos (magma, sal, cavidades)."
+                className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">
+                Densidad máx (t/m³)
+              </label>
+              <input
+                type="number"
+                step="0.05"
+                value={densityMax}
+                onChange={(e) => setDensityMax(e.target.value)}
+                title="Bound superior absoluto. 5.5 cubre magnetita/cromita/pirita masiva."
+                className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">
+              Gravímetro (piso de ruido σ)
+            </label>
+            <select
+              value={gravimeterType}
+              onChange={(e) => setGravimeterType(e.target.value)}
+              className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
+            >
+              <option value="unknown">Desconocido (0.020 mGal, conservador)</option>
+              <option value="scintrex_cg6">Scintrex CG-6 (0.005 mGal)</option>
+              <option value="zls_burris">ZLS Burris (0.002 mGal)</option>
+              <option value="lacoste_romberg">LaCoste &amp; Romberg (0.010 mGal)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">
+              Regularización λ
+            </label>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-[10px] text-neutral-400 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={lambdaMode === "auto"}
+                  onChange={() => setLambdaMode("auto")}
+                  className="accent-[#C2D8C4]"
+                />
+                <span title="El backend selecciona λ: discrepancia de Morozov (chi²→1) si declaraste gravímetro; operating point validado si no.">
+                  Auto
+                </span>
+              </label>
+              <label className="flex items-center gap-1.5 text-[10px] text-neutral-400 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={lambdaMode === "custom"}
+                  onChange={() => setLambdaMode("custom")}
+                  className="accent-[#C2D8C4]"
+                />
+                <span>Custom</span>
+              </label>
+              {lambdaMode === "custom" && (
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.0001"
+                  value={lambdaCustom}
+                  onChange={(e) => setLambdaCustom(e.target.value)}
+                  className="w-24 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
+                />
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="flex flex-col justify-center w-full max-w-full">

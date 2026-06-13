@@ -12,9 +12,7 @@ import WorkspaceLayout from "../workspace/WorkspaceLayout";
 import CommandBar from "../workspace/CommandBar";
 import SidebarSection from "../workspace/SidebarSection";
 import Panel from "../workspace/Panel";
-import SliceControls from "../viewport/SliceControls";
 import BoxClipControls from "../viewport/BoxClipControls";
-import MultiPhysicsControls from "../viewport/MultiPhysicsControls";
 import AnalyticsPanel from "../analytics/AnalyticsPanel";
 
 import { GravityObservation } from "../../lib/terraquantum/geophysicsSurvey";
@@ -219,8 +217,6 @@ export default function Exploration3DView() {
     setBlockModelElevationMeta,
     visualProfessionalMode,
     setVisualProfessionalMode,
-    postprocessingEnabled,
-    setPostprocessingEnabled,
     setSelectedVoxel,
     showLegend,
     visibleCellCount,
@@ -470,13 +466,6 @@ export default function Exploration3DView() {
                 onClick: () => setVisualProfessionalMode(!visualProfessionalMode),
               },
               {
-                id: "quality",
-                label: postprocessingEnabled ? "Calidad · Cinemático" : "Calidad · Rendimiento",
-                active: postprocessingEnabled,
-                disabled: !model || !show3D,
-                onClick: () => setPostprocessingEnabled(!postprocessingEnabled),
-              },
-              {
                 id: "reset",
                 label: "Reset Cámara",
                 disabled: !model || !show3D,
@@ -507,11 +496,6 @@ export default function Exploration3DView() {
               </p>
               <GravityCsvPreviewPanel />
             </SidebarSection>
-            {show3D && model && (
-              <SidebarSection title="Cortes geológicos">
-                <SliceControls />
-              </SidebarSection>
-            )}
             {show3D && model && (
               <SidebarSection title="Corte caja A-A' / B-B'">
                 <BoxClipControls />
@@ -582,7 +566,6 @@ export default function Exploration3DView() {
                 </div>
               )}
               {/* ── Fase 12: Panel Multi-Física (overlay sobre el Canvas) ────────── */}
-              {show3D && model && <MultiPhysicsControls />}
               {/* Badge: datos magnéticos no disponibles para la corrida actual */}
               {show3D && model && viewMode === 'susceptibility' && !susceptibilityDataAvailable && (
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/75 border border-yellow-500/60 text-yellow-400 text-[10px] font-mono px-3 py-1 rounded-full pointer-events-none">

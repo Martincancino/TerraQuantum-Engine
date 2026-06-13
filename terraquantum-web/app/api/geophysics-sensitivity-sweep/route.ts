@@ -28,7 +28,10 @@ export async function POST(req: NextRequest) {
     path: "/geophysics-sensitivity-sweep",
     method: "POST",
     body,
-    timeoutMs: 90_000,
+    // El sweep corre hasta 9 inversiones completas (LSQR+GPCG ~6s c/u) sobre la
+    // malla activa; con kernel build + diagnósticos supera los 90s previos y daba
+    // timeout. 5 min da margen holgado para un análisis on-demand.
+    timeoutMs: 300_000,
   });
 
   if (!result.ok) {

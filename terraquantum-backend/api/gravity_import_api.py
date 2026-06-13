@@ -1135,6 +1135,12 @@ async def invert_gravity_csv(
                 sensor_elevations_masl=_sensor_elevs_v1,
                 noise_floor_mgal=_noise_floor_from_unc,
                 gravimeter_type=gravimeter_type,
+                # compute_uncertainty queda OFF a propósito: a la λ que selecciona
+                # Morozov en surveys subdeterminados (LdM: 191 estaciones), la
+                # covarianza posterior está mal condicionada y σ explota (mediana
+                # ~41, máx ~1e13 t/m³ — no físico). Activarla mostraría basura.
+                # Requiere fijar un operating point estable (λ mayor) o regularizar
+                # la UQ; es decisión de física, no un wiring. Ver nota al usuario.
             )
         except ValidationError as exc:
             raise HTTPException(

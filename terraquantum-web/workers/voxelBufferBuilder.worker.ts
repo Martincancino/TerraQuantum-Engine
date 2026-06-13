@@ -275,8 +275,9 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
     // ── DOI / sensitivity proxy ───────────────────────────────────────────────
     const _rawSens = cell.sensitivity_proxy !== undefined ? cell.sensitivity_proxy : cell.normalized_sensitivity;
     const sensitivityProxy = (() => {
-      if (_rawSens === undefined) return 1.0;
-      if (_rawSens === null) return 0.0;
+      // null/undefined = sin dato de DOI -> visible (1.0), no "sensibilidad 0".
+      // Tratar null como 0.0 ocultaba el modelo entero (ver terraQuantumGeology).
+      if (_rawSens === undefined || _rawSens === null) return 1.0;
       const n2 = Number(_rawSens);
       return Number.isFinite(n2) ? n2 : 1.0;
     })();

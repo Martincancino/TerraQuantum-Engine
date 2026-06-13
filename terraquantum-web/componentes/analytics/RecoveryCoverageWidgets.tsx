@@ -129,6 +129,10 @@ export function RecoveryWidget({
     asRec(report?.syntheticRecovery) ??
     asRec(metrics?.recovery) ??
     asRec(report?.checkerboard) ??
+    // El backend escribe la métrica de checkerboard bajo `checkerboard_qa`
+    // (pearson_r, sign_recovery_pct, status). Sin esta clave el panel quedaba
+    // siempre en "no disponible" aunque el dato existía.
+    asRec(report?.checkerboard_qa) ??
     null;
 
   const pearson = numOf(rec ?? report, "pearson_r");

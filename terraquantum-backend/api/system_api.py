@@ -20,6 +20,7 @@ from core.block_model_store import (
     get_project_run_detail,
     list_project_runs,
 )
+from core.utils import sanitize_nan
 
 
 router = APIRouter()
@@ -76,7 +77,11 @@ async def project_run_detail(
         )
 
     try:
-        return get_project_run_detail(project_id, run_id)
+        # Los reportes persistidos pueden contener NaN/Inf (p. ej. rms_base del
+        # enfoque MS-x cuando no converge). Starlette serializa con
+        # allow_nan=False, así que cualquier NaN provoca un 500. Saneamos en el
+        # borde de la respuesta: NaN/Inf -> null.
+        return sanitize_nan(get_project_run_detail(project_id, run_id))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -98,12 +103,12 @@ async def compare_runs(
         )
 
     try:
-        return compare_project_runs(
+        return sanitize_nan(compare_project_runs(
             base_project_id=base_project_id,
             base_run_id=base_run_id,
             compare_project_id=compare_project_id,
             compare_run_id=compare_run_id,
-        )
+        ))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

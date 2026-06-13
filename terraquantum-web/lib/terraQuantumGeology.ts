@@ -203,8 +203,14 @@ function clamp01(v: number): number {
 
 function getCellNumber(cell: SceneCell, keys: string[], fallback = 0): number {
   for (const key of keys) {
-    const v = Number(cell?.[key]);
-    if (Number.isFinite(v)) return v;
+    const raw = cell?.[key];
+    // CRÍTICO: Number(null) === 0 (no NaN). Si la 1ª clave llega como null
+    // (el response_model estricto emite campos opcionales como null), la versión
+    // antigua devolvía 0 y NUNCA caía a la clave de respaldo -> target_score=null
+    // se leía como 0 (ocultando todo) y modeled_density_index=null hacía
+    // densidad=0 en TODA la malla. Solo aceptamos números finitos reales; null /
+    // undefined / no-número se saltan para usar la siguiente clave.
+    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
   }
   return fallback;
 }
@@ -420,9 +426,17 @@ export function updateInstancedBuffers({
       dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue;
     }
     const _rawSens = rawCell.sensitivity_proxy !== undefined ? rawCell.sensitivity_proxy : rawCell.normalized_sensitivity;
-    const sensitivityProxy = (() => { if (_rawSens === undefined) return 1.0; if (_rawSens === null) return 0.0; const n = Number(_rawSens); return Number.isFinite(n) ? n : 1.0; })();
+    // null/undefined = el backend no proveyó sensibilidad para esta celda ->
+    // "sin dato de DOI", NO "sensibilidad cero". Tratarlo como 0.0 ocultaba el
+    // modelo entero cuando el campo llegaba null. Sin dato -> visible (1.0); el
+    // gate DOI solo debe ocultar celdas con sensibilidad REAL baja (<0.05).
+    const sensitivityProxy = (() => { if (_rawSens === undefined || _rawSens === null) return 1.0; const n = Number(_rawSens); return Number.isFinite(n) ? n : 1.0; })();
     const DOI_THRESHOLD = 0.05;
-    if (sensitivityProxy < DOI_THRESHOLD) { dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue; }
+    // El gate DOI NO oculta el vóxel: el modelo de densidad se calcula
+    // (regularizado) en TODA la malla; baja sensibilidad = menor confianza, y eso
+    // se comunica atenuando el brillo (ver `brightness` más abajo), no borrando.
+    // Ocultar aquí eliminaba ~2/3 de un modelo regional válido (causa de "no se
+    // ve nada" en surveys dispersos como Laguna del Maule).
     if (showOnlySlice && sliceAxis !== "none") { const axisPos = getCellAxisPosition(cell, sliceAxis); if (axisPos > slicePosition) { dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue; } }
     const density = getVoxelModeledDensity(cell);
     const densityRatio = normalizeDensity(density, densityStats);
