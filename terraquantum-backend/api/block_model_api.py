@@ -38,6 +38,7 @@ async def get_block_model_arrow(
     mode: str = "exploration",
     project_id: str = None,
     run_id: str = None,
+    display_factor: int = 1,
 ):
     """Endpoint Arrow IPC — transporte binario, sin iter_rows ni deep_sanitize_nan.
 
@@ -50,11 +51,15 @@ async def get_block_model_arrow(
     )
 
     try:
+        # display_factor acotado a [1, 6]: factor 6 sobre ~8k celdas ya da ~1.7M
+        # vóxeles (el techo de ~2M que pidió el usuario). Evita payloads absurdos.
+        _df = max(1, min(int(display_factor or 1), 6))
         ipc_bytes, tq_headers = build_block_model_arrow_bytes(
             mode=mode,
             limit=0,
             project_id=project_id,
             run_id=run_id,
+            display_factor=_df,
         )
     except FileNotFoundError as exc:
         return Response(content=str(exc), status_code=404)

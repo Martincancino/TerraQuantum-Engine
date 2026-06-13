@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { previewGravityCsv, GravityImportPreviewResponse, invertGravityCsv, GravityCsvInvertResponse, GravityCsvInvertPayload, getExplorationBlockModelForRun, CoordinateTransformData, CrsInfo, SpatialReadiness, SpatialReadinessGateError, RegionalScalePreflight, RegionalScaleGateError, GravityCorrectionReport, connectGeophysicsStatusStream } from "../lib/terraquantum/frontendApi";
+import { useState, useMemo, useRef, useEffect } from "react";
+import { previewGravityCsv, GravityImportPreviewResponse, invertGravityCsv, GravityCsvInvertResponse, GravityCsvInvertPayload, getExplorationBlockModelForRun, getExplorationBlockModelForRunWithArrow, CoordinateTransformData, CrsInfo, SpatialReadiness, SpatialReadinessGateError, RegionalScalePreflight, RegionalScaleGateError, GravityCorrectionReport, connectGeophysicsStatusStream } from "../lib/terraquantum/frontendApi";
 import { useAppStore } from "../store/useAppStore";
 import GravityCorrectionWizard from "./GravityCorrectionWizard";
 import { type VoxelMineralModel, type VoxelData } from "../lib/terraQuantumGeology";
@@ -342,6 +342,28 @@ export default function GravityCsvPreviewPanel() {
   const setView = useAppStore(state => state.setView);
   const setShow3D = useAppStore(state => state.setShow3D);
   const setActiveRun = useAppStore(state => state.setActiveRun);
+  const displayResolutionFactor = useAppStore(state => state.displayResolutionFactor);
+
+  // Recarga el modelo 3D al cambiar la resolución de display (sub-muestreo
+  // trilineal), sin re-invertir: solo re-pide el block model al factor nuevo.
+  const prevResFactorRef = useRef(displayResolutionFactor);
+  useEffect(() => {
+    if (prevResFactorRef.current === displayResolutionFactor) return;
+    prevResFactorRef.current = displayResolutionFactor;
+    const run = useAppStore.getState().activeRun;
+    if (!run?.projectId || !run?.runId || run.status !== "ready") return;
+    let cancelled = false;
+    (async () => {
+      const res = await getExplorationBlockModelForRunWithArrow(
+        run.projectId, run.runId, "exploration", 5000, displayResolutionFactor,
+      );
+      if (cancelled || !res.ok || !res.data) return;
+      const m = buildVoxelModelFromBackend(res.data);
+      if (m) useAppStore.getState().setModel(m);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayResolutionFactor]);
   const clearActiveRun = useAppStore(state => state.clearActiveRun);
   const setGeorefState = useAppStore(state => state.setGeorefState);
 
@@ -525,7 +547,7 @@ export default function GravityCsvPreviewPanel() {
     setLoad3DError(null);
     setLoad3DMessage(null);
 
-    const res = await getExplorationBlockModelForRun(projectId, runId);
+    const res = await getExplorationBlockModelForRunWithArrow(projectId, runId, "exploration", 5000, displayResolutionFactor);
     setLoading3D(false);
 
     if (!res.ok || !res.data) {
@@ -753,7 +775,7 @@ export default function GravityCsvPreviewPanel() {
     setLoading3D(true);
     setLoad3DError(null);
 
-    const res = await getExplorationBlockModelForRun(projectId, runId);
+    const res = await getExplorationBlockModelForRunWithArrow(projectId, runId, "exploration", 5000, displayResolutionFactor);
     setLoading3D(false);
 
     if (!res.ok || !res.data) {

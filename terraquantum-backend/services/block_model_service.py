@@ -126,7 +126,7 @@ def ensure_visual_columns(df: pl.DataFrame) -> pl.DataFrame:
 
 def infer_cell_size(df: pl.DataFrame) -> float:
     """Infiere cell_size desde diferencias positivas entre coordenadas unicas."""
-    for col in ("x", "y", "z"):
+    for col in ("x", "y", "z", "x_m", "y_m", "z_m"):
         if col not in df.columns:
             continue
         unique_vals = df[col].drop_nulls().unique().sort().to_numpy()
@@ -807,11 +807,76 @@ _ARROW_MULTIPHYSICS_COLS = (
 )
 
 
+def upsample_grid_df(df: "pl.DataFrame", factor: int) -> "pl.DataFrame":
+    """Sub-muestreo trilineal SOLO de visualización (separa resolución de inversión
+    de resolución de display, estilo Leapfrog/VOXI). La inversión NO cambia: la
+    grilla regular nx×ny×nz se densifica a (nx·f)×(ny·f)×(nz·f) interpolando los
+    campos numéricos (order=1) y propagando la máscara is_active (order=0, nearest).
+    No agrega información física — da un modelo denso y suave para el visor.
+    Requiere x_m/y_m/z_m e índices ix/iy/iz; si faltan, devuelve df sin cambios."""
+    if factor is None or factor <= 1:
+        return df
+    if not {"ix", "iy", "iz", "x_m", "y_m", "z_m"}.issubset(set(df.columns)):
+        return df
+    import numpy as _np
+    from scipy.ndimage import zoom as _zoom
+
+    ix = df["ix"].to_numpy(); iy = df["iy"].to_numpy(); iz = df["iz"].to_numpy()
+    nx, ny, nz = int(ix.max()) + 1, int(iy.max()) + 1, int(iz.max()) + 1
+
+    _smooth = [c for c in (
+        "density", "rho", "density_t_m3", "density_contrast_t_m3",
+        "probability", "visual_score", "target_score", "density_anomaly_score",
+        "sensitivity_proxy", "doi_index", "posterior_std",
+    ) if c in df.columns]
+
+    active = _np.zeros((nx, ny, nz), dtype=bool)
+    if "is_active" in df.columns:
+        active[ix, iy, iz] = _np.asarray(df["is_active"].to_numpy(), dtype=bool)
+    else:
+        active[ix, iy, iz] = True
+    active_fine = _zoom(active.astype(_np.float32), factor, order=0) >= 0.5
+    nxf, nyf, nzf = active_fine.shape
+
+    fine_fields: dict = {}
+    for f in _smooth:
+        vals = df[f].to_numpy().astype(_np.float64)
+        arr = _np.full((nx, ny, nz), _np.nan)
+        arr[ix, iy, iz] = vals
+        finite = _np.isfinite(arr)
+        fill = float(_np.nanmedian(arr[finite])) if finite.any() else 0.0
+        fine_fields[f] = _zoom(_np.where(finite, arr, fill), factor, order=1)
+
+    gx, gy, gz = _np.meshgrid(_np.arange(nxf), _np.arange(nyf), _np.arange(nzf), indexing="ij")
+    gx = gx.ravel(); gy = gy.ravel(); gz = gz.ravel()
+    af = active_fine.ravel()
+
+    xm = df["x_m"].to_numpy(); ym = df["y_m"].to_numpy(); zm = df["z_m"].to_numpy()
+    _xs = _np.unique(_np.round(xm, 3))
+    cell = float(_np.min(_np.diff(_np.sort(_xs)))) if len(_xs) > 1 else 1.0
+    cell_f = cell / factor
+    x0 = float(xm.min()) - cell / 2.0
+    y0 = float(ym.min()) - cell / 2.0
+    z0 = float(zm.min()) - cell / 2.0
+
+    data: dict = {
+        "ix": gx.astype(_np.int32), "iy": gy.astype(_np.int32), "iz": gz.astype(_np.int32),
+        "x_m": x0 + (gx + 0.5) * cell_f,
+        "y_m": y0 + (gy + 0.5) * cell_f,
+        "z_m": z0 + (gz + 0.5) * cell_f,
+        "is_active": af,
+    }
+    for f in _smooth:
+        data[f] = _np.where(af, fine_fields[f].ravel(), _np.nan)
+    return pl.DataFrame(data)
+
+
 def build_block_model_arrow_bytes(
     mode: str = "exploration",
     limit: int = 0,
     project_id=None,
     run_id=None,
+    display_factor: int = 1,
 ):
     """Construye payload Arrow IPC para el block model.
 
@@ -841,14 +906,6 @@ def build_block_model_arrow_bytes(
 
     df = ensure_visual_columns(df)
 
-    # Stats autoritativos del modelo COMPLETO (antes de cualquier subsetting).
-    # Estos se emiten como headers X-TQ-* para que el FE los consuma directamente
-    # sin re-inferir cell_size ni recalcular bounds desde el subconjunto devuelto.
-    _arrow_cell_size = infer_cell_size(df)
-    _density_series = df["density"].drop_nulls()
-    _arrow_density_min = float(_density_series.min()) if len(_density_series) > 0 else None
-    _arrow_density_max = float(_density_series.max()) if len(_density_series) > 0 else None
-
     try:
         ix_col, iy_col, iz_col = get_index_columns(df)
     except ValueError as exc:
@@ -864,6 +921,19 @@ def build_block_model_arrow_bytes(
         rename_map[iz_col] = "iz"
     if rename_map:
         df = df.rename(rename_map)
+
+    # Sub-muestreo trilineal de DISPLAY (B): densifica la malla para el visor sin
+    # tocar la inversión. Se hace ANTES de calcular cell_size/density stats para que
+    # los headers X-TQ-* reflejen la grilla fina (cell_size/factor).
+    if display_factor and display_factor > 1:
+        df = upsample_grid_df(df, int(display_factor))
+
+    # Stats autoritativos (post-upsample). Se emiten como headers X-TQ-* para que el
+    # FE consuma cell_size/bounds sin re-inferir desde el subconjunto devuelto.
+    _arrow_cell_size = infer_cell_size(df)
+    _density_series = df["density"].drop_nulls()
+    _arrow_density_min = float(_density_series.min()) if len(_density_series) > 0 else None
+    _arrow_density_max = float(_density_series.max()) if len(_density_series) > 0 else None
 
     total_stored = len(df)
 

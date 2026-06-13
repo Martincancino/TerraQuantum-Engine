@@ -217,6 +217,8 @@ export default function Exploration3DView() {
     setBlockModelElevationMeta,
     visualProfessionalMode,
     setVisualProfessionalMode,
+    displayResolutionFactor,
+    setDisplayResolutionFactor,
     setSelectedVoxel,
     showLegend,
     visibleCellCount,
@@ -464,6 +466,22 @@ export default function Exploration3DView() {
                 label: visualProfessionalMode ? "Vista · Profesional" : "Vista · Debug",
                 active: visualProfessionalMode,
                 onClick: () => setVisualProfessionalMode(!visualProfessionalMode),
+              },
+              {
+                id: "resolution",
+                label: `Resolución · ${
+                  displayResolutionFactor >= 6 ? "Máxima ~1.7M"
+                    : displayResolutionFactor >= 4 ? "Alta ~500k"
+                    : "Nativa"
+                }`,
+                active: displayResolutionFactor > 1,
+                disabled: !model || !show3D,
+                // Cicla Nativa(1) → Alta(4, ~500k) → Máxima(6, ~1.7M). Es solo
+                // densificado de display (interpolación trilineal); la inversión
+                // no cambia. Al cambiar, el panel recarga el modelo al factor nuevo.
+                onClick: () => setDisplayResolutionFactor(
+                  displayResolutionFactor >= 6 ? 1 : displayResolutionFactor >= 4 ? 6 : 4
+                ),
               },
               {
                 id: "reset",

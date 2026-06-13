@@ -27,6 +27,8 @@ export async function GET(req: NextRequest) {
       backendParams.set("project_id", projectId);
       backendParams.set("run_id", runId);
     }
+    const displayFactor = searchParams.get("display_factor");
+    if (displayFactor) backendParams.set("display_factor", displayFactor);
 
     const backendUrl = buildBackendUrl(`/block-model-arrow?${backendParams.toString()}`);
     const controller = new AbortController();

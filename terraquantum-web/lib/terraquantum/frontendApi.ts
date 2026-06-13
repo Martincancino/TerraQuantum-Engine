@@ -700,11 +700,14 @@ export async function getExplorationBlockModelForRunWithArrow(
   runId: string,
   modeOrLimit: BlockModelDataMode | number = "exploration",
   limit = 5000,
+  displayFactor = 1,
 ): Promise<FrontendApiResult<BlockModelResponse>> {
   const request = resolveBlockModelRequestArgs(modeOrLimit, limit);
 
-  if (request.limit > 5000) {
-    const arrowResult = await fetchBlockModelArrowForRun(projectId, runId, request.mode);
+  // displayFactor>1 = sub-muestreo trilineal de display (500k-2M celdas): SIEMPRE
+  // por Arrow (binario), el JSON no soporta ese tamaño.
+  if (displayFactor > 1 || request.limit > 5000) {
+    const arrowResult = await fetchBlockModelArrowForRun(projectId, runId, request.mode, displayFactor);
     if (arrowResult.ok) {
       return arrowResult;
     }
@@ -1587,7 +1590,8 @@ export async function fetchBlockModelArrow(
 export async function fetchBlockModelArrowForRun(
   projectId: string,
   runId: string,
-  mode: BlockModelDataMode = "exploration"
+  mode: BlockModelDataMode = "exploration",
+  displayFactor = 1
 ): Promise<FrontendApiResult<BlockModelResponse>> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 120_000);
@@ -1597,7 +1601,8 @@ export async function fetchBlockModelArrowForRun(
       `/api/block-model?format=arrow` +
       `&mode=${encodeURIComponent(mode)}` +
       `&project_id=${encodeURIComponent(projectId)}` +
-      `&run_id=${encodeURIComponent(runId)}`;
+      `&run_id=${encodeURIComponent(runId)}` +
+      (displayFactor > 1 ? `&display_factor=${encodeURIComponent(String(displayFactor))}` : "");
 
     const res = await fetch(url, {
       method: "GET",

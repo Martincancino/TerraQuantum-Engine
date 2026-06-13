@@ -211,6 +211,8 @@ export interface AppState {
   showLegend: boolean;
   setShowLegend: (val: boolean) => void;
   visualProfessionalMode: boolean;
+  displayResolutionFactor: number;
+  setDisplayResolutionFactor: (val: number) => void;
   setVisualProfessionalMode: (val: boolean) => void;
 
   // 3c. CORTES X/Y/Z (Fase 7.2)
@@ -489,6 +491,10 @@ export const useAppStore = create<AppState>((set) => ({
   setShowLegend: (val) => set({ showLegend: val }),
   visualProfessionalMode: true,
   setVisualProfessionalMode: (val) => set({ visualProfessionalMode: val }),
+  // Factor de sub-muestreo trilineal SOLO de display (separa resolución de
+  // inversión de la de visualización). 1=nativo (~8k), 4=~500k, 6=~1.7M vóxeles.
+  displayResolutionFactor: 1,
+  setDisplayResolutionFactor: (val) => set({ displayResolutionFactor: val }),
 
   // 3c. CORTES X/Y/Z (Fase 7.2)
   sliceAxis: "none",
