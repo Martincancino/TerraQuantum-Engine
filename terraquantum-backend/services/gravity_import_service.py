@@ -247,11 +247,50 @@ def choose_gravity_column(headers: list[str]) -> str | None:
             return headers[idx]
     return None
 
+
+# ── Magnetometría (Fase 9A): columna de anomalía TMI en nanoTesla ────────────
+# El dato magnético es UNA columna escalar por estación (TMI/total-field anomaly),
+# en nT. Reusa toda la maquinaria de coordenadas/UTM/elevación de gravedad.
+MAGNETIC_COLUMN_PRIORITY = [
+    "magnetic_nt",
+    "tmi_nt",
+    "tmi",
+    "magnetic_anomaly",
+    "magnetic_anomaly_nt",
+    "total_field_anomaly",
+    "rtp",                 # reduced-to-pole
+    "rtp_nt",
+    "mag_nt",
+    "magnetic",
+    "nt",
+]
+# Unidades magnéticas aceptadas (no se convierte: nT es la unidad del pipeline TMI).
+ALLOWED_MAGNETIC_UNITS = {"nt", "ntesla", "nanotesla", "nanoteslas", "gamma", "gammas"}
+
+
+def choose_magnetic_column(headers: list[str]) -> str | None:
+    headers_lower = [h.strip().lower() for h in headers]
+    for col in MAGNETIC_COLUMN_PRIORITY:
+        if col in headers_lower:
+            idx = headers_lower.index(col)
+            return headers[idx]
+    return None
+
 def normalize_header_name(header: str) -> str:
     return header.replace("\ufeff", "").strip()
 
-def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_raw: bool = False) -> GravityImportResult:
-    _log.info("import_gravity_csv_start", file=str(file_path))
+def import_gravity_csv_v1(
+    file_path: str | Path,
+    strict: bool = True,
+    allow_g_raw: bool = False,
+    data_kind: str = "gravity",
+) -> GravityImportResult:
+    # data_kind="magnetic" (Fase 9A): parsea una columna TMI (nT) en lugar de
+    # gravedad, reusando coordenadas/UTM/elevación. El valor TMI se guarda en el
+    # slot escalar `g` de cada observación (sin conversión de unidades); el endpoint
+    # lo extrae a magnetic_nt y pone g=0. gravity_type se fija a "magnetic_only".
+    _is_magnetic = (data_kind == "magnetic")
+    _log.info("import_gravity_csv_start", file=str(file_path), data_kind=data_kind)
     path = Path(file_path)
     warnings_list = []
     errors_list = []
@@ -282,7 +321,8 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
             
         headers_lower = [h.lower() for h in headers]
 
-        if "unit" not in headers_lower:
+        # Magnetometría: la columna `unit` es opcional (nT implícito).
+        if "unit" not in headers_lower and not _is_magnetic:
             errors_list.append("Missing required column: unit")
 
         # R3.5-K — station_id is optional; auto-generate if column absent
@@ -303,14 +343,22 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
         else:
             warnings_list.extend(coord_map["warnings"])
         
-        gravity_col = choose_gravity_column(headers)
-        if not gravity_col:
-            errors_list.append("Missing gravity column (g, gravity_anomaly, g_corrected, or g_raw)")
-        elif gravity_col.lower() == "g_raw" and not allow_g_raw:
-            errors_list.append("Only g_raw is present but allow_g_raw is False")
-        
-        if strict and "gravity_type" not in headers:
-            errors_list.append("Missing required column: gravity_type (strict mode)")
+        if _is_magnetic:
+            # El "value column" es la anomalía TMI (nT). gravity_type no se exige.
+            gravity_col = choose_magnetic_column(headers)
+            if not gravity_col:
+                errors_list.append(
+                    "Missing magnetic column (magnetic_nt, tmi, magnetic_anomaly, ...)"
+                )
+        else:
+            gravity_col = choose_gravity_column(headers)
+            if not gravity_col:
+                errors_list.append("Missing gravity column (g, gravity_anomaly, g_corrected, or g_raw)")
+            elif gravity_col.lower() == "g_raw" and not allow_g_raw:
+                errors_list.append("Only g_raw is present but allow_g_raw is False")
+
+            if strict and "gravity_type" not in headers:
+                errors_list.append("Missing required column: gravity_type (strict mode)")
             
         if errors_list:
             return _build_error_result(path.name, errors_list, warnings_list)
@@ -384,18 +432,31 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
                     station_id = f"ST_{row_count:06d}"
                     
                 unit = row.get("unit", "").strip()
-                if not unit:
-                    raise ValueError(f"Row {row_num}: Empty unit")
-                if unit not in ALLOWED_UNITS:
-                    raise ValueError(f"Row {row_num}: Unsupported unit: {unit}")
-                if first_unit is None:
-                    first_unit = unit
-                elif unit != first_unit:
-                    raise ValueError("Mixed units are not allowed in TerraQuantum Gravity CSV v1")
-                
-                g_type = row.get("gravity_type", "").strip()
-                if strict and not g_type:
-                    raise ValueError(f"Row {row_num}: gravity_type cannot be empty in strict mode")
+                if _is_magnetic:
+                    # nT implícito; si se declara unidad, validarla como magnética.
+                    if unit and unit.lower() not in ALLOWED_MAGNETIC_UNITS:
+                        raise ValueError(f"Row {row_num}: Unsupported magnetic unit: {unit}")
+                    if first_unit is None:
+                        first_unit = unit or "nT"
+                else:
+                    if not unit:
+                        raise ValueError(f"Row {row_num}: Empty unit")
+                    if unit not in ALLOWED_UNITS:
+                        raise ValueError(f"Row {row_num}: Unsupported unit: {unit}")
+                    if first_unit is None:
+                        first_unit = unit
+                    elif unit != first_unit:
+                        raise ValueError("Mixed units are not allowed in TerraQuantum Gravity CSV v1")
+
+                if _is_magnetic:
+                    # gravity_type no aplica; se fija el sentinel magnético.
+                    if first_gravity_type is None:
+                        first_gravity_type = "magnetic_only"
+                    g_type = ""
+                else:
+                    g_type = row.get("gravity_type", "").strip()
+                    if strict and not g_type:
+                        raise ValueError(f"Row {row_num}: gravity_type cannot be empty in strict mode")
                 if g_type:
                     if g_type not in ALLOWED_GRAVITY_TYPES:
                         raise ValueError(f"Row {row_num}: Unsupported gravity_type: {g_type}")
@@ -463,8 +524,10 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
                 seen_coords.add(coord_tuple)
                 
                 g_val = parse_float(row.get(gravity_col, ""), gravity_col, row_num)
-                g_converted = convert_to_ms2(g_val, unit)
-                
+                # Magnetometría: el valor TMI (nT) NO se convierte; se guarda crudo
+                # en el slot `g` y el endpoint lo extrae a magnetic_nt.
+                g_converted = g_val if _is_magnetic else convert_to_ms2(g_val, unit)
+
                 obs = GravityObservation(x_m=x, y_m=y, z_m=z, g=g_converted)
                 observations.append(obs)
                 raw_gravity_values.append(g_val)
@@ -654,7 +717,8 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
             warnings_list.append("Low dynamic range: gravity variance is almost zero")
 
         # ---- QC FÍSICO DURO (Fase 2) ----
-        g_mgal = np.array([obs.g for obs in observations]) * 1e5
+        # Magnetometría: obs.g es TMI cruda (nT); gravedad: m/s² → mGal (×1e5).
+        g_mgal = np.array([obs.g for obs in observations]) * (1.0 if _is_magnetic else 1e5)
         if np.any(np.isnan(g_mgal)) or np.any(np.isinf(g_mgal)):
             errors_list.append(
                 "Datos corruptos: se detectaron valores NaN o Infinitos en la columna de gravedad"
@@ -682,11 +746,12 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
         # Gravedad absoluta (~9.8e5 mGal) solo es válida en el flujo de datos de
         # campo (allow_g_raw + tipo crudo), donde las correcciones FAC/BC/TC se
         # aplican después del import. En cualquier otro caso sigue siendo error.
+        # Magnetometría (nT): los chequeos de magnitud en mGal no aplican.
         _is_raw_type = (
             (first_gravity_type or "").strip() in ("g_raw", "absolute_gravity")
             or (gravity_col or "").lower() == "g_raw"
         )
-        if np.any(np.abs(g_mgal) > 1000.0):
+        if not _is_magnetic and np.any(np.abs(g_mgal) > 1000.0):
             if allow_g_raw and _is_raw_type:
                 # Plausibilidad física: gravedad en superficie terrestre
                 # ≈ 976 000–983 000 mGal (con elevaciones 0–9 km).
@@ -720,7 +785,7 @@ def import_gravity_csv_v1(file_path: str | Path, strict: bool = True, allow_g_ra
                     conversion_applied=conversion_applied, is_demo=is_demo,
                     coordinate_transform=coordinate_transform, auto_grid=auto_grid,
                 )
-        if np.any(np.abs(g_mgal) > 100.0):
+        if not _is_magnetic and np.any(np.abs(g_mgal) > 100.0):
             warnings_list.append(
                 "Large gravity anomaly detected (>100 mGal). Verify Bouguer/residual correction."
             )

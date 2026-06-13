@@ -808,9 +808,24 @@ async def invert_gravity_csv(
     # Instrumento del survey: fija el piso de sigma y habilita la selección de
     # lambda por Morozov cuando lambda_mag=0 (sigma explícito → chi² interpretable).
     gravimeter_type: str = Form("unknown"),
+    # ── Magnetometría (Fase 9A) ──────────────────────────────────────────────
+    # data_type="magnetic" parsea una columna TMI (nT) y rutea al motor magnético
+    # (inversión de susceptibilidad). "gravity" (default) = comportamiento intacto.
+    data_type: str = Form("gravity"),
+    inclination_deg: float = Form(-30.0),
+    declination_deg: float = Form(2.0),
+    field_intensity_nt: float = Form(23500.0),
+    susc_min: float = Form(0.0),
+    susc_max: float = Form(1.0),
 ):
     if not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must end with .csv")
+    if data_type not in ("gravity", "magnetic"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"data_type inválido: '{data_type}'. Use 'gravity' o 'magnetic'.",
+        )
+    _is_magnetic_run = (data_type == "magnetic")
     if gravimeter_type not in _VALID_GRAVIMETERS:
         raise HTTPException(
             status_code=422,
@@ -831,7 +846,10 @@ async def invert_gravity_csv(
         with open(temp_path, "wb") as f:
             f.write(content)
 
-        import_result = import_gravity_csv_v1(temp_path, strict=strict, allow_g_raw=allow_g_raw)
+        import_result = import_gravity_csv_v1(
+            temp_path, strict=strict, allow_g_raw=allow_g_raw,
+            data_kind="magnetic" if _is_magnetic_run else "gravity",
+        )
 
         # R3.5-K — compute effective UTM zone: form param takes priority, CSV-detected as fallback
         _effective_utm = _effective_utm_zone(utm_zone, import_result)
@@ -912,9 +930,11 @@ async def invert_gravity_csv(
         _gravity_type_raw = getattr(import_result.import_metadata, "gravity_type", None) or ""
         _effective_observations = list(import_result.observations)
 
-        _ALREADY_CORRECTED = {"bouguer_anomaly", "complete_bouguer_anomaly", "synthetic_demo"}
+        # magnetic_only: las correcciones gravimétricas (GRS80/FAC/BC/TC) NO aplican.
+        _ALREADY_CORRECTED = {"bouguer_anomaly", "complete_bouguer_anomaly", "synthetic_demo", "magnetic_only"}
         if (
-            _gravity_type_raw not in _ALREADY_CORRECTED
+            not _is_magnetic_run
+            and _gravity_type_raw not in _ALREADY_CORRECTED
             and import_result.raw_latlon_elev is not None
             and len(import_result.raw_latlon_elev) == len(import_result.observations)
         ):
@@ -1110,6 +1130,17 @@ async def invert_gravity_csv(
                     f"piso = {_noise_floor_from_unc:.4g} mGal (mediana por estación)."
                 )
 
+        # ── Magnetometría: extraer TMI (guardada en el slot g) a magnetic_nt y
+        # poner g=0 en las observaciones (el motor magnético ignora g). ──────────
+        _magnetic_nt: "Optional[list[float]]" = None
+        if _is_magnetic_run:
+            from schemas.geophysics_schema import GravityObservation as _GravObs
+            _magnetic_nt = [float(o.g) for o in _effective_observations]
+            _effective_observations = [
+                _GravObs(x_m=o.x_m, y_m=o.y_m, z_m=o.z_m, g=0.0)
+                for o in _effective_observations
+            ]
+
         try:
             invert_input = GeophysicsInvertInput(
                 project_id=project_id,
@@ -1135,6 +1166,13 @@ async def invert_gravity_csv(
                 sensor_elevations_masl=_sensor_elevs_v1,
                 noise_floor_mgal=_noise_floor_from_unc,
                 gravimeter_type=gravimeter_type,
+                # Magnetometría (Fase 9A): activa el motor de susceptibilidad.
+                magnetic_nt=_magnetic_nt,
+                inclination_deg=inclination_deg,
+                declination_deg=declination_deg,
+                field_intensity_nt=field_intensity_nt,
+                susc_min=susc_min,
+                susc_max=susc_max,
                 # compute_uncertainty queda OFF a propósito: a la λ que selecciona
                 # Morozov en surveys subdeterminados (LdM: 191 estaciones), la
                 # covarianza posterior está mal condicionada y σ explota (mediana
