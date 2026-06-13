@@ -2546,6 +2546,13 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         base_density=inversor_core.base_density,
         sensor_coords=sensor_coords,
         g_modeled_precomputed=g_modeled_solver,  # R-01: G_pad @ m_pad (None si falló)
+        # CRÍTICO: usar el MISMO sigma que usó el solver/Morozov. Antes se usaba el
+        # default sentinel (0.02/0.02 → σ≈0.01·rango ≈ 0.29 mGal), que daba un chi²
+        # artificialmente bajo (~0.02) y disparaba la falsa alarma de "sobreajuste",
+        # mientras Morozov optimizaba contra σ instrumental (0.05 mGal → chi²≈0.65).
+        # El chi² reportado debe corresponder al σ contra el que se invirtió.
+        noise_floor=_noise_floor_solver,
+        noise_pct=_noise_pct_solver,
     )
     fit_diagnostics["misfit_error_percent"] = misfit_error_percent
     fit_diagnostics["chi2_final_solver"]   = _solver_meta.get("chi2_final")
