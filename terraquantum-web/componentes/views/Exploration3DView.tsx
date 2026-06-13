@@ -653,15 +653,17 @@ export default function Exploration3DView() {
                       className="h-2 w-full rounded-sm"
                       style={{
                         background:
-                          "linear-gradient(to right, #1e293b 0%, #1e293b 34%, #22d3ee 52%, #38bdf8 68%, #818cf8 84%, #f8fafc 100%)",
+                          "linear-gradient(to right, #0530611f 0%, #2166ac 12%, #4393c3 25%, #92c5de 38%, #f7f7f7 50%, #f4a582 62%, #d6604d 75%, #b2182b 88%, #67001f 100%)",
                       }}
                     />
-                    <div className="mt-1 grid grid-cols-4 gap-1 text-[7px] font-mono text-white/45">
-                      <span>P85 {formatLegendPercentile(layerPercentiles.p85)}</span>
-                      <span>P90 {formatLegendPercentile(layerPercentiles.p90)}</span>
-                      <span>P95 {formatLegendPercentile(layerPercentiles.p95)}</span>
-                      <span>P98 {formatLegendPercentile(layerPercentiles.p98)}</span>
+                    <div className="mt-1 flex justify-between text-[7px] font-mono text-white/45">
+                      <span>Menos denso</span>
+                      <span>Roca normal</span>
+                      <span>Más denso</span>
                     </div>
+                    <p className="text-[7px] font-mono text-white/30 mt-1 leading-tight">
+                      Contraste vs. fondo {formatLegendPercentile(layerPercentiles.p95)} t/m³ (P95)
+                    </p>
                     {percentileStats && !percentileStats.is_degenerate && (
                       <p className="text-[7px] font-mono text-white/30 mt-1 leading-tight">
                         Percentiles sobre modelo completo

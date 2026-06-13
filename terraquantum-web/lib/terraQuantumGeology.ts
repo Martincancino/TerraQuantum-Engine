@@ -169,16 +169,24 @@ const TURBO_STOPS: ColorStop[] = [
   [1.000, [0.478, 0.027, 0.000]],
 ];
 
-// YlOrRd (ColorBrewer) — densidad: baja = amarillo suave, alta = rojo intenso.
-const YLORRD_STOPS: ColorStop[] = [
-  [0.000, [1.000, 1.000, 0.800]],
-  [0.143, [1.000, 0.929, 0.627]],
-  [0.286, [0.996, 0.851, 0.463]],
-  [0.429, [0.996, 0.698, 0.298]],
-  [0.571, [0.992, 0.553, 0.235]],
-  [0.714, [0.988, 0.306, 0.165]],
-  [0.857, [0.890, 0.102, 0.110]],
-  [1.000, [0.741, 0.000, 0.149]],
+// RdBu divergente (ColorBrewer, invertido azul→blanco→rojo) — densidad por
+// CONTRASTE respecto al fondo. Gravimetría NUNCA se muestra en densidad absoluta:
+// el fondo (~2.6 t/m³) vive en el centro y aplasta toda la geología en una banda
+// estrecha del colormap secuencial. Centrado en 0 = fondo neutro (blanco), déficit
+// de masa = azul, exceso de masa = rojo. Así los cuerpos resaltan (estándar
+// SimPEG/Leapfrog/Oasis montaj).
+const DENSITY_DIVERGING_STOPS: ColorStop[] = [
+  [0.0, [0.020, 0.188, 0.380]],
+  [0.1, [0.129, 0.400, 0.675]],
+  [0.2, [0.263, 0.576, 0.765]],
+  [0.3, [0.573, 0.773, 0.871]],
+  [0.4, [0.820, 0.898, 0.941]],
+  [0.5, [0.969, 0.969, 0.969]],
+  [0.6, [0.992, 0.859, 0.780]],
+  [0.7, [0.957, 0.647, 0.510]],
+  [0.8, [0.839, 0.376, 0.302]],
+  [0.9, [0.698, 0.094, 0.169]],
+  [1.0, [0.404, 0.000, 0.121]],
 ];
 
 function sampleColormap(stops: ColorStop[], t: number): [number, number, number] {
@@ -396,17 +404,24 @@ export function updateInstancedBuffers({
   // mineralizado es <2% del volumen y vive ENTERO por encima de P98; recortar a
   // P98 satura toda la anomalía a un rojo plano. Con el máximo, el cuerpo muestra
   // su gradiente interno y se distingue del fondo.
-  let densLo = dynDensMin;
-  let densHi = dynDensMax;
+  // ── Densidad por contraste: fondo = mediana, escala simétrica robusta ────────
+  // El fondo (mediana) ancla el blanco del colormap divergente; la escala es la
+  // mayor desviación robusta (P5/P95 respecto a la mediana, ignorando los pocos
+  // vóxeles de borde saturados a 0). El contraste se mapea a [-1,+1] -> [azul,rojo].
+  let densBackground = 2.6;
+  let densScale = 1.0;
   if (densitySamples.length > 1) {
     densitySamples.sort((a, b) => a - b);
     const pick = (q: number) =>
       densitySamples[Math.min(densitySamples.length - 1, Math.max(0, Math.round(q * (densitySamples.length - 1))))];
-    densLo = pick(0.02);
-    densHi = dynDensMax;
+    densBackground = pick(0.5);
+    const spreadHi = pick(0.95) - densBackground;
+    const spreadLo = densBackground - pick(0.05);
+    densScale = Math.max(spreadHi, spreadLo, 0.05);
+  } else if (Number.isFinite(dynDensMin) && Number.isFinite(dynDensMax) && dynDensMax > dynDensMin) {
+    densBackground = (dynDensMin + dynDensMax) / 2;
+    densScale = Math.max((dynDensMax - dynDensMin) / 2, 0.05);
   }
-  if (densHi <= densLo) { densLo = dynDensMin; densHi = dynDensMax; }
-  const _dynDensRange = Math.max(densHi - densLo, 1e-9);
 
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i] as SceneCell;
@@ -518,10 +533,13 @@ export function updateInstancedBuffers({
       if (visualLayer === "uncertainty") {
         [_r, _g, _b] = sampleColormap(INFERNO_STOPS, _sigmaRatio);
       } else {
-        // Normalización lineal robusta (P2–P98) + colormap YlOrRd:
-        // baja densidad = amarillo suave → alta densidad = rojo intenso.
-        const _u = clamp01((density - densLo) / _dynDensRange);
-        [_r, _g, _b] = sampleColormap(YLORRD_STOPS, _u);
+        // Densidad por CONTRASTE respecto al fondo (mediana). t=0.5 = fondo
+        // (blanco), t<0.5 = déficit de masa (azul), t>0.5 = exceso (rojo).
+        // Escala simétrica robusta -> los cuerpos anómalos resaltan en vez de
+        // aplastarse en una banda media casi uniforme (causa del "todo blanco").
+        const _contrast = density - densBackground;
+        const _u = clamp01(0.5 + 0.5 * (_contrast / densScale));
+        [_r, _g, _b] = sampleColormap(DENSITY_DIVERGING_STOPS, _u);
         const _alpha = 1 - 0.7 * _sigmaRatio;
         _r *= _alpha; _g *= _alpha; _b *= _alpha;
       }
