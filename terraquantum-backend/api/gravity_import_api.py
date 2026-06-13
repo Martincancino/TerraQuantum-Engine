@@ -542,10 +542,13 @@ async def preview_gravity_csv(
     file: UploadFile = File(...),
     strict: bool = Query(True),
     allow_g_raw: bool = Query(False),
-    preview_limit: int = Query(20)
+    preview_limit: int = Query(20),
+    data_type: str = Query("gravity"),  # Fase 9A: "magnetic" parsea columna TMI
 ):
     if not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must end with .csv")
+    if data_type not in ("gravity", "magnetic"):
+        raise HTTPException(status_code=422, detail=f"data_type inválido: '{data_type}'.")
 
     temp_filename = f"{uuid.uuid4()}.csv"
     temp_path = Path(TMP_DIR) / temp_filename
@@ -560,7 +563,10 @@ async def preview_gravity_csv(
         with open(temp_path, "wb") as f:
             f.write(content)
 
-        result = import_gravity_csv_v1(temp_path, strict=strict, allow_g_raw=allow_g_raw)
+        result = import_gravity_csv_v1(
+            temp_path, strict=strict, allow_g_raw=allow_g_raw,
+            data_kind="magnetic" if data_type == "magnetic" else "gravity",
+        )
 
         observations_preview = result.observations[:preview_limit]
         observations_list = [model_to_dict(o) for o in observations_preview]
