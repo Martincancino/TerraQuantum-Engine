@@ -92,23 +92,21 @@ const TURBO_STOPS: ColorStop[] = [
   [1.000, [0.478, 0.027, 0.000]],
 ];
 
-// RdBu divergente (azul→blanco→rojo) — densidad por CONTRASTE respecto al fondo.
-// Centrado en 0 = fondo neutro (blanco); déficit = azul, exceso = rojo. Evita que
-// la geología se aplaste en una banda media del colormap secuencial (causa del
-// "todo blanco/uniforme"). Estándar SimPEG/Leapfrog. Debe coincidir con
-// terraQuantumGeology.ts::DENSITY_DIVERGING_STOPS.
-const DENSITY_DIVERGING_STOPS: ColorStop[] = [
-  [0.0, [0.020, 0.188, 0.380]],
-  [0.1, [0.129, 0.400, 0.675]],
-  [0.2, [0.263, 0.576, 0.765]],
-  [0.3, [0.573, 0.773, 0.871]],
-  [0.4, [0.820, 0.898, 0.941]],
-  [0.5, [0.969, 0.969, 0.969]],
-  [0.6, [0.992, 0.859, 0.780]],
-  [0.7, [0.957, 0.647, 0.510]],
-  [0.8, [0.839, 0.376, 0.302]],
-  [0.9, [0.698, 0.094, 0.169]],
-  [1.0, [0.404, 0.000, 0.121]],
+// Espectral arcoíris (estándar Geosoft/Oasis montaj) — densidad por CONTRASTE.
+// Bajo = azul, fondo = verde, alto = rojo→magenta. SIN blanco. Debe coincidir
+// con terraQuantumGeology.ts::DENSITY_SPECTRAL_STOPS.
+const DENSITY_SPECTRAL_STOPS: ColorStop[] = [
+  [0.00, [0.000, 0.000, 0.549]],
+  [0.10, [0.000, 0.102, 1.000]],
+  [0.22, [0.000, 0.700, 1.000]],
+  [0.35, [0.000, 1.000, 0.800]],
+  [0.45, [0.102, 1.000, 0.200]],
+  [0.55, [0.700, 1.000, 0.000]],
+  [0.63, [1.000, 1.000, 0.000]],
+  [0.73, [1.000, 0.600, 0.000]],
+  [0.83, [1.000, 0.100, 0.000]],
+  [0.92, [1.000, 0.000, 0.700]],
+  [1.00, [1.000, 0.500, 0.900]],
 ];
 
 function sampleColormap(stops: ColorStop[], t: number): [number, number, number] {
@@ -406,7 +404,7 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
         // t<0.5=déficit (azul), t>0.5=exceso (rojo). Escala simétrica robusta.
         const _contrast = density - densBackground;
         const _u = clamp01(0.5 + 0.5 * (_contrast / densScale));
-        [_r, _g, _b] = sampleColormap(DENSITY_DIVERGING_STOPS, _u);
+        [_r, _g, _b] = sampleColormap(DENSITY_SPECTRAL_STOPS, _u);
         const _alpha = 1 - 0.7 * _sigmaRatio;
         _r *= _alpha; _g *= _alpha; _b *= _alpha;
       }

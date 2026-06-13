@@ -653,7 +653,7 @@ export default function Exploration3DView() {
                       className="h-2 w-full rounded-sm"
                       style={{
                         background:
-                          "linear-gradient(to right, #0530611f 0%, #2166ac 12%, #4393c3 25%, #92c5de 38%, #f7f7f7 50%, #f4a582 62%, #d6604d 75%, #b2182b 88%, #67001f 100%)",
+                          "linear-gradient(to right, #00008c 0%, #001aff 10%, #00b3ff 22%, #00ffcc 35%, #1aff33 45%, #b3ff00 55%, #ffff00 63%, #ff9900 73%, #ff1a00 83%, #ff00b3 92%, #ff80e6 100%)",
                       }}
                     />
                     <div className="mt-1 flex justify-between text-[7px] font-mono text-white/45">

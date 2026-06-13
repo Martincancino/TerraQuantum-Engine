@@ -174,24 +174,22 @@ const TURBO_STOPS: ColorStop[] = [
   [1.000, [0.478, 0.027, 0.000]],
 ];
 
-// RdBu divergente (ColorBrewer, invertido azul→blanco→rojo) — densidad por
-// CONTRASTE respecto al fondo. Gravimetría NUNCA se muestra en densidad absoluta:
-// el fondo (~2.6 t/m³) vive en el centro y aplasta toda la geología en una banda
-// estrecha del colormap secuencial. Centrado en 0 = fondo neutro (blanco), déficit
-// de masa = azul, exceso de masa = rojo. Así los cuerpos resaltan (estándar
-// SimPEG/Leapfrog/Oasis montaj).
-const DENSITY_DIVERGING_STOPS: ColorStop[] = [
-  [0.0, [0.020, 0.188, 0.380]],
-  [0.1, [0.129, 0.400, 0.675]],
-  [0.2, [0.263, 0.576, 0.765]],
-  [0.3, [0.573, 0.773, 0.871]],
-  [0.4, [0.820, 0.898, 0.941]],
-  [0.5, [0.969, 0.969, 0.969]],
-  [0.6, [0.992, 0.859, 0.780]],
-  [0.7, [0.957, 0.647, 0.510]],
-  [0.8, [0.839, 0.376, 0.302]],
-  [0.9, [0.698, 0.094, 0.169]],
-  [1.0, [0.404, 0.000, 0.121]],
+// Espectral arcoíris (estándar Geosoft/Oasis montaj) — densidad por CONTRASTE
+// respecto al fondo. Bajo (déficit de masa) = azul, fondo = verde, alto (exceso)
+// = rojo→magenta. SIN blanco: cada valor recibe un color saturado, como en la
+// leyenda clásica de geofísica. La normalización centra el fondo en el medio.
+const DENSITY_SPECTRAL_STOPS: ColorStop[] = [
+  [0.00, [0.000, 0.000, 0.549]],
+  [0.10, [0.000, 0.102, 1.000]],
+  [0.22, [0.000, 0.700, 1.000]],
+  [0.35, [0.000, 1.000, 0.800]],
+  [0.45, [0.102, 1.000, 0.200]],
+  [0.55, [0.700, 1.000, 0.000]],
+  [0.63, [1.000, 1.000, 0.000]],
+  [0.73, [1.000, 0.600, 0.000]],
+  [0.83, [1.000, 0.100, 0.000]],
+  [0.92, [1.000, 0.000, 0.700]],
+  [1.00, [1.000, 0.500, 0.900]],
 ];
 
 function sampleColormap(stops: ColorStop[], t: number): [number, number, number] {
@@ -565,7 +563,7 @@ export function updateInstancedBuffers({
         // aplastarse en una banda media casi uniforme (causa del "todo blanco").
         const _contrast = density - densBackground;
         const _u = clamp01(0.5 + 0.5 * (_contrast / densScale));
-        [_r, _g, _b] = sampleColormap(DENSITY_DIVERGING_STOPS, _u);
+        [_r, _g, _b] = sampleColormap(DENSITY_SPECTRAL_STOPS, _u);
         const _alpha = 1 - 0.7 * _sigmaRatio;
         _r *= _alpha; _g *= _alpha; _b *= _alpha;
       }
