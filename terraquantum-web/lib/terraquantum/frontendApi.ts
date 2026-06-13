@@ -913,13 +913,14 @@ export type GravityImportPreviewResponse = {
 
 export async function previewGravityCsv(
   file: File,
-  options?: { strict?: boolean; allowGRaw?: boolean; previewLimit?: number }
+  options?: { strict?: boolean; allowGRaw?: boolean; previewLimit?: number; dataType?: "gravity" | "magnetic" }
 ): Promise<FrontendApiResult<GravityImportPreviewResponse>> {
   const formData = new FormData();
   formData.append("file", file);
   if (options?.strict !== undefined) formData.append("strict", String(options.strict));
   if (options?.allowGRaw !== undefined) formData.append("allow_g_raw", String(options.allowGRaw));
   if (options?.previewLimit !== undefined) formData.append("preview_limit", String(options.previewLimit));
+  if (options?.dataType) formData.append("data_type", options.dataType);
 
   try {
     const res = await fetch("/api/gravity-import/preview", {
@@ -967,6 +968,14 @@ export type GravityCsvInvertPayload = {
   densityMin?: number;
   densityMax?: number;
   gravimeterType?: string;
+  // Fase 9A — Magnetometría. dataType="magnetic" rutea al motor de
+  // susceptibilidad (parsea una columna TMI en nT del CSV).
+  dataType?: "gravity" | "magnetic";
+  inclinationDeg?: number;
+  declinationDeg?: number;
+  fieldIntensityNt?: number;
+  suscMin?: number;
+  suscMax?: number;
 };
 
 export type InversionResultPayload = {
@@ -1083,6 +1092,13 @@ export async function invertGravityCsv(
   if (payload.densityMin !== undefined) formData.append("density_min", String(payload.densityMin));
   if (payload.densityMax !== undefined) formData.append("density_max", String(payload.densityMax));
   if (payload.gravimeterType) formData.append("gravimeter_type", payload.gravimeterType);
+  // Fase 9A — Magnetometría
+  if (payload.dataType) formData.append("data_type", payload.dataType);
+  if (payload.inclinationDeg !== undefined) formData.append("inclination_deg", String(payload.inclinationDeg));
+  if (payload.declinationDeg !== undefined) formData.append("declination_deg", String(payload.declinationDeg));
+  if (payload.fieldIntensityNt !== undefined) formData.append("field_intensity_nt", String(payload.fieldIntensityNt));
+  if (payload.suscMin !== undefined) formData.append("susc_min", String(payload.suscMin));
+  if (payload.suscMax !== undefined) formData.append("susc_max", String(payload.suscMax));
 
   try {
     const res = await fetch("/api/gravity-import/invert", {

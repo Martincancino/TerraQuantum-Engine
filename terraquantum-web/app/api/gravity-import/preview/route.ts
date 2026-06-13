@@ -13,11 +13,13 @@ export async function POST(req: NextRequest) {
     const strict = formData.get("strict");
     const allow_g_raw = formData.get("allow_g_raw");
     const preview_limit = formData.get("preview_limit");
-    
+    const data_type = formData.get("data_type");
+
     const url = new URL(`${BACKEND_URL}/gravity-import/preview`);
     if (strict !== null) url.searchParams.append("strict", strict as string);
     if (allow_g_raw !== null) url.searchParams.append("allow_g_raw", allow_g_raw as string);
     if (preview_limit !== null) url.searchParams.append("preview_limit", preview_limit as string);
+    if (data_type !== null) url.searchParams.append("data_type", data_type as string);
 
     const backendFormData = new FormData();
     if (file) {

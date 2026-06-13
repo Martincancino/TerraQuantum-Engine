@@ -309,6 +309,17 @@ export default function GravityCsvPreviewPanel() {
   const [invertStage, setInvertStage] = useState<string | null>(null);
   const [invertProgress, setInvertProgress] = useState<number>(0);
 
+  // Fase 9A — Magnetometría: "gravity" (default) | "magnetic". Lo fija el input
+  // de archivo usado; en modo magnetic la inversión rutea al motor de susceptibilidad.
+  const [dataType, setDataType] = useState<"gravity" | "magnetic">("gravity");
+  // Parámetros del campo geomagnético inducido (defaults norte de Chile). El backend
+  // los valida; el usuario puede ajustarlos según la región del survey.
+  const [inclinationDeg, setInclinationDeg] = useState<number>(-30);
+  const [declinationDeg, setDeclinationDeg] = useState<number>(2);
+  const [fieldIntensityNt, setFieldIntensityNt] = useState<number>(23500);
+  const [suscMin, setSuscMin] = useState<string>("0.0");
+  const [suscMax, setSuscMax] = useState<string>("1.0");
+
   const [loading3D, setLoading3D] = useState(false);
   const [load3DError, setLoad3DError] = useState<string | null>(null);
   const [load3DMessage, setLoad3DMessage] = useState<string | null>(null);
@@ -339,6 +350,7 @@ export default function GravityCsvPreviewPanel() {
   }, [result]);
 
   const setModel = useAppStore(state => state.setModel);
+  const setViewMode = useAppStore(state => state.setViewMode);
   const setView = useAppStore(state => state.setView);
   const setShow3D = useAppStore(state => state.setShow3D);
   const setActiveRun = useAppStore(state => state.setActiveRun);
@@ -351,11 +363,13 @@ export default function GravityCsvPreviewPanel() {
     if (prevResFactorRef.current === displayResolutionFactor) return;
     prevResFactorRef.current = displayResolutionFactor;
     const run = useAppStore.getState().activeRun;
-    if (!run?.projectId || !run?.runId || run.status !== "ready") return;
+    const pid = run?.projectId;
+    const rid = run?.runId;
+    if (!pid || !rid || run?.status !== "ready") return;
     let cancelled = false;
     (async () => {
       const res = await getExplorationBlockModelForRunWithArrow(
-        run.projectId, run.runId, "exploration", 5000, displayResolutionFactor,
+        pid, rid, "exploration", 5000, displayResolutionFactor,
       );
       if (cancelled || !res.ok || !res.data) return;
       const m = buildVoxelModelFromBackend(res.data);
@@ -452,6 +466,7 @@ export default function GravityCsvPreviewPanel() {
   const handleFileGravimetryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       setFileGravimetry(e.target.files[0]);
+      setDataType("gravity");
       setResult(null);
       setErrorMsg(null);
       setInvertResult(null);
@@ -474,13 +489,30 @@ export default function GravityCsvPreviewPanel() {
   const handleFileMagnetometryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       setFileMagnetometry(e.target.files[0]);
-      // En el futuro: lógica para validar magnetometría
+      setDataType("magnetic");
+      setResult(null);
+      setErrorMsg(null);
+      setInvertResult(null);
+      setInvertErrorMsg(null);
+      setLoad3DError(null);
+      setLoad3DMessage(null);
+      setGeoError(null);
+      setSpatialGateError(null);
+      setRegionalGateError(null);
+      setCorrectedFile(null);
+      setCorrectionReport(null);
+      setShowCorrectionWizard(false);
+      clearActiveRun();
     }
   };
 
   const handleValidate = async () => {
-    if (!file) {
-      setErrorMsg("Debes seleccionar un archivo CSV.");
+    const isMagnetic = dataType === "magnetic";
+    const valFile = isMagnetic ? fileMagnetometry : file;
+    if (!valFile) {
+      setErrorMsg(
+        isMagnetic ? "Debes seleccionar un CSV de magnetometría." : "Debes seleccionar un archivo CSV.",
+      );
       return;
     }
     setLoading(true);
@@ -489,8 +521,13 @@ export default function GravityCsvPreviewPanel() {
     setLoad3DError(null);
     setLoad3DMessage(null);
 
-    const effectiveFile = correctedFile ?? file;
-    const res = await previewGravityCsv(effectiveFile, { strict, allowGRaw: allowGRaw || correctedFile !== null, previewLimit });
+    const effectiveFile = isMagnetic ? valFile : (correctedFile ?? file ?? valFile);
+    const res = await previewGravityCsv(effectiveFile, {
+      strict: isMagnetic ? false : strict,
+      allowGRaw: isMagnetic ? false : (allowGRaw || correctedFile !== null),
+      previewLimit,
+      dataType: isMagnetic ? "magnetic" : "gravity",
+    });
     setLoading(false);
 
     if (!res.ok) {
@@ -566,6 +603,8 @@ export default function GravityCsvPreviewPanel() {
     }
 
     setModel(backendModel);
+    // Magnetometría: el visor colorea por susceptibilidad (no densidad).
+    setViewMode(dataType === "magnetic" ? "susceptibility" : "density");
     setShow3D(true);
     setView("figura 3d");
     setLoad3DMessage("Modelo 3D cargado en el visor");
@@ -587,8 +626,14 @@ export default function GravityCsvPreviewPanel() {
   };
 
   const handleInvert = async () => {
-    if (!file) {
-      setInvertErrorMsg("Debes seleccionar y validar un archivo CSV.");
+    const isMagnetic = dataType === "magnetic";
+    const invFile = isMagnetic ? fileMagnetometry : file;
+    if (!invFile) {
+      setInvertErrorMsg(
+        isMagnetic
+          ? "Debes seleccionar un CSV de magnetometría."
+          : "Debes seleccionar y validar un archivo CSV.",
+      );
       return;
     }
 
@@ -607,7 +652,7 @@ export default function GravityCsvPreviewPanel() {
     // Validación de forma de los controles físicos (los rangos finos los valida el backend)
     const dMinNum = Number(densityMin);
     const dMaxNum = Number(densityMax);
-    if (!Number.isFinite(dMinNum) || !Number.isFinite(dMaxNum) || dMinNum >= dMaxNum) {
+    if (!isMagnetic && (!Number.isFinite(dMinNum) || !Number.isFinite(dMaxNum) || dMinNum >= dMaxNum)) {
       setGeoError("Bounds de densidad inválidos: density_min debe ser un número menor que density_max.");
       return;
     }
@@ -628,7 +673,7 @@ export default function GravityCsvPreviewPanel() {
     setInvertProgress(0);
 
     // Señalamos inicio de inversión en activeRun
-    const projectId = buildCsvProjectId(file.name);
+    const projectId = buildCsvProjectId(invFile.name);
     const runId = `run_csv_${new Date().toISOString().replace(/[:.]/g, "-")}`;
 
     setActiveRun({
@@ -676,9 +721,20 @@ export default function GravityCsvPreviewPanel() {
       utmZone: (utmZone.trim() && !utmZoneError) ? utmZone.trim().toUpperCase() : undefined,
       acknowledgeSpatialRisk,
       acknowledgeRegionalScale,
+      // Fase 9A — Magnetometría: rutea al motor de susceptibilidad.
+      ...(isMagnetic
+        ? {
+            dataType: "magnetic" as const,
+            inclinationDeg: inclinationDeg,
+            declinationDeg: declinationDeg,
+            fieldIntensityNt: fieldIntensityNt,
+            suscMin: Number(suscMin),
+            suscMax: Number(suscMax),
+          }
+        : {}),
     };
 
-    const effectiveFile = correctedFile ?? file;
+    const effectiveFile = isMagnetic ? invFile : (correctedFile ?? invFile);
     const res = await invertGravityCsv(effectiveFile, {
       ...payloadWithFlags,
       allowGRaw: payloadWithFlags.allowGRaw || correctedFile !== null,
@@ -812,6 +868,7 @@ export default function GravityCsvPreviewPanel() {
       };
 
       setModel(backendModel);
+      setViewMode(dataType === "magnetic" ? "susceptibility" : "density");
       setShow3D(true);
       setView("figura 3d");
       setLoad3DMessage("Modelo 3D cargado en el visor");
@@ -1229,15 +1286,20 @@ export default function GravityCsvPreviewPanel() {
           <div>
             <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-2">
               CSV Magnetometría{" "}
-              <span className="normal-case text-yellow-600 font-normal">(Próximamente)</span>
+              <span className="normal-case text-[#C2D8C4] font-normal">(susceptibilidad)</span>
             </label>
             <input
               type="file"
               accept=".csv"
-              disabled
-              title="La importación de magnetometría no está disponible aún."
-              className="w-full max-w-full min-w-0 overflow-hidden text-xs text-neutral-600 opacity-40 cursor-not-allowed file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-neutral-900 file:text-neutral-600"
+              onChange={handleFileMagnetometryChange}
+              title="CSV con columna TMI (magnetic_nt / tmi) en nanoTesla + coordenadas."
+              className="w-full max-w-full min-w-0 overflow-hidden text-xs text-neutral-400 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-neutral-800 file:text-[#C2D8C4] hover:file:bg-neutral-700"
             />
+            {dataType === "magnetic" && fileMagnetometry && (
+              <p className="mt-1 text-[10px] text-[#C2D8C4]">
+                Modo magnetometría: {fileMagnetometry.name} → inversión de susceptibilidad (SI).
+              </p>
+            )}
           </div>
         </div>
         
@@ -1417,10 +1479,10 @@ export default function GravityCsvPreviewPanel() {
         <div className="flex items-end w-full min-w-0">
           <button
             onClick={handleValidate}
-            disabled={loading || !file}
+            disabled={loading || !(dataType === "magnetic" ? fileMagnetometry : file)}
             className="h-9 w-full justify-center px-4 bg-[#C2D8C4] text-black text-[10px] uppercase font-bold tracking-widest rounded hover:bg-[#a5bca7] disabled:opacity-50 transition-colors flex items-center"
           >
-            {loading ? "Validando..." : "Validar CSV"}
+            {loading ? "Validando..." : dataType === "magnetic" ? "Validar CSV magnético" : "Validar CSV"}
           </button>
         </div>
       </div>
@@ -1717,7 +1779,7 @@ export default function GravityCsvPreviewPanel() {
                 disabled={
                   invertLoading ||
                   loading3D ||
-                  !file ||
+                  !(dataType === "magnetic" ? fileMagnetometry : file) ||
                   result.spatial_readiness?.level === "NO_SPATIAL_DATA" ||
                   (result.spatial_readiness?.requires_user_acknowledgement === true && !acknowledgeSpatialRisk) ||
                   result.regional_scale_preflight?.can_run_single_inversion === false ||
