@@ -137,6 +137,11 @@ export interface UpdateInstancedBuffersParams {
 // Densidad de roca país fallback. El backend provee el valor específico del sitio.
 const DENSITY_COUNTRY_ROCK_FALLBACK_T_M3 = 2.75;
 
+// Umbral de contraste (|ρ − fondo| / escala robusta) por encima del cual una celda
+// se considera cuerpo anómalo y se muestra. ~0.18 deja emerger déficit y exceso de
+// masa y oculta el fondo neutro, revelando forma orgánica en vez de una caja llena.
+const ANOMALY_CONTRAST_VISIBLE = 0.18;
+
 // Color neutro gris para vóxeles sin datos (e.g. susceptibilidad ausente en corrida gravity-only)
 const NEUTRAL_GRAY: [number, number, number] = [0.5, 0.5, 0.5];
 
@@ -459,7 +464,15 @@ export function updateInstancedBuffers({
     const anomalyIntensity = getVoxelAnomalyIntensity(cell);
     const densityAnomalyScore = getVoxelDensityAnomalyScore(cell);
     const visualScore = getCellVisualScore(cell);
-    if (!isFullDataMode && !professionalScoreStats.isDegenerate) { if (targetScore < minTargetScore || anomalyIntensity < minAnomalyIntensity || densityAnomalyScore < minDensityAnomalyScore) { dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue; } }
+    // Magnitud de contraste SIMÉTRICA respecto al fondo: |ρ − fondo| / escala.
+    // Un déficit de masa (anomalía gravimétrica negativa) es un objetivo tan real
+    // como un exceso; los scores positivos (max(0, ρ−fondo)) lo ocultaban -> "no
+    // hay azul". Esto hace que los cuerpos anómalos en CUALQUIER signo emerjan y el
+    // fondo neutro se oculte (sin "caja blanca", forma orgánica).
+    const _contrastMag = densScale > 1e-9 ? Math.abs(density - densBackground) / densScale : 0;
+    // El pre-filtro sesgado a positivos NO debe ocultar cuerpos de fuerte contraste
+    // (de cualquier signo): solo se aplica a celdas de bajo contraste.
+    if (!isFullDataMode && !professionalScoreStats.isDegenerate && _contrastMag < ANOMALY_CONTRAST_VISIBLE) { if (targetScore < minTargetScore || anomalyIntensity < minAnomalyIntensity || densityAnomalyScore < minDensityAnomalyScore) { dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue; } }
     if (!passesDensityFilter(density, minDensityRaw, maxDensityRaw)) { dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue; }
     // ── Visibilidad: lógica de filtrado (sin asignar color) ──────────────────
     let visible = false;
@@ -469,8 +482,16 @@ export function updateInstancedBuffers({
       visible = true;
       if (visualScore >= professionalScoreStats.threshold) highlightedCount++;
     } else if (isExplorationMode) {
-      const supportScore = densityStats.supportScores[i] ?? getExplorationSupportScore(cell, densityRatio);
-      visible = isExplorationCellVisible(density, supportScore, densityStats, professionalScoreStats.isDegenerate);
+      if (professionalScoreStats.isDegenerate) {
+        // Modelo sin contraste estadístico: visibilidad por piso de densidad.
+        const supportScore = densityStats.supportScores[i] ?? getExplorationSupportScore(cell, densityRatio);
+        visible = isExplorationCellVisible(density, supportScore, densityStats, true);
+      } else {
+        // Visibilidad por contraste simétrico: emergen los cuerpos anómalos
+        // (déficit O exceso); el fondo neutro se oculta. Resuelve "no hay azul",
+        // "todo blanco" y "caja con pocos vóxeles" de una vez.
+        visible = _contrastMag >= ANOMALY_CONTRAST_VISIBLE;
+      }
     } else if (isAnomalyDataMode) {
       visible = anomalyIntensity > 0;
     } else if (isFullDataMode) {

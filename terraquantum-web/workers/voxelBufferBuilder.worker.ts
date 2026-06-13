@@ -169,13 +169,6 @@ function getCellVisualScore(cell: Record<string, unknown>): number {
   return clamp01(Math.max(0, getModeledDensity(cell) - DENSITY_FALLBACK) / DENSITY_FALLBACK);
 }
 
-function getExplorationSupportScore(cell: Record<string, unknown>, densityRatio: number): number {
-  const probability = clamp01(getTargetScore(cell));
-  const visualScore = clamp01(getCellNum(cell, ["visual_score"], densityRatio));
-  const densityAnomalyScore = clamp01(getDensityAnomalyScore(cell));
-  return Math.max(probability * 0.45, visualScore * 0.45, densityAnomalyScore * 0.10);
-}
-
 function getCellAxisPos(cell: Record<string, unknown>, axis: SliceAxis): number {
   if (axis === "none") return 0;
   if (axis === "y") return getCellNum(cell, ["y", "cy"], 0);
@@ -311,16 +304,18 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
     }
 
     const density = getModeledDensity(cell);
-    const densityRange = p.densityStats.densityMax - p.densityStats.densityMin;
-    const densityRatio = densityRange > 1e-6
-      ? clamp01((density - p.densityStats.densityMin) / densityRange) : 0.5;
     const targetScore = getTargetScore(cell);
     const anomalyIntensity = getAnomalyIntensity(cell);
     const densityAnomalyScore = getDensityAnomalyScore(cell);
     const visualScore = getCellVisualScore(cell);
 
+    // Contraste simétrico vs. fondo: déficit y exceso de masa son ambos cuerpos
+    // reales. Debe coincidir con terraQuantumGeology.ts::ANOMALY_CONTRAST_VISIBLE.
+    const _contrastMag = densScale > 1e-9 ? Math.abs(density - densBackground) / densScale : 0;
+    const ANOMALY_CONTRAST_VISIBLE = 0.18;
+
     // ── Score/density filters ─────────────────────────────────────────────────
-    if (!p.isFullDataMode && !p.professionalScoreStats.isDegenerate) {
+    if (!p.isFullDataMode && !p.professionalScoreStats.isDegenerate && _contrastMag < ANOMALY_CONTRAST_VISIBLE) {
       if (targetScore < p.minTargetScore || anomalyIntensity < p.minAnomalyIntensity || densityAnomalyScore < p.minDensityAnomalyScore) {
         writeMatrix(matricesF32, mb, 0, 0, 0, rx_visual, ry_visual, rz_visual);
         colorsF32[cb] = 0; colorsF32[cb + 1] = 0; colorsF32[cb + 2] = 0;
@@ -349,14 +344,15 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
       visible = true;
       if (visualScore >= p.professionalScoreStats.threshold) highlightedCount++;
     } else if (p.isExplorationMode) {
-      const supportScore = p.densityStats.supportScores[i] ?? getExplorationSupportScore(cell, densityRatio);
       const densRange = p.densityStats.densityMax - p.densityStats.densityMin;
       if (densRange <= 1e-6) {
         visible = Number.isFinite(density);
       } else if (p.professionalScoreStats.isDegenerate) {
         visible = density >= p.densityStats.visibleDensityFloor;
       } else {
-        visible = density >= p.densityStats.visibleDensityFloor && supportScore >= 0.25;
+        // Visibilidad por contraste simétrico: emergen los cuerpos anómalos
+        // (déficit O exceso); el fondo neutro se oculta -> sin caja blanca.
+        visible = _contrastMag >= ANOMALY_CONTRAST_VISIBLE;
       }
     } else if (p.isAnomalyDataMode) {
       visible = anomalyIntensity > 0;

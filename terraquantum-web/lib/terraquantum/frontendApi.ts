@@ -647,9 +647,11 @@ export async function runGeophysicsInvert(payload: unknown) {
 export async function runGeophysicsSensitivitySweep(payload: SensitivitySweepPayload) {
   return fetchInternalJson<SensitivitySweepResult>({
     path: "/api/geophysics-sensitivity-sweep",
-    method: "POST",
+    // El barrido corre ~9 inversiones (build de kernel + diagnósticos) y supera
+    // los 90s previos -> el cliente abortaba antes que el backend respondiera.
+    // 5 min para igualar el timeout de la ruta BFF.
+    timeoutMs: 300_000,
     body: payload,
-    timeoutMs: 90_000,
   });
 }
 

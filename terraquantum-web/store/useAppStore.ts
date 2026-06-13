@@ -552,7 +552,10 @@ export const useAppStore = create<AppState>((set) => ({
   setAnomalyEnvelopePercent: (val) => set({ anomalyEnvelopePercent: val }),
 
   // 3f. VOLUMEN CONCEPTUAL DEL SUBSUELO (C5.3)
-  showHostVolume: true,
+  // Por defecto OFF: la caja gris del volumen host se leía como una "jaula"
+  // artificial. Con visibilidad por contraste los cuerpos llenan el volumen de
+  // forma orgánica; el usuario puede reactivarla como referencia espacial.
+  showHostVolume: false,
   setShowHostVolume: (val) => set({ showHostVolume: val }),
   hostVolumeOpacity: 0.10,
   setHostVolumeOpacity: (val) => set({ hostVolumeOpacity: val }),
