@@ -747,6 +747,19 @@ class MagnetometryInversion:
         #   • Con anclajes: bloque diferencial (κ·λ_mag en celdas ancladas) que opera
         #     sobre m̃ pero apunta al valor del sondaje en el modelo físico m.
         from core.config import USE_BOUNDED_SOLVER as _USE_BC_M
+        # El solver con bounds (lsq_linear TRF+LSMR) escala MUY mal: cada iteración
+        # TRF resuelve un subproblema LSMR completo, y con max_iter=300 sobre miles
+        # de celdas tarda minutos (se "cuelga" para el usuario). Por encima del
+        # umbral se usa LSQR rápido (iter_lim=500) + clip a [susc_min, susc_max]
+        # (el clip de la reconstrucción física impone los bounds igual). TRF se
+        # reserva para mallas pequeñas, donde sí es ágil y maximiza precisión.
+        _MAG_TRF_MAX_CELLS = 2500
+        _use_bc_m_eff = _USE_BC_M and n_active <= _MAG_TRF_MAX_CELLS
+        if _USE_BC_M and not _use_bc_m_eff:
+            print(
+                f"[MAG INVERSIÓN] n_active={n_active:,} > {_MAG_TRF_MAX_CELLS:,}: "
+                f"usando LSQR+clip (rápido) en vez de TRF con bounds (evita cuelgue)."
+            )
         if _has_anchors:
             _w_small = np.full(n_active, float(lambda_mag), dtype=np.float64)
             _w_small = np.where(_anchor_active, float(anchor_kappa) * float(lambda_mag), _w_small)
@@ -756,7 +769,7 @@ class MagnetometryInversion:
             _d_small = _w_small * _small_target
             A_sys = sp.vstack([G_aug, _small_block]).tocsr()
             b_sys = np.concatenate([d_aug, _d_small])
-            if _USE_BC_M:
+            if _use_bc_m_eff:
                 from scipy.optimize import lsq_linear as _lsq_linear_m
                 _bc_m = _lsq_linear_m(
                     A_sys, b_sys,
@@ -771,7 +784,7 @@ class MagnetometryInversion:
                 m_tilde = result[0]
                 _acond = float(result[6])
         else:
-            if _USE_BC_M:
+            if _use_bc_m_eff:
                 from scipy.optimize import lsq_linear as _lsq_linear_m
                 _eye_lam_m = sp.eye(n_active, format='csr', dtype=np.float64) * float(lambda_mag)
                 _A_bc_m = sp.vstack([G_aug, _eye_lam_m]).tocsr()
