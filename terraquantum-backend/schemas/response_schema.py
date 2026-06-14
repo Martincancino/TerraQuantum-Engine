@@ -197,6 +197,13 @@ class GeophysicsStatusResponse(BaseModel):
 
 class VoxelData(BaseModel):
     """Single voxel in block model."""
+    # extra="allow": el builder emite campos que el visor necesita pero que no
+    # estaban declarados aquí (susceptibility_si, density_t_m3,
+    # density_contrast_t_m3, run_type, schema_version, doi_raw, ...). Sin esto el
+    # response_model los DESCARTA — p.ej. una corrida magnética perdía
+    # susceptibility_si y el visor no podía colorear por susceptibilidad.
+    model_config = ConfigDict(extra="allow")
+
     x: Optional[float] = None
     y: Optional[float] = None
     z: Optional[float] = None

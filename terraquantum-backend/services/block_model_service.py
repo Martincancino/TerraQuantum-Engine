@@ -574,7 +574,9 @@ def build_block_model_response(
     nz = int(df[iz_col].max()) + 1
     total_voxels = nx * ny * nz
     stored_voxels = len(df)
-    anomaly_voxels = count_parquet_rows_or_none(anomaly_path)
+    # None cuando no hay parquet de anomalía (p.ej. corrida MAGNÉTICA): el
+    # response_model exige int -> 0. (En gravedad sí existe y da un int.)
+    anomaly_voxels = count_parquet_rows_or_none(anomaly_path) or 0
 
     cell_size = infer_cell_size(df)
 
