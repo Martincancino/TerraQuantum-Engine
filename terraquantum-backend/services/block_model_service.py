@@ -676,10 +676,18 @@ def build_block_model_response(
         iy = int(row[iy_col])
         iz = int(row[iz_col])
 
-        density = sanitize_nan_value(float(row.get("density", 2.6)))
-        probability = sanitize_nan_value(float(row.get("probability", 1.0)))
-        real_grade = sanitize_nan_value(float(row.get("grade", 0.0)))
-        domain = int(row.get("domain", 0))
+        # Null-safe: en una corrida MAGNÉTICA las columnas gravimétricas (density,
+        # probability, grade) existen pero son None -> row.get(k, default) devuelve
+        # None (no el default) y float(None) crashea. El visor magnético colorea por
+        # susceptibilidad; density cae al fondo 2.6 solo como placeholder.
+        _dens_raw = row.get("density")
+        density = sanitize_nan_value(float(_dens_raw) if _dens_raw is not None else 2.6)
+        _prob_raw = row.get("probability")
+        probability = sanitize_nan_value(float(_prob_raw) if _prob_raw is not None else 1.0)
+        _grade_raw = row.get("grade")
+        real_grade = sanitize_nan_value(float(_grade_raw) if _grade_raw is not None else 0.0)
+        _domain_raw = row.get("domain")
+        domain = int(_domain_raw) if _domain_raw is not None else 0
 
         # v4.0 prefers x_m/y_m/z_m; fall back to x/y/z (v3.0) then to computed value
         _xv = read_numeric_row_value(row, "x_m")
@@ -741,7 +749,8 @@ def build_block_model_response(
         }
 
         cell["real_grade"] = real_grade
-        cell["visual_score"] = sanitize_nan_value(float(row.get("visual_score", 0.0)))
+        _vs_raw = row.get("visual_score")
+        cell["visual_score"] = sanitize_nan_value(float(_vs_raw) if _vs_raw is not None else 0.0)
 
         cells.append(cell)
 

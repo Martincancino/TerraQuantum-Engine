@@ -174,8 +174,20 @@ def get_run_block_model_reference(
     if clean_filename in {"", ".", ".."}:
         clean_filename = RUN_BLOCK_MODEL_FILENAME
 
+    _run_dir = get_run_dir(clean_project_id, clean_run_id)
+    _path = _run_dir / clean_filename
+    # Fase 9A: una corrida magnética escribe block_model_magnetic.parquet (no el
+    # block_model.parquet gravimétrico). Si se pide el modelo por defecto y no
+    # existe pero sí el magnético, servir ese → el visor carga susceptibilidad.
+    if (
+        clean_filename == RUN_BLOCK_MODEL_FILENAME
+        and not _path.exists()
+        and (_run_dir / RUN_MAGNETIC_BLOCK_MODEL_FILENAME).exists()
+    ):
+        _path = _run_dir / RUN_MAGNETIC_BLOCK_MODEL_FILENAME
+
     return BlockModelReference(
-        path=get_run_dir(clean_project_id, clean_run_id) / clean_filename,
+        path=_path,
         project_id=clean_project_id,
         run_id=clean_run_id,
         is_legacy=False,

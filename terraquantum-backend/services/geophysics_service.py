@@ -1520,6 +1520,13 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     )
 
     return {
+        # projectId/runId al nivel superior: el frontend (parseCsvInversionProjectRun)
+        # los necesita para cargar el block model. La rama gravimétrica los expone en
+        # el report; la magnética debe exponerlos también o la UI no carga el modelo.
+        "project_id": params.project_id,
+        "run_id": params.run_id,
+        "projectId": params.project_id,
+        "runId": params.run_id,
         "voxels": voxels,
         "best_target": best_target,
         "report": report,
