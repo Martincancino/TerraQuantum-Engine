@@ -171,6 +171,11 @@ class GravityImportResult(BaseModel):
     # Sigma por estación [mGal] desde la columna uncertainty/sigma. NaN si vacía.
     # Prioridad de sigma del solver: σ por estación > piso por gravímetro > adaptivo.
     station_uncertainties: Optional[List[float]] = None
+    # Fase 9C — Inversión conjunta. Valores TMI (nT) por estación, PARALELOS a
+    # observations, capturados cuando un CSV gravimétrico trae ADEMÁS una columna
+    # magnética (survey co-localizado). None = no hay columna magnética → flujo
+    # gravimétrico puro. Habilita el ruteo a joint cross-gradient.
+    magnetic_values: Optional[List[float]] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

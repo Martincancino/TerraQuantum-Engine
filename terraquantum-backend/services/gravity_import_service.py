@@ -359,10 +359,17 @@ def import_gravity_csv_v1(
 
             if strict and "gravity_type" not in headers:
                 errors_list.append("Missing required column: gravity_type (strict mode)")
-            
+
+        # Fase 9C: en modo gravedad, detectar si el CSV trae ADEMÁS una columna
+        # magnética (survey co-localizado) → se captura paralela a observations
+        # para habilitar la inversión conjunta (joint cross-gradient).
+        _joint_mag_col = None if _is_magnetic else choose_magnetic_column(headers)
+        _has_joint_mag = _joint_mag_col is not None
+        joint_mag_values: "list[float]" = []
+
         if errors_list:
             return _build_error_result(path.name, errors_list, warnings_list)
-            
+
         observations = []
         raw_gravity_values = []
         raw_latlon_elev_list: "list[dict]" = []  # H-B2: per-station lat/lon/elev (latlon surveys)
@@ -531,6 +538,13 @@ def import_gravity_csv_v1(
                 obs = GravityObservation(x_m=x, y_m=y, z_m=z, g=g_converted)
                 observations.append(obs)
                 raw_gravity_values.append(g_val)
+                # Fase 9C: capturar TMI (nT) co-localizada, alineada con la
+                # observación recién aceptada (mismo manejo de duplicados).
+                if _has_joint_mag:
+                    _mraw = str(row.get(_joint_mag_col, "") or "").strip()
+                    joint_mag_values.append(
+                        parse_float(_mraw, _joint_mag_col, row_num) if _mraw else float("nan")
+                    )
                 valid_rows += 1
 
                 # Elevación de estación (m s.n.m.) — paralela a observations
@@ -830,6 +844,8 @@ def import_gravity_csv_v1(
             raw_latlon_elev=raw_latlon_elev_list if raw_latlon_elev_list else None,
             station_elevations=station_elev_list if _has_elev_vals else None,
             station_uncertainties=station_unc_list if _has_unc_vals else None,
+            # Fase 9C: TMI co-localizada por estación (None si el CSV no la trae).
+            magnetic_values=joint_mag_values if _has_joint_mag else None,
         )
         
     except Exception as e:

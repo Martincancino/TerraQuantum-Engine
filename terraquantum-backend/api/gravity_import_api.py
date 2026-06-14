@@ -1136,8 +1136,12 @@ async def invert_gravity_csv(
                     f"piso = {_noise_floor_from_unc:.4g} mGal (mediana por estación)."
                 )
 
-        # ── Magnetometría: extraer TMI (guardada en el slot g) a magnetic_nt y
-        # poner g=0 en las observaciones (el motor magnético ignora g). ──────────
+        # ── Magnetometría / Joint ────────────────────────────────────────────────
+        # • magnetic_run: TMI está en el slot g → se mueve a magnetic_nt y g=0
+        #   (motor magnético aislado, ignora g).
+        # • gravity con columna magnética co-localizada (import.magnetic_values):
+        #   se conserva g real Y se pasa magnetic_nt → ruteo a inversión CONJUNTA
+        #   (run_geophysics_inversion enruta a joint cuando g≠0 y magnetic_nt≠0).
         _magnetic_nt: "Optional[list[float]]" = None
         if _is_magnetic_run:
             from schemas.geophysics_schema import GravityObservation as _GravObs
@@ -1146,6 +1150,24 @@ async def invert_gravity_csv(
                 _GravObs(x_m=o.x_m, y_m=o.y_m, z_m=o.z_m, g=0.0)
                 for o in _effective_observations
             ]
+        elif import_result.magnetic_values is not None:
+            _mv = import_result.magnetic_values
+            _all_finite = (
+                len(_mv) == len(_effective_observations)
+                and all(v == v and v not in (float("inf"), float("-inf")) for v in _mv)
+            )
+            if _all_finite and any(abs(float(v)) > 0 for v in _mv):
+                _magnetic_nt = [float(v) for v in _mv]
+                _corrections_warnings.append(
+                    f"Survey co-localizado: columna magnética detectada en el CSV "
+                    f"gravimétrico ({len(_mv)} estaciones) → inversión CONJUNTA "
+                    "(gravedad + magnetometría, cross-gradient)."
+                )
+            else:
+                _corrections_warnings.append(
+                    "Columna magnética presente pero con huecos/ceros: se ignora "
+                    "para el joint; se corre solo gravedad."
+                )
 
         try:
             invert_input = GeophysicsInvertInput(

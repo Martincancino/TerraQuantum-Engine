@@ -506,7 +506,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         converged = (delta_rho < _DELTA_TOL and delta_chi < _DELTA_TOL and dE_rel < _E_REL_TOL)
         if converged:
             stop_reason = "converged_delta_and_E"
-            print(f"[FASE 9C-2] Parada temprana en k={k}: deltas y ΔE_norm bajo tolerancia.")
+            print(f"[FASE 9C-2] Parada temprana en k={k}: deltas y dE_norm bajo tolerancia.")
             break
         if E_curr < _E_ABS_TOL:
             stop_reason = "E_norm_below_absolute_tol"
@@ -732,24 +732,36 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         report["anomalies_payload"] = []
 
     # ── FASE 10 Parte 4: Interpretación Gemini ────────────────────────────────
-    from services.gemini_agent import request_gemini_interpretation  # noqa: PLC0415
-    try:
-        gemini_result: dict = request_gemini_interpretation(report)
-        report["gemini_interpretation"] = gemini_result
-        n_anomalies = len(gemini_result.get("anomalies", []))
-        has_error = "error" in gemini_result
-        _log.info("gemini_interpretation_done", n_anomalies=n_anomalies, has_error=has_error)
-        print(f"[FASE 10-P4] Gemini: interpretación completada "
-              f"({n_anomalies} anomalías, has_error={has_error}).")
-    except Exception as _gem_exc:
-        _log.warning("gemini_interpretation_nonfatal", error=str(_gem_exc))
+    # Llamada LLM bloqueante (~100s, puede reintentar). NO produce el modelo 3D —
+    # es interpretación geológica opcional. Por defecto OFF para que el joint
+    # devuelva el modelo rápido; activar con JOINT_ENABLE_GEMINI=true.
+    import os as _os_jg  # noqa: PLC0415
+    if _os_jg.getenv("JOINT_ENABLE_GEMINI", "false").lower() != "true":
         report["gemini_interpretation"] = {
-            "error": f"Gemini interpretation unavailable: {_gem_exc}",
-            "executive_summary": "",
-            "anomalies": [],
-            "overall_assessment": "",
-            "limitations": "",
+            "skipped": True,
+            "note": "Interpretación Gemini omitida (JOINT_ENABLE_GEMINI!=true) para "
+                    "devolver el modelo 3D sin la latencia del LLM.",
         }
+        print("[FASE 10-P4] Gemini: omitido (JOINT_ENABLE_GEMINI!=true).")
+    else:
+        from services.gemini_agent import request_gemini_interpretation  # noqa: PLC0415
+        try:
+            gemini_result: dict = request_gemini_interpretation(report)
+            report["gemini_interpretation"] = gemini_result
+            n_anomalies = len(gemini_result.get("anomalies", []))
+            has_error = "error" in gemini_result
+            _log.info("gemini_interpretation_done", n_anomalies=n_anomalies, has_error=has_error)
+            print(f"[FASE 10-P4] Gemini: interpretación completada "
+                  f"({n_anomalies} anomalías, has_error={has_error}).")
+        except Exception as _gem_exc:
+            _log.warning("gemini_interpretation_nonfatal", error=str(_gem_exc))
+            report["gemini_interpretation"] = {
+                "error": f"Gemini interpretation unavailable: {_gem_exc}",
+                "executive_summary": "",
+                "anomalies": [],
+                "overall_assessment": "",
+                "limitations": "",
+            }
 
     # Escribe el report.json FINAL con anomalies_payload + gemini_interpretation.
     try:
@@ -772,6 +784,12 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     )
 
     return {
+        # projectId/runId al nivel superior: el frontend los necesita para cargar
+        # el block model (igual que gravedad/magnético).
+        "project_id": params.project_id,
+        "run_id": params.run_id,
+        "projectId": params.project_id,
+        "runId": params.run_id,
         "voxels": voxels,
         "best_target": best_target,
         "report": report,
