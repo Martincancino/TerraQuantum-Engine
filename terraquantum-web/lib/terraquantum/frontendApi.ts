@@ -34,6 +34,41 @@ export type BlockModelResponse = {
   blockModelMode: string | null;
 };
 
+// Fase 10 v0.4.0 — Out-of-core Zarr types
+export type BlockModelZarrInfo = {
+  zarr_path: string;
+  total_voxels: number;
+  chunk_count: number;
+  chunk_size_voxels: number;
+  memory_footprint_mb: number;
+  working_memory_mb: number;
+};
+
+export type BlockModelZarrMetadata = {
+  metadata_only: boolean;
+  total_voxels: number;
+  chunk_count: number;
+  chunk_size_voxels: number;
+  bounds: {
+    x_min: number; x_max: number;
+    y_min: number; y_max: number;
+    z_min: number; z_max: number;
+  };
+  project_id: string;
+  run_id: string;
+};
+
+export type BlockModelZarrChunk = {
+  chunk_idx: number;
+  voxel_count: number;
+  total_voxels: number;
+  chunk_count: number;
+  voxels: Array<{
+    cx: number; cy: number; cz: number;
+    density: number; susceptibility: number; doi_index: number;
+  }>;
+};
+
 export type FrontendApiResult<T> = {
   ok: boolean;
   status: number;

@@ -50,6 +50,7 @@ from services.inversion_postprocess_service import (
     build_full_block_model_dataframe,
     build_anomaly_dataframe,
 )
+from services.block_model_service import create_zarr_block_model
 
 _log = get_logger(__name__)
 
@@ -254,9 +255,10 @@ def validate_geophysics_input(params: GeophysicsInvertInput):
         seen_coords.add(coord)
 
     # grilla: límite total de voxels (cross-field; rango individual validado por Pydantic)
+    # Grids >500k usan almacenamiento Zarr out-of-core (Fase 10 v0.4.0).
     total_voxels = params.nx * params.ny * params.nz
-    if total_voxels > 200_000:
-        raise ValueError(f"Modelo demasiado grande (nx*ny*nz > 200000): {total_voxels} voxels.")
+    if total_voxels > 10_000_000:
+        raise ValueError(f"Modelo demasiado grande (nx*ny*nz > 10 000 000): {total_voxels} voxels.")
 
     # profundidad: límite físico contra la grilla (cross-field; rango validado por Pydantic)
     max_model_depth = params.ny * params.block_size
@@ -1209,8 +1211,8 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         raise HTTPException(status_code=422, detail="susc_max debe ser mayor que susc_min.")
 
     total_voxels = params.nx * params.ny * params.nz
-    if total_voxels > 200_000:
-        raise HTTPException(status_code=422, detail=f"Modelo demasiado grande (nx*ny*nz>200000): {total_voxels} voxels.")
+    if total_voxels > 10_000_000:
+        raise HTTPException(status_code=422, detail=f"Modelo demasiado grande (nx*ny*nz>10 000 000): {total_voxels} voxels.")
     if params.cutoff_radius < params.block_size:
         raise HTTPException(status_code=422, detail="cutoff_radius no puede ser menor que block_size.")
 
@@ -2748,6 +2750,25 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     _update("running", 0.90, "postprocessing", "Exportando block model y generando reportes...")
     df_full.write_parquet(str(block_model_ref.path))
     _grav_schema_result = validate_parquet_schema(block_model_ref.path, expected_run_type="gravity")
+
+    # ── Fase 10: Zarr out-of-core para grids >500k vóxeles ────────────────────
+    _n_vox_full = len(df_full)
+    _zarr_info: dict | None = None
+    if _n_vox_full > 500_000:
+        try:
+            _run_dir_zarr = str(block_model_ref.path.parent)
+            _zarr_voxels = df_full.select(
+                ["x_m", "y_m", "z_m", "density", "susceptibility_si", "doi_index"]
+            ).rename({"x_m": "cx", "y_m": "cy", "z_m": "cz", "susceptibility_si": "susceptibility"}).to_dicts()
+            _zarr_info = create_zarr_block_model(
+                voxels=_zarr_voxels,
+                project_id=params.project_id,
+                run_id=params.run_id,
+                run_dir=_run_dir_zarr,
+            )
+            _log.info("zarr_block_model_written", n_voxels=_n_vox_full, zarr_path=_zarr_info.get("zarr_path"))
+        except Exception as _zarr_exc:
+            _log.warning("zarr_block_model_nonfatal", error=str(_zarr_exc))
     if not _grav_schema_result["valid"]:
         _log.warning(
             "gravity_parquet_schema_invalid",
@@ -3017,6 +3038,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         "bounded_solver_active": os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false",
         # ── R-06: Auditoría de impacto físico del padding saturado ───────────────
         "r06_padding_saturation_audit": r06_padding_saturation_audit,
+        # ── Fase 10: Zarr out-of-core storage ─────────────────────────────────
+        "zarr_storage": _zarr_info,
         # ── FASE 10: VTK export ────────────────────────────────────────────────
         "vtk_export": {
             "vtr_path": vtr_export_path,

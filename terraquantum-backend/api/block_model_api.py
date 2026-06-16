@@ -1,8 +1,11 @@
 import io
+import os
+from typing import Optional
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
+from core.block_model_store import get_run_dir
 from schemas.response_schema import BlockModelResponse
 from services.block_model_service import (
     build_block_model_response,
@@ -84,6 +87,85 @@ async def get_block_model_arrow(
         response.headers[key] = val
 
     return response
+
+
+@router.get("/block-model-zarr/{project_id}/{run_id}")
+async def get_block_model_zarr(
+    project_id: str,
+    run_id: str,
+    chunk_idx: Optional[int] = Query(None, ge=0),
+):
+    """Stream Zarr chunks for out-of-core rendering (Fase 10 v0.4.0).
+
+    Without chunk_idx: returns metadata only (total_voxels, chunk_count, bounds).
+    With chunk_idx: returns voxel slice [start, end) for that chunk.
+    """
+    import zarr
+
+    run_dir = get_run_dir(project_id, run_id)
+    zarr_path = run_dir / f"{run_id}_blockmodel.zarr"
+
+    if not zarr_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Zarr store no encontrado ({zarr_path}). Grid muy pequeño (<500k vóxeles) usa Parquet.",
+        )
+
+    # zarr v3: open_group(path, mode='r') replaces DirectoryStore + open_group(store=...)
+    root = zarr.open_group(str(zarr_path), mode="r")
+
+    total_voxels = int(root.attrs["total_voxels"])
+    chunk_size_voxels = int(root.attrs.get("chunk_size_voxels", 32768))
+    n_chunks = int(root.attrs.get("chunk_count", 1))
+    bounds = root.attrs.get("bounds", {})
+
+    metadata = {
+        "total_voxels": total_voxels,
+        "chunk_count": n_chunks,
+        "chunk_size_voxels": chunk_size_voxels,
+        "bounds": bounds,
+        "project_id": project_id,
+        "run_id": run_id,
+    }
+
+    if chunk_idx is None:
+        return {"metadata_only": True, **metadata}
+
+    if chunk_idx >= n_chunks:
+        raise HTTPException(
+            status_code=400,
+            detail=f"chunk_idx={chunk_idx} fuera de rango (n_chunks={n_chunks}).",
+        )
+
+    start = chunk_idx * chunk_size_voxels
+    end = min(start + chunk_size_voxels, total_voxels)
+
+    # Vectorised slice reads — O(1) Zarr operations, not O(chunk_size) individual reads
+    cx_s = root["cx"][start:end]
+    cy_s = root["cy"][start:end]
+    cz_s = root["cz"][start:end]
+    den_s = root["density"][start:end]
+    sus_s = root["susceptibility"][start:end]
+    doi_s = root["doi_index"][start:end]
+
+    chunk_voxels = [
+        {
+            "cx": float(cx_s[j]),
+            "cy": float(cy_s[j]),
+            "cz": float(cz_s[j]),
+            "density": float(den_s[j]),
+            "susceptibility": float(sus_s[j]),
+            "doi_index": float(doi_s[j]),
+        }
+        for j in range(len(cx_s))
+    ]
+
+    return {
+        "chunk_idx": chunk_idx,
+        "voxels": chunk_voxels,
+        "voxel_count": len(chunk_voxels),
+        **metadata,
+    }
 
 
 @router.get("/v2/block-model-profile")

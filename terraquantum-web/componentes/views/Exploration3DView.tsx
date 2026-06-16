@@ -237,6 +237,10 @@ export default function Exploration3DView() {
     React.useRef<BlockModelDataMode>(blockModelDataMode);
   const previousLodLevelRef = React.useRef<'far' | 'medium' | 'full'>(lodLevel);
 
+  // Fase 10 v0.4.0 — Zarr progressive loader state
+  const [zarrLoadProgress, setZarrLoadProgress] = React.useState(0);
+  const [isZarrLoading, setIsZarrLoading] = React.useState(false);
+
   // Estados de la interfaz fake eliminados
 
   const modelMaxDomain = model
@@ -321,6 +325,64 @@ export default function Exploration3DView() {
     setTerrainData(null);
   };
 
+  // Fase 10 v0.4.0 — Zarr progressive chunk loader.
+  // Returns assembled BackendVoxelModel when Zarr store exists, null otherwise.
+  const loadBlockModelZarr = React.useCallback(
+    async (projectId: string, runId: string) => {
+      // 1. Fetch metadata (returns 404 when grid < 500k voxels → use normal path)
+      const metaRes = await fetch(
+        `/api/block-model-zarr?project_id=${encodeURIComponent(projectId)}&run_id=${encodeURIComponent(runId)}`
+      );
+      if (!metaRes.ok) return null; // 404 = no Zarr store, fall through to Arrow
+
+      const meta = await metaRes.json() as {
+        total_voxels: number; chunk_count: number; chunk_size_voxels: number;
+        bounds: { x_min: number; x_max: number; y_min: number; y_max: number; z_min: number; z_max: number };
+      };
+
+      setIsZarrLoading(true);
+      setZarrLoadProgress(0);
+
+      const allVoxels: unknown[] = [];
+      const { chunk_count, bounds } = meta;
+
+      try {
+        for (let i = 0; i < chunk_count; i++) {
+          const chunkRes = await fetch(
+            `/api/block-model-zarr?project_id=${encodeURIComponent(projectId)}&run_id=${encodeURIComponent(runId)}&chunk_idx=${i}`
+          );
+          if (!chunkRes.ok) break;
+          const chunkData = await chunkRes.json() as { voxels: unknown[] };
+          allVoxels.push(...(chunkData.voxels ?? []));
+          setZarrLoadProgress(Math.round(((i + 1) / chunk_count) * 100));
+        }
+      } finally {
+        setIsZarrLoading(false);
+        setZarrLoadProgress(0);
+      }
+
+      if (allVoxels.length === 0) return null;
+
+      // Compute domain from bounds (Three.js centers voxels at origin)
+      const domainL = Math.max(bounds.x_max - bounds.x_min, 1);
+      const domainH = Math.max(bounds.y_max - bounds.y_min, 1);
+      const domainW = Math.max(bounds.z_max - bounds.z_min, 1);
+
+      return {
+        cells: allVoxels,
+        domainL,
+        domainH,
+        domainW,
+        cellSize: 10,
+        volumeM3: domainL * domainH * domainW,
+        mode: "zarr",
+        visualMode: "density_probability",
+        warnings: [],
+      } as BackendVoxelModel;
+    },
+    [setIsZarrLoading, setZarrLoadProgress]
+  );
+
   useEffect(() => {
     let isMounted = true;
 
@@ -374,6 +436,21 @@ export default function Exploration3DView() {
       setIsBlockModelLoading(true);
 
       try {
+        // Fase 10 v0.4.0: Zarr-first path for grids >500k voxels.
+        // Falls back to Arrow when no Zarr store exists (small grids).
+        const zarrModel = await loadBlockModelZarr(
+          activeRun.projectId as string,
+          activeRun.runId as string,
+        );
+        if (zarrModel) {
+          if (blockModelReloadRequestRef.current !== requestId) return;
+          if (preservedElevationMeta) setBlockModelElevationMeta(preservedElevationMeta);
+          setModel(zarrModel);
+          setShow3D(true);
+          setSliceX(zarrModel.domainL / 2);
+          return;
+        }
+
         const blockResult = await getExplorationBlockModelForRunWithArrow(
           activeRun.projectId as string,
           activeRun.runId as string,
@@ -431,6 +508,7 @@ export default function Exploration3DView() {
     blockModelGeorefConfidence,
     hasElevation,
     hasElevationData,
+    loadBlockModelZarr,
     lodLevel,
     model,
     setBlockModelElevationMeta,
@@ -586,6 +664,27 @@ export default function Exploration3DView() {
                       </span>
                       <span className="text-[9px] font-mono tracking-[0.14em] text-white/55">
                         Objeto: {viewModeLabel}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {/* ── Fase 10: Zarr progressive loader overlay ─────────────────────── */}
+              {isZarrLoading && (
+                <div className="absolute inset-0 z-50 flex items-end justify-start p-4 pointer-events-none">
+                  <div className="flex flex-col gap-2 px-4 py-3 rounded-xl border border-emerald-400/25 bg-[#05070a]/90 shadow-[0_8px_40px_rgba(0,0,0,0.6)] min-w-[240px]">
+                    <span className="text-[10px] font-mono uppercase tracking-[0.22em] text-emerald-400">
+                      Cargando modelo Zarr...
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-emerald-400 rounded-full transition-all duration-300"
+                          style={{ width: `${zarrLoadProgress}%` }}
+                        />
+                      </div>
+                      <span className="text-[9px] font-mono text-white/55 tabular-nums w-8 text-right">
+                        {zarrLoadProgress}%
                       </span>
                     </div>
                   </div>

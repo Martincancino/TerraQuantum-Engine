@@ -798,6 +798,83 @@ def build_block_model_response(
     return sanitize_nan(response)
 
 
+# ─── Zarr Block Model Store (Fase 10 — Out-of-Core) ──────────────────────────
+
+def create_zarr_block_model(
+    voxels: list,
+    project_id: str,
+    run_id: str,
+    run_dir: str,
+    chunk_size: tuple = (32, 32, 32),
+) -> dict:
+    """Write voxel list to a Zarr DirectoryStore for out-of-core access.
+
+    Uses vectorised NumPy slices — no per-voxel Python loops.
+
+    Returns dict with zarr_path, total_voxels, chunk_count, working_memory_mb.
+    """
+    import os
+    import zarr
+    import numpy as np
+
+    if not voxels:
+        return {"error": "No voxels to store"}
+
+    chunk_voxels = chunk_size[0] * chunk_size[1] * chunk_size[2]
+    n = len(voxels)
+
+    # Vectorised extraction — single list comprehension per field
+    cx_arr = np.array([v.get("cx", 0.0) for v in voxels], dtype=np.float32)
+    cy_arr = np.array([v.get("cy", 0.0) for v in voxels], dtype=np.float32)
+    cz_arr = np.array([v.get("cz", 0.0) for v in voxels], dtype=np.float32)
+    den_arr = np.array([v.get("density", 0.0) or 0.0 for v in voxels], dtype=np.float32)
+    sus_arr = np.array([v.get("susceptibility", 0.0) or 0.0 for v in voxels], dtype=np.float32)
+    doi_arr = np.array([v.get("doi_index", 1.0) or 1.0 for v in voxels], dtype=np.float32)
+
+    zarr_path = os.path.join(run_dir, f"{run_id}_blockmodel.zarr")
+    # zarr v3: open_group(path, mode='w') replaces DirectoryStore + group()
+    root = zarr.open_group(zarr_path, mode="w")
+
+    root.attrs["project_id"] = project_id
+    root.attrs["run_id"] = run_id
+    root.attrs["total_voxels"] = n
+    root.attrs["chunk_size_voxels"] = chunk_voxels
+    root.attrs["bounds"] = {
+        "x_min": float(cx_arr.min()), "x_max": float(cx_arr.max()),
+        "y_min": float(cy_arr.min()), "y_max": float(cy_arr.max()),
+        "z_min": float(cz_arr.min()), "z_max": float(cz_arr.max()),
+    }
+
+    for name, arr in (
+        ("cx", cx_arr), ("cy", cy_arr), ("cz", cz_arr),
+        ("density", den_arr), ("susceptibility", sus_arr), ("doi_index", doi_arr),
+    ):
+        # zarr v3: create_array replaces create_dataset
+        ds = root.create_array(name, shape=(n,), chunks=(chunk_voxels,), dtype="f4")
+        ds[:] = arr  # single vectorised write
+
+    n_chunks = (n + chunk_voxels - 1) // chunk_voxels
+    root.attrs["chunk_count"] = n_chunks
+
+    # 6 float32 fields × 4 bytes each
+    total_mb = n * 6 * 4 / (1024 * 1024)
+    working_mb = chunk_voxels * 6 * 4 / (1024 * 1024)
+
+    print(
+        f"[ZARR] {n:,} voxels → {zarr_path} "
+        f"({n_chunks} chunks, disk≈{total_mb:.1f} MB, working≈{working_mb:.1f} MB)"
+    )
+
+    return {
+        "zarr_path": zarr_path,
+        "total_voxels": n,
+        "chunk_count": n_chunks,
+        "chunk_size_voxels": chunk_voxels,
+        "memory_footprint_mb": total_mb,
+        "working_memory_mb": working_mb,
+    }
+
+
 # ─── Arrow IPC Transport (R07) ────────────────────────────────────────────────
 # Pipeline: Parquet → Polars → select → cast → write_ipc → bytes
 # Sin iter_rows(), sin dicts Python, sin deep_sanitize_nan().
