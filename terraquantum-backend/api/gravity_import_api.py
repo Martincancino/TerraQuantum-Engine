@@ -823,6 +823,9 @@ async def invert_gravity_csv(
     field_intensity_nt: float = Form(23500.0),
     susc_min: float = Form(0.0),
     susc_max: float = Form(1.0),
+    # Fase 7B — Advanced params serialized as JSON strings from the frontend
+    pgi_params_json: Optional[str] = Form(None),
+    remanence_json: Optional[str] = Form(None),
 ):
     if not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must end with .csv")
@@ -1169,6 +1172,23 @@ async def invert_gravity_csv(
                     "para el joint; se corre solo gravedad."
                 )
 
+        # Fase 7B — Parse advanced params from JSON strings
+        _pgi_params_parsed = None
+        if pgi_params_json:
+            try:
+                from schemas.geophysics_schema import PgiParams as _PgiParams
+                _pgi_params_parsed = _PgiParams(**json.loads(pgi_params_json))
+            except Exception as _e:
+                _corrections_warnings.append(f"pgi_params_json inválido (ignorado): {_e}")
+
+        _remanence_parsed = None
+        if remanence_json:
+            try:
+                from schemas.geophysics_schema import MagneticRemanenceParams as _RemParams
+                _remanence_parsed = _RemParams(**json.loads(remanence_json))
+            except Exception as _e:
+                _corrections_warnings.append(f"remanence_json inválido (ignorado): {_e}")
+
         try:
             invert_input = GeophysicsInvertInput(
                 project_id=project_id,
@@ -1201,6 +1221,9 @@ async def invert_gravity_csv(
                 field_intensity_nt=field_intensity_nt,
                 susc_min=susc_min,
                 susc_max=susc_max,
+                # Fase 7B — Advanced params
+                pgi_params=_pgi_params_parsed,
+                remanence=_remanence_parsed,
                 # compute_uncertainty queda OFF a propósito: a la λ que selecciona
                 # Morozov en surveys subdeterminados (LdM: 191 estaciones), la
                 # covarianza posterior está mal condicionada y σ explota (mediana

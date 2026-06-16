@@ -877,6 +877,11 @@ export type GravityImportMetadata = {
   warnings: string[];
   errors: string[];
   is_demo: boolean;
+  // Fase 5: resolución real y contexto geológico
+  estimated_mean_spacing_m?: number;
+  estimated_depth_resolution_m?: number;
+  geological_context_hint?: string;
+  honesty_note?: string;
 };
 
 export type CoordinateSystemDetection = {
@@ -943,6 +948,27 @@ export async function previewGravityCsv(
   }
 }
 
+// ─── Advanced Inversion Params (Fase 7B) ──────────────────────────────────────
+
+export type PgiParamsPayload = {
+  /** Dummy components required by backend schema (ignored when fit_from_model=true). */
+  components: Array<{ mean_density_t_m3: number; std_density_t_m3: number; weight: number }>;
+  alpha_pgi: number;
+  max_iter: number;
+  convergence_tol: number;
+  fit_from_model: true;
+  n_components_auto: number;
+};
+
+export type MagneticRemanencePayload = {
+  enabled: boolean;
+  q_ratio: number;
+  remanence_inc_deg: number;
+  remanence_dec_deg: number;
+  inversion_mode: "induced_only" | "total_field" | "amplitude";
+  do_q_sweep: boolean;
+};
+
 export type GravityCsvInvertPayload = {
   projectId?: string;
   runId?: string;
@@ -976,6 +1002,9 @@ export type GravityCsvInvertPayload = {
   fieldIntensityNt?: number;
   suscMin?: number;
   suscMax?: number;
+  // Fase 7B — Advanced params (serialized as JSON strings in FormData)
+  pgiParamsJson?: string | null;
+  remanenceJson?: string | null;
 };
 
 export type InversionResultPayload = {
@@ -1099,6 +1128,9 @@ export async function invertGravityCsv(
   if (payload.fieldIntensityNt !== undefined) formData.append("field_intensity_nt", String(payload.fieldIntensityNt));
   if (payload.suscMin !== undefined) formData.append("susc_min", String(payload.suscMin));
   if (payload.suscMax !== undefined) formData.append("susc_max", String(payload.suscMax));
+  // Fase 7B — Advanced params as JSON strings
+  if (payload.pgiParamsJson) formData.append("pgi_params_json", payload.pgiParamsJson);
+  if (payload.remanenceJson) formData.append("remanence_json", payload.remanenceJson);
 
   try {
     const res = await fetch("/api/gravity-import/invert", {

@@ -27,16 +27,11 @@ jobs:
       - name: Compile check (syntax errors)
         run: python -m compileall api services exploration schemas Camiones core middleware workers
 
-      - name: Unit tests
-        run: pytest tests/ -m "unit" -v
-
-      - name: Integration tests
-        run: pytest tests/ -m "integration" -v
-
-      - name: Scientific Benchmarks (HITO 4)
-        # Falla si la recuperación esférica o de prisma supera el 10% de error.
-        # Ningún test debe usar la misma malla para forward e inversión (anti-inverse-crime).
-        run: pytest tests/ -m "benchmark" -v --tb=long
+      - name: Full pytest suite (excluding slow tests, ~900 tests, ~25 min)
+        # Ejecuta todos los tests EXCEPTO los marcados como @pytest.mark.slow.
+        # Incluye unit + integration + benchmark + todos los demás.
+        # Los tests lentos (>10s) se ejecutan localmente pero no en CI para mantener tiempo <30min.
+        run: pytest tests/ -m "not slow" -v --tb=short -x
 
   frontend:
     runs-on: ubuntu-latest

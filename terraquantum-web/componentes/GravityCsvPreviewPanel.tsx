@@ -6,6 +6,8 @@ import { useAppStore } from "../store/useAppStore";
 import GravityCorrectionWizard from "./GravityCorrectionWizard";
 import { type VoxelMineralModel, type VoxelData } from "../lib/terraQuantumGeology";
 import { isJsonObject, readStringField, readNumberField } from "./datos/helpers";
+import { PgiParamsForm, type PgiParamsUI } from "./PgiParamsForm";
+import { MagneticRemanenceForm, type MagneticRemanenceParamsUI } from "./MagneticRemanenceForm";
 
 // ─── Georef UX helpers (R1-FE-3) ──────────────────────────────────────────
 
@@ -327,6 +329,12 @@ export default function GravityCsvPreviewPanel() {
   const [showCorrectionWizard, setShowCorrectionWizard] = useState(false);
   const [correctedFile, setCorrectedFile] = useState<File | null>(null);
   const [correctionReport, setCorrectionReport] = useState<GravityCorrectionReport | null>(null);
+
+  // Fase 7B — Advanced inversion params
+  const [showPgiModal, setShowPgiModal] = useState(false);
+  const [pgiParams, setPgiParams] = useState<PgiParamsUI | null>(null);
+  const [showRemanenceModal, setShowRemanenceModal] = useState(false);
+  const [remanenceParams, setRemanenceParams] = useState<MagneticRemanenceParamsUI | null>(null);
 
   const [utmZone, setUtmZone] = useState<string>("");
   // Tier 1 B6 — controles físicos. El frontend solo recolecta y valida forma;
@@ -732,6 +740,30 @@ export default function GravityCsvPreviewPanel() {
             suscMax: Number(suscMax),
           }
         : {}),
+      // Fase 7B — Advanced params (serialized as JSON for FormData transport)
+      pgiParamsJson: (pgiParams?.enabled)
+        ? JSON.stringify({
+            components: [
+              { mean_density_t_m3: 2.6, std_density_t_m3: 0.2, weight: 0.5 },
+              { mean_density_t_m3: 3.0, std_density_t_m3: 0.2, weight: 0.5 },
+            ],
+            alpha_pgi: pgiParams.alpha_pgi,
+            max_iter: pgiParams.max_iter,
+            convergence_tol: 0.001,
+            fit_from_model: true,
+            n_components_auto: pgiParams.n_components_auto,
+          })
+        : null,
+      remanenceJson: (remanenceParams?.enabled && isMagnetic)
+        ? JSON.stringify({
+            enabled: remanenceParams.enabled,
+            q_ratio: remanenceParams.q_ratio,
+            remanence_inc_deg: remanenceParams.remanence_inc_deg,
+            remanence_dec_deg: remanenceParams.remanence_dec_deg,
+            inversion_mode: remanenceParams.inversion_mode,
+            do_q_sweep: remanenceParams.do_q_sweep,
+          })
+        : null,
     };
 
     const effectiveFile = isMagnetic ? invFile : (correctedFile ?? invFile);
@@ -1550,6 +1582,42 @@ export default function GravityCsvPreviewPanel() {
             ))}
           </div>
 
+          {/* ── Fase 5: Resolución real + contexto geológico honesto ───────── */}
+          {result.importMetadata?.estimated_mean_spacing_m != null && (
+            <div className="mb-4 p-3 border border-yellow-600/40 bg-yellow-900/20 rounded">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-yellow-400 mb-2">
+                Resolución &amp; Contexto Geológico
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2 text-[10px] font-mono">
+                <div>
+                  <span className="text-neutral-500">Espaciado medio:</span>{" "}
+                  <span className="text-white">{result.importMetadata.estimated_mean_spacing_m.toFixed(1)} m</span>
+                </div>
+                <div>
+                  <span className="text-neutral-500">Prof. resoluble (Li &amp; Oldenburg):</span>{" "}
+                  <span className="text-white">
+                    {result.importMetadata.estimated_depth_resolution_m != null
+                      ? `${result.importMetadata.estimated_depth_resolution_m.toFixed(1)} m`
+                      : "N/A"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-neutral-500">Escala survey:</span>{" "}
+                  <span className="text-yellow-300 uppercase">
+                    {result.importMetadata.geological_context_hint?.replace(/_/g, " ") ?? "—"}
+                  </span>
+                </div>
+              </div>
+              <p className="text-[10px] text-yellow-200/70 italic">
+                Este modelo invertido es geofísicamente válido a su escala, pero{" "}
+                <strong className="text-yellow-300">no emite ley, tonelaje ni indicadores mineros</strong>.
+                Solo proporciona densidad / susceptibilidad recuperadas. Para interpretación
+                minera o de viabilidad, consultar sondajes, análisis de rentabilidad y
+                restricciones geológicas independientes.
+              </p>
+            </div>
+          )}
+
           {result.warnings && result.warnings.length > 0 && (
             <div className="mb-4 p-2 border border-yellow-600/30 bg-yellow-600/10 rounded">
               <p className="text-[10px] text-yellow-500 font-mono">Hay advertencias técnicas. Revísalas en Datos o en detalle técnico.</p>
@@ -1772,6 +1840,56 @@ export default function GravityCsvPreviewPanel() {
             <h4 className="text-[12px] uppercase tracking-[0.2em] text-[#C2D8C4] font-bold mb-6">
               Inversión 3D
             </h4>
+
+            {/* Fase 7B — Botones de parámetros avanzados */}
+            <div className="flex gap-2 mb-4 flex-wrap">
+              <button
+                onClick={() => setShowPgiModal(true)}
+                className={`px-3 py-1.5 text-[9px] uppercase tracking-widest font-bold rounded border transition-colors ${
+                  pgiParams?.enabled
+                    ? "bg-purple-600/30 border-purple-500 text-purple-300"
+                    : "bg-neutral-800 border-neutral-700 text-neutral-400 hover:border-neutral-500"
+                }`}
+              >
+                PGI {pgiParams?.enabled ? `(K=${pgiParams.n_components_auto})` : ""}
+              </button>
+              {dataType === "magnetic" && (
+                <button
+                  onClick={() => setShowRemanenceModal(true)}
+                  className={`px-3 py-1.5 text-[9px] uppercase tracking-widest font-bold rounded border transition-colors ${
+                    remanenceParams?.enabled
+                      ? "bg-orange-600/30 border-orange-500 text-orange-300"
+                      : "bg-neutral-800 border-neutral-700 text-neutral-400 hover:border-neutral-500"
+                  }`}
+                >
+                  Remanencia {remanenceParams?.enabled ? `(Q=${remanenceParams.q_ratio.toFixed(1)})` : ""}
+                </button>
+              )}
+            </div>
+
+            {/* Modals */}
+            {showPgiModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowPgiModal(false)}>
+                <div onClick={(e) => e.stopPropagation()}>
+                  <PgiParamsForm
+                    initialParams={pgiParams ?? undefined}
+                    onSubmit={(p) => { setPgiParams(p); setShowPgiModal(false); }}
+                    onCancel={() => setShowPgiModal(false)}
+                  />
+                </div>
+              </div>
+            )}
+            {showRemanenceModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowRemanenceModal(false)}>
+                <div onClick={(e) => e.stopPropagation()}>
+                  <MagneticRemanenceForm
+                    initialParams={remanenceParams ?? undefined}
+                    onSubmit={(p) => { setRemanenceParams(p); setShowRemanenceModal(false); }}
+                    onCancel={() => setShowRemanenceModal(false)}
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-col gap-4 mb-6">
               <button

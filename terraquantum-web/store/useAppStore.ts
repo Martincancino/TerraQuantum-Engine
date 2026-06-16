@@ -361,6 +361,10 @@ export interface AppState {
   setClipBoxEnabled: (val: boolean) => void;
   clipBox: { xMin: number; xMax: number; yMin: number; yMax: number; zMin: number; zMax: number };
   setClipBox: (patch: Partial<{ xMin: number; xMax: number; yMin: number; yMax: number; zMin: number; zMax: number }>) => void;
+
+  // 14. DOI THRESHOLD (Fase 7B-1) — slider interactivo 0.0–1.0
+  doiThreshold: number;
+  setDoiThreshold: (val: number) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -672,4 +676,8 @@ export const useAppStore = create<AppState>((set) => ({
   clipBox: { xMin: 0, xMax: 0, yMin: 0, yMax: 0, zMin: 0, zMax: 0 },
   setClipBox: (patch) =>
     set((state) => ({ clipBox: { ...state.clipBox, ...patch } })),
+
+  // 14. DOI THRESHOLD (Fase 7B-1)
+  doiThreshold: 0.9,
+  setDoiThreshold: (val) => set({ doiThreshold: Math.max(0, Math.min(1, val)) }),
 }));
