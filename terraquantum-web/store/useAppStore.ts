@@ -237,6 +237,8 @@ export interface AppState {
   blockModelMode: string | null;
   blockModelDataMode: BlockModelDataMode;
   setBlockModelDataMode: (mode: BlockModelDataMode) => void;
+  lodLevel: 'far' | 'medium' | 'full';
+  setLodLevel: (level: 'far' | 'medium' | 'full') => void;
   isBlockModelLoading: boolean;
   setIsBlockModelLoading: (loading: boolean) => void;
   // HITO 6: true mientras el WebWorker construye los buffers de geometría masiva.
@@ -525,6 +527,8 @@ export const useAppStore = create<AppState>((set) => ({
   blockModelMode: null,
   blockModelDataMode: "exploration",
   setBlockModelDataMode: (mode) => set({ blockModelDataMode: mode }),
+  lodLevel: 'medium',
+  setLodLevel: (level) => set({ lodLevel: level }),
   isBlockModelLoading: false,
   setIsBlockModelLoading: (loading) => set({ isBlockModelLoading: loading }),
   isWorkerProcessing: false,

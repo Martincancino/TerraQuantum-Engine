@@ -882,12 +882,102 @@ def upsample_grid_df(df: "pl.DataFrame", factor: int) -> "pl.DataFrame":
     return pl.DataFrame(data)
 
 
+def _compute_octree_lod_levels(voxels: list, spacing_m: float) -> dict:
+    """Compute LOD levels via spatial grid subsampling (dict-based, used in tests).
+
+    Args:
+        voxels: list of dicts with keys cx, cy, cz, doi_index
+        spacing_m: base voxel spacing in metres
+
+    Returns:
+        {'lod_0_full': [...], 'lod_1_medium': [...], 'lod_2_far': [...]}
+    """
+    if not voxels:
+        return {"lod_0_full": [], "lod_1_medium": [], "lod_2_far": []}
+
+    xs = [v.get("cx", 0.0) for v in voxels]
+    ys = [v.get("cy", 0.0) for v in voxels]
+    zs = [v.get("cz", 0.0) for v in voxels]
+    x_min, y_min, z_min = min(xs), min(ys), min(zs)
+
+    # Medium (~10%): cube side = spacing_m × ∛10 ≈ 2.154
+    cube_m = spacing_m * 2.154
+    # Far (~1%): cube side = spacing_m × ∛100 ≈ 4.642
+    cube_far_m = spacing_m * 4.642
+
+    def _bin(x, y, z, size):
+        return (int((x - x_min) / size), int((y - y_min) / size), int((z - z_min) / size))
+
+    lod1: dict = {}
+    lod2: dict = {}
+    for v in voxels:
+        x, y, z = v.get("cx", 0.0), v.get("cy", 0.0), v.get("cz", 0.0)
+        doi = v.get("doi_index", 0.0)
+        k1 = _bin(x, y, z, cube_m)
+        if k1 not in lod1 or doi > lod1[k1].get("doi_index", -1):
+            lod1[k1] = v
+        k2 = _bin(x, y, z, cube_far_m)
+        if k2 not in lod2 or doi > lod2[k2].get("doi_index", -1):
+            lod2[k2] = v
+
+    return {
+        "lod_0_full": voxels,
+        "lod_1_medium": list(lod1.values()),
+        "lod_2_far": list(lod2.values()),
+    }
+
+
+def _apply_lod_polars(df: pl.DataFrame, lod: str, cell_size: float) -> pl.DataFrame:
+    """Spatial LOD subsampling using pure Polars (used in Arrow pipeline)."""
+    if lod == "full" or len(df) == 0:
+        return df
+
+    factor = 2.154 if lod == "medium" else 4.642  # medium~10%, far~1%
+    bin_m = max(cell_size * factor, 1.0)
+
+    cols = set(df.columns)
+    if {"x_m", "y_m", "z_m"}.issubset(cols):
+        xc, yc, zc = "x_m", "y_m", "z_m"
+    elif {"x", "y", "z"}.issubset(cols):
+        xc, yc, zc = "x", "y", "z"
+    else:
+        cs = max(cell_size, 1.0)
+        df = df.with_columns([
+            (pl.col("ix").cast(pl.Float64) * cs).alias("_xlod"),
+            (pl.col("iy").cast(pl.Float64) * cs).alias("_ylod"),
+            (pl.col("iz").cast(pl.Float64) * cs).alias("_zlod"),
+        ])
+        xc, yc, zc = "_xlod", "_ylod", "_zlod"
+        cols = set(df.columns)
+
+    x_min = float(df[xc].min())
+    y_min = float(df[yc].min())
+    z_min = float(df[zc].min())
+
+    df = df.with_columns([
+        ((pl.col(xc) - x_min) / bin_m).cast(pl.Int32).alias("_bx"),
+        ((pl.col(yc) - y_min) / bin_m).cast(pl.Int32).alias("_by"),
+        ((pl.col(zc) - z_min) / bin_m).cast(pl.Int32).alias("_bz"),
+    ])
+
+    if "doi_index" in cols:
+        df = df.sort("doi_index", descending=True)
+
+    df = df.unique(subset=["_bx", "_by", "_bz"], keep="first", maintain_order=True)
+
+    drop = [c for c in ("_bx", "_by", "_bz", "_xlod", "_ylod", "_zlod") if c in df.columns]
+    if drop:
+        df = df.drop(drop)
+    return df
+
+
 def build_block_model_arrow_bytes(
     mode: str = "exploration",
     limit: int = 0,
     project_id=None,
     run_id=None,
     display_factor: int = 1,
+    lod: str = "full",
 ):
     """Construye payload Arrow IPC para el block model.
 
@@ -948,10 +1038,19 @@ def build_block_model_arrow_bytes(
 
     total_stored = len(df)
 
-    # Selección de subconjunto si se pide límite explícito
-    safe_limit = max(int(limit or 0), 0)
-    if safe_limit > 0 and len(df) > safe_limit:
-        df = select_limited_exploration_view(df, safe_limit, ("ix", "iy", "iz"))
+    # Fase 9: LOD subsampling (spatial octree binning) — takes priority over safe_limit.
+    # lod="full" bypasses LOD and falls through to the safe_limit path below.
+    if lod in ("medium", "far"):
+        df = _apply_lod_polars(df, lod, _arrow_cell_size)
+        print(
+            f"[LOD] mode={lod} stored={total_stored} returned={len(df)} "
+            f"({100*len(df)/max(total_stored,1):.1f}%)"
+        )
+    else:
+        # Selección de subconjunto si se pide límite explícito
+        safe_limit = max(int(limit or 0), 0)
+        if safe_limit > 0 and len(df) > safe_limit:
+            df = select_limited_exploration_view(df, safe_limit, ("ix", "iy", "iz"))
 
     total_returned = len(df)
 
@@ -1043,6 +1142,8 @@ def build_block_model_arrow_bytes(
 
     headers: dict[str, str] = {
         "X-TQ-Total-Voxels": str(total_returned),
+        "X-TQ-Total-Stored": str(total_stored),
+        "X-TQ-Lod-Level": lod,
         "X-TQ-Bounds-Min": f"{x_min:.4f},{y_min_raw:.4f},{z_min:.4f}",
         "X-TQ-Bounds-Max": f"{x_max:.4f},{y_max_raw:.4f},{z_max:.4f}",
         "X-TQ-Cell-Size": f"{_arrow_cell_size:.4f}",

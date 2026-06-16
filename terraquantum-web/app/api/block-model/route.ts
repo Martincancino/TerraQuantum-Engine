@@ -29,6 +29,8 @@ export async function GET(req: NextRequest) {
     }
     const displayFactor = searchParams.get("display_factor");
     if (displayFactor) backendParams.set("display_factor", displayFactor);
+    const lod = searchParams.get("lod");
+    if (lod) backendParams.set("lod", lod);
 
     const backendUrl = buildBackendUrl(`/block-model-arrow?${backendParams.toString()}`);
     const controller = new AbortController();

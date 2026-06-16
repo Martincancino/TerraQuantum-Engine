@@ -1,6 +1,6 @@
 import io
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Query, Response
 from fastapi.responses import StreamingResponse
 
 from schemas.response_schema import BlockModelResponse
@@ -39,14 +39,20 @@ async def get_block_model_arrow(
     project_id: str = None,
     run_id: str = None,
     display_factor: int = 1,
+    lod: str = Query("full", pattern="^(far|medium|full)$"),
 ):
     """Endpoint Arrow IPC — transporte binario, sin iter_rows ni deep_sanitize_nan.
 
     Content-Type: application/vnd.apache.arrow.stream
-    Headers extra: X-TQ-Total-Voxels, X-TQ-Bounds-Min, X-TQ-Bounds-Max, X-TQ-Run-Id
+    Headers extra: X-TQ-Total-Voxels, X-TQ-Bounds-Min, X-TQ-Bounds-Max, X-TQ-Run-Id, X-TQ-Lod-Level
+
+    Query params:
+      lod=far     — ~1% spatial sample, fastest
+      lod=medium  — ~10% spatial sample, balanced
+      lod=full    — 100% (default, respects safe_limit)
     """
     print(
-        f"[BLOCK-MODEL-ARROW] GET /block-model-arrow mode={mode} "
+        f"[BLOCK-MODEL-ARROW] GET /block-model-arrow mode={mode} lod={lod} "
         f"project_id={project_id} run_id={run_id}"
     )
 
@@ -60,6 +66,7 @@ async def get_block_model_arrow(
             project_id=project_id,
             run_id=run_id,
             display_factor=_df,
+            lod=lod,
         )
     except FileNotFoundError as exc:
         return Response(content=str(exc), status_code=404)

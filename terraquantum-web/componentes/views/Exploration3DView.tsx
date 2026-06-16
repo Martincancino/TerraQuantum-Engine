@@ -225,6 +225,8 @@ export default function Exploration3DView() {
     highlightedCellCount,
     returnedVoxels,
     visualLayer,
+    lodLevel,
+    setLodLevel,
   } = useAppStore() as AppState;
 
   const hasElevation =
@@ -233,6 +235,7 @@ export default function Exploration3DView() {
   const blockModelReloadRequestRef = React.useRef(0);
   const previousBlockModelDataModeRef =
     React.useRef<BlockModelDataMode>(blockModelDataMode);
+  const previousLodLevelRef = React.useRef<'far' | 'medium' | 'full'>(lodLevel);
 
   // Estados de la interfaz fake eliminados
 
@@ -347,9 +350,11 @@ export default function Exploration3DView() {
 
   useEffect(() => {
     const previousMode = previousBlockModelDataModeRef.current;
+    const previousLod = previousLodLevelRef.current;
     previousBlockModelDataModeRef.current = blockModelDataMode;
+    previousLodLevelRef.current = lodLevel;
 
-    if (previousMode === blockModelDataMode) return;
+    if (previousMode === blockModelDataMode && previousLod === lodLevel) return;
     if (view !== "figura 3d") return;
     if (!activeRun.projectId || !activeRun.runId || activeRun.status !== "ready") return;
     if (!show3D && !model) return;
@@ -373,7 +378,9 @@ export default function Exploration3DView() {
           activeRun.projectId as string,
           activeRun.runId as string,
           blockModelDataMode,
-          limitForBlockModelMode(blockModelDataMode)
+          limitForBlockModelMode(blockModelDataMode),
+          1,
+          lodLevel
         );
 
         if (blockModelReloadRequestRef.current !== requestId) return;
@@ -424,6 +431,7 @@ export default function Exploration3DView() {
     blockModelGeorefConfidence,
     hasElevation,
     hasElevationData,
+    lodLevel,
     model,
     setBlockModelElevationMeta,
     setIsBlockModelLoading,
@@ -620,6 +628,26 @@ export default function Exploration3DView() {
                       : blockModelDataMode === "exploration"
                       ? "Exploración"
                       : "Anomalía"}
+                  </span>
+                  <span className="col-span-2 mt-2 mb-1 text-[7px] uppercase tracking-wider text-white/30">
+                    Detalle renderizado (LOD)
+                  </span>
+                  <span className="col-span-2">
+                    <div className="flex gap-1">
+                      {(["far", "medium", "full"] as const).map((lvl) => (
+                        <button
+                          key={lvl}
+                          onClick={() => setLodLevel(lvl)}
+                          className={`flex-1 rounded px-1 py-1 text-[7px] font-mono transition-colors ${
+                            lodLevel === lvl
+                              ? "bg-accent text-black font-bold"
+                              : "bg-white/10 text-white/55 hover:bg-white/20"
+                          }`}
+                        >
+                          {lvl === "far" ? "Far 1%" : lvl === "medium" ? "Med 10%" : "Full"}
+                        </button>
+                      ))}
+                    </div>
                   </span>
                   <span>Vista:</span>
                   <span className="text-right text-accent">

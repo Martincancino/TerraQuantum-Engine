@@ -703,13 +703,15 @@ export async function getExplorationBlockModelForRunWithArrow(
   modeOrLimit: BlockModelDataMode | number = "exploration",
   limit = 5000,
   displayFactor = 1,
+  lod: 'far' | 'medium' | 'full' = 'full',
 ): Promise<FrontendApiResult<BlockModelResponse>> {
   const request = resolveBlockModelRequestArgs(modeOrLimit, limit);
 
   // displayFactor>1 = sub-muestreo trilineal de display (500k-2M celdas): SIEMPRE
   // por Arrow (binario), el JSON no soporta ese tamaño.
-  if (displayFactor > 1 || request.limit > 5000) {
-    const arrowResult = await fetchBlockModelArrowForRun(projectId, runId, request.mode, displayFactor);
+  // lod!=full: always use Arrow path (spatial LOD requires binary transport).
+  if (displayFactor > 1 || request.limit > 5000 || lod !== 'full') {
+    const arrowResult = await fetchBlockModelArrowForRun(projectId, runId, request.mode, displayFactor, lod);
     if (arrowResult.ok) {
       return arrowResult;
     }
@@ -1641,7 +1643,8 @@ export async function fetchBlockModelArrowForRun(
   projectId: string,
   runId: string,
   mode: BlockModelDataMode = "exploration",
-  displayFactor = 1
+  displayFactor = 1,
+  lod: 'far' | 'medium' | 'full' = 'full',
 ): Promise<FrontendApiResult<BlockModelResponse>> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 120_000);
@@ -1652,7 +1655,8 @@ export async function fetchBlockModelArrowForRun(
       `&mode=${encodeURIComponent(mode)}` +
       `&project_id=${encodeURIComponent(projectId)}` +
       `&run_id=${encodeURIComponent(runId)}` +
-      (displayFactor > 1 ? `&display_factor=${encodeURIComponent(String(displayFactor))}` : "");
+      (displayFactor > 1 ? `&display_factor=${encodeURIComponent(String(displayFactor))}` : "") +
+      (lod !== 'full' ? `&lod=${encodeURIComponent(lod)}` : "");
 
     const res = await fetch(url, {
       method: "GET",
