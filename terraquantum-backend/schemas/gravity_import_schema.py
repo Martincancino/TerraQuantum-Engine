@@ -149,6 +149,11 @@ class GravityImportMetadata(BaseModel):
     csv_analysis: Optional[CsvAnalysisResult] = None
     coordinate_transform: Optional[CoordinateTransform] = None
     auto_grid: Optional[AutoGrid] = None
+    # Fase 5: resolución real y contexto geológico honesto
+    estimated_mean_spacing_m: Optional[float] = None
+    estimated_depth_resolution_m: Optional[float] = None
+    geological_context_hint: Optional[str] = None  # "regional" | "local_to_district" | "local_deposit"
+    honesty_note: Optional[str] = None
 
 class GravityImportResult(BaseModel):
     status: str

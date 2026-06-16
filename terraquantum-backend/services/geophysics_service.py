@@ -3037,6 +3037,41 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     if _cb_qa is not None:
         report_payload["checkerboard_qa"] = _cb_qa
 
+    # ── Fase 5: Contexto geológico honesto ───────────────────────────────────
+    _survey_extent_m = max(params.nx, params.nz) * params.block_size
+    if _survey_extent_m > 50_000:
+        _geo_hint = "regional"
+    elif _survey_extent_m > 5_000:
+        _geo_hint = "local_to_district"
+    else:
+        _geo_hint = "local_deposit"
+    report_payload["geological_context"] = {
+        "hint": _geo_hint,
+        "disclaimer": (
+            "Este modelo invertido es geofísicamente válido a su escala. "
+            "NO emite ley, tonelaje, reserves minerales ni indicadores de rentabilidad. "
+            "Solo densidad / susceptibilidad recuperadas. Requiere integración con datos "
+            "geológicos/mineros independientes para cualquier decisión de inversión."
+        ),
+        "estimated_survey_extent_m": _survey_extent_m,
+        "block_size_m": params.block_size,
+        "mining_metrics_disclaimer": {
+            "grade": (
+                "NOT computed by TerraQuantum. Grade requires geological assays and "
+                "commodity-specific economic models (Whittle, Gemcom, etc.)."
+            ),
+            "tonnage": (
+                "NOT computed by TerraQuantum. Tonnage requires mine design, pit optimization, "
+                "and geotechnical constraints outside geophysics scope."
+            ),
+            "why_zero": (
+                "TerraQuantum inverts gravity/magnetic data and outputs density/susceptibility. "
+                "Mining feasibility (grade, tonnage, NPV, LOM) requires integration with "
+                "assay data, commodity prices, and mine engineering — domains external to geophysics."
+            ),
+        },
+    }
+
     write_run_report_snapshot(params, report_payload)
 
     try:

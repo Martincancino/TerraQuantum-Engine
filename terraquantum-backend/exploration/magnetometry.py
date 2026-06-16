@@ -801,6 +801,31 @@ class MagnetometryInversion:
                 m_tilde = result[0]
                 _acond = float(result[6])
 
+        # ── Tier 1 A1 MAGNÉTICO: FISTA proyectado (bounds reales para n>2500) ────
+        # El clip post-hoc descarta masa fuera del box sin redistribuir
+        # (misfit degradado ~35% en cuerpos compactos). FISTA parte del
+        # clip como warm start → el objetivo solo puede mejorar; rollback
+        # exacto con USE_PROJECTED_SOLVER=false.
+        from core.config import USE_PROJECTED_SOLVER as _USE_PGD_MAG
+        if _USE_PGD_MAG and not _use_bc_m_eff:  # TRF ya es bounded; FISTA solo para LSQR
+            from exploration.solver_preconditioned import solve_inversion_pgd_fista
+            # En el branch sin anclajes A_sys/b_sys no existen (LSQR usó damp=λ).
+            # Construirlos explícitamente: sistema aumentado equivalente [G; λI] m̃ = [d; 0].
+            if not _has_anchors:
+                _eye_lam_fista = sp.eye(n_active, format='csr', dtype=np.float64) * float(lambda_mag)
+                A_sys = sp.vstack([G_aug, _eye_lam_fista]).tocsr()
+                b_sys = np.concatenate([d_aug, np.zeros(n_active, dtype=np.float64)])
+            _t_pgd_mag = time.perf_counter()
+            m_tilde, _pgd_info = solve_inversion_pgd_fista(
+                A_sys, b_sys, _lb_tilde_m, _ub_tilde_m, x0=m_tilde,
+            )
+            print(
+                f"[SOLVER MAG] FISTA proyectado en {time.perf_counter()-_t_pgd_mag:.1f}s "
+                f"(post-LSQR+warm-start)."
+            )
+            if solver_meta is not None:
+                solver_meta["pgd_magnetic"] = _pgd_info
+
         # Destransformación Li & Oldenburg: m = W_z^{-1} · m̃ (susceptibilidad real).
         susc_contrast_active = Wz_inv @ m_tilde
 

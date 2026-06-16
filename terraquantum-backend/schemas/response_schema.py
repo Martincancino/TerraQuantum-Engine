@@ -218,9 +218,12 @@ class VoxelData(BaseModel):
     visual_score: Optional[float] = None
 
     # Optional fields
-    grade: Optional[float] = None
+    # grade and tonnage are placeholders for external mining software integration (Whittle, Gemcom, etc.).
+    # TerraQuantum does NOT compute grade or tonnage — only density/susceptibility from geophysical inversion.
+    # In industrial mode (expose_demo_grade=False) grade is NaN/null; in demo mode it is a heuristic proxy.
+    grade: Optional[float] = Field(default=None, description="Grade (%): NOT computed by TerraQuantum. Placeholder for external mining software.")
     domain: Optional[int] = None
-    tonnage: Optional[float] = None
+    tonnage: Optional[float] = Field(default=None, description="Tonnage (tonnes): NOT computed by TerraQuantum. Placeholder for external mining software.")
     is_active: Optional[bool] = None
 
     # R3 Elevation fields (if available)

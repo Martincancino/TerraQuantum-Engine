@@ -1105,7 +1105,7 @@ class GravimetryInversion:
     def solve_inversion_lsqr(
         self,
         g_observed,
-        kernel_sparse,          # Obsoleto — ignorado. Conservado para compatibilidad de firma; pasar None.
+        kernel_sparse,          # Caché del kernel disperso (joint mode). Si no-None: se usa como G_active.
         y_c,
         lambda_mag=1e-5,
         alpha_spatial=1.0,
@@ -1261,12 +1261,16 @@ class GravimetryInversion:
         # KDTree construido SOLO sobre celdas activas — sin fancy indexing global
         x_c_arr = np.asarray(x_c, dtype=np.float64)
         z_c_arr = np.asarray(z_c, dtype=np.float64)
-        G_active = forward_model._build_sparse_kernel(
-            x_c_arr[active_cells],
-            y_c_active,
-            z_c_arr[active_cells],
-            np.asarray(sensor_coords, dtype=np.float64),
-        )
+        if kernel_sparse is not None:
+            G_active = kernel_sparse
+            print("[GRAV] Usando kernel cacheado (sin reconstrucción).")
+        else:
+            G_active = forward_model._build_sparse_kernel(
+                x_c_arr[active_cells],
+                y_c_active,
+                z_c_arr[active_cells],
+                np.asarray(sensor_coords, dtype=np.float64),
+            )
 
         # ── FASE 8 (Q4): Mapeo de vóxeles anclados por sondaje (full → active) ─
         # Para cada intervalo se localiza la COLUMNA (x,z) cuyos centros caen dentro

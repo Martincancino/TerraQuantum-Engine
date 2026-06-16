@@ -279,9 +279,9 @@ class GeophysicsInvertInput(BaseModel):
         15, ge=1, le=100,
         description="Iteraciones máximas del bucle alternado de inversión conjunta (Fase 9C-2).",
     )
-    cross_lambda_max: float = Field(
-        1e4, ge=0.0,
-        description="Peso máximo del acoplamiento cross-gradient (continuation exponencial). Fase 9C-2.",
+    cross_lambda_beta: float = Field(
+        0.05, ge=0.0, le=1.0,
+        description="Factor adimensional de coupling (0–1). Peso efectivo = β·‖G_scaled‖_F/‖B‖_F. Fase 9C-2.",
     )
     # ── HITO 5 (B-05): Topografía activa ────────────────────────────────────────
     # Elevación MASL de cada sensor de gravedad (m s.n.m.), paralelo a `observations`.

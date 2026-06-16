@@ -384,10 +384,10 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     lam_g = params.lambda_mag if params.lambda_mag > 0 else 1e-5
     lam_m = params.lambda_mag if params.lambda_mag > 0 else 1e-4
 
-    def _solve_gravity(extra_blocks, m_ref_contrast):
+    def _solve_gravity(extra_blocks, m_ref_contrast, kernel_cache=None):
         meta = {}
         rho_full, score, misfit, sens = grav_inv.solve_inversion_lsqr(
-            g_observed, None, y_c,
+            g_observed, kernel_cache, y_c,
             lambda_mag=lam_g, alpha_spatial=params.alpha_spatial,
             topography_elevations=None,
             sensor_coords=sensor_coords, x_c=x_c, z_c=z_c,
@@ -402,10 +402,10 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         )
         return np.nan_to_num(np.asarray(rho_full, dtype=np.float64), nan=base_rho), score, misfit, meta
 
-    def _solve_magnetic(extra_blocks, m_ref):
+    def _solve_magnetic(extra_blocks, m_ref, kernel_cache=None):
         meta = {}
         chi_full, score, misfit, sens = mag_inv.solve_magnetic_inversion_lsqr(
-            d_observed=mag, y_c=y_c,
+            d_observed=mag, override_kernel=kernel_cache, y_c=y_c,
             lambda_mag=lam_m, alpha_spatial=params.alpha_spatial,
             topography_elevations=None,
             sensor_coords=sensor_coords, x_c=x_c, z_c=z_c,
@@ -419,18 +419,42 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         )
         return np.nan_to_num(np.asarray(chi_full, dtype=np.float64), nan=0.0), score, misfit, meta
 
+    # ── CACHÉ KERNEL: construir G_active una sola vez (geometría invariante) ────
+    # En joint mode (topo=None, prune=False) todos los vóxeles son activos en
+    # cada llamada → kernel idéntico en toda iteración; cachear evita ~14-30
+    # reconstrucciones costosas de KDTree + prism loops.
+    _x_c_arr   = np.asarray(x_c, dtype=np.float64)
+    _z_c_arr   = np.asarray(z_c, dtype=np.float64)
+    _sensor_arr = np.asarray(sensor_coords, dtype=np.float64)
+    grav_fwd_kernel_cache = grav_fwd._build_sparse_kernel(
+        _x_c_arr, y_c, _z_c_arr, _sensor_arr,
+    )
+    mag_fwd_kernel_cache = mag_fwd._build_sparse_kernel(
+        _x_c_arr, y_c, _z_c_arr, _sensor_arr,
+    )
+    print(
+        f"[CACHÉ KERNEL] G_gravity: {grav_fwd_kernel_cache.shape} ({grav_fwd_kernel_cache.nnz:,} NNZ) | "
+        f"G_magnetic: {mag_fwd_kernel_cache.shape} ({mag_fwd_kernel_cache.nnz:,} NNZ)"
+    )
+
     # ── Iteración 0 — Warm-up: motores independientes (sin cross-gradient) ───
     _update("running", 0.10, "warmup", "Warm-up: inversiones independientes (k=0)...")
     print("[FASE 9C-2] Warm-up k=0 — gravedad independiente.")
-    m_rho, _g_score, misfit_g, meta_g = _solve_gravity(None, None)
+    m_rho, _g_score, misfit_g, meta_g = _solve_gravity(None, None, grav_fwd_kernel_cache)
     print("[FASE 9C-2] Warm-up k=0 — magnetometría independiente.")
-    m_chi, _m_score, misfit_m, meta_m = _solve_magnetic(None, None)
+    m_chi, _m_score, misfit_m, meta_m = _solve_magnetic(None, None, mag_fwd_kernel_cache)
 
     # E_norm primario = métrica por celda grid-independiente (criterio de parada).
     # E_l2 = fórmula global literal del plan, solo para trazabilidad (satura en 1/√N).
     E_norm = _e_norm_cellwise(m_rho, m_chi, Dx, Dy, Dz)
     E_l2 = _e_norm_global_l2(m_rho, m_chi, Dx, Dy, Dz)
-    cross_lambda_max = float(params.cross_lambda_max)
+    cross_beta = (
+        float(params.cross_lambda_beta) if hasattr(params, 'cross_lambda_beta')
+        else float(getattr(params, 'cross_lambda_max', 1e4)) / 1e4
+    )
+    # Proxy para ‖G_scaled‖_F: tras la col-norm de gravimetry.py cada columna tiene
+    # norma unitaria, por lo tanto ‖G_scaled‖_F = sqrt(nC).
+    G_norm = float(np.sqrt(nC))
     history = [{
         "iter": 0,
         "lambda_cross": 0.0,
@@ -454,27 +478,34 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         progress = 0.10 + 0.80 * (k / max(int(params.joint_max_iter), 1))
         _update("running", progress, "joint_loop", f"Inversión conjunta — iteración {k}...")
 
-        lambda_cross = cross_lambda_max * (1.0 - np.exp(-k / 4.0))
+        # k=1: warm-up sin coupling; k≥2: coupling activo (step function)
+        lambda_cross = 1.0 if k >= 2 else 0.0
 
         # Paso de gravedad: fija χ, penaliza ∇ρ × ĝ_χ.
+        lambda_cross_eff_g = 0.0
         if lambda_cross > 0.0:
             hx, hy, hz = _normalized_gradient(m_chi, Dx, Dy, Dz)
             B_chi = _build_cross_gradient_block(hx, hy, hz, Dx, Dy, Dz)
             max_block_nnz = max(max_block_nnz, B_chi.nnz)
-            grav_blocks = [lambda_cross * B_chi]
+            B_chi_norm = float(np.sqrt(B_chi.power(2).sum()))
+            lambda_cross_eff_g = cross_beta * G_norm / max(B_chi_norm, 1e-12)
+            grav_blocks = [lambda_cross_eff_g * B_chi]
         else:
             grav_blocks = None
-        m_rho_new, _gs, misfit_g, meta_g = _solve_gravity(grav_blocks, m_rho - base_rho)
+        m_rho_new, _gs, misfit_g, meta_g = _solve_gravity(grav_blocks, m_rho - base_rho, grav_fwd_kernel_cache)
 
         # Paso de magnetometría: fija ρ (actualizado), penaliza ∇χ × ĝ_ρ.
+        lambda_cross_eff_m = 0.0
         if lambda_cross > 0.0:
             hx, hy, hz = _normalized_gradient(m_rho_new, Dx, Dy, Dz)
             B_rho = _build_cross_gradient_block(hx, hy, hz, Dx, Dy, Dz)
             max_block_nnz = max(max_block_nnz, B_rho.nnz)
-            mag_blocks = [lambda_cross * B_rho]
+            B_rho_norm = float(np.sqrt(B_rho.power(2).sum()))
+            lambda_cross_eff_m = cross_beta * G_norm / max(B_rho_norm, 1e-12)
+            mag_blocks = [lambda_cross_eff_m * B_rho]
         else:
             mag_blocks = None
-        m_chi_new, _ms, misfit_m, meta_m = _solve_magnetic(mag_blocks, m_chi)
+        m_chi_new, _ms, misfit_m, meta_m = _solve_magnetic(mag_blocks, m_chi, mag_fwd_kernel_cache)
 
         # Métricas de convergencia.
         delta_rho = _rel_change(m_rho_new, m_rho)
@@ -487,7 +518,8 @@ def run_joint_inversion(params: GeophysicsInvertInput):
 
         history.append({
             "iter": k,
-            "lambda_cross": round(float(lambda_cross), 6),
+            "lambda_cross": round(float(lambda_cross_eff_g), 6),
+            "lambda_cross_eff_m": round(float(lambda_cross_eff_m), 6),
             "E_norm": round(float(E_curr), 6),
             "E_norm_l2_global": round(float(E_l2), 6),
             "delta_rho": round(delta_rho, 6),
@@ -498,7 +530,8 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             "cond_A_gravity": meta_g.get("acond"),
             "cond_A_magnetic": meta_m.get("acond"),
         })
-        print(f"[FASE 9C-2] k={k:>2} | lambda_cross={lambda_cross:.4e} | E_norm={E_curr:.6f} | "
+        print(f"[FASE 9C-2] k={k:>2} | lambda_eff_g={lambda_cross_eff_g:.4e} | "
+              f"lambda_eff_m={lambda_cross_eff_m:.4e} | E_norm={E_curr:.6f} | "
               f"E_l2={E_l2:.6f} | dE_rel={dE_rel:.4e} | delta_rho={delta_rho:.4e} | "
               f"delta_chi={delta_chi:.4e} | misfit_g={misfit_g:.3f}% | misfit_m={misfit_m:.3f}%")
 
@@ -601,8 +634,9 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             "axis_convention": "x=Norte, z=Este, y=profundidad(+abajo)",
         },
         "continuation": {
-            "cross_lambda_max": cross_lambda_max,
-            "schedule": "lambda_cross(k) = cross_lambda_max * (1 - exp(-k/4))",
+            "cross_lambda_beta": cross_beta,
+            "G_norm_proxy": round(G_norm, 4),
+            "schedule": "step: no coupling k=1, coupling activo k>=2; lambda_eff = beta * G_norm / B_norm",
             "joint_max_iter": int(params.joint_max_iter),
             "iterations_done": int(n_iter_done),
             "stop_reason": stop_reason,

@@ -808,6 +808,28 @@ def import_gravity_csv_v1(
             warnings_list = list(dict.fromkeys(warnings_list))
             csv_analysis.warnings = warnings_list
         
+        # ── Fase 5: Resolución real + contexto geológico honesto ─────────────
+        _mean_spacing = (
+            csv_analysis.sampling.mean_spacing_m
+            if csv_analysis and csv_analysis.sampling.mean_spacing_m
+            else None
+        )
+        _depth_resolution = round(_mean_spacing / 2, 2) if _mean_spacing else None
+        _x_ext = getattr(coordinate_transform, "x_extent_m", None) or 0
+        _z_ext = getattr(coordinate_transform, "z_extent_m", None) or 0
+        _extent_m = max(_x_ext, _z_ext)
+        if _extent_m > 50_000:
+            _context_hint: str = "regional"
+        elif _extent_m > 5_000:
+            _context_hint = "local_to_district"
+        else:
+            _context_hint = "local_deposit"
+        _honesty_note = (
+            "Resolución real ≈ mean_spacing; profundidad resoluble ≈ spacing/2 (Li & Oldenburg). "
+            "Este modelo NO emite ley, tonelaje ni rentabilidad. "
+            "Solo densidad/susceptibilidad invertidas."
+        )
+
         meta = GravityImportMetadata(
             source_file=path.name,
             schema_version="TerraQuantum Gravity CSV v1",
@@ -824,7 +846,11 @@ def import_gravity_csv_v1(
             is_demo=is_demo,
             csv_analysis=csv_analysis,
             coordinate_transform=coordinate_transform,
-            auto_grid=auto_grid
+            auto_grid=auto_grid,
+            estimated_mean_spacing_m=round(_mean_spacing, 2) if _mean_spacing else None,
+            estimated_depth_resolution_m=_depth_resolution,
+            geological_context_hint=_context_hint,
+            honesty_note=_honesty_note,
         )
         
         # Topografía/sigma por estación: solo si hay al menos un valor real
