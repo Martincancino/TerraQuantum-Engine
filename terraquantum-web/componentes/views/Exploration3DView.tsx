@@ -7,6 +7,8 @@ import { VoxelMineralModel } from "../../lib/terraQuantumGeology";
 
 import Scene3D from "../Scene3D";
 import GravityCsvPreviewPanel from "../GravityCsvPreviewPanel";
+import BoreholeUploadPanel from "../BoreholeUploadPanel";
+import MultimodalComboPanel from "../MultimodalComboPanel";
 import InversionQualityBadge from "../InversionQualityBadge";
 import WorkspaceLayout from "../workspace/WorkspaceLayout";
 import CommandBar from "../workspace/CommandBar";
@@ -599,6 +601,19 @@ export default function Exploration3DView() {
                 Importar y validar survey gravimétrico (CSV) antes de invertir.
               </p>
               <GravityCsvPreviewPanel />
+            </SidebarSection>
+            <SidebarSection title="Sondajes (Fase 20)">
+              <p className="text-[8px] text-white/40 font-mono mb-3 leading-relaxed">
+                Cargar sondajes para anclar la inversión y validar densidades.
+              </p>
+              <BoreholeUploadPanel />
+            </SidebarSection>
+            <SidebarSection title="Fusión multimodal (Fase 21)">
+              <p className="text-[8px] text-white/40 font-mono mb-3 leading-relaxed">
+                Combo recomendado, confianza y error de profundidad según los datos
+                disponibles. La decisión la calcula el backend.
+              </p>
+              <MultimodalComboPanel />
             </SidebarSection>
             {show3D && model && (
               <SidebarSection title="Corte caja A-A' / B-B'">
