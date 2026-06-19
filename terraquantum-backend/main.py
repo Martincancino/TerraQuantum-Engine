@@ -30,6 +30,8 @@ from api.geophysics_api import router as geophysics_router
 from api.block_model_api import router as block_model_router
 from api.gravity_import_api import router as gravity_import_router
 from api.gravity_import_api import router_v2 as gravity_import_router_v2
+from api.borehole_api import router as borehole_router
+from api.multimodal_api import router as multimodal_router
 from api.report_api import router as report_router
 from api.project_api import router as project_router
 from api.terrain_api import router as terrain_router
@@ -106,6 +108,8 @@ app.include_router(geophysics_router)
 app.include_router(block_model_router)
 app.include_router(gravity_import_router)
 app.include_router(gravity_import_router_v2)
+app.include_router(borehole_router)
+app.include_router(multimodal_router)
 app.include_router(report_router)
 app.include_router(project_router)
 app.include_router(terrain_router)
