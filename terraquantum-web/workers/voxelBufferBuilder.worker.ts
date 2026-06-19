@@ -58,6 +58,7 @@ interface WorkerInput {
   visualLayer?: string;
   viewMode?: 'density' | 'susceptibility' | 'joint';
   jointThreshold?: number;
+  doiThreshold?: number;
 }
 
 interface WorkerOutput {
@@ -199,6 +200,7 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
   const effectiveSigma95 = (p.sigma95 !== undefined && p.sigma95 > 0) ? p.sigma95 : 1;
   const viewMode = p.viewMode ?? 'density';
   const jointThreshold = p.jointThreshold ?? 0.6;
+  const doiThreshold = p.doiThreshold ?? 0;
 
   // ── Rango dinámico para normalización (susceptibility / density) ─────────
   let dynChiMin = Infinity, dynChiMax = -Infinity;
@@ -289,6 +291,19 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
       writeMatrix(matricesF32, mb, 0, 0, 0, rx_visual, ry_visual, rz_visual);
       colorsF32[cb] = 0; colorsF32[cb + 1] = 0; colorsF32[cb + 2] = 0;
       continue;
+    }
+
+    // ── DOI slider gate (Fase 7C) ─────────────────────────────────────────────
+    if (doiThreshold > 0) {
+      const doiRaw = cell.doi_index;
+      if (doiRaw !== undefined && doiRaw !== null) {
+        const doiVal = Number(doiRaw);
+        if (Number.isFinite(doiVal) && doiVal < doiThreshold) {
+          writeMatrix(matricesF32, mb, 0, 0, 0, rx_visual, ry_visual, rz_visual);
+          colorsF32[cb] = 0; colorsF32[cb + 1] = 0; colorsF32[cb + 2] = 0;
+          continue;
+        }
+      }
     }
 
     // ── Slice filter ─────────────────────────────────────────────────────────

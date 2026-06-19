@@ -927,6 +927,35 @@ export type CoordinateSystemDetection = {
   warning?: string | null;
 };
 
+// Fase 19 Tarea 5 — Data Quality Score numérico 0–100.
+export type DataQualityScore = {
+  version?: string;
+  score: number;
+  interpretation: "GOOD" | "MEDIOCRE" | "POOR" | string;
+  completeness: number;
+  spatial_distribution: number;
+  noise_level: number;
+  resolution: number;
+  outlier_fraction: number;
+  weights?: Record<string, number>;
+  notes?: string[];
+};
+
+// Fase 19 Tarea 1 — tipo de dato inferido desde columnas del CSV.
+export type DataTypeDetection = {
+  version?: string;
+  detected_type: "gravity" | "magnetic" | "borehole" | "joint" | "ambiguous" | "unknown" | string;
+  confidence: "high" | "medium" | "low" | string;
+  has_gravity_column: boolean;
+  has_magnetic_column: boolean;
+  has_borehole_columns: boolean;
+  is_joint_candidate: boolean;
+  gravity_column?: string | null;
+  magnetic_column?: string | null;
+  signals?: string[];
+  warning?: string | null;
+};
+
 export type CoordinateTransformData = {
   input_coordinate_system?: string;
   input_confidence?: string;
@@ -946,8 +975,12 @@ export type GravityImportPreviewResponse = {
   errors: string[];
   csv_analysis?: {
     coordinate_system?: CoordinateSystemDetection | null;
+    quality_label?: string | null;
+    data_quality?: DataQualityScore | null;
   } | null;
   coordinate_transform?: CoordinateTransformData | null;
+  // Fase 19 Tarea 1 — auto-detección de tipo de CSV.
+  detected_data_type?: DataTypeDetection | null;
   georef_preview?: GeorefSummary;
   spatial_readiness?: SpatialReadiness | null;
   regional_scale_preflight?: RegionalScalePreflight | null;
@@ -1042,6 +1075,10 @@ export type GravityCsvInvertPayload = {
   // Fase 7B — Advanced params (serialized as JSON strings in FormData)
   pgiParamsJson?: string | null;
   remanenceJson?: string | null;
+  // FASE 16 — Kappas configurables
+  paddingKappa?: number;
+  anchorKappa?: number;
+  autoKappa?: boolean;
 };
 
 export type InversionResultPayload = {
@@ -1168,6 +1205,10 @@ export async function invertGravityCsv(
   // Fase 7B — Advanced params as JSON strings
   if (payload.pgiParamsJson) formData.append("pgi_params_json", payload.pgiParamsJson);
   if (payload.remanenceJson) formData.append("remanence_json", payload.remanenceJson);
+  // FASE 16 — Kappas configurables
+  if (payload.paddingKappa !== undefined) formData.append("padding_kappa", String(payload.paddingKappa));
+  if (payload.anchorKappa !== undefined) formData.append("anchor_kappa", String(payload.anchorKappa));
+  if (payload.autoKappa !== undefined) formData.append("auto_kappa", String(payload.autoKappa));
 
   try {
     const res = await fetch("/api/gravity-import/invert", {
@@ -1813,6 +1854,186 @@ export async function applyGravityCorrections(
       };
     }
     return { ok: true, status: res.status, data: data as ApplyCorrectionsResponse, error: null };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, status: 500, data: null, error: message };
+  }
+}
+
+// ── FASE 20 — Sondajes (Borehole Integration) ───────────────────────────────
+// Espejo del schema backend BoreholeSample / BoreholeSurvey. El frontend NO
+// parsea ni valida: envía el texto del CSV y consume lo que devuelve el backend.
+export type BoreholeSample = {
+  hole_id: string;
+  x_m: number;
+  z_m: number;
+  depth_from_m: number;
+  depth_to_m: number;
+  sample_type: string;
+  density_t_m3: number | null;
+  density_uncertainty: number;
+  lithology: string | null;
+  susceptibility_si: number | null;
+  comment: string;
+};
+
+export type BoreholeSurvey = {
+  holes: BoreholeSample[];
+  crs: string;
+  datum_elevation_m: number;
+};
+
+export type ParseBoreholeCsvResponse = {
+  survey: BoreholeSurvey;
+  n_holes: number;
+  n_samples: number;
+  n_with_density: number;
+  n_with_susceptibility: number;
+  n_with_lithology: number;
+  lithologies_detected: string[];
+  unrecognized_lithologies: string[];
+};
+
+export type ParseBoreholeCsvRequest = {
+  csv_text: string;
+  length_units?: "m" | "ft" | "auto";
+  crs?: string;
+  datum_elevation_m?: number;
+};
+
+export async function parseBoreholeCsv(
+  request: ParseBoreholeCsvRequest
+): Promise<FrontendApiResult<ParseBoreholeCsvResponse>> {
+  try {
+    const res = await fetch("/api/borehole/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      return { ok: false, status: res.status, data: null, error: "Respuesta no es JSON." };
+    }
+    if (!res.ok) {
+      const d = data !== null && typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : null;
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error: (typeof d?.detail === "string" ? d.detail : null) ?? `Error ${res.status}`,
+      };
+    }
+    return { ok: true, status: res.status, data: data as ParseBoreholeCsvResponse, error: null };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, status: 500, data: null, error: message };
+  }
+}
+
+// Convierte un BoreholeSurvey al formato `boreholes` que consume /geophysics-invert
+// (BoreholeInterval: x_m, z_m, y_from_m, y_to_m, density_t_m3, susceptibility_si).
+// Solo incluye muestras con al menos una propiedad física.
+export function boreholeSurveyToIntervals(
+  survey: BoreholeSurvey
+): Array<{
+  x_m: number;
+  z_m: number;
+  y_from_m: number;
+  y_to_m: number;
+  density_t_m3?: number;
+  susceptibility_si?: number;
+}> {
+  return survey.holes
+    .filter((h) => h.density_t_m3 != null || h.susceptibility_si != null)
+    .map((h) => ({
+      x_m: h.x_m,
+      z_m: h.z_m,
+      y_from_m: h.depth_from_m,
+      y_to_m: h.depth_to_m,
+      ...(h.density_t_m3 != null ? { density_t_m3: h.density_t_m3 } : {}),
+      ...(h.susceptibility_si != null ? { susceptibility_si: h.susceptibility_si } : {}),
+    }));
+}
+
+// ── FASE 21 — Estrategia de Fusión Multimodal ─────────────────────────────────
+// El frontend manda los CONTEOS de datos disponibles; el backend devuelve qué
+// combo se usaría, su confianza y el error de profundidad esperado. El frontend
+// NO calcula confianza ni física (Regla de Oro): sólo muestra la decisión.
+export type MultimodalPlan = {
+  route: string;
+  has_gravity: boolean;
+  has_magnetic: boolean;
+  has_borehole: boolean;
+  n_sensors: number;
+  base_confidence: number;
+  confidence: number;
+  confidence_pct: number;
+  error_depth_m: number;
+  coverage_pct: number;
+  data_quality: number | null;
+  resolution_priority: string[];
+  warnings: string[];
+  notes: string[];
+};
+
+export type MultimodalPlanResponse = {
+  has_gravity: boolean;
+  has_magnetic: boolean;
+  has_borehole: boolean;
+  n_sensors: number;
+  plan: MultimodalPlan | null;
+  insufficient_reason: string | null;
+};
+
+export type MultimodalPlanRequest = {
+  n_gravity_sensors?: number;
+  n_magnetic_sensors?: number;
+  n_boreholes_with_density?: number;
+  data_quality?: number | null;
+  coverage_pct?: number;
+};
+
+// Etiquetas legibles por ruta (solo presentación; la ruta canónica viene del backend).
+export const MULTIMODAL_ROUTE_LABELS: Record<string, string> = {
+  gravity_only: "Gravimetría sola",
+  magnetic_only: "Magnetometría sola",
+  gravity_magnetic_joint: "Gravimetría + Magnetometría (conjunta)",
+  gravity_with_constraints: "Gravimetría + Sondajes",
+  joint_with_constraints: "Gravimetría + Magnetometría + Sondajes",
+};
+
+export async function getMultimodalPlan(
+  request: MultimodalPlanRequest
+): Promise<FrontendApiResult<MultimodalPlanResponse>> {
+  try {
+    const res = await fetch("/api/multimodal/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      return { ok: false, status: res.status, data: null, error: "Respuesta no es JSON." };
+    }
+    if (!res.ok) {
+      const d =
+        data !== null && typeof data === "object" && !Array.isArray(data)
+          ? (data as Record<string, unknown>)
+          : null;
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error: (typeof d?.detail === "string" ? d.detail : null) ?? `Error ${res.status}`,
+      };
+    }
+    return { ok: true, status: res.status, data: data as MultimodalPlanResponse, error: null };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Error de red";
     return { ok: false, status: 500, data: null, error: message };

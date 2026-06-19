@@ -35,6 +35,38 @@ function getGeorefExplanation(confidence?: string | null): string {
   return "El modelo no tiene ubicación geográfica absoluta. No es posible afirmar dónde está la anomalía en el mapa.";
 }
 
+// ─── Fase 19: Data Quality + tipo de dato detectado helpers ───────────────
+
+function getDataQualityColor(score: number): string {
+  if (score >= 75) return "text-green-400 border-green-600/40 bg-green-900/20";
+  if (score >= 50) return "text-yellow-400 border-yellow-600/40 bg-yellow-900/20";
+  return "text-red-400 border-red-600/40 bg-red-900/20";
+}
+
+function getDataQualityBarColor(score: number): string {
+  if (score >= 75) return "bg-green-500";
+  if (score >= 50) return "bg-yellow-500";
+  return "bg-red-500";
+}
+
+function getDataTypeLabel(t?: string | null): string {
+  switch ((t ?? "unknown").toLowerCase()) {
+    case "gravity": return "Gravimetría";
+    case "magnetic": return "Magnetometría";
+    case "joint": return "Gravimetría + Magnetometría (joint)";
+    case "borehole": return "Sondajes";
+    case "ambiguous": return "Ambiguo — confirmar tipo";
+    default: return "Desconocido — confirmar tipo";
+  }
+}
+
+function getDataTypeBadgeClass(confidence?: string | null): string {
+  const c = (confidence ?? "low").toLowerCase();
+  if (c === "high") return "text-green-400 border-green-600/40 bg-green-900/20";
+  if (c === "medium") return "text-yellow-400 border-yellow-600/40 bg-yellow-900/20";
+  return "text-orange-400 border-orange-600/40 bg-orange-900/20";
+}
+
 // ─── UTM zone helpers (R2-FE) ─────────────────────────────────────────────
 
 function normalizeUtmZone(raw: string): string {
@@ -125,6 +157,112 @@ function mapPriorityClassLabel(value: string | null | undefined): string {
   if (v === "UNCLASSIFIED_INSUFFICIENT_CONFIDENCE" || v === "UNCLASSIFIED") return "Sin clasificar";
   return v || "N/A";
 }
+
+// ─── Fase 14: Client-side CSV Validation ─────────────────────────────────
+
+type CsvIssue = { type: "error" | "warning"; message: string };
+
+interface CsvValidationResult {
+  status: "ok" | "warning" | "invalid";
+  issues: CsvIssue[];
+  n_sensors: number;
+  can_invert: boolean;
+}
+
+function parseCsvForValidation(text: string): CsvValidationResult {
+  const issues: CsvIssue[] = [];
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith("#"));
+  if (lines.length < 2) {
+    return { status: "invalid", issues: [{ type: "error", message: "CSV vacío o sin datos." }], n_sensors: 0, can_invert: false };
+  }
+
+  const header = lines[0].split(/[,;\t]/).map((h) => h.trim().toLowerCase());
+  const dataLines = lines.slice(1).filter((l) => l.trim());
+
+  // Detectar columna de gravedad
+  const gCandidates = ["gravity_mgal", "g_mgal", "bouguer", "free_air", "gravity", "g", "tmi", "magnetic_nt"];
+  const gIdx = gCandidates.map((c) => header.indexOf(c)).find((i) => i >= 0) ?? -1;
+
+  // Detectar columnas de posición
+  const xCandidates = ["x_m", "x", "easting", "longitude", "lon"];
+  const zCandidates = ["z_m", "z", "northing", "latitude", "lat"];
+  const xIdx = xCandidates.map((c) => header.indexOf(c)).find((i) => i >= 0) ?? -1;
+  const zIdx = zCandidates.map((c) => header.indexOf(c)).find((i) => i >= 0) ?? -1;
+
+  if (gIdx < 0) {
+    issues.push({ type: "error", message: "No se detectó columna de gravedad (gravity_mgal, g_mgal, tmi, etc.)." });
+    return { status: "invalid", issues, n_sensors: 0, can_invert: false };
+  }
+
+  const gValues: number[] = [];
+  const positions: Array<[number, number]> = [];
+
+  for (const line of dataLines) {
+    const cols = line.split(/[,;\t]/);
+    const gRaw = parseFloat(cols[gIdx]);
+    if (Number.isFinite(gRaw)) gValues.push(gRaw);
+    if (xIdx >= 0 && zIdx >= 0) {
+      const xv = parseFloat(cols[xIdx]);
+      const zv = parseFloat(cols[zIdx]);
+      if (Number.isFinite(xv) && Number.isFinite(zv)) positions.push([xv, zv]);
+    }
+  }
+
+  const n = gValues.length;
+
+  // 1. Mínimo de sensores
+  if (n < 5) {
+    issues.push({ type: "error", message: `Solo ${n} observación(es) válidas. Se requieren ≥ 5.` });
+  }
+
+  // 2. Rango cero
+  if (n > 0) {
+    const gMin = Math.min(...gValues);
+    const gMax = Math.max(...gValues);
+    if (gMax - gMin < 1e-10) {
+      issues.push({ type: "error", message: "Rango cero: todas las observaciones son idénticas." });
+    }
+  }
+
+  // 3. Duplicados de posición
+  if (positions.length === n && n > 1) {
+    const tol = 1.0;
+    const keySet = new Set<string>();
+    let nDup = 0;
+    for (const [xv, zv] of positions) {
+      const key = `${Math.round(xv / tol)}_${Math.round(zv / tol)}`;
+      if (keySet.has(key)) nDup++;
+      else keySet.add(key);
+    }
+    if (nDup > 0) {
+      issues.push({ type: "warning", message: `${nDup} sensor(es) duplicados (misma posición x,z). Se promediarán en el backend.` });
+    }
+  }
+
+  // 4. Outlier anómalo (|g| > 10× mediana)
+  if (n > 1) {
+    const sorted = [...gValues.map(Math.abs)].sort((a, b) => a - b);
+    const medianAbs = n % 2 === 0 ? (sorted[n / 2 - 1] + sorted[n / 2]) / 2 : sorted[Math.floor(n / 2)];
+    if (medianAbs > 1e-10) {
+      const nOutliers = gValues.filter((g) => Math.abs(g) / medianAbs > 10).length;
+      if (nOutliers > 0 && nOutliers <= Math.max(1, Math.floor(n / 5))) {
+        issues.push({ type: "warning", message: `${nOutliers} valor(es) anómalo(s) detectados (|g| > 10× mediana). Revisa antes de invertir.` });
+      }
+    }
+  }
+
+  const hasErrors = issues.some((i) => i.type === "error");
+  const hasWarnings = issues.some((i) => i.type === "warning");
+
+  return {
+    status: hasErrors ? "invalid" : hasWarnings ? "warning" : "ok",
+    issues,
+    n_sensors: n,
+    can_invert: !hasErrors,
+  };
+}
+
+// ─── Fin Fase 14 ──────────────────────────────────────────────────────────
 
 // Parámetros de grilla: 0 = el backend usa el auto_grid calculado del CSV.
 // NO enviar valores fijos aquí: desde R3.8-A el backend PRIORIZA cualquier
@@ -336,18 +474,48 @@ export default function GravityCsvPreviewPanel() {
   const [showRemanenceModal, setShowRemanenceModal] = useState(false);
   const [remanenceParams, setRemanenceParams] = useState<MagneticRemanenceParamsUI | null>(null);
 
+  // Fase 14: client-side CSV validation
+  const [csvValidation, setCsvValidation] = useState<CsvValidationResult | null>(null);
+
+  // Ejecutar validación local cuando cambia el archivo activo
+  useEffect(() => {
+    const activeFile = dataType === "magnetic" ? fileMagnetometry : (correctedFile ?? file);
+    if (!activeFile) { setCsvValidation(null); return; }
+    let cancelled = false;
+    activeFile.text().then((text) => {
+      if (!cancelled) setCsvValidation(parseCsvForValidation(text));
+    }).catch(() => {
+      if (!cancelled) setCsvValidation(null);
+    });
+    return () => { cancelled = true; };
+  }, [file, fileMagnetometry, correctedFile, dataType]);
+
   const [utmZone, setUtmZone] = useState<string>("");
   // Tier 1 B6 — controles físicos. El frontend solo recolecta y valida forma;
   // la física (bounds, sigma, selección de λ) la resuelve el backend.
   const [densityMin, setDensityMin] = useState<string>("0.0");
   const [densityMax, setDensityMax] = useState<string>("5.5");
+  const [densityPreset, setDensityPreset] = useState<"granite" | "magnetite" | "copper" | "custom">("custom");
   const [gravimeterType, setGravimeterType] = useState<string>("unknown");
   const [lambdaMode, setLambdaMode] = useState<"auto" | "custom">("auto");
   const [lambdaCustom, setLambdaCustom] = useState<string>("0.1");
+  // FASE 16 — Kappas configurables (sliders en escala log, ocultos por defecto)
+  const [showAdvancedKappas, setShowAdvancedKappas] = useState(false);
+  const [paddingKappaLog, setPaddingKappaLog] = useState<number>(5); // log10(1e5)
+  const [anchorKappaLog, setAnchorKappaLog] = useState<number>(4);   // log10(1e4)
+  const [autoKappa, setAutoKappa] = useState(true);
   const [acknowledgeSpatialRisk, setAcknowledgeSpatialRisk] = useState(false);
   const [spatialGateError, setSpatialGateError] = useState<SpatialReadinessGateError | null>(null);
   const [acknowledgeRegionalScale, setAcknowledgeRegionalScale] = useState(false);
   const [regionalGateError, setRegionalGateError] = useState<RegionalScaleGateError | null>(null);
+
+  // FASE 16 — Aplica preset de bounds de densidad según litología
+  const applyDensityPreset = (preset: "granite" | "magnetite" | "copper" | "custom") => {
+    setDensityPreset(preset);
+    if (preset === "granite")   { setDensityMin("2.6"); setDensityMax("3.0"); }
+    if (preset === "magnetite") { setDensityMin("4.5"); setDensityMax("5.5"); }
+    if (preset === "copper")    { setDensityMin("4.3"); setDensityMax("4.8"); }
+  };
 
   const utmZoneError = useMemo(() => validateUtmZone(utmZone), [utmZone]);
   const derivedEpsg = useMemo(() => deriveEpsgFromUtmZone(utmZone), [utmZone]);
@@ -764,6 +932,10 @@ export default function GravityCsvPreviewPanel() {
             do_q_sweep: remanenceParams.do_q_sweep,
           })
         : null,
+      // FASE 16 — Kappas configurables
+      paddingKappa: Math.pow(10, paddingKappaLog),
+      anchorKappa: Math.pow(10, anchorKappaLog),
+      autoKappa,
     };
 
     const effectiveFile = isMagnetic ? invFile : (correctedFile ?? invFile);
@@ -1414,6 +1586,25 @@ export default function GravityCsvPreviewPanel() {
           <p className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">
             Parámetros físicos de inversión
           </p>
+          {/* FASE 16 — Preset de bounds de densidad */}
+          {dataType !== "magnetic" && (
+            <div>
+              <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">
+                Litología objetivo (bounds de densidad)
+              </label>
+              <select
+                value={densityPreset}
+                onChange={(e) => applyDensityPreset(e.target.value as "granite" | "magnetite" | "copper" | "custom")}
+                className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
+                title="Selecciona un preset para fijar density_min/max automáticamente."
+              >
+                <option value="granite">Granito (2.6–3.0 t/m³)</option>
+                <option value="magnetite">Magnetita (4.5–5.5 t/m³)</option>
+                <option value="copper">Cobre porfírico (4.3–4.8 t/m³)</option>
+                <option value="custom">Personalizado</option>
+              </select>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">
@@ -1423,7 +1614,7 @@ export default function GravityCsvPreviewPanel() {
                 type="number"
                 step="0.05"
                 value={densityMin}
-                onChange={(e) => setDensityMin(e.target.value)}
+                onChange={(e) => { setDensityMin(e.target.value); setDensityPreset("custom"); }}
                 title="Bound inferior absoluto. < 2.6 permite contrastes negativos (magma, sal, cavidades)."
                 className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
               />
@@ -1436,7 +1627,7 @@ export default function GravityCsvPreviewPanel() {
                 type="number"
                 step="0.05"
                 value={densityMax}
-                onChange={(e) => setDensityMax(e.target.value)}
+                onChange={(e) => { setDensityMax(e.target.value); setDensityPreset("custom"); }}
                 title="Bound superior absoluto. 5.5 cubre magnetita/cromita/pirita masiva."
                 className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
               />
@@ -1456,6 +1647,62 @@ export default function GravityCsvPreviewPanel() {
               <option value="zls_burris">ZLS Burris (0.002 mGal)</option>
               <option value="lacoste_romberg">LaCoste &amp; Romberg (0.010 mGal)</option>
             </select>
+          </div>
+          {/* FASE 16 — Advanced: Soft Constraints (kappas, hidden by default) */}
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowAdvancedKappas(v => !v)}
+              className="text-[9px] uppercase text-neutral-500 tracking-widest hover:text-neutral-300 flex items-center gap-1"
+            >
+              <span>{showAdvancedKappas ? "▾" : "▸"}</span>
+              Avanzado: Soft Constraints (kappas)
+            </button>
+            {showAdvancedKappas && (
+              <div className="mt-2 flex flex-col gap-2 pl-2 border-l border-neutral-700">
+                <div>
+                  <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">
+                    Padding Kappa (10^{paddingKappaLog} = {Math.pow(10, paddingKappaLog).toExponential(0)})
+                  </label>
+                  <input
+                    type="range"
+                    min={2} max={8} step={0.5}
+                    value={paddingKappaLog}
+                    onChange={(e) => setPaddingKappaLog(Number(e.target.value))}
+                    title="Peso soft constraint para celdas de borde (padding). Aumentar si cond(A) < 1e6."
+                    className="w-full accent-[#C2D8C4]"
+                  />
+                  <div className="flex justify-between text-[8px] text-neutral-600">
+                    <span>1e2</span><span>1e5 (default)</span><span>1e8</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">
+                    Anchor Kappa (10^{anchorKappaLog} = {Math.pow(10, anchorKappaLog).toExponential(0)})
+                  </label>
+                  <input
+                    type="range"
+                    min={2} max={8} step={0.5}
+                    value={anchorKappaLog}
+                    onChange={(e) => setAnchorKappaLog(Number(e.target.value))}
+                    title="Peso soft constraint para vóxeles anclados por sondaje. NO superar 1e6."
+                    className="w-full accent-[#C2D8C4]"
+                  />
+                  <div className="flex justify-between text-[8px] text-neutral-600">
+                    <span>1e2</span><span>1e4 (default)</span><span>1e8</span>
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 text-[10px] text-neutral-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoKappa}
+                    onChange={(e) => setAutoKappa(e.target.checked)}
+                    className="accent-[#C2D8C4]"
+                  />
+                  Ajuste automático si cond(A) &gt; 1e12
+                </label>
+              </div>
+            )}
           </div>
           <div>
             <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">
@@ -1508,10 +1755,40 @@ export default function GravityCsvPreviewPanel() {
           />
         </div>
 
+        {/* ── Fase 14: CSV Validation Badge ───────────────────────────────── */}
+        {csvValidation && (
+          <div className={`p-2.5 border rounded text-[10px] font-mono ${
+            csvValidation.status === "ok"
+              ? "border-green-600/40 bg-green-900/20 text-green-300"
+              : csvValidation.status === "warning"
+              ? "border-yellow-600/40 bg-yellow-900/20 text-yellow-300"
+              : "border-red-600/40 bg-red-900/20 text-red-300"
+          }`}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="font-bold text-[11px]">
+                {csvValidation.status === "ok" && "✓ CSV limpio"}
+                {csvValidation.status === "warning" && `⚠ CSV con avisos (${csvValidation.issues.filter(i => i.type === "warning").length})`}
+                {csvValidation.status === "invalid" && `✗ CSV inválido (${csvValidation.issues.filter(i => i.type === "error").length} error(es))`}
+              </span>
+              <span className="text-neutral-500">{csvValidation.n_sensors} sensor(es)</span>
+            </div>
+            {csvValidation.issues.length > 0 && (
+              <ul className="list-none space-y-0.5 mt-1">
+                {csvValidation.issues.map((issue, i) => (
+                  <li key={i} className={issue.type === "error" ? "text-red-400" : "text-yellow-400"}>
+                    {issue.type === "error" ? "✗" : "⚠"} {issue.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         <div className="flex items-end w-full min-w-0">
           <button
             onClick={handleValidate}
-            disabled={loading || !(dataType === "magnetic" ? fileMagnetometry : file)}
+            disabled={loading || !(dataType === "magnetic" ? fileMagnetometry : file) || csvValidation?.can_invert === false}
+            title={csvValidation?.can_invert === false ? "Corrige los errores del CSV antes de continuar." : undefined}
             className="h-9 w-full justify-center px-4 bg-[#C2D8C4] text-black text-[10px] uppercase font-bold tracking-widest rounded hover:bg-[#a5bca7] disabled:opacity-50 transition-colors flex items-center"
           >
             {loading ? "Validando..." : dataType === "magnetic" ? "Validar CSV magnético" : "Validar CSV"}
@@ -1567,6 +1844,87 @@ export default function GravityCsvPreviewPanel() {
               </span>
             )}
           </div>
+
+          {/* ── Fase 19: Validación del CSV — tipo detectado + Data Quality ── */}
+          {(result.detected_data_type || result.csv_analysis?.data_quality) && (
+            <div className="mb-4 p-3 border border-neutral-700 bg-black/40 rounded">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[#C2D8C4] mb-3">
+                Validación del CSV
+              </p>
+
+              {result.detected_data_type && (
+                <div className="mb-3">
+                  <span className="text-[8px] uppercase tracking-widest text-neutral-500 font-bold">
+                    Tipo de dato detectado
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2 mt-1">
+                    <span className={`px-2 py-1 border rounded text-[10px] font-bold uppercase tracking-wider ${getDataTypeBadgeClass(result.detected_data_type.confidence)}`}>
+                      {getDataTypeLabel(result.detected_data_type.detected_type)}
+                    </span>
+                    <span className="text-[9px] text-neutral-500 font-mono">
+                      confianza: {result.detected_data_type.confidence}
+                    </span>
+                  </div>
+                  {result.detected_data_type.warning && (
+                    <p className="mt-1 text-[9px] text-yellow-400/80 font-mono">
+                      ⚠ {result.detected_data_type.warning}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {result.csv_analysis?.data_quality && (() => {
+                const dq = result.csv_analysis!.data_quality!;
+                const comps: Array<[string, number]> = [
+                  ["Completitud", dq.completeness],
+                  ["Distribución espacial", dq.spatial_distribution],
+                  ["Nivel de ruido", dq.noise_level],
+                  ["Resolución", dq.resolution],
+                  ["Outliers", dq.outlier_fraction],
+                ];
+                return (
+                  <div className={`p-3 border rounded ${getDataQualityColor(dq.score)}`}>
+                    <div className="flex items-baseline gap-2 mb-2">
+                      <span className="text-[8px] uppercase tracking-widest text-neutral-500 font-bold">
+                        Data Quality
+                      </span>
+                      <span className="text-2xl font-bold">{dq.score.toFixed(0)}</span>
+                      <span className="text-[10px] text-neutral-400">/100</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider ml-1">
+                        {dq.interpretation}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      {comps.map(([label, val]) => (
+                        <div key={label} className="flex items-center gap-2">
+                          <span className="text-[9px] text-neutral-400 w-32 shrink-0">{label}</span>
+                          <div className="flex-1 h-1.5 bg-neutral-800 rounded overflow-hidden">
+                            <div
+                              className={`h-full ${getDataQualityBarColor(val)}`}
+                              style={{ width: `${Math.max(0, Math.min(100, val))}%` }}
+                            />
+                          </div>
+                          <span className="text-[9px] font-mono text-neutral-400 w-8 text-right">
+                            {val.toFixed(0)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    {dq.notes && dq.notes.length > 0 && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-[8px] uppercase tracking-widest text-neutral-500 hover:text-neutral-300 outline-none">
+                          Cómo se calcula
+                        </summary>
+                        <ul className="list-disc list-inside text-[8px] text-neutral-500 font-mono mt-1 space-y-0.5">
+                          {dq.notes.map((n, i) => <li key={i}>{n}</li>)}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
             {[
@@ -1898,6 +2256,7 @@ export default function GravityCsvPreviewPanel() {
                   invertLoading ||
                   loading3D ||
                   !(dataType === "magnetic" ? fileMagnetometry : file) ||
+                  csvValidation?.can_invert === false ||
                   result.spatial_readiness?.level === "NO_SPATIAL_DATA" ||
                   (result.spatial_readiness?.requires_user_acknowledgement === true && !acknowledgeSpatialRisk) ||
                   result.regional_scale_preflight?.can_run_single_inversion === false ||

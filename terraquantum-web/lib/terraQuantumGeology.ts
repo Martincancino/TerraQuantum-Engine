@@ -132,6 +132,9 @@ export interface UpdateInstancedBuffersParams {
   viewMode?: 'density' | 'susceptibility' | 'joint';
   /** Umbral conjunto (0–1): voxels con joint_structural_score < umbral se ocultan. */
   jointThreshold?: number;
+  /** Umbral DOI slider (0–1, Fase 7C): voxels con doi_index < umbral se ocultan.
+   *  0 = deshabilitado (sin filtro). Voxels sin doi_index siempre se muestran. */
+  doiThreshold?: number;
 }
 
 // Densidad de roca país fallback. El backend provee el valor específico del sitio.
@@ -353,6 +356,7 @@ export function updateInstancedBuffers({
   visualLayer,
   viewMode = 'density',
   jointThreshold = 0.6,
+  doiThreshold = 0,
 }: UpdateInstancedBuffersParams): { visibleCount: number; highlightedCount: number; susceptibilityAvailable: boolean } {
   const _r08_t0 = performance.now();
   const dummy = _dummy;
@@ -455,6 +459,19 @@ export function updateInstancedBuffers({
     // se comunica atenuando el brillo (ver `brightness` más abajo), no borrando.
     // Ocultar aquí eliminaba ~2/3 de un modelo regional válido (causa de "no se
     // ve nada" en surveys dispersos como Laguna del Maule).
+
+    // ── DOI slider gate (Fase 7C) ─────────────────────────────────────────────
+    // Oculta voxeles donde doi_index < doiThreshold. Voxeles sin doi_index → show.
+    if (doiThreshold > 0) {
+      const doiRaw = cell.doi_index;
+      if (doiRaw !== undefined && doiRaw !== null) {
+        const doiVal = Number(doiRaw);
+        if (Number.isFinite(doiVal) && doiVal < doiThreshold) {
+          dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue;
+        }
+      }
+    }
+
     if (showOnlySlice && sliceAxis !== "none") { const axisPos = getCellAxisPosition(cell, sliceAxis); if (axisPos > slicePosition) { dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue; } }
     const density = getVoxelModeledDensity(cell);
     const densityRatio = normalizeDensity(density, densityStats);

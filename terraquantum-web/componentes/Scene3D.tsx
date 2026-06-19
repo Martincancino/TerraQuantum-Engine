@@ -20,7 +20,7 @@ import {
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import * as THREE from "three";
 import { useAppStore } from "../store/useAppStore";
-import type { VisualLayer, SliceAxis, ViewMode } from "../store/useAppStore";
+import type { VisualLayer, SliceAxis } from "../store/useAppStore";
 import { buildTerrainTextureProxyUrl } from "../lib/terraquantum/frontendApi";
 import { updateInstancedBuffers } from "../lib/terraQuantumGeology";
 import { fmtNum, fmtSci, asRecord, safeNumber, clamp01, readFiniteRecordNumber } from "./datos/helpers";
@@ -558,6 +558,8 @@ function MineralComplex({
   // ── Fase 12: selectores granulares para evitar cascading renders ───────────────
   const viewMode = useAppStore((s) => s.viewMode);
   const jointThreshold = useAppStore((s) => s.jointThreshold);
+  // ── Fase 7C: DOI threshold slider ────────────────────────────────────────────
+  const doiThreshold = useAppStore((s) => s.doiThreshold);
 
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const lastVisibleCellCount = useRef(-1);
@@ -813,6 +815,8 @@ function MineralComplex({
       // ── Fase 12 ──
       viewMode,
       jointThreshold,
+      // ── Fase 7C ──
+      doiThreshold,
     });
 
     // ── Frustum Culling: bounding sphere explícita ────────────────────────
@@ -875,6 +879,8 @@ function MineralComplex({
     // ── Fase 12 ──
     viewMode,
     jointThreshold,
+    // ── Fase 7C ──
+    doiThreshold,
   ]);
 
   // ── HITO 6: path asíncrono para modelos grandes (worker) ─────────────────────
@@ -922,6 +928,7 @@ function MineralComplex({
       sigma95,
       viewMode,
       jointThreshold,
+      doiThreshold,
     });
 
     const handleMsg = (e: MessageEvent<{
@@ -984,7 +991,7 @@ function MineralComplex({
     effectiveProfessionalMode, professionalScoreStats, elevationVisualState,
     setVisibleCellCount, setHighlightedCellCount, setSusceptibilityDataAvailable,
     setIsWorkerProcessing,
-    visualLayer, sigma95, viewMode, jointThreshold,
+    visualLayer, sigma95, viewMode, jointThreshold, doiThreshold,
   ]);
   // ────────────────────────────────────────────────────────────────────────────
 
