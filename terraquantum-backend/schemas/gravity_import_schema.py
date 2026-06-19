@@ -108,6 +108,31 @@ class AutoGrid(BaseModel):
     recommended_use_treemesh: bool = False
 
 
+class DataQualityScore(BaseModel):
+    """
+    Fase 19 Tarea 5 — Data Quality Score numérico 0–100.
+
+    Score ponderado derivado de CsvAnalysisResult (no recalcula física):
+      completeness 50% · spatial_distribution 20% · noise_level 15% ·
+      resolution 10% · outlier_fraction 5%.
+    Cada componente es un sub-score 0–100; `score` es la suma ponderada.
+    `interpretation`: GOOD (≥75) · MEDIOCRE (≥50) · POOR (<50).
+    """
+    version: str = "data_quality_v0_1"
+    score: float = 0.0
+    interpretation: str = "POOR"
+    # Sub-scores 0–100 por componente
+    completeness: float = 0.0
+    spatial_distribution: float = 0.0
+    noise_level: float = 0.0
+    resolution: float = 0.0
+    outlier_fraction: float = 0.0
+    # Pesos usados (transparencia / trazabilidad)
+    weights: Dict[str, float] = Field(default_factory=dict)
+    # Explicaciones de proxies usados por componente
+    notes: List[str] = Field(default_factory=list)
+
+
 class CsvAnalysisResult(BaseModel):
     version: str = "csv_analysis_v0_1"
     observation_count: int = 0
@@ -122,6 +147,8 @@ class CsvAnalysisResult(BaseModel):
     auto_grid: Optional[AutoGrid] = None
     warnings: List[str] = Field(default_factory=list)
     quality_label: str = "INSUFICIENTE"
+    # Fase 19 Tarea 5 — score numérico 0–100 (complementa quality_label categórico)
+    data_quality: Optional[DataQualityScore] = None
     # R3.5-I — professional survey column flags
     has_elevation_column: bool = False
     has_uncertainty_column: bool = False
@@ -155,6 +182,46 @@ class GravityImportMetadata(BaseModel):
     geological_context_hint: Optional[str] = None  # "regional" | "local_to_district" | "local_deposit"
     honesty_note: Optional[str] = None
 
+class HelmertTransformResult(BaseModel):
+    """Fase 19 Tarea 7 (Caso B) — transformada de similitud 2D (Helmert).
+
+    Resuelve real = s·R(θ)·local + t a partir de ≥2 puntos de control, fijando
+    posición + rotación + escala de coordenadas locales (x_m, z_m) a coordenadas
+    reales (Easting/Northing en una zona UTM, o un sistema proyectado coherente).
+    """
+    version: str = "helmert_v0_1"
+    n_control_points: int
+    scale: float
+    rotation_deg: float
+    translation_e: float
+    translation_n: float
+    residual_rms_m: float
+    max_residual_m: float
+    # HIGH (≥3 ptos, residual bajo) · MEDIUM (2 ptos, ajuste exacto sin redundancia)
+    # · LOW (residual alto → datos mal anclados o puntos errados)
+    confidence: str
+    warnings: List[str] = Field(default_factory=list)
+    # Coeficientes crudos para aplicar la transformada: E = a·x − b·z + tE ...
+    a: float
+    b: float
+
+
+class DataTypeDetection(BaseModel):
+    """Fase 19 Tarea 1 — tipo de dato inferido desde las columnas del CSV."""
+    version: str = "data_type_detection_v0_1"
+    # gravity | magnetic | borehole | joint | ambiguous | unknown
+    detected_type: str = "unknown"
+    confidence: str = "low"  # high | medium | low
+    has_gravity_column: bool = False
+    has_magnetic_column: bool = False
+    has_borehole_columns: bool = False
+    is_joint_candidate: bool = False
+    gravity_column: Optional[str] = None
+    magnetic_column: Optional[str] = None
+    signals: List[str] = Field(default_factory=list)
+    warning: Optional[str] = None
+
+
 class GravityImportResult(BaseModel):
     status: str
     observations: List[GravityObservation]
@@ -181,6 +248,10 @@ class GravityImportResult(BaseModel):
     # magnética (survey co-localizado). None = no hay columna magnética → flujo
     # gravimétrico puro. Habilita el ruteo a joint cross-gradient.
     magnetic_values: Optional[List[float]] = None
+    # Fase 19 Tarea 1 — auto-detección del tipo de CSV (gravity/magnetic/borehole/
+    # joint/ambiguous/unknown) a partir de las columnas presentes. Informativo:
+    # permite al frontend pre-seleccionar el tipo o pedir confirmación si es ambiguo.
+    detected_data_type: Optional[DataTypeDetection] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

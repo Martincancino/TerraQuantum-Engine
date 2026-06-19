@@ -624,6 +624,11 @@ async def preview_gravity_csv(
             "coordinate_transform": model_to_dict(result.coordinate_transform) if result.coordinate_transform else None,
             "auto_grid": _auto_grid_dict,
             "octree_params": _octree_params_top,
+            # Fase 19 Tarea 1 — tipo de dato inferido desde columnas del CSV.
+            "detected_data_type": (
+                model_to_dict(result.detected_data_type)
+                if result.detected_data_type else None
+            ),
             "georef_preview": georef_preview,
             "spatial_readiness": model_to_dict(spatial_readiness_preview),
             "regional_scale_preflight": model_to_dict(regional_scale_preflight),
@@ -826,6 +831,10 @@ async def invert_gravity_csv(
     # Fase 7B — Advanced params serialized as JSON strings from the frontend
     pgi_params_json: Optional[str] = Form(None),
     remanence_json: Optional[str] = Form(None),
+    # FASE 16 — Kappas configurables y ajuste automático de condicionamiento
+    padding_kappa: float = Form(1e5),
+    anchor_kappa: float = Form(1e4),
+    auto_kappa: bool = Form(True),
 ):
     if not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must end with .csv")
@@ -1224,6 +1233,10 @@ async def invert_gravity_csv(
                 # Fase 7B — Advanced params
                 pgi_params=_pgi_params_parsed,
                 remanence=_remanence_parsed,
+                # FASE 16 — Kappas configurables
+                padding_kappa=padding_kappa,
+                anchor_kappa=anchor_kappa,
+                auto_kappa=auto_kappa,
                 # compute_uncertainty queda OFF a propósito: a la λ que selecciona
                 # Morozov en surveys subdeterminados (LdM: 191 estaciones), la
                 # covarianza posterior está mal condicionada y σ explota (mediana

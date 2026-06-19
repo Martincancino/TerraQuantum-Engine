@@ -10,6 +10,7 @@ from schemas.gravity_import_schema import (
     AutoGrid,
     CoordinateTransform,
     CsvAnalysisResult,
+    DataTypeDetection,
     GravityImportMetadata,
     GravityImportResult,
 )
@@ -276,6 +277,97 @@ def choose_magnetic_column(headers: list[str]) -> str | None:
             return headers[idx]
     return None
 
+# \u2500\u2500 Sondajes (Fase 20): columnas de intervalo de profundidad / litolog\u00eda \u2500\u2500\u2500\u2500\u2500
+# La se\u00f1al fuerte de un CSV de sondaje es el par depth_from / depth_to (intervalo)
+# y/o un identificador de pozo. No comparte columnas con gravedad/magnetometr\u00eda.
+BOREHOLE_DEPTH_FROM_ALIASES: frozenset = frozenset({
+    "depth_from", "depth_from_m", "from_m", "from", "desde_m", "desde",
+})
+BOREHOLE_DEPTH_TO_ALIASES: frozenset = frozenset({
+    "depth_to", "depth_to_m", "to_m", "to", "hasta_m", "hasta",
+})
+BOREHOLE_ID_ALIASES: frozenset = frozenset({
+    "hole_id", "holeid", "bhid", "borehole_id", "dhid",
+    "drillhole", "drillhole_id", "pozo", "sondaje", "sondaje_id",
+})
+
+
+def detect_csv_data_type(headers: list[str]) -> dict:
+    """Fase 19 Tarea 1 \u2014 infiere el tipo de dato del CSV desde sus columnas.
+
+    Devuelve un dict serializable (lo consume el schema DataTypeDetection):
+      detected_type \u2208 {gravity, magnetic, borehole, joint, ambiguous, unknown}.
+
+    Criterios:
+      - gravity: alguna columna de GRAVITY_COLUMN_PRIORITY (g, bouguer_anomaly, ...).
+      - magnetic: alguna columna de MAGNETIC_COLUMN_PRIORITY (magnetic_nt, tmi, ...).
+      - borehole: par depth_from/depth_to, o id de pozo con al menos un depth.
+      - joint: gravedad Y magnetometr\u00eda co-localizadas (sin sondaje).
+      - ambiguous: se\u00f1ales mixtas geof\u00edsica + sondaje \u2192 pedir confirmaci\u00f3n.
+      - unknown: ninguna columna reconocible \u2192 pedir tipo al usuario.
+    """
+    headers_lower = {h.strip().lower() for h in headers if h}
+    grav_col = choose_gravity_column(list(headers))
+    mag_col = choose_magnetic_column(list(headers))
+
+    has_from = bool(headers_lower & BOREHOLE_DEPTH_FROM_ALIASES)
+    has_to = bool(headers_lower & BOREHOLE_DEPTH_TO_ALIASES)
+    has_hole_id = bool(headers_lower & BOREHOLE_ID_ALIASES)
+    has_borehole = (has_from and has_to) or (has_hole_id and (has_from or has_to))
+
+    has_g = grav_col is not None
+    has_m = mag_col is not None
+
+    signals: list[str] = []
+    if has_g:
+        signals.append(f"columna de gravedad '{grav_col}'")
+    if has_m:
+        signals.append(f"columna magn\u00e9tica '{mag_col}'")
+    if has_borehole:
+        signals.append("columnas de intervalo de sondaje (depth_from/depth_to)")
+
+    is_joint = has_g and has_m and not has_borehole
+    warning: "str | None" = None
+
+    if has_borehole and not has_g and not has_m:
+        detected, confidence = "borehole", "high"
+    elif is_joint:
+        detected, confidence = "joint", "high"
+        warning = (
+            "Columnas de gravedad y magnetometr\u00eda detectadas en el mismo CSV "
+            "(survey co-localizado) \u2192 inversi\u00f3n conjunta (joint cross-gradient)."
+        )
+    elif has_g and not has_m and not has_borehole:
+        detected, confidence = "gravity", "high"
+    elif has_m and not has_g and not has_borehole:
+        detected, confidence = "magnetic", "high"
+    elif not has_g and not has_m and not has_borehole:
+        detected, confidence = "unknown", "low"
+        warning = (
+            "No se detect\u00f3 columna de gravedad, magnetometr\u00eda ni sondaje. "
+            "Especifique manualmente el tipo de dato del CSV."
+        )
+    else:
+        detected, confidence = "ambiguous", "low"
+        warning = (
+            "Se detectaron se\u00f1ales mixtas (geof\u00edsica + sondaje) en el mismo CSV. "
+            "Confirme el tipo de dato o separe los archivos."
+        )
+
+    return {
+        "detected_type": detected,
+        "confidence": confidence,
+        "has_gravity_column": has_g,
+        "has_magnetic_column": has_m,
+        "has_borehole_columns": has_borehole,
+        "is_joint_candidate": is_joint,
+        "gravity_column": grav_col,
+        "magnetic_column": mag_col,
+        "signals": signals,
+        "warning": warning,
+    }
+
+
 def normalize_header_name(header: str) -> str:
     return header.replace("\ufeff", "").strip()
 
@@ -320,6 +412,11 @@ def import_gravity_csv_v1(
             reader.append(clean_row)
             
         headers_lower = [h.lower() for h in headers]
+
+        # Fase 19 Tarea 1 — auto-detección del tipo de dato desde las columnas.
+        # Informativo (no altera el ruteo, que sigue gobernado por data_kind):
+        # el frontend lo usa para pre-seleccionar el tipo o pedir confirmación.
+        _detected_data_type = DataTypeDetection(**detect_csv_data_type(headers))
 
         # Magnetometría: la columna `unit` es opcional (nT implícito).
         if "unit" not in headers_lower and not _is_magnetic:
@@ -368,7 +465,10 @@ def import_gravity_csv_v1(
         joint_mag_values: "list[float]" = []
 
         if errors_list:
-            return _build_error_result(path.name, errors_list, warnings_list)
+            return _build_error_result(
+                path.name, errors_list, warnings_list,
+                detected_data_type=_detected_data_type,
+            )
 
         observations = []
         raw_gravity_values = []
@@ -872,6 +972,8 @@ def import_gravity_csv_v1(
             station_uncertainties=station_unc_list if _has_unc_vals else None,
             # Fase 9C: TMI co-localizada por estación (None si el CSV no la trae).
             magnetic_values=joint_mag_values if _has_joint_mag else None,
+            # Fase 19 Tarea 1: tipo de dato inferido desde las columnas.
+            detected_data_type=_detected_data_type,
         )
         
     except Exception as e:
@@ -1048,6 +1150,7 @@ def _build_error_result(
     gravity_type: Optional[str] = None,
     conversion_applied: bool = False,
     is_demo: bool = False,
+    detected_data_type: Optional[DataTypeDetection] = None,
 ) -> GravityImportResult:
     meta = GravityImportMetadata(
         source_file=filename,
@@ -1074,7 +1177,8 @@ def _build_error_result(
         errors=errors,
         csv_analysis=csv_analysis,
         coordinate_transform=coordinate_transform,
-        auto_grid=auto_grid
+        auto_grid=auto_grid,
+        detected_data_type=detected_data_type,
     )
 
 

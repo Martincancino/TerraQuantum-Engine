@@ -6,6 +6,7 @@ from schemas.geophysics_schema import GravityObservation
 from schemas.gravity_import_schema import (
     CoordSystemDetection,
     CsvAnalysisResult,
+    DataQualityScore,
     DuplicateInfo,
     GravityStats,
     OutlierInfo,
@@ -456,6 +457,191 @@ def _select_gravity_values(
     return [obs.g for obs in observations]
 
 
+# ---------------------------------------------------------------------------
+# Fase 19 Tarea 5 — Data Quality Score (0–100)
+# ---------------------------------------------------------------------------
+
+# Pesos del score global (deben sumar 1.0). Fijados por el roadmap Fase 19.
+DATA_QUALITY_WEIGHTS: Dict[str, float] = {
+    "completeness": 0.50,
+    "spatial_distribution": 0.20,
+    "noise_level": 0.15,
+    "resolution": 0.10,
+    "outlier_fraction": 0.05,
+}
+
+# Umbrales de resolución: spacing ≤ lo m → óptimo; ≥ hi m → nulo (escala log).
+_RESOLUTION_BEST_SPACING_M = 100.0
+_RESOLUTION_WORST_SPACING_M = 2000.0
+# Fracción de outliers que lleva el sub-score a 0.
+_OUTLIER_ZERO_FRACTION = 0.10
+# Cortes de interpretación cualitativa.
+_DQ_GOOD_THRESHOLD = 75.0
+_DQ_MEDIOCRE_THRESHOLD = 50.0
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _convex_hull_area(points: Sequence[Tuple[float, float]]) -> float:
+    """Área del envolvente convexo 2D (monotone chain, sin dependencias).
+
+    Devuelve 0.0 si los puntos son colineales o < 3 puntos únicos.
+    """
+    unique = sorted(set(points))
+    if len(unique) < 3:
+        return 0.0
+
+    def cross(o: Tuple[float, float], a: Tuple[float, float], b: Tuple[float, float]) -> float:
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: List[Tuple[float, float]] = []
+    for p in unique:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+
+    upper: List[Tuple[float, float]] = []
+    for p in reversed(unique):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+
+    hull = lower[:-1] + upper[:-1]
+    if len(hull) < 3:
+        return 0.0
+
+    # Fórmula del polígono (shoelace).
+    area = 0.0
+    n = len(hull)
+    for i in range(n):
+        x1, y1 = hull[i]
+        x2, y2 = hull[(i + 1) % n]
+        area += x1 * y2 - x2 * y1
+    return abs(area) / 2.0
+
+
+def _score_completeness(analysis: CsvAnalysisResult) -> float:
+    """% de campos válidos. Esenciales (coords, gravedad) pesan más que enriquecimiento."""
+    coords_ok = 1.0 if analysis.sampling.area_km2 and analysis.sampling.area_km2 > 0 else 0.0
+    grav_ok = 1.0 if (analysis.gravity_stats.std or 0.0) > 0 else 0.0
+    elev_ok = 1.0 if analysis.has_elevation_column else 0.0
+    unc_ok = 1.0 if analysis.has_uncertainty_column else 0.0
+    return (0.40 * coords_ok + 0.30 * grav_ok + 0.15 * elev_ok + 0.15 * unc_ok) * 100.0
+
+
+def _score_spatial_distribution(
+    analysis: CsvAnalysisResult,
+    observations: Sequence[GravityObservation],
+) -> float:
+    """Cobertura espacial = área del envolvente convexo / área del bounding box.
+
+    Geometría degenerada (colineal) → ~0; survey bien distribuido → ~100.
+    """
+    ext = analysis.spatial_extent
+    bbox = float(ext.x_span or 0.0) * float(ext.z_span or 0.0)
+    if bbox <= 0:
+        return 0.0
+    hull = _convex_hull_area([(obs.x_m, obs.z_m) for obs in observations])
+    return _clamp01(hull / bbox) * 100.0
+
+
+def _score_noise(stats: GravityStats) -> float:
+    """Proxy de ruido: fracción del rango total que vive en las colas extremas.
+
+    signal robusto = p95 − p5; rango total = max − min. Mucha cola (spikes)
+    indica ruido/outliers → sub-score bajo. No reemplaza un modelo de SNR real.
+    """
+    if stats.max is None or stats.min is None:
+        return 0.0
+    full_range = float(stats.max) - float(stats.min)
+    if full_range <= 0:
+        return 0.0
+    robust_span = float(stats.p95 if stats.p95 is not None else stats.max) - float(
+        stats.p5 if stats.p5 is not None else stats.min
+    )
+    robust_span = max(0.0, robust_span)
+    tail_fraction = _clamp01((full_range - robust_span) / full_range)
+    return (1.0 - tail_fraction) * 100.0
+
+
+def _score_resolution(sampling: SamplingStats) -> float:
+    """Resolución por spacing medio de sensores (escala log entre best/worst)."""
+    spacing = sampling.mean_spacing_m
+    if not spacing or spacing <= 0:
+        return 0.0
+    if spacing <= _RESOLUTION_BEST_SPACING_M:
+        return 100.0
+    if spacing >= _RESOLUTION_WORST_SPACING_M:
+        return 0.0
+    frac = (math.log(_RESOLUTION_WORST_SPACING_M) - math.log(spacing)) / (
+        math.log(_RESOLUTION_WORST_SPACING_M) - math.log(_RESOLUTION_BEST_SPACING_M)
+    )
+    return _clamp01(frac) * 100.0
+
+
+def _score_outlier_fraction(analysis: CsvAnalysisResult) -> float:
+    """1 − (fracción de outliers / umbral). 0% outliers → 100; ≥10% → 0."""
+    n = analysis.observation_count
+    if n <= 0:
+        return 100.0
+    fraction = analysis.outliers.count / n
+    return _clamp01(1.0 - fraction / _OUTLIER_ZERO_FRACTION) * 100.0
+
+
+def compute_data_quality_score(
+    analysis: CsvAnalysisResult,
+    observations: Sequence[GravityObservation],
+) -> DataQualityScore:
+    """Fase 19 Tarea 5 — score 0–100 ponderado a partir del análisis del CSV.
+
+    No recalcula física: combina señales ya computadas en `analysis`
+    (cobertura, stats de gravedad, spacing, outliers, columnas profesionales).
+    """
+    completeness = _score_completeness(analysis)
+    spatial = _score_spatial_distribution(analysis, observations)
+    noise = _score_noise(analysis.gravity_stats)
+    resolution = _score_resolution(analysis.sampling)
+    outlier = _score_outlier_fraction(analysis)
+
+    total = (
+        DATA_QUALITY_WEIGHTS["completeness"] * completeness
+        + DATA_QUALITY_WEIGHTS["spatial_distribution"] * spatial
+        + DATA_QUALITY_WEIGHTS["noise_level"] * noise
+        + DATA_QUALITY_WEIGHTS["resolution"] * resolution
+        + DATA_QUALITY_WEIGHTS["outlier_fraction"] * outlier
+    )
+    total = round(_clamp01(total / 100.0) * 100.0, 1)
+
+    if total >= _DQ_GOOD_THRESHOLD:
+        interpretation = "GOOD"
+    elif total >= _DQ_MEDIOCRE_THRESHOLD:
+        interpretation = "MEDIOCRE"
+    else:
+        interpretation = "POOR"
+
+    notes = [
+        "completeness: presencia de coords, gravedad y columnas elevación/sigma.",
+        "spatial_distribution: área del envolvente convexo / área del bounding box.",
+        "noise_level: proxy por fracción del rango en colas extremas (no es SNR real).",
+        "resolution: spacing medio de sensores en escala log (100 m óptimo, 2000 m nulo).",
+        "outlier_fraction: % de observaciones marcadas como outlier por el análisis.",
+    ]
+
+    return DataQualityScore(
+        score=total,
+        interpretation=interpretation,
+        completeness=round(completeness, 1),
+        spatial_distribution=round(spatial, 1),
+        noise_level=round(noise, 1),
+        resolution=round(resolution, 1),
+        outlier_fraction=round(outlier, 1),
+        weights=dict(DATA_QUALITY_WEIGHTS),
+        notes=notes,
+    )
+
+
 def analyze_csv_observations(
     observations: Sequence[GravityObservation],
     declared_unit: Optional[str],
@@ -553,7 +739,7 @@ def analyze_csv_observations(
     else:
         quality_label = "ALTA"
 
-    return CsvAnalysisResult(
+    result = CsvAnalysisResult(
         observation_count=observation_count,
         spatial_extent=extent,
         sampling=sampling,
@@ -571,3 +757,6 @@ def analyze_csv_observations(
         professional_columns_detected=prof_detected,
         professional_columns_with_values=professional_columns_with_values,
     )
+    # Fase 19 Tarea 5 — score numérico 0–100 derivado del análisis ya construido.
+    result.data_quality = compute_data_quality_score(result, observations)
+    return result
