@@ -140,6 +140,92 @@ class BoreholeInterval(BaseModel):
         return self
 
 
+# ── FASE 20: Esquema enriquecido de sondajes (capa de carga / CSV / litología) ──
+# BoreholeInterval (arriba) es el contrato MÍNIMO que consume el solver. BoreholeSample
+# y BoreholeSurvey son la capa enriquecida pensada para el flujo de carga de CSV de
+# sondajes: añade trazabilidad (hole_id, sample_type, comment), metadatos petrofísicos
+# (lithology, density_uncertainty) y de georreferencia (crs, datum_elevation_m). Un
+# BoreholeSurvey se "rebaja" a List[BoreholeInterval] vía to_intervals() para alimentar
+# la inversión existente sin tocar el contrato del solver.
+class BoreholeSample(BaseModel):
+    """Una muestra/tramo de sondaje VERTICAL con propiedades petrofísicas medidas.
+
+    El sondaje se asume vertical: collar en (x_m, z_m) local y el tramo cubre
+    [depth_from_m, depth_to_m] en profundidad (+ hacia abajo). density_t_m3 y/o
+    susceptibility_si anclan respectivamente la inversión gravimétrica/magnética;
+    al menos una debe estar presente (igual semántica que BoreholeInterval).
+    """
+    hole_id: str = Field(..., description="Identificador del sondaje, p.ej. 'BH01'.")
+    x_m: float = Field(..., description="Coordenada local X del collar (m). Pozo vertical.")
+    z_m: float = Field(..., description="Coordenada local Z del collar (m). Pozo vertical.")
+    depth_from_m: float = Field(..., ge=0.0, description="Profundidad inicial del tramo (m, + hacia abajo).")
+    depth_to_m: float = Field(..., gt=0.0, description="Profundidad final del tramo (m, + hacia abajo).")
+    sample_type: Literal["core", "cuttings", "downhole_density", "downhole_susc", "other"] = Field(
+        "core", description="Tipo de muestra: testigo, detritus, registro de densidad/susc en pozo, etc.",
+    )
+    density_t_m3: Optional[float] = Field(
+        default=None, gt=0.0, le=10.0,
+        description="Densidad medida del tramo (t/m³). Ancla la inversión gravimétrica.",
+    )
+    density_uncertainty: float = Field(
+        0.15, ge=0.0, le=1.0,
+        description="Incertidumbre fraccional de la densidad de muestreo (0.15 = 15%).",
+    )
+    lithology: Optional[str] = Field(
+        default=None,
+        description="Litología registrada (p.ej. 'granite', 'magnetite', 'diorite'). Alimenta priors PGI.",
+    )
+    susceptibility_si: Optional[float] = Field(
+        default=None, ge=0.0,
+        description="Susceptibilidad magnética medida (SI). Ancla la inversión magnética.",
+    )
+    comment: str = Field("", description="Comentario libre (trazabilidad).")
+
+    @model_validator(mode="after")
+    def _validate_sample(self):
+        if self.depth_to_m <= self.depth_from_m:
+            raise ValueError(
+                f"depth_to_m ({self.depth_to_m}) debe ser mayor que depth_from_m "
+                f"({self.depth_from_m}) en el sondaje {self.hole_id}."
+            )
+        if self.density_t_m3 is None and self.susceptibility_si is None and self.lithology is None:
+            raise ValueError(
+                f"La muestra del sondaje {self.hole_id} no aporta dato útil: declare al menos "
+                "density_t_m3, susceptibility_si o lithology."
+            )
+        return self
+
+    def to_interval(self) -> "BoreholeInterval":
+        """Rebaja la muestra al contrato mínimo que consume el solver."""
+        return BoreholeInterval(
+            x_m=self.x_m,
+            z_m=self.z_m,
+            y_from_m=self.depth_from_m,
+            y_to_m=self.depth_to_m,
+            density_t_m3=self.density_t_m3,
+            susceptibility_si=self.susceptibility_si,
+        )
+
+
+class BoreholeSurvey(BaseModel):
+    """Conjunto de sondajes con metadatos de georreferencia (capa de carga FASE 20)."""
+    holes: List[BoreholeSample] = Field(default_factory=list, description="Muestras/tramos de sondaje.")
+    crs: str = Field("local", description="Sistema de referencia, p.ej. 'UTM 19S' o 'local'.")
+    datum_elevation_m: float = Field(
+        0.0, description="Elevación del datum local (m s.n.m.) para referencia vertical.",
+    )
+
+    def to_intervals(self) -> List["BoreholeInterval"]:
+        """Convierte el survey a la lista de intervalos que consume la inversión.
+
+        Solo se incluyen muestras con al menos una propiedad física (density/susc);
+        las muestras puramente litológicas (sin densidad ni susc) no anclan el solver
+        pero sí pueden alimentar priors PGI por separado.
+        """
+        return [h.to_interval() for h in self.holes
+                if h.density_t_m3 is not None or h.susceptibility_si is not None]
+
+
 class GeophysicsInvertInput(BaseModel):
     project_id: Optional[str] = None
     run_id: Optional[str] = None
@@ -203,6 +289,26 @@ class GeophysicsInvertInput(BaseModel):
     auto_lambda: bool = Field(
         False,
         description="Selección automática de lambda via scan chi²-target (R-A2). Ignora lambda_mag cuando True.",
+    )
+    # ── FASE 24B Tarea 1: Norma de regularización (normas compactas) ───────────
+    # "L2" (default)  = Tikhonov suave (comportamiento histórico, backward-compat).
+    # "compact"       = minimum support IRLS: cuerpos nítidos y bien delimitados,
+    #                   mejor error de profundidad/localización en cuerpos compactos
+    #                   (Last & Kubik 1983, Portniaguine & Zhdanov 1999).
+    # "mixed"         = compact smallness + suavidad edge-preserving (experimental).
+    regularization_norm: Literal["L2", "compact", "mixed"] = Field(
+        "L2",
+        description="Norma de regularización: 'L2' (suave, default), 'compact' (minimum "
+                    "support, cuerpos nítidos), 'mixed' (compact + bordes, experimental).",
+    )
+    # ── FASE 24B Tarea 4: Topografía fraccionaria (cut-cell, anti-staircase) ────
+    # OFF (default) = máscara de aire binaria. ON = celdas de borde ponderan por su
+    # fracción de volumen rocoso bajo el DEM → elimina el efecto escalera en terreno
+    # rugoso (AUDIT GEMINI P0). Solo aplica al motor de grilla regular (kernel fresco).
+    cut_cell_topography: bool = Field(
+        False,
+        description="Topografía fraccionaria (cut-cell): pondera celdas de borde por su "
+                    "fracción de roca bajo el DEM. OFF=máscara binaria (default).",
     )
     # ── Flujo de datos de campo: sigma por instrumento ─────────────────────────
     # Cuando != "unknown" y el caller no fija noise_floor_mgal explícito (v2),
@@ -283,6 +389,15 @@ class GeophysicsInvertInput(BaseModel):
         0.05, ge=0.0, le=1.0,
         description="Factor adimensional de coupling (0–1). Peso efectivo = β·‖G_scaled‖_F/‖B‖_F. Fase 9C-2.",
     )
+    joint_observable_pruning: bool = Field(
+        True,
+        description=(
+            "Joint v1.1: activar poda R-05 en inversión conjunta. "
+            "True (default) = excluir vóxeles con sensibilidad cero antes de resolver → "
+            "sin vóxeles muertos, mejor condicionamiento. "
+            "False = comportamiento v1.0 (sin poda, Tier 0.9 — solo para diagnóstico)."
+        ),
+    )
     # ── HITO 5 (B-05): Topografía activa ────────────────────────────────────────
     # Elevación MASL de cada sensor de gravedad (m s.n.m.), paralelo a `observations`.
     # Si se provee con la misma longitud que observations, el solver activa la máscara
@@ -305,6 +420,49 @@ class GeophysicsInvertInput(BaseModel):
         ge=0, le=4,
         description="Profundidad máxima de refinamiento en la malla Octree (0-4). Default 2.",
     )
+    # ── FASE 16: Densidad base y kappas configurables ─────────────────────────
+    # Pre-sets sugeridos por litología:
+    #   Granito:   density_min=2.6, density_max=3.0, base_density=2.6
+    #   Magnetita: density_min=4.5, density_max=5.5, base_density=4.5
+    #   Cobre:     density_min=4.3, density_max=4.8, base_density=4.3
+    base_density: float = Field(
+        2.6, ge=1.0, le=6.0,
+        description=(
+            "Densidad de fondo (host rock) en t/m³. "
+            "La inversión recupera el CONTRASTE respecto a este valor. "
+            "Default 2.6 = granito/roca huésped típica. Magnetita masiva: 4.5-5.0."
+        ),
+    )
+    # ── Kappas de restricción suave (Fase 16) ────────────────────────────────
+    # padding_kappa: penaliza las celdas de borde (padding) 1e5× más que el core
+    # para evitar que la masa se escape al dominio de padding (auditoría R-A1).
+    # anchor_kappa: fija los vóxeles con dato de sondaje (strong soft constraint).
+    # Regla de ajuste: aumentar si cond(A) < 1e6, disminuir si cond(A) > 1e12.
+    padding_kappa: float = Field(
+        1e5, ge=1e2, le=1e8,
+        description=(
+            "Peso del soft constraint para celdas de padding (1e2–1e8). "
+            "Valores altos evitan mass escape al borde. "
+            "Aumentar si cond(A) < 1e6; disminuir si cond(A) > 1e12."
+        ),
+    )
+    anchor_kappa: float = Field(
+        1e4, ge=1e2, le=1e8,
+        description=(
+            "Peso del soft constraint para vóxeles anclados por sondaje (1e2–1e8). "
+            "Fija la densidad de los intervalos con dato medido. "
+            "NO usar > 1e6: deteriora el condicionamiento de A."
+        ),
+    )
+    # auto_kappa: True → el solver ajusta kappas automáticamente si cond(A) > 1e12.
+    auto_kappa: bool = Field(
+        True,
+        description=(
+            "Ajustar kappas automáticamente si el número de condición estimado de A > 1e12. "
+            "True (default) = protección automática. "
+            "False = usar padding_kappa / anchor_kappa exactamente como declarados."
+        ),
+    )
     # ── FASE 11: Inversión Guiada Petrológica (PGI — Astic & Oldenburg 2019) ──
     # Cuando se provee, el solver ejecuta el bucle alternado PGI: después de cada
     # inversión estándar, se actualiza el modelo de referencia m_PGI asignando cada
@@ -321,10 +479,23 @@ class GeophysicsInvertInput(BaseModel):
         default=None,
         description="Parámetros de remanencia magnética (Q, Inc_rem, Dec_rem). None = solo inducida (Fase 9A).",
     )
+    # ── FASE 18: Robust sigma (MAD outlier detection) ─────────────────────────
+    # Cuando True, el estimador de sigma detecta outliers por MAD (|g_i - median| > 3·MAD)
+    # y los downpesa 10× en lugar de dilatar sigma globalmente. Solo activo en el path
+    # sentinel adaptivo (noise_floor==0.02 y noise_pct==0.02).
+    robust_sigma: bool = Field(
+        True,
+        description=(
+            "Use MAD-based outlier detection in sigma weighting (FASE 18). "
+            "Downweights sensors where |g_i - median(g)| > 3·MAD by 10× "
+            "to avoid global sigma dilation from single anomalous readings. "
+            "Only active in adaptive sentinel path (no explicit noise_floor/gravimeter_type)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_grid_bounds(self):
-        """Sanidad de profundidad: cap absoluto de 500 km.
+        """Sanidad de profundidad, bounds de densidad y kappas.
 
         NO se rechaza depth > ny*block_size: a escala regional (Bushveld,
         250 km) es legítimo declarar la extensión física objetivo aunque la
@@ -336,6 +507,10 @@ class GeophysicsInvertInput(BaseModel):
             raise ValueError(
                 f"depth ({self.depth}m) supera el cap de sanidad de 500 km. "
                 "Verificar unidades (se esperan metros)."
+            )
+        if self.density_min >= self.density_max:
+            raise ValueError(
+                f"density_min ({self.density_min}) debe ser menor que density_max ({self.density_max})."
             )
         return self
 

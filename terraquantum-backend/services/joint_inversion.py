@@ -147,6 +147,17 @@ def _e_norm_cellwise(m_rho, m_chi, Dx, Dy, Dz):
     return num / (den + _RATIO_EPS)
 
 
+def _obs_mask_from_kernel(k):
+    """Máscara booleana de celdas observables (misma lógica R-05 de gravimetry.py).
+
+    Columnas con norma² < 1e-6 * max son muertos: sensibilidad cero para todos los
+    sensores → solver no las necesita. Pre-computada en joint para poder recortar
+    los bloques cross-gradient ANTES de pasarlos al motor.
+    """
+    col_sens = np.asarray(k.power(2).sum(axis=0)).ravel()
+    return col_sens > 1e-6 * max(float(np.max(col_sens)), 1e-30)
+
+
 def _rel_change(m_new, m_old):
     """‖m_new − m_old‖ / (‖m_old‖ + eps)."""
     denom = float(np.linalg.norm(m_old)) + _RATIO_EPS
@@ -377,7 +388,8 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         declination_deg=params.declination_deg,
         field_intensity_nt=params.field_intensity_nt,
     )
-    grav_inv = GravimetryInversion(nx, ny, nz, dx)
+    _base_density = float(getattr(params, "base_density", 2.6))
+    grav_inv = GravimetryInversion(nx, ny, nz, dx, base_density=_base_density)
     mag_inv = MagnetometryInversion(nx, ny, nz, dx)
     base_rho = grav_inv.base_density
 
@@ -397,7 +409,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             m_ref=m_ref_contrast,
             extra_reg_blocks=extra_blocks,
             extra_reg_rhs=None,
-            prune_observable_domain=False,   # mantiene n_active = nC (conformable)
+            prune_observable_domain=_do_prune,  # Joint v1.1: R-05 compatible vía dimensión reducida
             solver_meta=meta,
         )
         return np.nan_to_num(np.asarray(rho_full, dtype=np.float64), nan=base_rho), score, misfit, meta
@@ -435,6 +447,23 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     print(
         f"[CACHÉ KERNEL] G_gravity: {grav_fwd_kernel_cache.shape} ({grav_fwd_kernel_cache.nnz:,} NNZ) | "
         f"G_magnetic: {mag_fwd_kernel_cache.shape} ({mag_fwd_kernel_cache.nnz:,} NNZ)"
+    )
+
+    # ── Joint v1.1: Observable pruning (R-05 compatible) ─────────────────────
+    # Pre-computar la máscara de dominio observable gravitacional desde el kernel
+    # cacheado (misma lógica que R-05 interno de solve_inversion_lsqr). Al pasar
+    # B_chi[:, _obs_mask_g] al motor de gravedad, los bloques cross-gradient
+    # conforman con el espacio post-poda sin remapeo: B.shape[1] = n_obs_g = Wz.shape[0].
+    # El motor magnético no tiene poda (prune_observable_domain no existe en magnetometry.py)
+    # y opera siempre sobre n_active = nC → no requiere slicing.
+    _do_prune = bool(getattr(params, 'joint_observable_pruning', True))
+    _obs_mask_g = _obs_mask_from_kernel(grav_fwd_kernel_cache)
+    _n_obs_g = int(np.sum(_obs_mask_g))
+    _n_dead_g = nC - _n_obs_g
+    print(
+        f"[JOINT R-05] Dominio observable (gravedad): {_n_obs_g:,}/{nC:,} "
+        f"({100.0 * _n_obs_g / nC:.1f}%) | muertos: {_n_dead_g:,} | "
+        f"poda={'ON' if _do_prune else 'OFF (joint_observable_pruning=False)'}"
     )
 
     # ── Iteración 0 — Warm-up: motores independientes (sin cross-gradient) ───
@@ -489,7 +518,9 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             max_block_nnz = max(max_block_nnz, B_chi.nnz)
             B_chi_norm = float(np.sqrt(B_chi.power(2).sum()))
             lambda_cross_eff_g = cross_beta * G_norm / max(B_chi_norm, 1e-12)
-            grav_blocks = [lambda_cross_eff_g * B_chi]
+            # Joint v1.1: recortar columnas al dominio observable → B.shape[1] = n_obs_g
+            _B_chi_g = B_chi[:, _obs_mask_g] if _do_prune else B_chi
+            grav_blocks = [lambda_cross_eff_g * _B_chi_g]
         else:
             grav_blocks = None
         m_rho_new, _gs, misfit_g, meta_g = _solve_gravity(grav_blocks, m_rho - base_rho, grav_fwd_kernel_cache)

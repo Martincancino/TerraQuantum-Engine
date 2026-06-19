@@ -43,6 +43,8 @@ def _run_lsqr_with_heartbeat(
     boreholes=None,        # array (n,5) [x_m, z_m, y_from_m, y_to_m, density_t_m3] o None
     anchor_kappa=1e4,      # strong soft constraint (NO 1e6: preserva cond(A))
     laplacian_relax_alpha=0.2,  # relajación de filas del Laplaciano en vóxeles anclados
+    # ── FASE 16: Ajuste automático de kappas ─────────────────────────────────
+    auto_kappa=True,       # escalar kappas si cond(A) > 1e12 (heurística rápida)
     # ── Fase 2: sigma de ruido configurable por gravímetro ────────────────────
     # noise_floor en mismas unidades que g_observed (m/s² para el pipeline de import).
     # Default 0.02 activa _sigma_adaptive (equivalente al comportamiento v1).
@@ -50,6 +52,12 @@ def _run_lsqr_with_heartbeat(
     noise_pct: float = 0.02,
     # ── Diagnósticos del solver (OUT) ─────────────────────────────────────────
     solver_meta=None,      # dict mutable; el solver escribe acond, chi2_final, etc.
+    # ── FASE 18: Robust sigma (MAD outlier detection) ─────────────────────────
+    detect_outliers: bool = True,
+    # ── FASE 24B Tarea 1: Norma de regularización (L2 / compact / mixed) ───────
+    regularization_norm: str = "L2",
+    # ── FASE 24B Tarea 4: Topografía fraccionaria (cut-cell) ───────────────────
+    cut_cell_topography: bool = False,
 ):
     """Ejecuta solve_inversion_lsqr (Motor HPC F0.2 + Tensor Mesh F0.9) con heartbeat cada 5 s."""
     stop_event = threading.Event()
@@ -98,6 +106,10 @@ def _run_lsqr_with_heartbeat(
             noise_floor=noise_floor,    # Fase 2: sigma configurable por gravímetro
             noise_pct=noise_pct,
             solver_meta=solver_meta,    # OUT: acond, chi2_final, saturación
+            auto_kappa=auto_kappa,      # FASE 16: ajuste automático de kappas
+            detect_outliers=detect_outliers,  # FASE 18: MAD robust sigma
+            regularization_norm=regularization_norm,  # FASE 24B: L2/compact/mixed
+            cut_cell_topography=cut_cell_topography,   # FASE 24B: cut-cell anti-staircase
         )
     finally:
         stop_event.set()

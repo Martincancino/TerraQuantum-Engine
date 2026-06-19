@@ -1536,6 +1536,50 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     }
 
 
+def _attach_multimodal_plan(result: dict, params, coverage_pct: float = 1.0) -> dict:
+    """FASE 21: adjunta el plan de fusión multimodal a result["report"] (non-fatal).
+
+    Deriva las banderas de datos (g≠0, magnetic_nt≠0, sondaje con densidad) de los
+    mismos campos que usa el dispatcher, así el plan SIEMPRE concuerda con el solver
+    realmente ejecutado. No cambia el flujo ni la física; sólo añade metadato.
+    """
+    try:
+        from services.multimodal_fusion_service import plan_multimodal
+
+        g_arr = np.asarray([o.g for o in params.observations], dtype=float)
+        has_g = g_arr.size > 0 and not np.allclose(g_arr, 0.0)
+        mag = getattr(params, "magnetic_nt", None)
+        has_m = (
+            mag is not None
+            and len(mag) > 0
+            and not np.allclose(np.asarray(mag, dtype=float), 0.0)
+        )
+        _bh = getattr(params, "boreholes", None) or []
+        has_b = any(getattr(b, "density_t_m3", None) is not None for b in _bh)
+
+        dq = None
+        meta = getattr(params, "auto_params_metadata", None) or {}
+        if isinstance(meta, dict):
+            dq = meta.get("data_quality_score", meta.get("data_quality"))
+            if isinstance(dq, dict):
+                dq = dq.get("score")
+
+        plan = plan_multimodal(
+            has_gravity=has_g,
+            has_magnetic=has_m,
+            has_borehole=has_b,
+            n_sensors=len(params.observations),
+            data_quality=(float(dq) if dq is not None else None),
+            coverage_pct=coverage_pct,
+        )
+        rep = result.get("report") if isinstance(result, dict) else None
+        if isinstance(rep, dict):
+            rep["multimodal_plan"] = plan.to_dict()
+    except Exception as exc:  # non-fatal: la inversión ya es válida
+        _log.warning("multimodal_plan_nonfatal", error=str(exc))
+    return result
+
+
 def run_geophysics_inversion(params: GeophysicsInvertInput):
     project_id = params.project_id
     run_id = params.run_id
@@ -1553,8 +1597,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         grav_has_signal = g_arr.size > 0 and not np.allclose(g_arr, 0.0)
         if mag_has_signal and grav_has_signal:
             from services.joint_inversion import run_joint_inversion
-            return run_joint_inversion(params)
-        return run_magnetic_inversion(params)
+            return _attach_multimodal_plan(run_joint_inversion(params), params)
+        return _attach_multimodal_plan(run_magnetic_inversion(params), params)
 
     def _update(status, progress, stage, message, metrics=None, error=None):
         if project_id and run_id:
@@ -1745,17 +1789,21 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     # Regular Grid path (original, unmodified)
     # ─────────────────────────────────────────────────────────────────────────
 
-    # inversor_padded: opera sobre grilla completa (Core + Padding) para LSQR + Laplaciano
-    inversor_padded = GravimetryInversion(nx_total, ny_total, nz_total, dx)
-    # inversor_core: para focusing y regularizador de diagnóstico (grilla Core solamente)
-    inversor_core   = GravimetryInversion(nx, ny, nz, dx)
+    # FASE 16: base_density configurable desde params (default 2.6 = granito host rock)
+    _base_density = float(getattr(params, "base_density", 2.6))
 
-    # ── R-02: Máscara de padding — κ=1e5 post-auditoría R-A1 ─────────────────
-    # κ=1e4 (previo) producía mass_pad_ratio=15.4% >> umbral 5%.
-    # κ=1e5 suprime la smallness del padding 100000× más que el core. Solo actúa
-    # sobre el término de smallness; el Laplaciano (smoothing) permanece invariante.
+    # inversor_padded: opera sobre grilla completa (Core + Padding) para LSQR + Laplaciano
+    inversor_padded = GravimetryInversion(nx_total, ny_total, nz_total, dx, base_density=_base_density)
+    # inversor_core: para focusing y regularizador de diagnóstico (grilla Core solamente)
+    inversor_core   = GravimetryInversion(nx, ny, nz, dx, base_density=_base_density)
+
+    # ── R-02: Máscara de padding — κ configurable (FASE 16) ──────────────────
+    # Default 1e5 post-auditoría R-A1: suprime smallness del padding 100000× más
+    # que el core para evitar mass escape. Ahora configurable desde el schema.
     _padding_mask_r02 = ~is_core
-    _kappa = 1e5
+    _kappa        = float(getattr(params, "padding_kappa", 1e5))
+    _anchor_kappa = float(getattr(params, "anchor_kappa", 1e4))
+    _auto_kappa   = bool(getattr(params, "auto_kappa", True))
 
     # ── HITO 5 (B-05): Topografía activa desde sensor_elevations_masl ──────────
     # Se calcula ANTES del lambda scan para que todos los solvers (lambda, UQ, DOI)
@@ -1765,19 +1813,30 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     _sensor_elevs = getattr(params, "sensor_elevations_masl", None)
     if _sensor_elevs is not None and len(_sensor_elevs) == len(params.observations):
         try:
-            from scipy.spatial import cKDTree as _cKDTree
+            from core.geo_utils import interpolate_surface_depths as _interp_surface
             _elev_arr = np.asarray(_sensor_elevs, dtype=np.float64)
             _max_elev = float(np.max(_elev_arr))
             _surface_depths = _max_elev - _elev_arr  # profundidad desde el punto más alto
-            _sx = sensor_coords[:, 0]
-            _sz = sensor_coords[:, 2]
-            _tree = _cKDTree(np.column_stack([_sx, _sz]))
-            _, _nearest_idx = _tree.query(np.column_stack([x_c_full, z_c_full]))
-            _topography_elevations_padded = _surface_depths[_nearest_idx]
-            _topography_used = "from_sensor_elevations_masl"
+
+            # ── FASE 24B Tarea 3: superficie de malla SUAVE (anti-staircase) ──────
+            # nearest-neighbor produce una superficie escalonada en bloques entre
+            # sensores → aristas ortogonales falsas → máscara de aire incorrecta →
+            # error de profundidad. interpolate_surface_depths usa interpolación LINEAL
+            # (superficie suave) con fallback nearest fuera del convex hull (padding).
+            # NOTA: el upgrade a DEM denso bilineal (30 m OpenTopography) muestreado en
+            # el (x,z) geográfico real de cada columna requiere la georef local→UTM de
+            # Fase 19 (no cableada en este path); cuando exista, sustituye a esta
+            # interpolación de sensores sin perder el comportamiento de fallback.
+            _topography_elevations_padded, _surface_mode = _interp_surface(
+                sensor_coords[:, [0, 2]],
+                _surface_depths,
+                np.column_stack([x_c_full, z_c_full]),
+            )
+            _topography_used = f"from_sensor_elevations_masl[{_surface_mode}]"
             _log.info(
                 "topography_activated",
                 max_elev_masl=round(float(_max_elev), 1),
+                surface_mode=_surface_mode,
                 surface_depth_range_m=[round(float(_surface_depths.min()), 1),
                                        round(float(_surface_depths.max()), 1)],
             )
@@ -1895,12 +1954,17 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             hx=hx, hy=hy, hz=hz,           # F0.9: Laplaciano no-uniforme
             density_min=params.density_min, # P2: bound petrofísico configurable desde API
             density_max=params.density_max,
-            padding_mask=_padding_mask_r02, # R-02: κ=1e5 post-auditoría R-A1
+            padding_mask=_padding_mask_r02, # R-02: κ configurable (FASE 16)
             padding_kappa=_kappa,
             boreholes=boreholes_arr,        # FASE 8: anclaje por sondajes (None si no hay)
+            anchor_kappa=_anchor_kappa,     # FASE 16: configurable desde schema
+            auto_kappa=_auto_kappa,         # FASE 16: ajuste automático si cond>1e12
             noise_floor=_noise_floor_solver, # Fase 2: sigma calibrado por gravímetro
             noise_pct=_noise_pct_solver,
             solver_meta=_meta_out,          # OUT: acond, chi2_final, sat_*
+            detect_outliers=bool(getattr(params, "robust_sigma", True)),  # FASE 18
+            regularization_norm=getattr(params, "regularization_norm", "L2"),  # FASE 24B
+            cut_cell_topography=bool(getattr(params, "cut_cell_topography", False)),  # FASE 24B T4
         )
 
     if _use_morozov:
@@ -2080,12 +2144,15 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
                     padding_mask=_padding_mask_r02,
                     padding_kappa=_kappa,
                     boreholes=boreholes_arr,
+                    anchor_kappa=_anchor_kappa,
+                    auto_kappa=_auto_kappa,
                     noise_floor=_noise_floor_solver,
                     noise_pct=_noise_pct_solver,
                     extra_reg_blocks=[A_pgi],
                     extra_reg_rhs=[b_pgi],
                     prune_observable_domain=False,
                     solver_meta=_pgi_meta,
+                    regularization_norm=getattr(params, "regularization_norm", "L2"),  # FASE 24B
                 )
             )
             _density_pgi_full = np.asarray(_density_pgi_full, dtype=np.float64)
@@ -2129,6 +2196,33 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         _log.info("pgi_complete", iters=_pgi_iters_done, final_misfit=float(_misfit_pgi),
                   final_conv=float(_pgi_conv))
         print(f"[FASE 11 PGI] Completo. Iters={_pgi_iters_done}, misfit={_misfit_pgi:.2f}%")
+
+    # ── FASE 20: Detección de conflictos sondaje vs modelo recuperado ────────
+    # Compara la densidad anclada (medida en sondaje) con la densidad recuperada en
+    # los mismos vóxeles. El anclaje es soft (κ finito), así que el solver PUEDE
+    # apartarse del valor medido si los datos gravimétricos lo exigen → un Δ grande
+    # señala datos inconsistentes (sondaje vs gravimetría) que el usuario debe revisar.
+    if boreholes_arr is not None and len(boreholes_arr) > 0:
+        try:
+            from services.borehole_service import detect_borehole_conflicts
+            _bh_validation = detect_borehole_conflicts(
+                getattr(params, "boreholes", None) or [],
+                est_density_full,
+                x_c_full, y_c_full, z_c_full,
+                dx,
+            )
+            _solver_meta["borehole_validation"] = _bh_validation["status"]
+            _solver_meta["borehole_conflicts"] = _bh_validation["conflicts"]
+            _solver_meta["borehole_validation_detail"] = {
+                k: v for k, v in _bh_validation.items() if k != "conflicts"
+            }
+            print(
+                f"[FASE 20] Validación sondajes: {_bh_validation['status']} | "
+                f"{_bh_validation['n_conflicts']} conflictos / "
+                f"{_bh_validation['n_warnings']} avisos de {_bh_validation['n_evaluated']} intervalos"
+            )
+        except Exception as _bh_exc:  # non-fatal: la inversión ya es válida
+            _log.warning("borehole_conflict_detection_nonfatal", error=str(_bh_exc))
 
     # ── F0.9: Descartar Padding — solo celdas Core al frontend ───────────────
     est_density          = est_density_full[is_core]
@@ -3015,6 +3109,10 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         "chi2_final":             _solver_meta.get("chi2_final"),
         "cond_A":                 _solver_meta.get("acond"),
         "lambda_scan_chi2":       _lambda_scan_meta if _lambda_scan_meta else None,
+        # ── FASE 20: Validación de sondajes (anclaje vs modelo recuperado) ────
+        "borehole_validation":    _solver_meta.get("borehole_validation"),
+        "borehole_conflicts":     _solver_meta.get("borehole_conflicts"),
+        "borehole_validation_detail": _solver_meta.get("borehole_validation_detail"),
         # ── R-05: Auditoría de dominio geométrico observable ──────────────────
         "r05_geometry_audit": {
             "dead_voxels":         _solver_meta.get("n_dead_voxels", 0),
@@ -3167,7 +3265,15 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         },
     )
 
-    return {
+    # ── FASE 21: plan de fusión multimodal (cobertura del survey gravimétrico) ──
+    try:
+        _cov_x = float(qaqc_report.get("coverage_ratio_x", 1.0))
+        _cov_z = float(qaqc_report.get("coverage_ratio_z", 1.0))
+        _coverage_pct = max(0.0, min(1.0, _cov_x * _cov_z))
+    except Exception:
+        _coverage_pct = 1.0
+
+    result = {
         "voxels": voxels,
         "run_id": params.run_id,
         "misfit_pct": misfit_error_percent,
@@ -3175,6 +3281,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         "report": report_payload,
         "misfit_error_percent": misfit_error_percent,
     }
+    return _attach_multimodal_plan(result, params, coverage_pct=_coverage_pct)
 
 
 def run_geophysics_sensitivity_sweep(

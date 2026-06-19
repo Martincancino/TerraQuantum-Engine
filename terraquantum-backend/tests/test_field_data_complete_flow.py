@@ -141,7 +141,7 @@ class TestSigmaFloor:
         # El sigma adaptivo v1 (2%·|d|) sobreestima ~40× el ruido CG-6 →
         # chi² ficticiamente ~0 (el bug que motivó este cierre).
         d_obs, noise = self._bouguer_10mgal_with_cg6_noise()
-        sigma_v1 = _sigma_adaptive(d_obs)
+        sigma_v1, _ = _sigma_adaptive(d_obs, detect_outliers=False)
         chi2_v1 = float(np.mean((noise / sigma_v1) ** 2))
         assert chi2_v1 < 0.01, (
             f"chi²_red={chi2_v1:.6f}: el sigma adaptivo debería sobreestimar el "

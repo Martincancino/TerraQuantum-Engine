@@ -355,3 +355,58 @@ def extract_utm_zone_safe(import_result) -> Optional[str]:
                 return utm_zone
 
     return None
+
+
+def interpolate_surface_depths(sensor_xz, surface_depths, grid_xz):
+    """
+    FASE 24B Tarea 3 — Superficie de malla SUAVE (anti-staircase).
+
+    Construye la profundidad de superficie en cada columna (x, z) de la grilla de
+    inversión interpolando LINEALMENTE las profundidades de superficie conocidas en
+    las estaciones, en lugar de copiar la del sensor más cercano (nearest-neighbor,
+    que produce una superficie escalonada en bloques → aristas ortogonales falsas →
+    máscara de aire incorrecta → error de profundidad).
+
+    Para columnas FUERA del convex hull de las estaciones (padding, extrapolación)
+    la interpolación lineal no está definida (NaN) → fallback a nearest-neighbor.
+    Geometrías degeneradas (estaciones colineales, <3 puntos) → nearest completo.
+
+    Parameters
+    ----------
+    sensor_xz      : array (n_sensors, 2) — coordenadas (x, z) de cada estación [m].
+    surface_depths : array (n_sensors,)   — profundidad de superficie por estación
+                     (p.ej. max_elev - elev), positiva hacia abajo [m].
+    grid_xz        : array (n_columns, 2)  — coordenadas (x, z) de cada columna [m].
+
+    Returns
+    -------
+    (depths, mode) : depths array (n_columns,) y mode str
+                     ("linear+nearest_fallback" | "nearest").
+    """
+    import numpy as np
+    from scipy.spatial import cKDTree
+    from scipy.interpolate import griddata
+
+    sensor_xz = np.asarray(sensor_xz, dtype=np.float64).reshape(-1, 2)
+    surface_depths = np.asarray(surface_depths, dtype=np.float64).ravel()
+    grid_xz = np.asarray(grid_xz, dtype=np.float64).reshape(-1, 2)
+
+    # Nearest siempre disponible (fallback robusto).
+    tree = cKDTree(sensor_xz)
+    _, nearest_idx = tree.query(grid_xz)
+    depths_nearest = surface_depths[nearest_idx]
+
+    if sensor_xz.shape[0] < 3:
+        return depths_nearest, "nearest"
+
+    try:
+        depths_linear = griddata(sensor_xz, surface_depths, grid_xz, method="linear")
+    except Exception:
+        return depths_nearest, "nearest"
+
+    finite = np.isfinite(depths_linear)
+    if not finite.any():
+        return depths_nearest, "nearest"
+
+    depths = np.where(finite, depths_linear, depths_nearest)
+    return depths, "linear+nearest_fallback"
