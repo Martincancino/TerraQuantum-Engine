@@ -865,6 +865,375 @@ async def export_clean_csv(
                 pass
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# FASE R4 — Paquete CSV auto-contenido: ensamblar (build) + cargar 3D (load)
+# build-package: toma grav (+mag co-localizado opcional) + sondajes + params,
+#   normaliza vía el mismo import que /invert, decide el combo multimodal (Fase 21)
+#   y emite UN CSV con encabezado de metadatos. load-package: lo lee y rutea al
+#   solver correcto (grav/mag/joint/+sondajes) reusando run_geophysics_inversion.
+# ═════════════════════════════════════════════════════════════════════════════
+@router_v2.post("/build-package")
+@limiter.limit("10/minute")
+async def build_package(
+    request: Request,
+    file: UploadFile = File(...),
+    magnetic_file: Optional[UploadFile] = File(None),
+    data_type: str = Query("gravity"),
+    strict: bool = Query(True),
+    allow_g_raw: bool = Query(False),
+    config_json: Optional[str] = Form(None),
+    boreholes_json: Optional[str] = Form(None),
+):
+    """FASE R4 — Ensambla el paquete CSV auto-contenido (texto descargable).
+
+    Primario = `file` (gravimetría, o magnetometría si data_type="magnetic").
+    `magnetic_file` opcional: magnetometría CO-LOCALIZADA (mismas estaciones) que
+    se anexa como columna para habilitar la inversión CONJUNTA. `config_json` lleva
+    los parámetros físicos; `boreholes_json` los sondajes de anclaje.
+    """
+    from fastapi.responses import PlainTextResponse
+    from services.csv_package_service import build_package_text, merge_config
+    from services.multimodal_fusion_service import plan_multimodal
+    from core.errors import InsufficientDataError
+
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="File must end with .csv")
+    if data_type not in ("gravity", "magnetic"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"data_type inválido: '{data_type}'. Use 'gravity' o 'magnetic'.",
+        )
+
+    cfg_overrides: dict = {}
+    if config_json:
+        try:
+            cfg_overrides = json.loads(config_json) or {}
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"config_json inválido: {exc}")
+    boreholes: list = []
+    if boreholes_json:
+        try:
+            _bh = json.loads(boreholes_json)
+            if isinstance(_bh, dict):
+                _bh = _bh.get("boreholes") or _bh.get("intervals") or []
+            boreholes = list(_bh or [])
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"boreholes_json inválido: {exc}")
+
+    tmp_primary = Path(TMP_DIR) / f"{uuid.uuid4()}.csv"
+    tmp_mag: "Optional[Path]" = None
+    try:
+        content = await file.read()
+        if len(content) > CSV_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Archivo CSV demasiado grande. Máximo: {CSV_MAX_BYTES // 1048576} MB.",
+            )
+        with open(tmp_primary, "wb") as f:
+            f.write(content)
+
+        primary = import_gravity_csv_v1(
+            tmp_primary, strict=strict, allow_g_raw=allow_g_raw,
+            data_kind="magnetic" if data_type == "magnetic" else "gravity",
+        )
+        if primary.status != "ok":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "CSV_IMPORT_FAILED",
+                    "message": "No se pudo validar el CSV primario para el paquete.",
+                    "errors": primary.errors,
+                    "warnings": primary.warnings,
+                },
+            )
+
+        magnetic_values: "Optional[list]" = None
+        has_magnetic = (data_type == "magnetic")
+        if magnetic_file is not None and data_type == "gravity":
+            if not magnetic_file.filename.lower().endswith(".csv"):
+                raise HTTPException(status_code=400, detail="magnetic_file must end with .csv")
+            tmp_mag = Path(TMP_DIR) / f"{uuid.uuid4()}.csv"
+            with open(tmp_mag, "wb") as f:
+                f.write(await magnetic_file.read())
+            mag_res = import_gravity_csv_v1(
+                tmp_mag, strict=False, allow_g_raw=True, data_kind="magnetic",
+            )
+            if mag_res.status != "ok":
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "MAGNETIC_CSV_IMPORT_FAILED",
+                        "message": "No se pudo validar el CSV magnético para el joint.",
+                        "errors": mag_res.errors,
+                    },
+                )
+            mag_obs = list(mag_res.observations or [])
+            if len(mag_obs) != len(primary.observations or []):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "El CSV magnético debe ser CO-LOCALIZADO: mismo número de "
+                        f"estaciones que el gravimétrico ({len(mag_obs)} vs "
+                        f"{len(primary.observations or [])})."
+                    ),
+                )
+            magnetic_values = [float(o.g) for o in mag_obs]
+            has_magnetic = True
+        elif data_type == "gravity":
+            # Magnetometría co-localizada embebida en el propio CSV gravimétrico.
+            _mv = getattr(primary, "magnetic_values", None)
+            if _mv and any(abs(float(v)) > 0 for v in _mv):
+                has_magnetic = True
+
+        n_sensors = len(primary.observations or [])
+        has_gravity = (data_type == "gravity")
+        try:
+            plan = plan_multimodal(
+                has_gravity=has_gravity,
+                has_magnetic=has_magnetic,
+                has_borehole=bool(boreholes),
+                n_sensors=n_sensors,
+            ).to_dict()
+        except InsufficientDataError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "INSUFFICIENT_DATA", "message": str(exc)},
+            )
+
+        cfg = merge_config(cfg_overrides)
+        cfg["data_type"] = data_type
+        cfg["strict"] = strict
+        cfg["allow_g_raw"] = allow_g_raw
+
+        text = build_package_text(
+            primary_result=primary,
+            data_type=data_type,
+            config=cfg,
+            magnetic_values=magnetic_values,
+            boreholes=boreholes,
+            plan=plan,
+        )
+        out_name = f"{Path(file.filename).stem}_package.tqpkg.csv"
+        return PlainTextResponse(
+            content=text,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{out_name}"',
+                "X-TQ-Package-Route": str(plan.get("route")),
+                "X-TQ-Package-Sensors": str(n_sensors),
+            },
+        )
+    finally:
+        for _p in (tmp_primary, tmp_mag):
+            if _p and _p.exists():
+                try:
+                    os.remove(_p)
+                except Exception:
+                    pass
+
+
+@router_v2.post("/load-package")
+@limiter.limit("10/minute")
+async def load_package(
+    request: Request,
+    file: UploadFile = File(...),
+    project_id: Optional[str] = Form(None),
+    run_id: Optional[str] = Form(None),
+):
+    """FASE R4 — Lee el paquete auto-contenido y corre la inversión ruteada.
+
+    Separa encabezado (config + sondajes + plan) del cuerpo CSV, importa el cuerpo
+    por el mismo camino que /invert, y construye GeophysicsInvertInput. El ruteo a
+    grav/mag/joint/+sondajes lo decide run_geophysics_inversion según la presencia
+    de señal gravimétrica/magnética y los sondajes.
+    """
+    from services.csv_package_service import parse_package_text
+
+    _fn = (file.filename or "").lower()
+    if not (_fn.endswith(".csv") or _fn.endswith(".tqpkg")):
+        raise HTTPException(status_code=400, detail="File must be a .csv/.tqpkg package")
+
+    content = await file.read()
+    if len(content) > CSV_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Paquete demasiado grande. Máximo: {CSV_MAX_BYTES // 1048576} MB.",
+        )
+    try:
+        parsed = parse_package_text(content.decode("utf-8", errors="replace"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "INVALID_PACKAGE", "message": str(exc)},
+        )
+
+    cfg = parsed.config
+    is_magnetic = (parsed.data_type == "magnetic")
+
+    tmp = Path(TMP_DIR) / f"{uuid.uuid4()}.csv"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(parsed.body_csv)
+
+        import_result = import_gravity_csv_v1(
+            tmp,
+            strict=bool(cfg.get("strict", True)),
+            allow_g_raw=bool(cfg.get("allow_g_raw", False)),
+            data_kind="magnetic" if is_magnetic else "gravity",
+        )
+        if import_result.status != "ok":
+            return sanitize_nan({
+                "status": "error",
+                "stage": "import",
+                "warnings": import_result.warnings,
+                "errors": import_result.errors,
+                "inversionResult": None,
+            })
+
+        observations = list(import_result.observations or [])
+        auto_grid = import_result.auto_grid
+        if auto_grid is None and import_result.csv_analysis:
+            auto_grid = import_result.csv_analysis.auto_grid
+        if auto_grid is None:
+            raise HTTPException(status_code=500, detail="auto_grid no disponible tras importar el paquete.")
+
+        # Grilla efectiva: usar el valor del paquete si cabe (1..80), si no el auto_grid.
+        def _eff_dim(v, av):
+            v = int(v or 0)
+            return v if (0 < v <= 80) else int(av)
+
+        effective_nx = _eff_dim(cfg.get("nx", 0), auto_grid.nx)
+        effective_ny = _eff_dim(cfg.get("ny", 0), auto_grid.ny)
+        effective_nz = _eff_dim(cfg.get("nz", 0), auto_grid.nz)
+        _bs = float(cfg.get("block_size", 0) or 0)
+        effective_block_size = int(math.ceil(_bs)) if _bs > 0 else int(math.ceil(auto_grid.block_size_m))
+        _dp = float(cfg.get("depth", 0) or 0)
+        effective_depth = int(math.ceil(_dp)) if _dp > 0 else int(math.ceil(auto_grid.depth_m))
+        _cr = float(cfg.get("cutoff_radius", 0) or 0)
+        effective_cutoff_radius = _cr if _cr > 0 else float(auto_grid.cutoff_radius_m)
+
+        # Ruteo magnético/joint (espejo de /invert): magnetic mueve g→magnetic_nt;
+        # gravedad con columna magnética co-localizada habilita el joint.
+        magnetic_nt: "Optional[list[float]]" = None
+        effective_observations = observations
+        if is_magnetic:
+            from schemas.geophysics_schema import GravityObservation as _GravObs
+            magnetic_nt = [float(o.g) for o in observations]
+            effective_observations = [
+                _GravObs(x_m=o.x_m, y_m=o.y_m, z_m=o.z_m, g=0.0) for o in observations
+            ]
+        else:
+            _mv = import_result.magnetic_values
+            if (
+                _mv is not None
+                and len(_mv) == len(observations)
+                and all(v == v and v not in (float("inf"), float("-inf")) for v in _mv)
+                and any(abs(float(v)) > 0 for v in _mv)
+            ):
+                magnetic_nt = [float(v) for v in _mv]
+
+        # Sondajes de anclaje desde el encabezado del paquete.
+        boreholes_parsed = None
+        if parsed.boreholes:
+            from schemas.geophysics_schema import BoreholeInterval as _BHInterval
+            try:
+                boreholes_parsed = [_BHInterval(**_b) for _b in parsed.boreholes]
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "INVALID_PACKAGE_BOREHOLES", "message": str(exc)},
+                )
+
+        # Sigma por estación (mediana de la columna uncertainty) + topografía.
+        noise_floor = None
+        _unc = import_result.station_uncertainties
+        if _unc:
+            _fin = sorted(u for u in _unc if u == u and u > 0.0)
+            if len(_fin) >= max(3, len(_unc) // 2):
+                noise_floor = float(_fin[len(_fin) // 2])
+        sensor_elevs = None
+        _se = import_result.station_elevations
+        if _se and len(_se) == len(observations):
+            _se_fin = [v for v in _se if v == v]
+            if len(_se_fin) == len(_se) and (max(_se_fin) - min(_se_fin)) >= 10.0:
+                sensor_elevs = [float(v) for v in _se]
+
+        try:
+            invert_input = GeophysicsInvertInput(
+                project_id=project_id,
+                run_id=run_id,
+                depth=effective_depth,
+                nir=int(cfg.get("nir", 83)),
+                fe=int(cfg.get("fe", 79)),
+                region=str(cfg.get("region", "norte_chile")),
+                lat=cfg.get("lat"),
+                lon=cfg.get("lon"),
+                nx=effective_nx,
+                ny=effective_ny,
+                nz=effective_nz,
+                block_size=effective_block_size,
+                cutoff_radius=effective_cutoff_radius,
+                lambda_mag=float(cfg.get("lambda_mag", 0.0)),
+                alpha_spatial=float(cfg.get("alpha_spatial", 1.0)),
+                observations=effective_observations,
+                enable_focusing=True,
+                density_min=float(cfg.get("density_min", 0.0)),
+                density_max=float(cfg.get("density_max", 5.5)),
+                sensor_elevations_masl=sensor_elevs,
+                noise_floor_mgal=noise_floor,
+                gravimeter_type=str(cfg.get("gravimeter_type", "unknown")),
+                magnetic_nt=magnetic_nt,
+                inclination_deg=float(cfg.get("inclination_deg", -30.0)),
+                declination_deg=float(cfg.get("declination_deg", 2.0)),
+                field_intensity_nt=float(cfg.get("field_intensity_nt", 23500.0)),
+                susc_min=float(cfg.get("susc_min", 0.0)),
+                susc_max=float(cfg.get("susc_max", 1.0)),
+                boreholes=boreholes_parsed,
+                padding_kappa=float(cfg.get("padding_kappa", 1e5)),
+                anchor_kappa=float(cfg.get("anchor_kappa", 1e4)),
+                auto_kappa=bool(cfg.get("auto_kappa", True)),
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "PACKAGE_INPUT_VALIDATION",
+                    "message": "Parámetros inválidos al construir la inversión desde el paquete.",
+                    "errors": exc.errors(),
+                },
+            ) from exc
+
+        try:
+            inversion_result = run_geophysics_inversion(invert_input)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "GEOPHYSICS_INPUT_VALIDATION", "message": str(exc)},
+            ) from exc
+
+        _inversion_dict = model_to_dict(inversion_result) if inversion_result else {}
+        if isinstance(_inversion_dict, dict) and "voxels" in _inversion_dict:
+            _inversion_dict.pop("voxels", None)
+
+        return sanitize_nan({
+            "status": "done",
+            "stage": "inversion",
+            "project_id": project_id,
+            "run_id": run_id,
+            "route": parsed.plan.get("route"),
+            "multimodal_plan": parsed.plan,
+            "warnings": import_result.warnings,
+            "errors": [],
+            "inversionResult": _inversion_dict,
+        })
+    finally:
+        if tmp.exists():
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+
 @router.post("/invert", response_model=GravityImportInvertResponse)
 @limiter.limit("10/minute")
 async def invert_gravity_csv(
