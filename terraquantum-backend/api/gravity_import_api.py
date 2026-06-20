@@ -920,6 +920,10 @@ async def invert_gravity_csv(
     # el anclaje (residual). Formato: {"points":[{"local_x","local_z","real_e","real_n",
     # "label"?}, ...], "residual_warn_m"?}. Vacío/None = sin georef Helmert.
     helmert_control_points_json: Optional[str] = Form(None),
+    # FASE 20 (Caso B) — Sondajes que anclan la inversión (combo grav+sondajes).
+    # JSON: lista de intervalos verticales [{"x_m","z_m","y_from_m","y_to_m",
+    # "density_t_m3"?,"susceptibility_si"?,...}]. None/vacío = sin anclaje.
+    boreholes_json: Optional[str] = Form(None),
 ):
     if not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must end with .csv")
@@ -1324,6 +1328,23 @@ async def invert_gravity_csv(
             except Exception as _e:
                 _corrections_warnings.append(f"remanence_json inválido (ignorado): {_e}")
 
+        # FASE 20 — Sondajes (anclaje grav+sondajes). Lista de BoreholeInterval.
+        _boreholes_parsed = None
+        if boreholes_json:
+            try:
+                from schemas.geophysics_schema import BoreholeInterval as _BHInterval
+                _bh_raw = json.loads(boreholes_json)
+                if isinstance(_bh_raw, dict):  # tolera {"boreholes":[...]} o {"intervals":[...]}
+                    _bh_raw = _bh_raw.get("boreholes") or _bh_raw.get("intervals") or []
+                _boreholes_parsed = [_BHInterval(**_b) for _b in _bh_raw]
+                if _boreholes_parsed:
+                    _corrections_warnings.append(
+                        f"[Fase 20] Anclaje por sondajes activo: {len(_boreholes_parsed)} "
+                        "intervalos (combo grav+sondajes)."
+                    )
+            except Exception as _e:
+                _corrections_warnings.append(f"boreholes_json inválido (ignorado): {_e}")
+
         try:
             invert_input = GeophysicsInvertInput(
                 project_id=project_id,
@@ -1359,6 +1380,8 @@ async def invert_gravity_csv(
                 # Fase 7B — Advanced params
                 pgi_params=_pgi_params_parsed,
                 remanence=_remanence_parsed,
+                # Fase 20 — Sondajes que anclan la inversión (None = sin anclaje)
+                boreholes=_boreholes_parsed,
                 # FASE 16 — Kappas configurables
                 padding_kappa=padding_kappa,
                 anchor_kappa=anchor_kappa,
