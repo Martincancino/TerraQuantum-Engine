@@ -1315,6 +1315,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         susc_max=params.susc_max,
         boreholes=boreholes_arr,
         detect_outliers=bool(getattr(params, "robust_sigma", True)),  # FASE 20B Tarea 4
+        auto_kappa=bool(getattr(params, "auto_kappa", True)),         # FASE 20B Tarea 5
         solver_meta=solver_meta,
         override_kernel=_override_kernel,
     )

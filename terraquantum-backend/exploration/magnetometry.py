@@ -534,6 +534,11 @@ class MagnetometryInversion:
         boreholes: Optional[np.ndarray] = None,
         anchor_kappa: float = 1e4,      # NO usar 1e6: degradaría cond(A)
         laplacian_relax_alpha: float = 0.2,
+        # ── FASE 20B Tarea 5: Ajuste automático de kappa (port Fase 16) ───────
+        # Si True y hay anclajes, escala anchor_kappa cuando cond(A) estimado > 1e12
+        # (por ratio de normas-columna del sistema ensamblado, O(nnz), sin SVD).
+        # Mantiene el solver bien condicionado sin que el usuario tunee kappa.
+        auto_kappa: bool = True,
         # ── OUT: diagnósticos numéricos ──────────────────────────────────────
         solver_meta: Optional[dict] = None,
         # ── FASE 9C-1: Inversión Conjunta (cross-gradient) ───────────────────
@@ -861,9 +866,11 @@ class MagnetometryInversion:
                 f"[MAG INVERSIÓN] n_active_sol={_n_active_sol:,} > {_MAG_TRF_MAX_CELLS:,}: "
                 f"usando LSQR+clip (rápido) en vez de TRF con bounds (evita cuelgue)."
             )
+        # FASE 20B Tarea 5: diagnósticos de kappa adaptativo (expuestos en solver_meta).
+        _anchor_kappa_used = float(anchor_kappa)
+        _cond_a_est = None
+        _auto_kappa_adjusted = False
         if _has_anchors:
-            _w_small = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64)
-            _w_small = np.where(_anchor_active, float(anchor_kappa) * float(lambda_mag), _w_small)
             # FASE 20B Tarea 1 — anclaje en MAGNITUD (verificado, NO portar el fix de
             # gravedad aquí). El bloque smallness magnético es `diags(w)·Wz_inv`, así que
             # la fila de la celda anclada penaliza
@@ -876,12 +883,38 @@ class MagnetometryInversion:
             # celda anclada a χ=0.3 recupera 0.3000 a y=15/75/135 m (ver
             # tests/test_fase20b_anchor_magnitude.py). Dividir el target por diag(Wz_inv)
             # aquí SOBRE-corregiría a χ=contraste/wz → NO hacerlo.
-            _small_block = sp.diags(_w_small) @ Wz_inv
             _small_target = np.zeros(_n_active_sol, dtype=np.float64)
             _small_target[_anchor_active] = _anchor_value_active[_anchor_active]
-            _d_small = _w_small * _small_target
-            A_sys = sp.vstack([G_aug, _small_block]).tocsr()
-            b_sys = np.concatenate([d_aug, _d_small])
+
+            def _assemble_anchor(_ak):
+                """Ensambla (A_sys, b_sys) del smallness anclado con kappa=_ak."""
+                _ws = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64)
+                _ws = np.where(_anchor_active, float(_ak) * float(lambda_mag), _ws)
+                _blk = sp.diags(_ws) @ Wz_inv
+                _A = sp.vstack([G_aug, _blk]).tocsr()
+                _b = np.concatenate([d_aug, _ws * _small_target])
+                return _A, _b
+
+            A_sys, b_sys = _assemble_anchor(_anchor_kappa_used)
+
+            # ── FASE 20B Tarea 5: Dynamic Kappa Adaptation (port Fase 16) ─────
+            # cond(A) ~ sqrt(max/min de normas-columna²) — O(nnz), sin SVD. Si supera
+            # 1e12 y auto_kappa=True, escala anchor_kappa para volver a ~1e12.
+            _col_sq = np.array(A_sys.power(2).sum(axis=0)).ravel()
+            _nz = _col_sq > 0.0
+            if _nz.any():
+                _mx, _mn = float(np.max(_col_sq)), float(np.min(_col_sq[_nz]))
+                if _mn > 0.0:
+                    _cond_a_est = float(np.sqrt(_mx / _mn))
+            if auto_kappa and _cond_a_est is not None and _cond_a_est > 1e12:
+                _scale = 1e12 / _cond_a_est
+                _anchor_kappa_used = float(anchor_kappa) * _scale
+                _auto_kappa_adjusted = True
+                print(
+                    f"[MAG FASE 16] cond(A)~{_cond_a_est:.2e} > 1e12: anchor_kappa "
+                    f"escalado ×{_scale:.2e} ({anchor_kappa:.0e}→{_anchor_kappa_used:.2e})"
+                )
+                A_sys, b_sys = _assemble_anchor(_anchor_kappa_used)
             if _use_bc_m_eff:
                 from scipy.optimize import lsq_linear as _lsq_linear_m
                 _bc_m = _lsq_linear_m(
@@ -1030,6 +1063,10 @@ class MagnetometryInversion:
             solver_meta["n_anchored_voxels"] = int(np.sum(_anchor_active)) if _anchor_active is not None else 0
             solver_meta["anchor_kappa"] = float(anchor_kappa) if _has_anchors else None
             solver_meta["laplacian_relax_alpha"] = float(laplacian_relax_alpha) if _has_anchors else None
+            # FASE 20B Tarea 5: bounds + auto_kappa
+            solver_meta["cond_a_estimated"] = float(_cond_a_est) if _cond_a_est is not None else None
+            solver_meta["anchor_kappa_used"] = float(_anchor_kappa_used) if _has_anchors else None
+            solver_meta["auto_kappa_adjusted"] = bool(_auto_kappa_adjusted)
             solver_meta["field_unit_vector"] = [float(v) for v in forward_model.f_hat]
             # FASE 20B Tarea 3: diagnóstico de dominio observable (R-05)
             solver_meta["prune_observable_domain"] = bool(prune_observable_domain)

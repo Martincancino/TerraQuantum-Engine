@@ -51,6 +51,22 @@ GRAVIMETER_NOISE_FLOOR: dict = {
     "unknown": 0.020,           # conservador para gravímetro desconocido
 }
 
+# FASE 20B Tarea 5: presets de susceptibilidad magnética por litología (SI volumétrico).
+# Valores típicos para fijar bounds [susc_min, susc_max] o priors de litología en el
+# motor magnético (magnetita masiva = χ alta; roca estéril/sedimentaria ≈ 0).
+# Cada entrada: (susc_típica, susc_max_recomendado) en SI. Fuentes: Clark 1997
+# (rangos de susceptibilidad de rocas y minerales); Hunt et al. 1995 (rock magnetism).
+MAGNETIC_SUSCEPTIBILITY_PRESETS: dict = {
+    "magnetite_massive": (1.0, 5.0),     # magnetita masiva (IOCG/skarn): χ muy alta
+    "magnetite_disseminated": (0.1, 1.0),  # magnetita diseminada (pórfido magnético)
+    "bif": (0.5, 3.0),                   # banded iron formation
+    "chromite": (0.05, 0.5),
+    "mafic_intrusive": (0.01, 0.2),      # gabro/diorita (magnetita accesoria)
+    "granite": (0.001, 0.05),            # granito (mag-series vs ilmenite-series)
+    "sediment_barren": (0.0, 0.01),      # roca estéril/sedimentaria ≈ 0
+    "unknown": (0.0, 1.0),               # default conservador del schema
+}
+
 # HITO 5: Solver con bounds (B-06). Env var USE_BOUNDED_SOLVER=false fuerza LSQR+clip (rollback).
 USE_BOUNDED_SOLVER: bool = os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false"
 
