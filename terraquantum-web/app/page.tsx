@@ -9,6 +9,7 @@ import NavBar from "../componentes/layout/NavBar";
 
 // Vistas Principales
 import HomeView from "../componentes/views/HomeView";
+import PreparacionView from "../componentes/views/PreparacionView";
 import IAChatView from "../componentes/views/IAChatView";
 import Exploration3DView from "../componentes/views/Exploration3DView";
 
@@ -33,6 +34,8 @@ export default function Home() {
       <section className="flex-grow relative overflow-hidden flex flex-col z-0">
         {normalizedView === "inicio" && <HomeView />}
 
+        {normalizedView === "preparación" && <PreparacionView />}
+
         {normalizedView === "ia geológica" && <IAChatView />}
 
         {normalizedView === "figura 3d" && <Exploration3DView />}
@@ -41,9 +44,14 @@ export default function Home() {
 
         {normalizedView === "historial" && <HistorialView />}
 
-        {!["inicio", "ia geológica", "figura 3d", "datos", "historial"].includes(
-          normalizedView
-        ) && <HomeView />}
+        {![
+          "inicio",
+          "preparación",
+          "ia geológica",
+          "figura 3d",
+          "datos",
+          "historial",
+        ].includes(normalizedView) && <HomeView />}
       </section>
     </main>
   );
