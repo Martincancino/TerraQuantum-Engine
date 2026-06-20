@@ -917,6 +917,146 @@ class MagnetometryInversion:
 
         return susceptibility_full, relative_score_full, misfit_percent, normalized_sensitivity
 
+    def estimate_posterior_std(
+        self,
+        d_observed,
+        y_c,
+        forward_model,
+        sensor_coords,
+        x_c,
+        z_c,
+        lambda_mag=1e-4,
+        alpha_spatial=1.0,
+        topography_elevations=None,
+        noise_floor=0.02,
+        noise_pct=0.02,
+        depth_beta: float = 1.5,
+        hx=None, hy=None, hz=None,
+        override_kernel=None,
+        n_probes: int = 32,
+        cg_maxiter: int = 300,
+        cg_rtol: float = 1e-6,
+        seed: int = 0,
+    ):
+        """
+        FASE 20B Tarea 2 — Incertidumbre posterior por vóxel de SUSCEPTIBILIDAD
+        (estimador de Hutchinson). Paridad con gravimetry.estimate_posterior_std.
+
+        Bajo el modelo lineal gaussiano del problema inverso regularizado, la matriz de
+        covarianza posterior de la susceptibilidad en el espacio escalado m̃ = W_z·m es:
+
+            C_tilde = ( G̃ᵀ G̃ + λ_spatial² · L̃ᵀ L̃ + λ_mag² · I )⁻¹
+
+        donde G̃ = Wd·G·Wz_inv y L̃ = L·Wz_inv son EXACTAMENTE los operadores que arma
+        solve_magnetic_inversion_lsqr (mismo Wd sigma adaptivo, mismo cambio de variable
+        Li & Oldenburg con depth_beta=1.5, Laplaciano no-uniforme,
+        λ_spatial = alpha_spatial·(n_sensores/n_activas) y el damping λ_mag). El término
+        λ_mag²·I garantiza que C_tilde sea SPD. Se estima diag(C_tilde) por Hutchinson
+        (reutiliza el helper genérico de gravimetry, álgebra pura, no física) y se
+        devuelve la desviación estándar EN UNIDADES FÍSICAS deshaciendo el cambio de
+        variable: como m = Wz_inv·m̃ y Wz_inv es diagonal,
+
+            σ_phys_j = wz_inv_diag_j · sqrt( diag(C_tilde)_j )    [SI].
+
+        ALCANCE HONESTO (idéntico a gravedad): es la covarianza posterior LINEAL
+        alrededor de la solución regularizada; NO captura la no-unicidad no-lineal, ni
+        errores de modelo/topografía, ni el sesgo de profundidad inherente. Reportar como
+        "σ posterior lineal", no como verdad absoluta.
+
+        Método de SOLO LECTURA: no altera la solución ni el estado del solver.
+        Devuelve un array (total_voxels,) con NaN en celdas de aire.
+        """
+        # Helper genérico de álgebra lineal (no física): reutilizado, no copiado.
+        from exploration.gravimetry import hutchinson_diag_inv
+
+        d_observed = np.asarray(d_observed, dtype=np.float64)
+        y_c = np.asarray(y_c, dtype=np.float64)
+
+        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
+            raise ValueError(
+                "estimate_posterior_std requiere forward_model, sensor_coords, x_c, z_c."
+            )
+        if lambda_mag <= 0:
+            raise ValueError(
+                "lambda_mag debe ser > 0: garantiza que C sea definida positiva (SPD)."
+            )
+
+        # ── Máscara de celdas activas (idéntica a solve_magnetic_inversion_lsqr) ──
+        if topography_elevations is None:
+            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
+        else:
+            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
+        voxel_top = y_c - (self.dy / 2.0)
+        active_cells = voxel_top >= topo_depth
+        n_active = int(np.sum(active_cells))
+        if n_active == 0:
+            raise ValueError("[UQ MAG] No hay celdas activas bajo la topografía dada.")
+
+        n_sensors = len(d_observed)
+        y_c_active = y_c[active_cells]
+        x_c_arr = np.asarray(x_c, dtype=np.float64)
+        z_c_arr = np.asarray(z_c, dtype=np.float64)
+
+        if override_kernel is not None:
+            G_active = override_kernel
+            if G_active.shape != (n_sensors, n_active):
+                raise ValueError(
+                    f"override_kernel shape {G_active.shape} no coincide con "
+                    f"(n_obs={n_sensors}, n_active={n_active})."
+                )
+        else:
+            G_active = forward_model._build_sparse_kernel(
+                x_c_arr[active_cells], y_c_active, z_c_arr[active_cells],
+                np.asarray(sensor_coords, dtype=np.float64),
+            )
+
+        # ── Data weighting Wd (sigma adaptivo, igual que el solver) ───────────
+        if noise_floor == 0.02 and noise_pct == 0.02:
+            sigma = _sigma_adaptive(d_observed)
+        else:
+            sigma = np.maximum(noise_floor + noise_pct * np.abs(d_observed), 1e-30)
+        Wd = sp.diags(1.0 / sigma)
+        G_w = Wd @ G_active
+
+        # ── Cambio de variable Li & Oldenburg: Wz_inv = diag((depth+z0)^{+β/2}) ──
+        # (idéntico al solver: NO hay column scaling Ws en el motor magnético).
+        z0 = 0.5 * self.dy
+        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
+        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
+        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
+        Wz_inv = sp.diags(wz_inv_diag)
+        G_scaled = (G_w @ Wz_inv).tocsr()
+
+        # ── Laplaciano reducido a activas y escalado: L̃ = L·Wz_inv ───────────
+        L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
+        L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+        L_scaled = (L_active @ Wz_inv).tocsr()
+
+        lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
+
+        # ── Matriz de información posterior (SPD por el término λ_mag²·I) ─────
+        A = (
+            (G_scaled.T @ G_scaled)
+            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
+            + (float(lambda_mag) ** 2) * sp.identity(n_active, format="csr", dtype=np.float64)
+        ).tocsr()
+
+        diag_C = hutchinson_diag_inv(
+            A, n_probes=n_probes, cg_maxiter=cg_maxiter, cg_rtol=cg_rtol, seed=seed
+        )
+        # σ_phys = diag(Wz_inv)·sqrt(diag(C_tilde)) (deshace el cambio de variable → SI).
+        std_active = wz_inv_diag * np.sqrt(diag_C)
+
+        posterior_std_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
+        posterior_std_full[active_cells] = std_active
+
+        print(
+            f"[UQ MAG Hutchinson] sigma posterior: n_probes={n_probes} | "
+            f"sigma_med={float(np.median(std_active)):.4g} SI | "
+            f"sigma_p95={float(np.percentile(std_active, 95)):.4g} SI"
+        )
+        return posterior_std_full
+
 
 def sweep_q_ratio(
     forward: "MagnetometryForward",
