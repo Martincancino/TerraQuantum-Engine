@@ -550,6 +550,14 @@ class MagnetometryInversion:
         extra_reg_blocks: Optional[list] = None,
         extra_reg_rhs: Optional[list] = None,
         m_ref: Optional[np.ndarray] = None,
+        # ── FASE 20B Tarea 6: Normas compactas (minimum-support IRLS) — port 24B ─
+        # "L2" (default) = Tikhonov suave histórico (idéntico, n_irls=1, sin foco).
+        # "compact" = minimum support sobre la smallness → cuerpos de χ nítidos.
+        # "mixed" = compact (el edge-preserving de gravedad queda como trabajo futuro).
+        regularization_norm: str = "L2",
+        compact_eps: float = 0.005,       # piso de foco (χ SI); estabiliza el IRLS
+        compact_max_irls: int = 8,        # nº de reponderaciones IRLS (compact/mixed)
+        compact_tol: float = 1e-2,        # tol convergencia del foco (||Δfocus||/||focus||)
         # ── FASE 20B Tarea 3: Observable Domain Pruning (R-05) ───────────────
         # Excluye del solver los vóxeles con sensibilidad ~0 (fuera del cutoff para
         # TODOS los sensores): columnas nulas de G que solo añaden plateau de mínima
@@ -870,107 +878,160 @@ class MagnetometryInversion:
         _anchor_kappa_used = float(anchor_kappa)
         _cond_a_est = None
         _auto_kappa_adjusted = False
+
+        # ── FASE 20B Tarea 6: control de norma de regularización (port Fase 24B) ─
+        # "L2" (default) = comportamiento histórico EXACTO (1 solve, sin foco).
+        # "compact"/"mixed" = bucle IRLS minimum-support sobre la smallness (Last &
+        # Kubik 1983, Portniaguine & Zhdanov 1999): cuerpos de susceptibilidad nítidos
+        # → mejor localización. El foco f_i=1/√(c_i²+ε²) (c = contraste físico χ) se
+        # normaliza a media-1 y se aplica SOLO a celdas libres (no ancladas), con ε en
+        # cooling. "mixed" reusa el mismo foco de smallness (el término edge-preserving
+        # de suavidad de gravedad queda como trabajo futuro para magnético).
+        _reg_norm = str(regularization_norm).lower()
+        if _reg_norm not in ("l2", "compact", "mixed"):
+            raise ValueError(
+                f"regularization_norm inválido: {regularization_norm!r}. "
+                f"Use 'L2', 'compact' o 'mixed'."
+            )
+        _n_irls = 1 if _reg_norm == "l2" else max(1, int(compact_max_irls))
+
+        # Target de smallness (anclajes en espacio físico; 0 en libres) y máscara libre.
+        # FASE 20B Tarea 1 — anclaje en MAGNITUD (verificado): el bloque smallness
+        # magnético es diags(w)·Wz_inv → penaliza w·(susc_físico − target), ancla χ
+        # directamente sin atenuación. NO portar el fix de gravedad (sobre-corregiría a
+        # χ=contraste/wz). Medido: celda anclada a χ=0.3 recupera 0.3000 a y=15/75/135 m
+        # (tests/test_fase20b_anchor_magnitude.py).
+        _small_target = np.zeros(_n_active_sol, dtype=np.float64)
         if _has_anchors:
-            # FASE 20B Tarea 1 — anclaje en MAGNITUD (verificado, NO portar el fix de
-            # gravedad aquí). El bloque smallness magnético es `diags(w)·Wz_inv`, así que
-            # la fila de la celda anclada penaliza
-            #     w·((Wz_inv·m̃) − target) = w·(susc_físico − target).
-            # Es decir, YA opera en el espacio FÍSICO de la susceptibilidad y el target es
-            # el contraste físico medido (= χ, porque base_susc=0) → ancla χ directamente,
-            # sin atenuación por profundidad. Esto difiere del motor de GRAVEDAD, cuyo
-            # bloque es `diags(_ws)` (identidad en m̃) y por eso necesitó dividir el target
-            # por diag(Wz_inv) (Fase 25B). Medido 2026-06-20: con datos no degenerados, una
-            # celda anclada a χ=0.3 recupera 0.3000 a y=15/75/135 m (ver
-            # tests/test_fase20b_anchor_magnitude.py). Dividir el target por diag(Wz_inv)
-            # aquí SOBRE-corregiría a χ=contraste/wz → NO hacerlo.
-            _small_target = np.zeros(_n_active_sol, dtype=np.float64)
             _small_target[_anchor_active] = _anchor_value_active[_anchor_active]
+        _free_mask = np.ones(_n_active_sol, dtype=bool)
+        if _has_anchors:
+            _free_mask &= ~_anchor_active
 
-            def _assemble_anchor(_ak):
-                """Ensambla (A_sys, b_sys) del smallness anclado con kappa=_ak."""
-                _ws = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64)
-                _ws = np.where(_anchor_active, float(_ak) * float(lambda_mag), _ws)
-                _blk = sp.diags(_ws) @ Wz_inv
-                _A = sp.vstack([G_aug, _blk]).tocsr()
-                _b = np.concatenate([d_aug, _ws * _small_target])
-                return _A, _b
-
-            A_sys, b_sys = _assemble_anchor(_anchor_kappa_used)
-
-            # ── FASE 20B Tarea 5: Dynamic Kappa Adaptation (port Fase 16) ─────
-            # cond(A) ~ sqrt(max/min de normas-columna²) — O(nnz), sin SVD. Si supera
-            # 1e12 y auto_kappa=True, escala anchor_kappa para volver a ~1e12.
-            _col_sq = np.array(A_sys.power(2).sum(axis=0)).ravel()
-            _nz = _col_sq > 0.0
-            if _nz.any():
-                _mx, _mn = float(np.max(_col_sq)), float(np.min(_col_sq[_nz]))
-                if _mn > 0.0:
-                    _cond_a_est = float(np.sqrt(_mx / _mn))
-            if auto_kappa and _cond_a_est is not None and _cond_a_est > 1e12:
-                _scale = 1e12 / _cond_a_est
-                _anchor_kappa_used = float(anchor_kappa) * _scale
-                _auto_kappa_adjusted = True
-                print(
-                    f"[MAG FASE 16] cond(A)~{_cond_a_est:.2e} > 1e12: anchor_kappa "
-                    f"escalado ×{_scale:.2e} ({anchor_kappa:.0e}→{_anchor_kappa_used:.2e})"
-                )
-                A_sys, b_sys = _assemble_anchor(_anchor_kappa_used)
-            if _use_bc_m_eff:
-                from scipy.optimize import lsq_linear as _lsq_linear_m
-                _bc_m = _lsq_linear_m(
-                    A_sys, b_sys,
-                    bounds=(_lb_tilde_m, _ub_tilde_m),
-                    method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
-                )
-                m_tilde = _bc_m.x
-                _acond = float('nan')
-                print("[MAG/ANCLA] lsq_linear (bound-constrained, TRF+LSQR) finalizado.")
-            else:
-                result = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
-                m_tilde = result[0]
-                _acond = float(result[6])
-        else:
-            if _use_bc_m_eff:
-                from scipy.optimize import lsq_linear as _lsq_linear_m
-                _eye_lam_m = sp.eye(_n_active_sol, format='csr', dtype=np.float64) * float(lambda_mag)
-                _A_bc_m = sp.vstack([G_aug, _eye_lam_m]).tocsr()
-                _b_bc_m = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
-                _bc_m = _lsq_linear_m(
-                    _A_bc_m, _b_bc_m,
-                    bounds=(_lb_tilde_m, _ub_tilde_m),
-                    method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
-                )
-                m_tilde = _bc_m.x
-                _acond = float('nan')
-            else:
-                result = lsqr(G_aug, d_aug, damp=float(lambda_mag), iter_lim=500, atol=1e-8, btol=1e-8, show=False)
-                m_tilde = result[0]
-                _acond = float(result[6])
-
-        # ── Tier 1 A1 MAGNÉTICO: FISTA proyectado (bounds reales para n>2500) ────
-        # El clip post-hoc descarta masa fuera del box sin redistribuir
-        # (misfit degradado ~35% en cuerpos compactos). FISTA parte del
-        # clip como warm start → el objetivo solo puede mejorar; rollback
-        # exacto con USE_PROJECTED_SOLVER=false.
         from core.config import USE_PROJECTED_SOLVER as _USE_PGD_MAG
-        if _USE_PGD_MAG and not _use_bc_m_eff:  # TRF ya es bounded; FISTA solo para LSQR
-            from exploration.solver_preconditioned import solve_inversion_pgd_fista
-            # En el branch sin anclajes A_sys/b_sys no existen (LSQR usó damp=λ).
-            # Construirlos explícitamente: sistema aumentado equivalente [G; λI] m̃ = [d; 0].
-            if not _has_anchors:
-                _eye_lam_fista = sp.eye(_n_active_sol, format='csr', dtype=np.float64) * float(lambda_mag)
-                A_sys = sp.vstack([G_aug, _eye_lam_fista]).tocsr()
+
+        def _run_solve(focus_w):
+            """Resuelve un sistema (bounds TRF o LSQR+clip+FISTA). focus_w=None → L2
+            histórico EXACTO (damp escalar / λI). focus_w!=None → smallness enfocado
+            diags(w·focus)·Wz_inv. Devuelve (m_tilde, acond); actualiza diagnósticos kappa."""
+            nonlocal _cond_a_est, _anchor_kappa_used, _auto_kappa_adjusted
+            A_sys = None
+            b_sys = None
+            if _has_anchors:
+                def _assemble_anchor(_ak):
+                    _ws = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64)
+                    _ws = np.where(_anchor_active, float(_ak) * float(lambda_mag), _ws)
+                    if focus_w is not None:
+                        _ws = np.where(_free_mask, _ws * focus_w, _ws)
+                    _blk = sp.diags(_ws) @ Wz_inv
+                    return (sp.vstack([G_aug, _blk]).tocsr(),
+                            np.concatenate([d_aug, _ws * _small_target]))
+
+                A_sys, b_sys = _assemble_anchor(_anchor_kappa_used)
+                # ── Dynamic Kappa Adaptation (port Fase 16) ──────────────────
+                _col_sq = np.array(A_sys.power(2).sum(axis=0)).ravel()
+                _nz = _col_sq > 0.0
+                if _nz.any():
+                    _mx, _mn = float(np.max(_col_sq)), float(np.min(_col_sq[_nz]))
+                    if _mn > 0.0:
+                        _cond_a_est = float(np.sqrt(_mx / _mn))
+                if auto_kappa and _cond_a_est is not None and _cond_a_est > 1e12:
+                    _scale = 1e12 / _cond_a_est
+                    _anchor_kappa_used = float(anchor_kappa) * _scale
+                    _auto_kappa_adjusted = True
+                    print(
+                        f"[MAG FASE 16] cond(A)~{_cond_a_est:.2e} > 1e12: anchor_kappa "
+                        f"escalado ×{_scale:.2e} ({anchor_kappa:.0e}→{_anchor_kappa_used:.2e})"
+                    )
+                    A_sys, b_sys = _assemble_anchor(_anchor_kappa_used)
+                if _use_bc_m_eff:
+                    from scipy.optimize import lsq_linear as _lsq_linear_m
+                    _bc = _lsq_linear_m(A_sys, b_sys, bounds=(_lb_tilde_m, _ub_tilde_m),
+                                        method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300)
+                    _mt, _ac = _bc.x, float('nan')
+                    print("[MAG/ANCLA] lsq_linear (bound-constrained, TRF+LSQR) finalizado.")
+                else:
+                    _res = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
+                    _mt, _ac = _res[0], float(_res[6])
+            elif focus_w is None:
+                # L2 sin anclajes: damp escalar / λI (byte-idéntico al motor histórico).
+                if _use_bc_m_eff:
+                    from scipy.optimize import lsq_linear as _lsq_linear_m
+                    _eye_lam_m = sp.eye(_n_active_sol, format='csr', dtype=np.float64) * float(lambda_mag)
+                    A_sys = sp.vstack([G_aug, _eye_lam_m]).tocsr()
+                    b_sys = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
+                    _bc = _lsq_linear_m(A_sys, b_sys, bounds=(_lb_tilde_m, _ub_tilde_m),
+                                        method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300)
+                    _mt, _ac = _bc.x, float('nan')
+                else:
+                    _res = lsqr(G_aug, d_aug, damp=float(lambda_mag), iter_lim=500, atol=1e-8, btol=1e-8, show=False)
+                    _mt, _ac = _res[0], float(_res[6])
+            else:
+                # compact sin anclajes: bloque smallness enfocado diags(λ·focus)·Wz_inv.
+                _ws = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64) * focus_w
+                _blk = sp.diags(_ws) @ Wz_inv
+                A_sys = sp.vstack([G_aug, _blk]).tocsr()
                 b_sys = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
-            _t_pgd_mag = time.perf_counter()
-            m_tilde, _pgd_info = solve_inversion_pgd_fista(
-                A_sys, b_sys, _lb_tilde_m, _ub_tilde_m, x0=m_tilde,
-            )
+                if _use_bc_m_eff:
+                    from scipy.optimize import lsq_linear as _lsq_linear_m
+                    _bc = _lsq_linear_m(A_sys, b_sys, bounds=(_lb_tilde_m, _ub_tilde_m),
+                                        method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300)
+                    _mt, _ac = _bc.x, float('nan')
+                else:
+                    _res = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
+                    _mt, _ac = _res[0], float(_res[6])
+
+            # ── Tier 1 A1 MAGNÉTICO: FISTA proyectado (bounds reales, solo path LSQR) ──
+            # El clip post-hoc descarta masa fuera del box; FISTA parte del clip como warm
+            # start → el objetivo solo mejora. Rollback exacto con USE_PROJECTED_SOLVER=false.
+            if _USE_PGD_MAG and not _use_bc_m_eff:
+                from exploration.solver_preconditioned import solve_inversion_pgd_fista
+                if A_sys is None:   # L2 sin anclajes usó damp=λ → reconstruir [G; λI].
+                    _eye_lam_fista = sp.eye(_n_active_sol, format='csr', dtype=np.float64) * float(lambda_mag)
+                    A_sys = sp.vstack([G_aug, _eye_lam_fista]).tocsr()
+                    b_sys = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
+                _t_pgd_mag = time.perf_counter()
+                _mt, _pgd_info = solve_inversion_pgd_fista(A_sys, b_sys, _lb_tilde_m, _ub_tilde_m, x0=_mt)
+                print(f"[SOLVER MAG] FISTA proyectado en {time.perf_counter()-_t_pgd_mag:.1f}s.")
+                if solver_meta is not None:
+                    solver_meta["pgd_magnetic"] = _pgd_info
+            return _mt, _ac
+
+        # ── Bucle IRLS minimum-support (L2 = 1 iteración sin foco) ─────────────
+        _compact_hist: list = []
+        _focus_w = None
+        _eps = None
+        _eps_floor = max(float(compact_eps), 1e-3)
+        m_tilde = None
+        _acond = float("nan")
+        for _irls_it in range(_n_irls):
+            m_tilde, _acond = _run_solve(_focus_w)
+            if _reg_norm == "l2":
+                break
+            # Foco sobre el contraste físico c = Wz_inv·m̃ (χ). f_i=1/√(c²+ε²) media-1
+            # sobre celdas libres → concentra la penalización donde c≈0 (vacía el fondo)
+            # y la relaja donde hay cuerpo. ε se enfría por iteración.
+            _c = Wz_inv @ m_tilde
+            _c_free = np.abs(_c[_free_mask]) if _free_mask.any() else np.abs(_c)
+            if _eps is None:
+                _eps = (max(_eps_floor, 0.5 * float(np.percentile(_c_free, 90)))
+                        if _c_free.size else _eps_floor)
+            _raw = 1.0 / np.sqrt(_c ** 2 + _eps ** 2)
+            _den = float(np.mean(_raw[_free_mask])) if _free_mask.any() else float(np.mean(_raw))
+            _den = _den if _den > 1e-12 else 1.0
+            _fw_new = np.clip(_raw / _den, 0.05, 20.0)
+            _delta = (float(np.linalg.norm(_fw_new - _focus_w) / max(np.linalg.norm(_fw_new), 1e-12))
+                      if _focus_w is not None else 1.0)
+            _focus_w = _fw_new
+            _compact_hist.append({"iter": _irls_it, "eps": float(_eps), "focus_delta": _delta})
+            _eps = max(_eps * 0.7, _eps_floor)
+            if _irls_it > 0 and _delta < float(compact_tol):
+                break
+        if _reg_norm != "l2":
             print(
-                f"[SOLVER MAG] FISTA proyectado en {time.perf_counter()-_t_pgd_mag:.1f}s "
-                f"(post-LSQR+warm-start)."
+                f"[MAG FASE 24B] norma '{_reg_norm}': {len(_compact_hist)} iter IRLS, "
+                f"delta_focus_final={_compact_hist[-1]['focus_delta']:.2e} eps_floor={_eps_floor:.3f}"
             )
-            if solver_meta is not None:
-                solver_meta["pgd_magnetic"] = _pgd_info
 
         # Destransformación Li & Oldenburg: m = W_z^{-1} · m̃ (susceptibilidad real).
         susc_contrast_sol = Wz_inv @ m_tilde
@@ -1067,6 +1128,10 @@ class MagnetometryInversion:
             solver_meta["cond_a_estimated"] = float(_cond_a_est) if _cond_a_est is not None else None
             solver_meta["anchor_kappa_used"] = float(_anchor_kappa_used) if _has_anchors else None
             solver_meta["auto_kappa_adjusted"] = bool(_auto_kappa_adjusted)
+            # FASE 20B Tarea 6: norma de regularización + diagnóstico IRLS compacto
+            solver_meta["regularization_norm"] = _reg_norm
+            solver_meta["compact_irls_iters"] = len(_compact_hist)
+            solver_meta["compact_eps_floor"] = float(_eps_floor) if _reg_norm != "l2" else None
             solver_meta["field_unit_vector"] = [float(v) for v in forward_model.f_hat]
             # FASE 20B Tarea 3: diagnóstico de dominio observable (R-05)
             solver_meta["prune_observable_domain"] = bool(prune_observable_domain)
