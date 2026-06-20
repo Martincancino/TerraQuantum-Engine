@@ -763,6 +763,18 @@ class MagnetometryInversion:
         if _has_anchors:
             _w_small = np.full(n_active, float(lambda_mag), dtype=np.float64)
             _w_small = np.where(_anchor_active, float(anchor_kappa) * float(lambda_mag), _w_small)
+            # FASE 20B Tarea 1 — anclaje en MAGNITUD (verificado, NO portar el fix de
+            # gravedad aquí). El bloque smallness magnético es `diags(w)·Wz_inv`, así que
+            # la fila de la celda anclada penaliza
+            #     w·((Wz_inv·m̃) − target) = w·(susc_físico − target).
+            # Es decir, YA opera en el espacio FÍSICO de la susceptibilidad y el target es
+            # el contraste físico medido (= χ, porque base_susc=0) → ancla χ directamente,
+            # sin atenuación por profundidad. Esto difiere del motor de GRAVEDAD, cuyo
+            # bloque es `diags(_ws)` (identidad en m̃) y por eso necesitó dividir el target
+            # por diag(Wz_inv) (Fase 25B). Medido 2026-06-20: con datos no degenerados, una
+            # celda anclada a χ=0.3 recupera 0.3000 a y=15/75/135 m (ver
+            # tests/test_fase20b_anchor_magnitude.py). Dividir el target por diag(Wz_inv)
+            # aquí SOBRE-corregiría a χ=contraste/wz → NO hacerlo.
             _small_block = sp.diags(_w_small) @ Wz_inv
             _small_target = np.zeros(n_active, dtype=np.float64)
             _small_target[_anchor_active] = _anchor_value_active[_anchor_active]
