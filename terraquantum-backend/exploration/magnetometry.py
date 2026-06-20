@@ -69,16 +69,57 @@ def field_unit_vector(inclination_deg: float, declination_deg: float) -> np.ndar
     return f / n if n > 0 else f
 
 
-def _sigma_adaptive(d_observed: np.ndarray) -> np.ndarray:
+def _sigma_adaptive(d_observed: np.ndarray, detect_outliers: bool = False) -> tuple:
     """
     Sigma calibrado a la amplitud de los datos (Li & Oldenburg / SimPEG), idéntico
     en forma al de gravimetry: invariante de escala, funciona en nT directamente.
 
         sigma_i = max(0.02 · |d_obs_i|,  0.01 · data_range)
+
+    ROBUST VERSION (FASE 20B Tarea 4, port de gravimetry Fase 18):
+
+    Detección de outliers por MAD (Median Absolute Deviation):
+    - is_outlier = |d_i − median(d)| > 3 · 1.4826 · MAD
+    - los outliers se downpesan 10× (sigma permisivo) → no dilatan el sigma global
+    - data_range limpio desde percentiles p5–p95 (no min–max) cuando hay outliers
+
+    CAVEAT: el downweighting 10× es heurístico. Para surveys muy anómalos (>10%
+    outliers) el usuario debe inspeccionar el CSV o bajar el umbral.
+
+    Referencia: Li & Oldenburg 1998; Hampel et al. 1986 (estadística robusta).
+
+    Returns
+    -------
+    sigma      : np.ndarray
+    is_outlier : np.ndarray[bool]  — True para sensores marcados como outliers
     """
-    data_range = max(float(np.max(d_observed) - np.min(d_observed)), 1e-30)
-    sigma = np.maximum(0.02 * np.abs(d_observed), 0.01 * data_range)
-    return np.maximum(sigma, 1e-30)
+    d = np.asarray(d_observed, dtype=np.float64)
+
+    if detect_outliers:
+        median = np.median(d)
+        mad = np.median(np.abs(d - median))
+        sigma_est = 1.4826 * mad
+        outlier_threshold = 3.0 * sigma_est
+        is_outlier = np.abs(d - median) > outlier_threshold
+
+        if is_outlier.any():
+            clean = d[~is_outlier]
+            data_range = max(
+                float(np.percentile(clean, 95) - np.percentile(clean, 5)),
+                1e-30,
+            )
+        else:
+            data_range = max(float(np.max(d) - np.min(d)), 1e-30)
+    else:
+        data_range = max(float(np.max(d) - np.min(d)), 1e-30)
+        is_outlier = np.zeros(len(d), dtype=bool)
+
+    sigma = np.maximum(0.02 * np.abs(d), 0.01 * data_range)
+
+    if is_outlier.any():
+        sigma[is_outlier] = 10.0 * sigma[is_outlier]
+
+    return np.maximum(sigma, 1e-30), is_outlier
 
 
 class MagnetometryForward:
@@ -470,6 +511,12 @@ class MagnetometryInversion:
         # ── Data weighting ───────────────────────────────────────────────────
         noise_floor=0.02,
         noise_pct=0.02,
+        # ── FASE 20B Tarea 4: Robust sigma (MAD outlier detection) — port Fase 18 ─
+        # Si True, detecta outliers |d_i − median| > 3·MAD y los downpesa 10×.
+        # Default False (backward-compat con calls directos/tests/joint). El path de
+        # producción (geophysics_service) lo activa vía params.robust_sigma. Solo surte
+        # efecto en el path sentinel (noise_floor=noise_pct=0.02, sigma adaptivo).
+        detect_outliers: bool = False,
         # ── Depth weighting (FASE 9B-2: pre-condicionamiento algebraico) ─────
         # Cambio de variable Li & Oldenburg: W_z=diag((depth+z0)^(-β/2)) multiplica
         # TODOS los bloques (datos, smallness, Laplaciano); el solver opera sobre
@@ -656,8 +703,15 @@ class MagnetometryInversion:
             )
 
         # ── Formal Data Weighting Wd — sigma adaptivo ────────────────────────
+        # FASE 20B Tarea 4: detect_outliers activa MAD; solo en el path sentinel.
+        _is_outlier = np.zeros(n_sensors, dtype=bool)
         if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma = _sigma_adaptive(d_observed)
+            sigma, _is_outlier = _sigma_adaptive(d_observed, detect_outliers=detect_outliers)
+            if detect_outliers and _is_outlier.any():
+                print(
+                    f"[MAG SIGMA] {int(_is_outlier.sum())} outlier(s) detectado(s) "
+                    f"(MAD > 3σ). Downweighting ×10."
+                )
         else:
             sigma = np.maximum(noise_floor + noise_pct * np.abs(d_observed), 1e-30)
         Wd = sp.diags(1.0 / sigma)
@@ -954,9 +1008,8 @@ class MagnetometryInversion:
         else:
             relative_score_full[active_cells] = np.clip(1.0 - (voxel_error_active / max_voxel_error), 0.0, 1.0)
 
-        _sigma_diag = _sigma_adaptive(d_observed) if (noise_floor == 0.02 and noise_pct == 0.02) \
-            else np.maximum(noise_floor + noise_pct * np.abs(d_observed), 1e-30)
-        _chi2_final = float(np.sum((residual_sensor / _sigma_diag) ** 2)) / max(n_sensors, 1)
+        # Reusa el sigma ya computado (incluye outlier downweighting si aplica).
+        _chi2_final = float(np.sum((residual_sensor / sigma) ** 2)) / max(n_sensors, 1)
 
         print(
             f"[MAG INVERSIÓN] Convergencia. Residual L2: {residual_error:.4e} | "
@@ -980,6 +1033,9 @@ class MagnetometryInversion:
             solver_meta["field_unit_vector"] = [float(v) for v in forward_model.f_hat]
             # FASE 20B Tarea 3: diagnóstico de dominio observable (R-05)
             solver_meta["prune_observable_domain"] = bool(prune_observable_domain)
+            # FASE 20B Tarea 4: outliers detectados (MAD) y downpesados
+            solver_meta["detect_outliers"] = bool(detect_outliers)
+            solver_meta["n_outliers"] = int(np.sum(_is_outlier))
             solver_meta["n_dead_voxels"] = int(_n_dead)
             solver_meta["n_observable"] = int(_n_obs_domain)
             solver_meta["observable_ratio"] = round(float(_n_obs_domain) / max(n_active, 1), 4)
@@ -1081,7 +1137,7 @@ class MagnetometryInversion:
 
         # ── Data weighting Wd (sigma adaptivo, igual que el solver) ───────────
         if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma = _sigma_adaptive(d_observed)
+            sigma, _ = _sigma_adaptive(d_observed, detect_outliers=False)
         else:
             sigma = np.maximum(noise_floor + noise_pct * np.abs(d_observed), 1e-30)
         Wd = sp.diags(1.0 / sigma)
