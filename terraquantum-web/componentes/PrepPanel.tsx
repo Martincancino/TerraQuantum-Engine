@@ -353,13 +353,16 @@ function buildVoxelModelFromBackend(data: unknown): BackendVoxelModel | null {
   };
 }
 
-type GravityCsvPreviewPanelProps = {
+type PrepPanelProps = {
   // FASE 20 — Sondajes que anclan la inversión (combo grav+sondajes). Vienen del
-  // BoreholeUploadPanel vía Exploration3DView. Se inyectan en el payload de invert.
+  // BoreholeUploadPanel (vista «Preparación»). Se empaquetan en el paquete CSV.
   boreholes?: GravityCsvInvertPayload["boreholes"];
 };
 
-export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewPanelProps = {}) {
+// PrepPanel (ex GravityCsvPreviewPanel) — vista «Preparación». Importa/valida el
+// survey, recolecta parámetros y genera el paquete CSV. NO invierte: la inversión
+// ocurre en LoadPanel (vista 3D).
+export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   const {
     fileGravimetry, setFileGravimetry,
     fileMagnetometry, setFileMagnetometry,

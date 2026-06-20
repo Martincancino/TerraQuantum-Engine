@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 
-import GravityCsvPreviewPanel from "../GravityCsvPreviewPanel";
+import PrepPanel from "../PrepPanel";
 import BoreholeUploadPanel from "../BoreholeUploadPanel";
 import MultimodalComboPanel from "../MultimodalComboPanel";
 import { boreholeSurveyToIntervals } from "../../lib/terraquantum/frontendApi";
@@ -12,13 +12,13 @@ import { boreholeSurveyToIntervals } from "../../lib/terraquantum/frontendApi";
  *
  * Aloja los paneles que antes vivían en el sidebar de Exploration3DView:
  * importar/validar el survey gravimétrico (CSV), cargar sondajes y planificar
- * el combo multimodal. Al ejecutar la inversión, GravityCsvPreviewPanel navega
- * automáticamente a la vista "figura 3d". No calcula física: solo orquesta los
+ * el combo multimodal. PrepPanel genera el paquete CSV que luego se sube en la
+ * vista 3D (LoadPanel) para invertir. No calcula física: solo orquesta los
  * paneles y consume APIs del backend.
  */
 export default function PreparacionView() {
   // FASE 20 — Sondajes confirmados en BoreholeUploadPanel, en el formato que el
-  // payload de inversión consume. Se pasan a GravityCsvPreviewPanel (anclaje) y al
+  // payload de inversión consume. Se pasan a PrepPanel (anclaje/empaquetado) y al
   // panel multimodal (conteo que decide el combo recomendado).
   const [boreholeIntervals, setBoreholeIntervals] = useState<
     ReturnType<typeof boreholeSurveyToIntervals>
@@ -56,7 +56,7 @@ export default function PreparacionView() {
             title="Survey gravimétrico (CSV)"
             desc="Importar y validar el survey gravimétrico (CSV) antes de invertir."
           >
-            <GravityCsvPreviewPanel boreholes={boreholeIntervals} />
+            <PrepPanel boreholes={boreholeIntervals} />
           </Section>
 
           {/* 02 — Sondajes (Fase 20) */}

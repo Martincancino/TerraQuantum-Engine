@@ -49,7 +49,8 @@ terraquantum-web/
 │  │  └─ RunComparePanel.tsx
 │  │
 │  ├─ Scene3D.tsx
-│  ├─ GravityCsvPreviewPanel.tsx
+│  ├─ PrepPanel.tsx            (prep: genera el paquete CSV)
+│  ├─ LoadPanel.tsx            (3D: sube paquete + carga modelo)
 │  └─ GravityCorrectionWizard.tsx
 │
 ├─ lib/
