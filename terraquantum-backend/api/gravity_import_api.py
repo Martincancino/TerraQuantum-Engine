@@ -785,6 +785,86 @@ async def invert_with_corrections(
                 pass
 
 
+@router_v2.post("/export-clean-csv")
+@limiter.limit("10/minute")
+async def export_clean_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    strict: bool = Query(True),
+    allow_g_raw: bool = Query(False),
+    data_type: str = Query("gravity"),  # "gravity" | "magnetic"
+):
+    """FASE 19 — Devuelve el CSV LIMPIO (validado + enriquecido) descargable.
+
+    Toma el CSV sucio, lo pasa por el mismo import que la inversión
+    (`import_gravity_csv_v1`: normaliza unidades, detecta coordenadas, captura
+    sigma/elevación/lat-lon por estación) y serializa el resultado a un CSV con
+    columnas normalizadas (`services.gravity_import_service.build_clean_csv_from_import`).
+    No recalcula física: refleja exactamente lo que consumirá el solver.
+
+    Responde `text/csv` con `Content-Disposition: attachment`. Si el import falla,
+    responde 422 con los errores (mismo contrato que /invert en etapa de import).
+    """
+    from fastapi.responses import PlainTextResponse
+    from services.gravity_import_service import build_clean_csv_from_import
+
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="File must end with .csv")
+    if data_type not in ("gravity", "magnetic"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"data_type inválido: '{data_type}'. Use 'gravity' o 'magnetic'.",
+        )
+
+    temp_filename = f"{uuid.uuid4()}.csv"
+    temp_path = Path(TMP_DIR) / temp_filename
+    try:
+        content = await file.read()
+        if len(content) > CSV_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Archivo CSV demasiado grande. Máximo permitido: {CSV_MAX_BYTES // 1048576} MB.",
+            )
+        with open(temp_path, "wb") as f:
+            f.write(content)
+
+        result = import_gravity_csv_v1(
+            temp_path, strict=strict, allow_g_raw=allow_g_raw,
+            data_kind="magnetic" if data_type == "magnetic" else "gravity",
+        )
+        if result.status != "ok":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "CSV_IMPORT_FAILED",
+                    "message": "No se pudo validar el CSV para exportar la versión limpia.",
+                    "errors": result.errors,
+                    "warnings": result.warnings,
+                },
+            )
+
+        clean_csv = build_clean_csv_from_import(
+            result, data_kind="magnetic" if data_type == "magnetic" else "gravity",
+        )
+        _base = Path(file.filename).stem
+        out_name = f"{_base}_clean.csv"
+        return PlainTextResponse(
+            content=clean_csv,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{out_name}"',
+                "X-TQ-Clean-Rows": str(len(result.observations or [])),
+                "X-TQ-Import-Warnings": str(len(result.warnings or [])),
+            },
+        )
+    finally:
+        if temp_path.exists():
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
 @router.post("/invert", response_model=GravityImportInvertResponse)
 @limiter.limit("10/minute")
 async def invert_gravity_csv(

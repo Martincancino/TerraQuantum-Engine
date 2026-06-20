@@ -1687,3 +1687,80 @@ async def run_field_data_inversion_with_corrections(
         warnings_out.append(f"inversion_report.json no persistido: {_rep_exc}")
 
     return response
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FASE 19 — Export de "CSV limpio"
+# Serializa el resultado de import validado/enriquecido a un CSV descargable con
+# columnas normalizadas (coordenadas + valor medido + sigma/elev/lat-lon cuando
+# existan). NO recalcula física: solo refleja lo que import_gravity_csv_v1 ya
+# produjo (unidades normalizadas, elevación enriquecida, sigma por estación).
+# ═════════════════════════════════════════════════════════════════════════════
+def build_clean_csv_from_import(
+    result: GravityImportResult,
+    *,
+    data_kind: str = "gravity",
+) -> str:
+    """Construye el texto del CSV limpio a partir de un GravityImportResult.
+
+    Para gravimetría el valor se exporta en mGal (el slot interno `g` está en m/s²
+    tras el import → ×1e5). Para magnetometría el valor es TMI (nT) tal cual.
+    Las columnas opcionales (sigma_mgal, elev_masl, lat_deg, lon_deg, magnetic_nt)
+    solo aparecen si el import las pobló (listas paralelas a observations).
+
+    Devuelve el CSV como string (UTF-8, separador coma). Si no hay observaciones,
+    devuelve solo la fila de cabecera.
+    """
+    import io
+
+    obs = list(result.observations or [])
+    n = len(obs)
+    is_magnetic = (data_kind == "magnetic")
+
+    def _parallel(lst: "Optional[list]") -> "Optional[list]":
+        return lst if (lst is not None and len(lst) == n) else None
+
+    elevs = _parallel(result.station_elevations)
+    sigmas = _parallel(result.station_uncertainties)
+    mags = _parallel(result.magnetic_values)
+    latlon = _parallel(result.raw_latlon_elev)
+
+    value_col = "tmi_nt" if is_magnetic else "g_mgal"
+    headers = ["station_id", "x_m", "y_m", "z_m", value_col]
+    if not is_magnetic and sigmas is not None:
+        headers.append("sigma_mgal")
+    if elevs is not None:
+        headers.append("elev_masl")
+    if latlon is not None:
+        headers += ["lat_deg", "lon_deg"]
+    if not is_magnetic and mags is not None:
+        headers.append("magnetic_nt")
+
+    def _fmt(v) -> str:
+        if v is None:
+            return ""
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return ""
+        if not math.isfinite(fv):
+            return ""
+        return f"{fv:.6g}"
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(headers)
+    for i, o in enumerate(obs):
+        value = o.g if is_magnetic else o.g * 1e5  # m/s² → mGal para gravimetría
+        row = [f"ST{i + 1:04d}", _fmt(o.x_m), _fmt(o.y_m), _fmt(o.z_m), _fmt(value)]
+        if not is_magnetic and sigmas is not None:
+            row.append(_fmt(sigmas[i]))
+        if elevs is not None:
+            row.append(_fmt(elevs[i]))
+        if latlon is not None:
+            ll = latlon[i] or {}
+            row += [_fmt(ll.get("lat_deg")), _fmt(ll.get("lon_deg"))]
+        if not is_magnetic and mags is not None:
+            row.append(_fmt(mags[i]))
+        writer.writerow(row)
+    return buf.getvalue()
