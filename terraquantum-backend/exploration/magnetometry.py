@@ -380,6 +380,116 @@ class MagnetometryForward:
         )
         return G_total
 
+    def build_mvi_kernels(self, x_c_act, y_c_act, z_c_act, sensor_coords):
+        """
+        FASE 20C — Kernels de 3 componentes para MVI (Magnetic Vector Inversion).
+
+        Generaliza el kernel escalar TMI: en vez de asumir M ∝ f̂ (inducción pura),
+        computa la sensibilidad TMI a CADA componente cartesiana de la magnetización
+        por separado. El modelo MVI es un vector M=(Mx,My,Mz) por celda, DIMENSIONAL-
+        MENTE una "susceptibilidad efectiva vectorial": para inducción pura M=κ·f̂, de
+        modo que |M| recupera la susceptibilidad efectiva κ y μ0 se cancela igual que
+        en el escalar (prefactor C = B0·V/4π idéntico).
+
+        Derivación (campo dipolar proyectado sobre f̂, ejes x=Norte/y=prof/z=Este):
+            ΔT = Σ_c M_c · G_c,
+            G_c = C · [ 3·r_vec_c·(f̂·r_vec) / r⁵  −  f̂_c / r³ ],   c ∈ {x,y,z}
+        con r_vec = (celda − sensor) y C = B0·V/4π (μ0 cancelado). Cada G_c es par en
+        el signo de r_vec (igual que el escalar): r_vec_c·(f̂·r_vec) es cuadrático y el
+        término f̂_c/r³ no depende del signo → reusamos dxv = x_cell − x_sensor.
+
+        CONSISTENCIA CON EL ESCALAR (gate Paso 1): fijando M = κ·f̂ (inducción),
+            Σ_c f̂_c·G_c = C·[3(f̂·r_vec)²/r⁵ − 1/r³] = C·(3(f̂·r_vec)² − r²)/r⁵,
+        que es EXACTAMENTE el kernel escalar TMI. Reproduce el escalar a precisión de
+        máquina (Lelièvre & Oldenburg 2009; Ellis et al. 2012).
+
+        Returns
+        -------
+        (Gx, Gy, Gz) : tres CSR (n_obs × n_active), float64. Misma esparsidad
+        (mismo cutoff/KDTree); columnas alineadas con las celdas activas de entrada.
+        """
+        x_c_act = np.asarray(x_c_act, dtype=np.float64)
+        y_c_act = np.asarray(y_c_act, dtype=np.float64)
+        z_c_act = np.asarray(z_c_act, dtype=np.float64)
+        sensor_coords = np.asarray(sensor_coords, dtype=np.float64)
+
+        if len(x_c_act) == 0:
+            raise ValueError("No hay vóxeles para construir los kernels MVI.")
+        if len(sensor_coords) == 0:
+            raise ValueError("No hay sensores para construir los kernels MVI.")
+
+        n_active = len(x_c_act)
+        n_obs = len(sensor_coords)
+        eps = 1e-10 * min(self.dx, self.dy, self.dz)
+        max_workers = max(1, (os.cpu_count() or 2) - 1)
+        t_start = time.perf_counter()
+
+        print(
+            f"[MAG MVI] Kernels 3C (Gx,Gy,Gz) KDTree+ThreadPool({max_workers}w). "
+            f"n_active={n_active:,} | n_obs={n_obs:,} | cutoff={self.cutoff_radius:.0f}m | "
+            f"I={self.inclination_deg:.1f} D={self.declination_deg:.1f} B0={self.field_intensity_nt:.0f}nT"
+        )
+
+        voxel_centers = np.column_stack([x_c_act, y_c_act, z_c_act])
+        tree = cKDTree(voxel_centers)
+        cutoff_lists = tree.query_ball_point(sensor_coords, r=self.cutoff_radius)
+
+        _x, _y, _z = x_c_act, y_c_act, z_c_act
+        _fx, _fy, _fz = float(self.f_hat[0]), float(self.f_hat[1]), float(self.f_hat[2])
+        _C = self.C
+
+        def _sensor_row_mvi(i):
+            """Triplets (rows, cols) + 3 data arrays (Gx,Gy,Gz) para el sensor i."""
+            sx, sy, sz = sensor_coords[i]
+            idx = np.asarray(cutoff_lists[i], dtype=np.int32)
+            if len(idx) == 0:
+                z0 = np.empty(0, dtype=np.float64)
+                return (np.empty(0, np.int32), np.empty(0, np.int32), z0, z0.copy(), z0.copy())
+            dxv = _x[idx] - sx
+            dyv = _y[idx] - sy
+            dzv = _z[idx] - sz
+            r2 = dxv * dxv + dyv * dyv + dzv * dzv + eps
+            fdot = _fx * dxv + _fy * dyv + _fz * dzv
+            r3 = r2 ** 1.5
+            r5 = r2 ** 2.5
+            three_fdot_r5 = 3.0 * fdot / r5
+            gx = _C * (dxv * three_fdot_r5 - _fx / r3)
+            gy = _C * (dyv * three_fdot_r5 - _fy / r3)
+            gz = _C * (dzv * three_fdot_r5 - _fz / r3)
+            rows = np.full(len(idx), i, dtype=np.int32)
+            return (rows, idx, gx.astype(np.float64), gy.astype(np.float64), gz.astype(np.float64))
+
+        rows_c, cols_c, gx_c, gy_c, gz_c = [], [], [], [], []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_sensor_row_mvi, i) for i in range(n_obs)]
+            for fut in futures:
+                r, c, gx, gy, gz = fut.result()
+                rows_c.append(r); cols_c.append(c)
+                gx_c.append(gx); gy_c.append(gy); gz_c.append(gz)
+
+        rows_arr = np.concatenate(rows_c) if rows_c else np.empty(0, np.int32)
+        cols_arr = np.concatenate(cols_c) if cols_c else np.empty(0, np.int32)
+
+        def _csr(data_chunks):
+            data_arr = np.concatenate(data_chunks) if data_chunks else np.empty(0, np.float64)
+            return sp.csr_matrix((data_arr, (rows_arr, cols_arr)),
+                                 shape=(n_obs, n_active), dtype=np.float64)
+
+        Gx = _csr(gx_c)
+        Gy = _csr(gy_c)
+        Gz = _csr(gz_c)
+
+        if Gx.nnz == 0:
+            raise ValueError(
+                "Los kernels MVI quedaron vacíos. Revisa cutoff_radius, sensores y active_cells."
+            )
+
+        print(
+            f"[MAG MVI] Gx/Gy/Gz CSR: NNZ={Gx.nnz:,} c/u | "
+            f"t={time.perf_counter()-t_start:.2f}s"
+        )
+        return Gx, Gy, Gz
+
     def build_sparse_kernel(self, x_vox, y_vox, z_vox, sensor_coords):
         """API pública: trata TODOS los vóxeles como activos. Delega en _build_sparse_kernel."""
         x_vox = np.asarray(x_vox, dtype=np.float64)
@@ -1283,6 +1393,228 @@ class MagnetometryInversion:
             f"sigma_p95={float(np.percentile(std_active, 95)):.4g} SI"
         )
         return posterior_std_full
+
+    def solve_mvi_inversion_lsqr(
+        self,
+        d_observed,                     # anomalía TMI observada (nT), una por sensor
+        y_c,
+        forward_model=None,             # MagnetometryForward (requerido)
+        sensor_coords=None,
+        x_c=None,
+        z_c=None,
+        lambda_mag=1e-3,                # smallness por componente (damp en m̃)
+        alpha_spatial=1.0,              # peso de suavidad por componente
+        topography_elevations=None,
+        noise_floor=0.02,
+        noise_pct=0.02,
+        depth_beta: float = 1.5,
+        hx=None, hy=None, hz=None,
+        detect_outliers: bool = False,
+        solver_meta: Optional[dict] = None,
+    ):
+        """
+        FASE 20C — MAGNETIC VECTOR INVERSION (MVI), cartesiana y lineal.
+
+        Invierte el VECTOR de magnetización M=(Mx,My,Mz) por celda (3N incógnitas) en
+        vez de la susceptibilidad escalar, recuperando la DIRECCIÓN de magnetización
+        DESDE los datos. Esto maneja la remanencia (común en IOCG/magnetita chilena con
+        rotación tectónica de la Falla Atacama) SIN asumir la dirección a priori.
+
+        Formulación (Lelièvre & Oldenburg 2009; Ellis et al. 2012):
+            ΔT = Gx·Mx + Gy·My + Gz·Mz      (lineal en las 3 componentes)
+        El modelo M es una "susceptibilidad efectiva vectorial": para inducción pura
+        M = κ·f̂, de modo que |M| = κ (susceptibilidad efectiva, observable robusto de
+        targeting). Cartesiano = lineal y robusto; la versión esférica (no-lineal) NO
+        se hace aquí.
+
+        Regularización: smallness (λ_mag, damp) + suavidad por componente
+        (λ_spatial·L) con depth weighting de Li & Oldenburg (cambio de variable
+        m̃=W_z·m por componente, mismo Wz_inv que el motor escalar). SIN bounds de
+        no-negatividad: las componentes tienen signo (la no-negatividad solo aplicaría
+        a la AMPLITUD |M|, fuera de alcance aquí). Solver: LSQR sobre el sistema 3N.
+
+        Returns
+        -------
+        dict con (todos longitud total_voxels, NaN en aire):
+            amplitude_full              : |M| = √(Mx²+My²+Mz²)  ← campo principal MVI
+            effective_susceptibility_full: alias de |M| (κ efectiva si se asume inducción)
+            inclination_full            : inclinación efectiva (°, + hacia abajo)
+            declination_full            : declinación efectiva (°, + Este desde Norte)
+            mx_full, my_full, mz_full   : componentes recuperadas (con signo)
+            misfit_percent              : ‖d − Gm‖/‖d‖ × 100
+            relative_score_full         : score de ranking [0,1] desde la amplitud
+        """
+        print("[MAG MVI] Preparando solver MVI (3 componentes, kernel 3C TMI).")
+
+        d_observed = np.asarray(d_observed, dtype=np.float64)
+        y_c = np.asarray(y_c, dtype=np.float64)
+
+        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
+            raise ValueError(
+                "solve_mvi_inversion_lsqr requiere forward_model, sensor_coords, x_c, z_c."
+            )
+        if not np.isfinite(d_observed).all():
+            raise ValueError("d_observed (TMI) contiene NaN o Inf.")
+        if lambda_mag <= 0:
+            raise ValueError("lambda_mag debe ser mayor que 0.")
+        if alpha_spatial < 0:
+            raise ValueError("alpha_spatial no puede ser negativo.")
+
+        # ── Máscara de celdas activas (topografía; y positivo hacia abajo) ───
+        if topography_elevations is None:
+            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
+        else:
+            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
+            if topo_depth.shape[0] != self.total_voxels:
+                raise ValueError(
+                    f"topography_elevations debe tener {self.total_voxels} elementos, "
+                    f"got {topo_depth.shape[0]}."
+                )
+
+        voxel_top = y_c - (self.dy / 2.0)
+        active_cells = voxel_top >= topo_depth
+        n_active = int(np.sum(active_cells))
+        if n_active == 0:
+            raise ValueError("Ningún vóxel activo bajo la topografía dada.")
+
+        n_sensors = len(d_observed)
+        y_c_active = y_c[active_cells]
+        x_c_arr = np.asarray(x_c, dtype=np.float64)
+        z_c_arr = np.asarray(z_c, dtype=np.float64)
+
+        print(
+            f"[MAG MVI] Active cells: {n_active:,}/{self.total_voxels:,} | "
+            f"modelo 3N = {3 * n_active:,} incógnitas | n_obs={n_sensors:,}"
+        )
+
+        # ── Kernels de 3 componentes sobre celdas activas ────────────────────
+        Gx, Gy, Gz = forward_model.build_mvi_kernels(
+            x_c_arr[active_cells], y_c_active, z_c_arr[active_cells],
+            np.asarray(sensor_coords, dtype=np.float64),
+        )
+
+        # ── Data weighting Wd (sigma adaptivo, igual que el motor escalar) ───
+        _is_outlier = np.zeros(n_sensors, dtype=bool)
+        if noise_floor == 0.02 and noise_pct == 0.02:
+            sigma, _is_outlier = _sigma_adaptive(d_observed, detect_outliers=detect_outliers)
+        else:
+            sigma = np.maximum(noise_floor + noise_pct * np.abs(d_observed), 1e-30)
+        Wd = sp.diags(1.0 / sigma)
+
+        # ── Depth weighting (cambio de variable Li & Oldenburg) por componente ─
+        # Mismo Wz_inv para las 3 componentes (la profundidad es la misma).
+        z0 = 0.5 * self.dy
+        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
+        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
+        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
+        Wz_inv = sp.diags(wz_inv_diag)
+
+        # ── Bloque de datos:  Wd · [Gx·Wz_inv | Gy·Wz_inv | Gz·Wz_inv] ───────
+        Gx_s = (Wd @ Gx) @ Wz_inv
+        Gy_s = (Wd @ Gy) @ Wz_inv
+        Gz_s = (Wd @ Gz) @ Wz_inv
+        G_data = sp.hstack([Gx_s, Gy_s, Gz_s]).tocsr()    # (n_obs, 3N)
+        d_w = Wd @ d_observed
+
+        # ── Suavidad por componente: block-diag(λs·L̃, λs·L̃, λs·L̃) ─────────
+        lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
+        L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
+        L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+        L_scaled = (L_active @ Wz_inv).tocsr()
+        _z = sp.csr_matrix(L_scaled.shape)
+        L_block = sp.bmat([
+            [L_scaled, None, None],
+            [None, L_scaled, None],
+            [None, None, L_scaled],
+        ]).tocsr() * lambda_spatial
+
+        # ── Sistema aumentado: [G_data ; L_block] ; smallness vía damp=λ_mag ──
+        G_aug = sp.vstack([G_data, L_block]).tocsr()
+        d_aug = np.concatenate([d_w, np.zeros(3 * n_active, dtype=np.float64)])
+
+        print(
+            f"[MAG MVI] Ejecutando LSQR 3N. lambda_mag={lambda_mag:.2e} | "
+            f"lambda_spatial={lambda_spatial:.2e} | depth_beta={depth_beta}"
+        )
+        _res = lsqr(G_aug, d_aug, damp=float(lambda_mag), iter_lim=800,
+                    atol=1e-8, btol=1e-8, show=False)
+        m_tilde = _res[0]
+        _acond = float(_res[6])
+
+        if not np.isfinite(m_tilde).all():
+            raise RuntimeError("LSQR MVI devolvió componentes no finitas.")
+
+        # ── Destransformación por componente: m = Wz_inv · m̃ ────────────────
+        mt_x = m_tilde[0:n_active]
+        mt_y = m_tilde[n_active:2 * n_active]
+        mt_z = m_tilde[2 * n_active:3 * n_active]
+        Mx = wz_inv_diag * mt_x
+        My = wz_inv_diag * mt_y
+        Mz = wz_inv_diag * mt_z
+
+        # ── Misfit en el dominio de datos ─────────────────────────────────────
+        d_model = Gx @ Mx + Gy @ My + Gz @ Mz
+        residual_sensor = d_observed - d_model
+        observed_norm = float(np.linalg.norm(d_observed))
+        residual_error = float(np.linalg.norm(residual_sensor))
+        misfit_percent = 0.0 if observed_norm <= 0 else float((residual_error / observed_norm) * 100.0)
+        _chi2_final = float(np.sum((residual_sensor / sigma) ** 2)) / max(n_sensors, 1)
+
+        # ── PASO 3: amplitud (observable robusto) y dirección efectiva ───────
+        amplitude = np.sqrt(Mx ** 2 + My ** 2 + Mz ** 2)
+        horiz = np.sqrt(Mx ** 2 + Mz ** 2)
+        # Convención de ejes: f̂=(cosI·cosD, sinI, cosI·sinD) con x=Norte, y=prof, z=Este.
+        # → I = atan2(My, √(Mx²+Mz²)) ; D = atan2(Mz, Mx).
+        inc_eff = np.degrees(np.arctan2(My, horiz))
+        dec_eff = np.degrees(np.arctan2(Mz, Mx))
+
+        def _expand(vec_active, fill=np.nan):
+            full = np.full(self.total_voxels, fill, dtype=np.float64)
+            full[active_cells] = vec_active
+            return full
+
+        amplitude_full = _expand(amplitude)
+        inc_full = _expand(inc_eff)
+        dec_full = _expand(dec_eff)
+        mx_full, my_full, mz_full = _expand(Mx), _expand(My), _expand(Mz)
+
+        # Score relativo [0,1] desde la amplitud (ranking de targeting, NO probabilidad).
+        amax = float(np.max(amplitude)) if n_active > 0 else 0.0
+        rel_score = (amplitude / amax) if amax > 0 else np.zeros_like(amplitude)
+        relative_score_full = _expand(np.clip(rel_score, 0.0, 1.0))
+
+        if _acond > 1e12:
+            print(f"[MAG MVI] WARN cond(A)~{_acond:.2e} > 1e12. Revisar lambda_mag.")
+        print(
+            f"[MAG MVI] Convergencia. Misfit: {misfit_percent:.2f}% | "
+            f"chi2_final={_chi2_final:.4f} | cond(A)~{_acond:.2e} | "
+            f"|M|_max={amax:.4f} (SI efectiva)"
+        )
+
+        if solver_meta is not None:
+            solver_meta["magnetization_model"] = "vector"
+            solver_meta["acond"] = float(_acond)
+            solver_meta["chi2_final"] = float(_chi2_final)
+            solver_meta["misfit_percent"] = float(misfit_percent)
+            solver_meta["n_active"] = int(n_active)
+            solver_meta["n_unknowns"] = int(3 * n_active)
+            solver_meta["depth_beta"] = float(depth_beta)
+            solver_meta["amplitude_max"] = float(amax)
+            solver_meta["detect_outliers"] = bool(detect_outliers)
+            solver_meta["n_outliers"] = int(np.sum(_is_outlier))
+            solver_meta["field_unit_vector"] = [float(v) for v in forward_model.f_hat]
+
+        return {
+            "amplitude_full": amplitude_full,
+            "effective_susceptibility_full": amplitude_full,
+            "inclination_full": inc_full,
+            "declination_full": dec_full,
+            "mx_full": mx_full,
+            "my_full": my_full,
+            "mz_full": mz_full,
+            "misfit_percent": misfit_percent,
+            "relative_score_full": relative_score_full,
+        }
 
 
 def sweep_q_ratio(

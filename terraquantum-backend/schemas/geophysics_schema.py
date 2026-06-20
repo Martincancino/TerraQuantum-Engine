@@ -376,6 +376,21 @@ class GeophysicsInvertInput(BaseModel):
         1.0, gt=0.0, le=10.0,
         description="Susceptibilidad máxima permitida (SI). Default 1.0. Subir para magnetita masiva.",
     )
+    # ── FASE 20C: Magnetic Vector Inversion (MVI) — modo OPT-IN ────────────────
+    # "scalar" (default) = motor magnético histórico (susceptibilidad escalar, asume
+    #            magnetización inducida ∥ B0). Camino byte-idéntico, cero regresión.
+    # "vector" = MVI cartesiano lineal: invierte el VECTOR M=(Mx,My,Mz) por celda y
+    #            recupera la DIRECCIÓN de magnetización desde los datos (maneja
+    #            remanencia oblicua, común en IOCG/magnetita chilena + Falla Atacama,
+    #            SIN asumir la dirección). El observable de targeting es la amplitud
+    #            |M| (susceptibilidad efectiva). Sugerido cuando sweep_q_ratio (Fase 12)
+    #            detecta Q>0.5 (evidencia de remanencia). Lelièvre & Oldenburg 2009.
+    magnetization_model: Literal["scalar", "vector"] = Field(
+        "scalar",
+        description="Modelo de magnetización magnética: 'scalar' (susceptibilidad, "
+                    "default, asume inducción) o 'vector' (MVI: invierte Mx,My,Mz y "
+                    "recupera la dirección desde los datos → maneja remanencia).",
+    )
     # ── FASE 9C-2: Inversión Conjunta (Joint Inversion / Cross-Gradient) ──────
     # Cuando el input trae A LA VEZ señal gravimétrica real (g≠0) y magnética
     # (magnetic_nt≠0), el servicio rutea al Orquestador de Inversión Conjunta
