@@ -1,0 +1,185 @@
+{
+  "dataset": "DO-27 Tli Kwi Cho (Astic & Oldenburg 2020) — synthetic-based-on, ground truth EXTERNO",
+  "ingestion": {
+    "gravity": {
+      "n_stations": 961,
+      "easting_range": [
+        557000.0,
+        557600.0
+      ],
+      "northing_range": [
+        7133300.0,
+        7133900.0
+      ],
+      "elevation_range": [
+        426.3894,
+        441.0743
+      ],
+      "bouguer_mgal_range": [
+        -2.02544,
+        -0.12392
+      ],
+      "n_nan": 0
+    },
+    "magnetic": {
+      "n_stations": 961,
+      "n_dropped_nan": 2,
+      "tmi_nt_range": [
+        -9.75816,
+        114.4496
+      ],
+      "n_nan": 0,
+      "igrf": {
+        "inclination_deg": 83.8,
+        "declination_deg": 25.4,
+        "field_intensity_nt": 60308.0
+      }
+    }
+  },
+  "ground_truth": {
+    "gravity_pipe": {
+      "centroid_easting": 557264.1,
+      "centroid_northing": 7133585.5,
+      "centroid_elevation": 256.3,
+      "top_elevation": 405.0,
+      "surface_elevation": 415.0,
+      "depth_to_top_m": 10.0,
+      "horizontal_extent_m": [
+        280.0,
+        320.0
+      ],
+      "n_body_cells": 18117
+    },
+    "magnetic_body": {
+      "centroid_easting": 557314.9,
+      "centroid_northing": 7133628.6,
+      "centroid_elevation": 262.6,
+      "top_elevation": 405.0,
+      "surface_elevation": 415.0,
+      "depth_to_top_m": 10.0,
+      "horizontal_extent_m": [
+        280.0,
+        320.0
+      ],
+      "n_body_cells": 18117
+    }
+  },
+  "local_frame": {
+    "origin_east": 557000.0,
+    "origin_north": 7133300.0,
+    "datum_elev": 456.0743
+  },
+  "mesh": {
+    "nx": 12,
+    "ny": 10,
+    "nz": 12,
+    "block_size_m": 50.0,
+    "n_sensors_used": 256
+  },
+  "results": {
+    "gravity_only": {
+      "horizontal_error_m": 53.7,
+      "centroid_depth_error_m": 32.8,
+      "recovered_centroid_depth_m": 166.9,
+      "true_centroid_depth_m": 199.7,
+      "recovered_top_depth_m": 75.0,
+      "true_top_depth_m": 51.1,
+      "top_depth_error_m": 23.9,
+      "n_strong": 103,
+      "recovered_easting": 557314.8,
+      "recovered_northing": 7133567.7,
+      "recovered_elevation": 289.2,
+      "true_centroid_utm": [
+        557264.1,
+        7133585.5
+      ],
+      "misfit_percent": 0.072
+    },
+    "magnetic_only": {
+      "horizontal_error_m": 74.8,
+      "centroid_depth_error_m": 73.1,
+      "recovered_centroid_depth_m": 120.4,
+      "true_centroid_depth_m": 193.5,
+      "recovered_top_depth_m": 75.0,
+      "true_top_depth_m": 51.1,
+      "top_depth_error_m": 23.9,
+      "n_strong": 42,
+      "recovered_easting": 557309.8,
+      "recovered_northing": 7133703.3,
+      "recovered_elevation": 335.7,
+      "true_centroid_utm": [
+        557314.9,
+        7133628.6
+      ],
+      "misfit_percent": 1.003
+    },
+    "joint_gravity": {
+      "horizontal_error_m": 74.6,
+      "centroid_depth_error_m": 108.5,
+      "recovered_centroid_depth_m": 91.2,
+      "true_centroid_depth_m": 199.7,
+      "recovered_top_depth_m": 75.0,
+      "true_top_depth_m": 51.1,
+      "top_depth_error_m": 23.9,
+      "n_strong": 26,
+      "recovered_easting": 557337.5,
+      "recovered_northing": 7133572.5,
+      "recovered_elevation": 364.9,
+      "true_centroid_utm": [
+        557264.1,
+        7133585.5
+      ],
+      "misfit_percent": 0.078
+    },
+    "joint_magnetic": {
+      "horizontal_error_m": 89.6,
+      "centroid_depth_error_m": 55.0,
+      "recovered_centroid_depth_m": 138.5,
+      "true_centroid_depth_m": 193.5,
+      "recovered_top_depth_m": 75.0,
+      "true_top_depth_m": 51.1,
+      "top_depth_error_m": 23.9,
+      "n_strong": 42,
+      "recovered_easting": 557302.5,
+      "recovered_northing": 7133717.3,
+      "recovered_elevation": 317.6,
+      "true_centroid_utm": [
+        557314.9,
+        7133628.6
+      ],
+      "misfit_percent": 1.627
+    },
+    "joint_history": [
+      {
+        "iter": 0,
+        "misfit_g": 0.072,
+        "misfit_m": 1.407
+      },
+      {
+        "iter": 1,
+        "misfit_g": 0.062,
+        "misfit_m": 3.132
+      },
+      {
+        "iter": 2,
+        "misfit_g": 0.078,
+        "misfit_m": 1.627
+      }
+    ]
+  },
+  "reference": {
+    "source": "Astic & Oldenburg 2020 — ground truth de sondajes + inv. de referencia L2/PGI",
+    "note": "Las referencias L2/PGI localizan el pipe central somero; aquí se compara TQ vs ese ground truth."
+  },
+  "verdict": {
+    "targeting_tol_m": 100.0,
+    "gravity_only_horiz_m": 53.7,
+    "magnetic_only_horiz_m": 74.8,
+    "joint_grav_horiz_m": 74.6,
+    "joint_mag_horiz_m": 89.6,
+    "gravity_targeting_pass": true,
+    "magnetic_targeting_pass": true
+  },
+  "elapsed_s": 1559.1,
+  "table_markdown": "| Inversión | err horiz | err prof centroide | err prof techo | misfit |\n|-----------|-----------|--------------------|----------------|--------|\n| Gravimetría sola | 53.7m | 32.8m | 23.9m | 0.072% |\n| Magnetometría sola | 74.8m | 73.1m | 23.9m | 1.003% |\n| Joint — gravedad | 74.6m | 108.5m | 23.9m | 0.078% |\n| Joint — magnetismo | 89.6m | 55.0m | 23.9m | 1.627% |"
+}
