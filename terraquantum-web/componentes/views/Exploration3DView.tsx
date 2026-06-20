@@ -1,14 +1,11 @@
 "use client";
 
-import React, { Suspense, useEffect, useMemo, useState } from "react";
+import React, { Suspense, useEffect, useMemo } from "react";
 import { Canvas } from "@react-three/fiber";
 import { useAppStore } from "../../store/useAppStore";
 import { VoxelMineralModel } from "../../lib/terraQuantumGeology";
 
 import Scene3D from "../Scene3D";
-import GravityCsvPreviewPanel from "../GravityCsvPreviewPanel";
-import BoreholeUploadPanel from "../BoreholeUploadPanel";
-import MultimodalComboPanel from "../MultimodalComboPanel";
 import MviDirectionPanel from "../MviDirectionPanel";
 import InversionQualityBadge from "../InversionQualityBadge";
 import WorkspaceLayout from "../workspace/WorkspaceLayout";
@@ -33,7 +30,6 @@ import {
   getGeophysicsStatus,
   getProjectRunDetail,
   exportRunUrl,
-  boreholeSurveyToIntervals,
 } from "../../lib/terraquantum/frontendApi";
 import { AppState, VoxelInfo } from "../../store/useAppStore";
 import type { BlockModelDataMode } from "../../store/useAppStore";
@@ -186,12 +182,6 @@ function hasValidElevationRange(range: AppState["blockModelElevationRange"]) {
 }
 
 export default function Exploration3DView() {
-  // FASE 20 — Sondajes confirmados en BoreholeUploadPanel, en el formato que el
-  // payload de inversión consume. Se pasan a GravityCsvPreviewPanel (anclaje) y al
-  // panel multimodal (conteo que decide el combo recomendado).
-  const [boreholeIntervals, setBoreholeIntervals] = useState<
-    ReturnType<typeof boreholeSurveyToIntervals>
-  >([]);
   const {
     model,
     setModel,
@@ -605,31 +595,11 @@ export default function Exploration3DView() {
         }
         sidebar={
           <div className="flex flex-col">
-            <SidebarSection title="Dataset">
+            <SidebarSection title="Modelo 3D">
               <p className="text-[8px] text-white/40 font-mono mb-3 leading-relaxed">
-                Importar y validar survey gravimétrico (CSV) antes de invertir.
+                Prepara y ejecuta la inversión en la vista «Preparación». El modelo
+                generado se carga aquí automáticamente.
               </p>
-              <GravityCsvPreviewPanel boreholes={boreholeIntervals} />
-            </SidebarSection>
-            <SidebarSection title="Sondajes (Fase 20)">
-              <p className="text-[8px] text-white/40 font-mono mb-3 leading-relaxed">
-                Cargar sondajes para anclar la inversión y validar densidades.
-              </p>
-              <BoreholeUploadPanel
-                onConfirm={(_survey, intervals) => setBoreholeIntervals(intervals)}
-              />
-            </SidebarSection>
-            <SidebarSection title="Fusión multimodal (Fase 21)">
-              <p className="text-[8px] text-white/40 font-mono mb-3 leading-relaxed">
-                Combo recomendado, confianza y error de profundidad según los datos
-                disponibles. La decisión la calcula el backend.
-              </p>
-              <MultimodalComboPanel
-                key={`mm-${boreholeIntervals.length}`}
-                nBoreholesWithDensity={
-                  boreholeIntervals.filter((b) => b.density_t_m3 != null).length
-                }
-              />
             </SidebarSection>
             {show3D && model && (
               <SidebarSection title="Corte caja A-A' / B-B'">
