@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useMemo, useRef, useEffect } from "react";
-import { previewGravityCsv, GravityImportPreviewResponse, invertGravityCsv, GravityCsvInvertResponse, GravityCsvInvertPayload, getExplorationBlockModelForRun, getExplorationBlockModelForRunWithArrow, CoordinateTransformData, CrsInfo, SpatialReadiness, SpatialReadinessGateError, RegionalScalePreflight, RegionalScaleGateError, GravityCorrectionReport, connectGeophysicsStatusStream, exportCleanCsv } from "../lib/terraquantum/frontendApi";
-import ErrorModal from "./ErrorModal";
+import { previewGravityCsv, GravityCsvInvertPayload, getExplorationBlockModelForRunWithArrow, CoordinateTransformData, SpatialReadiness, RegionalScalePreflight, GravityCorrectionReport, exportCleanCsv } from "../lib/terraquantum/frontendApi";
 import WarningBanner from "./WarningBanner";
-import { parseBackendError, TQErrorView } from "../lib/terraquantum/errorContract";
+import { TQErrorView } from "../lib/terraquantum/errorContract";
 import { useAppStore } from "../store/useAppStore";
 import GravityCorrectionWizard from "./GravityCorrectionWizard";
 import { type VoxelMineralModel, type VoxelData } from "../lib/terraQuantumGeology";
@@ -153,15 +152,6 @@ function getGeorefBadge(ct: CoordinateTransformData | null | undefined): GeorefB
   };
 }
 
-function mapPriorityClassLabel(value: string | null | undefined): string {
-  const v = String(value || "").toUpperCase().trim();
-  if (v === "HIGH_RELATIVE_PRIORITY" || v === "DRILL") return "Prioridad relativa alta";
-  if (v === "MEDIUM_RELATIVE_PRIORITY" || v === "OBSERVE" || v === "WAIT") return "Prioridad relativa media";
-  if (v === "LOW_RELATIVE_PRIORITY") return "Prioridad relativa baja";
-  if (v === "UNCLASSIFIED_INSUFFICIENT_CONFIDENCE" || v === "UNCLASSIFIED") return "Sin clasificar";
-  return v || "N/A";
-}
-
 // ─── Fase 14: Client-side CSV Validation ─────────────────────────────────
 
 type CsvIssue = { type: "error" | "warning"; message: string };
@@ -268,58 +258,6 @@ function parseCsvForValidation(text: string): CsvValidationResult {
 
 // ─── Fin Fase 14 ──────────────────────────────────────────────────────────
 
-// Parámetros de grilla: 0 = el backend usa el auto_grid calculado del CSV.
-// NO enviar valores fijos aquí: desde R3.8-A el backend PRIORIZA cualquier
-// valor > 0 del formulario, y una grilla fija (ej. 32×20×32 @ 25 m) rompe
-// surveys reales (kernel vacío → 422) cuya extensión no calza con esa caja.
-const LEGACY_INVERSION_PARAMS = { nx: 0, ny: 0, nz: 0, blockSize: 0, depth: 0 } as const;
-
-function buildCsvProjectId(filename?: string | null): string {
-  const rawName = filename?.replace(/\.[^.]+$/, "") || "import";
-  const cleanName = rawName
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 72);
-  const projectName = cleanName || "import";
-  const now = new Date();
-  const pad = (value: number) => String(value).padStart(2, "0");
-  const timestamp = [
-    now.getFullYear(),
-    pad(now.getMonth() + 1),
-    pad(now.getDate()),
-    `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`,
-  ].join("_");
-  const collisionSuffix =
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? `_${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`
-      : "";
-
-  return `csv_${projectName}_${timestamp}${collisionSuffix}`;
-}
-
-function parseCsvInversionProjectRun(inversionResult: unknown): {
-  projectId: string | null;
-  runId: string | null;
-} {
-  const obj = isJsonObject(inversionResult) ? inversionResult : null;
-  const rep = obj && isJsonObject(obj.report) ? obj.report : null;
-  return {
-    projectId:
-      readStringField(obj?.project_id) ??
-      readStringField(obj?.projectId) ??
-      readStringField(rep?.project_id) ??
-      readStringField(rep?.projectId),
-    runId:
-      readStringField(obj?.run_id) ??
-      readStringField(obj?.runId) ??
-      readStringField(rep?.run_id) ??
-      readStringField(rep?.runId),
-  };
-}
-
 function readArrayProperty(value: unknown, key: string): unknown[] {
   const obj = isJsonObject(value) ? value : null;
   const field = obj?.[key];
@@ -415,18 +353,6 @@ function buildVoxelModelFromBackend(data: unknown): BackendVoxelModel | null {
   };
 }
 
-const INVERT_STAGE_LABELS: Record<string, string> = {
-  queued: "En cola...",
-  building_kernel: "Construyendo kernel de sensibilidad...",
-  running_lsqr: "Ejecutando inversor LSQR...",
-  computing_uq: "Calculando incertidumbre...",
-  exporting_model: "Exportando modelo 3D...",
-  running: "Ejecutando inversión...",
-  done: "Inversión completa",
-  completed: "Inversión completa",
-  error: "Error en inversión",
-};
-
 type GravityCsvPreviewPanelProps = {
   // FASE 20 — Sondajes que anclan la inversión (combo grav+sondajes). Vienen del
   // BoreholeUploadPanel vía Exploration3DView. Se inyectan en el payload de invert.
@@ -441,8 +367,7 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
     latSouth, setLatSouth,
     lonEast, setLonEast,
     lonWest, setLonWest,
-    gravityPreviewResult: result, setGravityPreviewResult: setResult,
-    gravityInvertResult: invertResult, setGravityInvertResult: setInvertResult
+    gravityPreviewResult: result, setGravityPreviewResult: setResult
   } = useAppStore();
 
   const file = fileGravimetry; // Retrocompatibilidad para endpoints que solo toman 'file'
@@ -454,13 +379,6 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const [invertLoading, setInvertLoading] = useState(false);
-  const [invertErrorMsg, setInvertErrorMsg] = useState<string | null>(null);
-  const [invertStage, setInvertStage] = useState<string | null>(null);
-  const [invertProgress, setInvertProgress] = useState<number>(0);
-
-  // FASE 23 — Error accionable parseado del backend (ErrorModal 3 pestañas).
-  const [errorModalView, setErrorModalView] = useState<TQErrorView | null>(null);
   // FASE 19 — Descarga de "CSV limpio".
   const [cleanCsvLoading, setCleanCsvLoading] = useState(false);
   const [cleanCsvError, setCleanCsvError] = useState<string | null>(null);
@@ -481,10 +399,6 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
   const [fieldIntensityNt, setFieldIntensityNt] = useState<number>(23500);
   const [suscMin, setSuscMin] = useState<string>("0.0");
   const [suscMax, setSuscMax] = useState<string>("1.0");
-
-  const [loading3D, setLoading3D] = useState(false);
-  const [load3DError, setLoad3DError] = useState<string | null>(null);
-  const [load3DMessage, setLoad3DMessage] = useState<string | null>(null);
 
   const [showCorrectionWizard, setShowCorrectionWizard] = useState(false);
   const [correctedFile, setCorrectedFile] = useState<File | null>(null);
@@ -527,9 +441,7 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
   const [anchorKappaLog, setAnchorKappaLog] = useState<number>(4);   // log10(1e4)
   const [autoKappa, setAutoKappa] = useState(true);
   const [acknowledgeSpatialRisk, setAcknowledgeSpatialRisk] = useState(false);
-  const [spatialGateError, setSpatialGateError] = useState<SpatialReadinessGateError | null>(null);
   const [acknowledgeRegionalScale, setAcknowledgeRegionalScale] = useState(false);
-  const [regionalGateError, setRegionalGateError] = useState<RegionalScaleGateError | null>(null);
 
   // FASE 16 — Aplica preset de bounds de densidad según litología
   const applyDensityPreset = (preset: "granite" | "magnetite" | "copper" | "custom") => {
@@ -547,11 +459,6 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
     return type === "csv_utm" || type === "utm" || detected === "utm";
   }, [result]);
 
-  const setModel = useAppStore(state => state.setModel);
-  const setViewMode = useAppStore(state => state.setViewMode);
-  const setView = useAppStore(state => state.setView);
-  const setShow3D = useAppStore(state => state.setShow3D);
-  const setActiveRun = useAppStore(state => state.setActiveRun);
   const displayResolutionFactor = useAppStore(state => state.displayResolutionFactor);
 
   // Recarga el modelo 3D al cambiar la resolución de display (sub-muestreo
@@ -577,60 +484,12 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayResolutionFactor]);
   const clearActiveRun = useAppStore(state => state.clearActiveRun);
-  const setGeorefState = useAppStore(state => state.setGeorefState);
 
   // Se han eliminado userLat y userLon en favor del Bounding Box en Zustand
   const [geoError, setGeoError] = useState<string | null>(null);
 
-  const [invertPayloadBase] = useState<Omit<GravityCsvInvertPayload, "nx" | "ny" | "nz" | "blockSize" | "depth" | "lat" | "lon">>({
-    nir: 83,
-    fe: 79,
-    region: "norte_chile",
-    // 0 = auto: el backend deriva cutoff_radius del auto_grid (cubre la
-    // profundidad del modelo) y lambda del operating point validado.
-    // Un cutoff fijo (300 m) dejaba >80% de vóxeles muertos en surveys
-    // regionales, y lambda=5e-5 era el valor legacy pre-preconditioning.
-    cutoffRadius: 0,
-    lambdaMag: 0,
-    alphaSpatial: 1.0,
-  });
-
   // ---------------------------------------------------------------------------
   // Helpers locales — devuelven Record<string, unknown> | null, sin usar any
-  // ---------------------------------------------------------------------------
-
-  function buildObservationsSummary(
-    previewData: GravityImportPreviewResponse | null
-  ): Record<string, unknown> | null {
-    if (!previewData) return null;
-    return {
-      previewCount: previewData.previewCount ?? null,
-      totalObservations: previewData.totalObservations ?? null,
-      warnings: previewData.warnings ?? [],
-      errors: previewData.errors ?? [],
-    };
-  }
-
-  function buildReportSummary(
-    inversionResult: unknown
-  ): Record<string, unknown> | null {
-    if (!isJsonObject(inversionResult)) return null;
-    const rep = isJsonObject(inversionResult.report) ? inversionResult.report : null;
-    if (!rep) return null;
-    // Extrae solo campos escalares seguros; deja fuera arrays grandes de datos
-    const out: Record<string, unknown> = {};
-    const safeKeys = [
-      "project_id", "projectId", "run_id", "runId",
-      "overall_level", "risk_level", "fit_level", "uncertainty_level",
-      "confidence_level", "recommendation", "drill_recommendation",
-      "semantic_note", "avg_anomaly_intensity", "avg_grade",
-    ];
-    for (const k of safeKeys) {
-      if (k in rep) out[k] = rep[k];
-    }
-    return Object.keys(out).length > 0 ? out : null;
-  }
-
   // ---------------------------------------------------------------------------
 
   const validateCoords = (): string | null => {
@@ -667,16 +526,12 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
       setDataType("gravity");
       setResult(null);
       setErrorMsg(null);
-      setInvertResult(null);
-      setInvertErrorMsg(null);
-      setLoad3DError(null);
-      setLoad3DMessage(null);
+      setPackageError(null);
+      setPackageMessage(null);
       setGeoError(null);
       setUtmZone("");
       setAcknowledgeSpatialRisk(false);
-      setSpatialGateError(null);
       setAcknowledgeRegionalScale(false);
-      setRegionalGateError(null);
       setCorrectedFile(null);
       setCorrectionReport(null);
       setShowCorrectionWizard(false);
@@ -690,13 +545,9 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
       setDataType("magnetic");
       setResult(null);
       setErrorMsg(null);
-      setInvertResult(null);
-      setInvertErrorMsg(null);
-      setLoad3DError(null);
-      setLoad3DMessage(null);
+      setPackageError(null);
+      setPackageMessage(null);
       setGeoError(null);
-      setSpatialGateError(null);
-      setRegionalGateError(null);
       setCorrectedFile(null);
       setCorrectionReport(null);
       setShowCorrectionWizard(false);
@@ -716,8 +567,8 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
     setLoading(true);
     setErrorMsg(null);
     setResult(null);
-    setLoad3DError(null);
-    setLoad3DMessage(null);
+    setPackageError(null);
+    setPackageMessage(null);
 
     const effectiveFile = isMagnetic ? valFile : (correctedFile ?? file ?? valFile);
     const res = await previewGravityCsv(effectiveFile, {
@@ -735,392 +586,9 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
 
     setResult(res.data);
     setAcknowledgeSpatialRisk(false);
-    setSpatialGateError(null);
     setAcknowledgeRegionalScale(false);
-    setRegionalGateError(null);
-    setInvertResult(null);
-    setInvertErrorMsg(null);
-    setLoad3DError(null);
-    setLoad3DMessage(null);
   };
 
-  const loadCsvModel3DFromInversion = async (
-    inversionResult: unknown,
-    previewData: GravityImportPreviewResponse | null
-  ): Promise<boolean> => {
-    const { projectId, runId } = parseCsvInversionProjectRun(inversionResult);
-    if (!projectId || !runId) {
-      const errMsg = "No se detecto projectId/runId en la respuesta de inversion CSV.";
-      setLoad3DError(errMsg);
-      setActiveRun({ source: "csv", status: "error", error: errMsg });
-      return false;
-    }
-
-    const reportSummary = buildReportSummary(inversionResult);
-    const observationsSummary = buildObservationsSummary(previewData);
-
-    // Extraer focusing antes de buildReportSummary (safeKeys no lo incluye)
-    const rawReport = isJsonObject(inversionResult) && isJsonObject(inversionResult.report)
-      ? inversionResult.report
-      : null;
-    const focusing = isJsonObject(rawReport?.focusing) ? rawReport.focusing : null;
-
-    // Corrida identificada, iniciamos carga del modelo
-    setActiveRun({
-      projectId,
-      runId,
-      source: "csv",
-      status: "loading",
-      error: null,
-      importMetadata: previewData?.importMetadata ?? null,
-      observationsSummary,
-      reportSummary,
-      focusing,
-    });
-
-    setLoading3D(true);
-    setLoad3DError(null);
-    setLoad3DMessage(null);
-
-    const res = await getExplorationBlockModelForRunWithArrow(projectId, runId, "exploration", 5000, displayResolutionFactor);
-    setLoading3D(false);
-
-    if (!res.ok || !res.data) {
-      const errMsg = "No se pudo cargar el modelo 3D preliminar de la corrida CSV.";
-      setLoad3DError(errMsg);
-      setActiveRun({ projectId, runId, source: "csv", status: "error", error: errMsg });
-      return false;
-    }
-
-    const backendModel = buildVoxelModelFromBackend(res.data);
-    if (!backendModel) {
-      const errMsg = "El modelo devuelto no tiene celdas validas.";
-      setLoad3DError(errMsg);
-      setActiveRun({ projectId, runId, source: "csv", status: "error", error: errMsg });
-      return false;
-    }
-
-    setModel(backendModel);
-    // Magnetometría: el visor colorea por susceptibilidad (no densidad).
-    setViewMode(dataType === "magnetic" ? "susceptibility" : "density");
-    setShow3D(true);
-    setView("figura 3d");
-    setLoad3DMessage("Modelo 3D cargado en el visor");
-
-    // Corrida lista y modelo visualizable
-    setActiveRun({
-      projectId,
-      runId,
-      source: "csv",
-      status: "ready",
-      error: null,
-      importMetadata: previewData?.importMetadata ?? null,
-      observationsSummary,
-      reportSummary,
-      focusing,
-    });
-
-    return true;
-  };
-
-  const handleInvert = async () => {
-    const isMagnetic = dataType === "magnetic";
-    const invFile = isMagnetic ? fileMagnetometry : file;
-    if (!invFile) {
-      setInvertErrorMsg(
-        isMagnetic
-          ? "Debes seleccionar un CSV de magnetometría."
-          : "Debes seleccionar y validar un archivo CSV.",
-      );
-      return;
-    }
-
-    const geoErr = validateCoords();
-    if (geoErr) {
-      setGeoError(geoErr);
-      return;
-    }
-    setGeoError(null);
-
-    if (utmZone.trim() && utmZoneError) {
-      setGeoError(utmZoneError);
-      return;
-    }
-
-    // Validación de forma de los controles físicos (los rangos finos los valida el backend)
-    const dMinNum = Number(densityMin);
-    const dMaxNum = Number(densityMax);
-    if (!isMagnetic && (!Number.isFinite(dMinNum) || !Number.isFinite(dMaxNum) || dMinNum >= dMaxNum)) {
-      setGeoError("Bounds de densidad inválidos: density_min debe ser un número menor que density_max.");
-      return;
-    }
-    const lambdaValNum = lambdaMode === "custom" ? Number(lambdaCustom) : 0;
-    if (lambdaMode === "custom" && (!Number.isFinite(lambdaValNum) || lambdaValNum <= 0)) {
-      setGeoError("Lambda personalizado debe ser un número mayor que 0.");
-      return;
-    }
-
-    setInvertLoading(true);
-    setInvertErrorMsg(null);
-    setSpatialGateError(null);
-    setRegionalGateError(null);
-    setInvertResult(null);
-    setLoad3DError(null);
-    setLoad3DMessage(null);
-    setInvertStage("queued");
-    setInvertProgress(0);
-
-    // Señalamos inicio de inversión en activeRun
-    const projectId = buildCsvProjectId(invFile.name);
-    const runId = `run_csv_${new Date().toISOString().replace(/[:.]/g, "-")}`;
-
-    setActiveRun({
-      projectId,
-      runId,
-      source: "csv",
-      status: "loading",
-      error: null,
-      importMetadata: result?.importMetadata ?? null,
-      observationsSummary: buildObservationsSummary(result),
-    });
-
-    // SSE stream para progreso en tiempo real (§2.6)
-    const closeStream = connectGeophysicsStatusStream(
-      projectId,
-      runId,
-      (ev) => {
-        setInvertStage(ev.stage ?? ev.status ?? null);
-        setInvertProgress(typeof ev.progress === "number" ? ev.progress : 0);
-      },
-      () => {
-        // terminal — nada extra; invertGravityCsv() resolverá la promesa
-      },
-    );
-
-    const payloadWithFlags = {
-      ...invertPayloadBase,
-      projectId,
-      lat: latNorth.trim(),
-      lon: lonWest.trim(),
-      nx: LEGACY_INVERSION_PARAMS.nx,
-      ny: LEGACY_INVERSION_PARAMS.ny,
-      nz: LEGACY_INVERSION_PARAMS.nz,
-      blockSize: LEGACY_INVERSION_PARAMS.blockSize,
-      depth: LEGACY_INVERSION_PARAMS.depth,
-      // Controles físicos (B6): λ=0 dispara selección automática en backend
-      // (Morozov si el gravímetro declarado hace el chi² interpretable).
-      lambdaMag: lambdaValNum,
-      densityMin: dMinNum,
-      densityMax: dMaxNum,
-      gravimeterType,
-      runId,
-      strict,
-      allowGRaw,
-      utmZone: (utmZone.trim() && !utmZoneError) ? utmZone.trim().toUpperCase() : undefined,
-      acknowledgeSpatialRisk,
-      acknowledgeRegionalScale,
-      // Fase 9A — Magnetometría: rutea al motor de susceptibilidad.
-      ...(isMagnetic
-        ? {
-            dataType: "magnetic" as const,
-            inclinationDeg: inclinationDeg,
-            declinationDeg: declinationDeg,
-            fieldIntensityNt: fieldIntensityNt,
-            suscMin: Number(suscMin),
-            suscMax: Number(suscMax),
-          }
-        : {}),
-      // Fase 7B — Advanced params (serialized as JSON for FormData transport)
-      pgiParamsJson: (pgiParams?.enabled)
-        ? JSON.stringify({
-            components: [
-              { mean_density_t_m3: 2.6, std_density_t_m3: 0.2, weight: 0.5 },
-              { mean_density_t_m3: 3.0, std_density_t_m3: 0.2, weight: 0.5 },
-            ],
-            alpha_pgi: pgiParams.alpha_pgi,
-            max_iter: pgiParams.max_iter,
-            convergence_tol: 0.001,
-            fit_from_model: true,
-            n_components_auto: pgiParams.n_components_auto,
-          })
-        : null,
-      remanenceJson: (remanenceParams?.enabled && isMagnetic)
-        ? JSON.stringify({
-            enabled: remanenceParams.enabled,
-            q_ratio: remanenceParams.q_ratio,
-            remanence_inc_deg: remanenceParams.remanence_inc_deg,
-            remanence_dec_deg: remanenceParams.remanence_dec_deg,
-            inversion_mode: remanenceParams.inversion_mode,
-            do_q_sweep: remanenceParams.do_q_sweep,
-          })
-        : null,
-      // FASE 16 — Kappas configurables
-      paddingKappa: Math.pow(10, paddingKappaLog),
-      anchorKappa: Math.pow(10, anchorKappaLog),
-      autoKappa,
-      // FASE 20 — Sondajes que anclan la inversión (combo grav+sondajes).
-      ...(boreholes && boreholes.length > 0 ? { boreholes } : {}),
-    };
-
-    const effectiveFile = isMagnetic ? invFile : (correctedFile ?? invFile);
-    const res = await invertGravityCsv(effectiveFile, {
-      ...payloadWithFlags,
-      allowGRaw: payloadWithFlags.allowGRaw || correctedFile !== null,
-    });
-    closeStream();
-    setInvertLoading(false);
-    setInvertStage(null);
-    setInvertProgress(0);
-
-    if (!res.ok) {
-      const rawData = res.data as unknown;
-      if (isJsonObject(rawData)) {
-        const detail = rawData.detail;
-        if (isJsonObject(detail) && detail.error === "SPATIAL_READINESS_GATE") {
-          setSpatialGateError(detail as unknown as SpatialReadinessGateError);
-          setActiveRun({ source: "csv", status: "error", error: "SPATIAL_READINESS_GATE" });
-          return;
-        }
-        if (isJsonObject(detail) && detail.error === "REGIONAL_SCALE_PREFLIGHT") {
-          setRegionalGateError(detail as unknown as RegionalScaleGateError);
-          setActiveRun({ source: "csv", status: "error", error: "REGIONAL_SCALE_PREFLIGHT" });
-          return;
-        }
-        if (isJsonObject(detail) && detail.error === "INVERSION_RUNTIME_ERROR") {
-          const msg = String((detail.message as string) || "Error interno del motor de inversión.");
-          const errType = String((detail.type as string) || "Error");
-          setInvertErrorMsg(`[${errType}] ${msg}`);
-          setActiveRun({ source: "csv", status: "error", error: msg });
-          return;
-        }
-      }
-      const errMsg = res.error || "Error al solicitar la inversión geofísica.";
-      setInvertErrorMsg(errMsg);
-      // FASE 23 — Error accionable parseado (ErrorModal). Acepta el contrato del
-      // backend (user_message/suggested_action/technical_details) o un detalle suelto.
-      const rawDetail = isJsonObject(rawData) ? (rawData.detail ?? rawData) : rawData;
-      setErrorModalView(parseBackendError(rawDetail, errMsg));
-      setActiveRun({ source: "csv", status: "error", error: errMsg });
-      return;
-    }
-
-    setInvertResult(res.data);
-
-    // Guardar georef + CRS en store desde el response de inversión (R1-FE-3 + R2-FE)
-    if (res.data?.georef) {
-      const georef = res.data.georef;
-      const crsInfoFromResponse: CrsInfo = {
-        input_crs: georef.input_crs ?? null,
-        epsg_code: georef.epsg_code ?? null,
-        crs_source: georef.crs_source ?? null,
-        crs_confidence: georef.crs_confidence ?? null,
-        utm_zone: georef.utm_zone ?? null,
-        utm_hemisphere: georef.utm_hemisphere ?? null,
-      };
-      setGeorefState({
-        footprint: georef.footprint ?? null,
-        confidence: georef.confidence ?? null,
-        warnings: georef.warnings ?? [],
-        crsInfo: crsInfoFromResponse,
-      });
-    }
-
-    if (!res.data) {
-      const errMsg = "La inversion no devolvio una respuesta valida.";
-      setInvertErrorMsg(errMsg);
-      setActiveRun({ source: "csv", status: "error", error: errMsg });
-      return;
-    }
-
-    if (res.data.status !== "done") {
-      return;
-    }
-
-    await loadCsvModel3DFromInversion(res.data.inversionResult, result);
-  };
-
-  const handleLoadCsvModel3D = async () => {
-    const { projectId, runId } = parseCsvInversionProjectRun(invertResult?.inversionResult || null);
-    if (!projectId || !runId) {
-      setLoad3DError("No hay projectId o runId detectables en esta corrida.");
-      return;
-    }
-
-    const reportSummary = buildReportSummary(invertResult?.inversionResult ?? null);
-    const observationsSummary = buildObservationsSummary(result);
-
-    setActiveRun({
-      projectId,
-      runId,
-      source: "csv",
-      status: "loading",
-      error: null,
-      importMetadata: result?.importMetadata ?? null,
-      observationsSummary,
-      reportSummary,
-    });
-
-    setLoading3D(true);
-    setLoad3DError(null);
-
-    const res = await getExplorationBlockModelForRunWithArrow(projectId, runId, "exploration", 5000, displayResolutionFactor);
-    setLoading3D(false);
-
-    if (!res.ok || !res.data) {
-      const errMsg = "No se pudo cargar el modelo 3D preliminar de la corrida CSV.";
-      setLoad3DError(errMsg);
-      setActiveRun({ projectId, runId, source: "csv", status: "error", error: errMsg });
-      return;
-    }
-
-    try {
-      const data = res.data as JsonObject;
-      const parsedCells = Array.isArray(data.cells) ? data.cells as unknown as VoxelData[] : [];
-      if (parsedCells.length === 0) {
-        const errMsg = "El modelo devuelto no tiene celdas válidas.";
-        setLoad3DError(errMsg);
-        setActiveRun({ projectId, runId, source: "csv", status: "error", error: errMsg });
-        return;
-      }
-
-      const domainL = typeof data.domainL === "number" ? data.domainL : 0;
-      const domainH = typeof data.domainH === "number" ? data.domainH : 0;
-      const domainW = typeof data.domainW === "number" ? data.domainW : 0;
-      const cellSize = typeof data.cellSize === "number" ? data.cellSize : 10;
-
-      const backendModel: BackendVoxelModel = {
-        domainL,
-        domainH,
-        domainW,
-        cellSize,
-        cells: parsedCells,
-        volumeM3: domainL * domainH * domainW,
-        visualMode: typeof data.visualMode === "string" ? data.visualMode : undefined,
-        ...readBlockModelVisualMeta(data),
-      };
-
-      setModel(backendModel);
-      setViewMode(dataType === "magnetic" ? "susceptibility" : "density");
-      setShow3D(true);
-      setView("figura 3d");
-      setLoad3DMessage("Modelo 3D cargado en el visor");
-
-      setActiveRun({
-        projectId,
-        runId,
-        source: "csv",
-        status: "ready",
-        error: null,
-        importMetadata: result?.importMetadata ?? null,
-        observationsSummary,
-        reportSummary,
-      });
-    } catch {
-      const errMsg = "Error al interpretar el modelo de densidad/anomalía.";
-      setLoad3DError(errMsg);
-      setActiveRun({ projectId, runId, source: "csv", status: "error", error: errMsg });
-    }
-  };
 
   function renderSpatialReadinessPanel(
     spatialReadiness: SpatialReadiness | null | undefined,
@@ -1387,121 +855,6 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
     );
   }
 
-  function renderInversionSummary(inversionResult: unknown) {
-    if (!inversionResult) return null;
-
-    const inversionObject = isJsonObject(inversionResult) ? inversionResult : null;
-    if (!inversionObject) return null;
-
-    const reportObject = isJsonObject(inversionObject.report) ? inversionObject.report : null;
-    const technicalSummary = isJsonObject(reportObject?.technicalSummary) ? reportObject?.technicalSummary : null;
-    const fitDiagnostics = isJsonObject(reportObject?.fitDiagnostics) ? reportObject?.fitDiagnostics : null;
-    const uncertaintyDiagnostics = isJsonObject(reportObject?.uncertaintyDiagnostics) ? reportObject?.uncertaintyDiagnostics : null;
-    const observationQuality = isJsonObject(reportObject?.observationQuality) ? reportObject?.observationQuality : null;
-    const bestTarget = isJsonObject(inversionObject.best_target) ? inversionObject.best_target : null;
-
-    const recommendation = readStringField(reportObject?.drill_recommendation) ?? readStringField(reportObject?.recommendation);
-    const riskLevel = readStringField(reportObject?.risk_level);
-    const overallLevel = readStringField(technicalSummary?.overall_level);
-    const fitLevel = readStringField(fitDiagnostics?.fit_level);
-    const uncertaintyLevel = readStringField(uncertaintyDiagnostics?.uncertainty_level);
-    const confidenceLevel = readStringField(reportObject?.confidence_level) ?? readStringField(bestTarget?.confidence_level);
-    const semanticNote = readStringField(reportObject?.semantic_note);
-    const observationCount = typeof observationQuality?.observation_count === "number" ? observationQuality.observation_count : null;
-    const projectId = readStringField(reportObject?.projectId);
-    const runId = readStringField(reportObject?.runId);
-    
-    const tsSummary = readStringField(technicalSummary?.summary);
-    const tsWarnings = Array.isArray(technicalSummary?.warnings) ? technicalSummary?.warnings : [];
-
-    return (
-      <div className="flex flex-col gap-4">
-        {tsSummary && (
-          <div className="p-3 border-l-2 border-[#C2D8C4] bg-[#C2D8C4]/10 text-[11px] text-white font-mono">
-            {tsSummary}
-          </div>
-        )}
-        
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {[
-            ["Project / Run", projectId && runId ? `${projectId} / ${runId}` : null],
-            ["Overall Level", overallLevel],
-            ["Confiabilidad técnica", riskLevel],
-            ["Fit Level", fitLevel],
-            ["Uncertainty Level", uncertaintyLevel],
-            ["Nivel de confianza", confidenceLevel],
-            ["Observations", observationCount !== null ? String(observationCount) : null],
-          ].map(([label, val]) => val ? (
-            <div key={label as string} className="min-w-0 border border-neutral-800 bg-neutral-900/50 rounded p-2">
-              <p className="text-[8px] uppercase tracking-widest text-neutral-500 mb-1">{label}</p>
-              <p className="text-[10px] text-white font-mono truncate">{val}</p>
-            </div>
-          ) : null)}
-        </div>
-
-        {bestTarget && (() => {
-          const btDensity = readNumberField(bestTarget.modeled_density_index) ?? readNumberField(bestTarget.density);
-          const btProb = readNumberField(bestTarget.target_score) ?? readNumberField(bestTarget.probability);
-          const btAnomalyIntensity = readNumberField(bestTarget.anomaly_intensity) ?? readNumberField(bestTarget.grade);
-          const btDensityAnomalyScore = readNumberField(bestTarget.density_anomaly_score);
-          
-          return (
-            <div className="border border-purple-500/30 bg-purple-500/10 rounded p-3 mt-4">
-              <p className="text-[9px] uppercase tracking-widest text-purple-400 mb-2 font-bold">Target Preliminar Destacado</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] font-mono">
-                <div><span className="text-neutral-500">X:</span> {typeof bestTarget.x_m === 'number' ? bestTarget.x_m.toFixed(1) : '-'}</div>
-                <div><span className="text-neutral-500">Y:</span> {typeof bestTarget.y_m === 'number' ? bestTarget.y_m.toFixed(1) : '-'}</div>
-                <div><span className="text-neutral-500">Z:</span> {typeof bestTarget.z_m === 'number' ? bestTarget.z_m.toFixed(1) : '-'}</div>
-                <div><span className="text-neutral-500">Densidad modelada:</span> {typeof btDensity === 'number' ? btDensity.toFixed(2) : '-'}</div>
-                <div><span className="text-neutral-500">Target score:</span> {typeof btProb === 'number' ? btProb.toFixed(2) : '-'}</div>
-              </div>
-              {(btAnomalyIntensity !== null || btDensityAnomalyScore !== null) && (
-                <div className="grid grid-cols-2 gap-2 text-[10px] font-mono mt-2 pt-2 border-t border-purple-500/20">
-                  {btAnomalyIntensity !== null && <div><span className="text-neutral-500">Intensidad de anomalía:</span> {btAnomalyIntensity.toFixed(2)}</div>}
-                  {btDensityAnomalyScore !== null && <div><span className="text-neutral-500">Density Anomaly Score:</span> {btDensityAnomalyScore.toFixed(2)}</div>}
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
-        {recommendation && (
-          <div className="p-3 border border-purple-500/30 rounded bg-black/40 mt-4">
-            <p className="text-[9px] uppercase tracking-widest text-purple-400 mb-1 font-bold">Clase de prioridad relativa</p>
-            <p className="text-[10px] text-white font-mono">{mapPriorityClassLabel(recommendation)}</p>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-[8px] uppercase tracking-[0.18em] text-purple-700 font-bold">Señal Preliminar:</span>
-              <span className="text-[9px] font-mono text-purple-400">{recommendation}</span>
-            </div>
-            <p className="text-[7px] text-purple-700 italic mt-1">Esta clase no representa una recomendación de perforación.</p>
-          </div>
-        )}
-
-        {tsWarnings.length > 0 && (
-          <div className="p-3 border border-yellow-600/30 bg-yellow-600/10 rounded">
-            <p className="text-[9px] uppercase tracking-widest text-yellow-500 mb-1 font-bold">Advertencias Técnicas</p>
-            <ul className="list-disc list-inside text-[10px] text-yellow-500/90 font-mono">
-              {tsWarnings.map((w: unknown, i: number) => (
-                <li key={i}>{String(w)}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <div className="mt-4 p-2 bg-neutral-900 border border-neutral-800 rounded text-center">
-          <p className="text-[9px] text-neutral-400 font-mono italic">
-            Este resultado es preliminar y debe validarse con más observaciones, QA/QC y perforación. Requiere validación.
-          </p>
-          {semanticNote && (
-            <p className="text-[9px] text-yellow-500/80 font-mono italic mt-1">
-              {semanticNote}
-            </p>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   // FASE 19 — Descargar el CSV limpio (validado + enriquecido) del backend.
   async function handleDownloadCleanCsv() {
     if (!file) return;
@@ -1603,13 +956,6 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
 
   return (
     <div className="w-full min-w-0 max-w-full overflow-hidden border border-neutral-800 bg-black/50 p-3 rounded-xl shrink-0">
-      {errorModalView && (
-        <ErrorModal
-          error={errorModalView}
-          onClose={() => setErrorModalView(null)}
-          onRetry={() => setErrorModalView(null)}
-        />
-      )}
       <div className="flex flex-col gap-3 mb-4 min-w-0">
         <div className="w-full min-w-0 flex flex-col gap-3">
           <div>
@@ -1957,7 +1303,6 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
       {(() => {
         const backendWarnings: string[] = [
           ...((result?.warnings as string[] | undefined) ?? []),
-          ...((invertResult?.warnings as string[] | undefined) ?? []),
         ].filter((w): w is string => typeof w === "string" && w.trim().length > 0);
         if (backendWarnings.length === 0) return null;
         const views: TQErrorView[] = backendWarnings.slice(0, 12).map((msg, i) => ({
@@ -2472,32 +1817,11 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
             )}
 
             <div className="flex flex-col gap-4 mb-6">
-              <button
-                onClick={handleInvert}
-                disabled={
-                  invertLoading ||
-                  loading3D ||
-                  !(dataType === "magnetic" ? fileMagnetometry : file) ||
-                  csvValidation?.can_invert === false ||
-                  result.spatial_readiness?.level === "NO_SPATIAL_DATA" ||
-                  (result.spatial_readiness?.requires_user_acknowledgement === true && !acknowledgeSpatialRisk) ||
-                  result.regional_scale_preflight?.can_run_single_inversion === false ||
-                  (result.regional_scale_preflight?.requires_user_acknowledgement === true && !acknowledgeRegionalScale)
-                }
-                className="h-9 w-full justify-center px-4 bg-purple-500/80 text-white text-[10px] uppercase font-bold tracking-widest rounded hover:bg-purple-500 disabled:opacity-50 transition-colors flex items-center"
-              >
-                {invertLoading
-                  ? "Ejecutando inversion..."
-                  : loading3D
-                  ? "Cargando modelo 3D..."
-                  : "Invertir y cargar modelo 3D"}
-              </button>
-              {/* FASE R3 — Genera el paquete CSV (prep) para cargarlo en la vista 3D. */}
+              {/* FASE R3 — El prep solo genera el paquete CSV; la inversión y la
+                  carga del modelo 3D ocurren en la vista 3D (LoadPanel). */}
               <button
                 onClick={handleGeneratePackage}
                 disabled={
-                  invertLoading ||
-                  loading3D ||
                   !(dataType === "magnetic" ? fileMagnetometry : file) ||
                   csvValidation?.can_invert === false ||
                   result.spatial_readiness?.level === "NO_SPATIAL_DATA" ||
@@ -2531,363 +1855,6 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
               )}
             </div>
 
-            {invertLoading && (
-              <div className="mb-4">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-[9px] font-mono text-neutral-400 uppercase tracking-widest">
-                    {invertStage
-                      ? INVERT_STAGE_LABELS[invertStage] ?? invertStage.replace(/_/g, " ")
-                      : "Preparando inversión..."}
-                  </span>
-                  <span className="text-[9px] font-mono text-neutral-500">
-                    {invertProgress > 0 ? `${Math.round(invertProgress * 100)}%` : ""}
-                  </span>
-                </div>
-                <div className="w-full h-1 bg-neutral-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-purple-500 rounded-full transition-all duration-500"
-                    style={{
-                      width: invertProgress > 0 ? `${Math.round(invertProgress * 100)}%` : "30%",
-                      animation: invertProgress === 0 ? "pulse 1.5s infinite" : undefined,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {load3DMessage && (
-              <div className="mb-4 p-3 border border-[#C2D8C4]/40 bg-[#C2D8C4]/10 text-[#C2D8C4] text-[10px] font-mono rounded break-words">
-                {load3DMessage}
-              </div>
-            )}
-
-            {load3DError && (
-              <div className="mb-4 p-3 border border-red-900/50 bg-red-950/20 text-red-400 text-[10px] font-mono rounded break-words">
-                {load3DError}
-              </div>
-            )}
-
-            {invertErrorMsg && (
-              <div className="mb-4 p-4 border border-red-900/50 bg-red-950/20 text-red-400 text-sm font-mono rounded">
-                <span className="font-bold mr-2">ERROR DE INVERSIÓN:</span> {invertErrorMsg}
-              </div>
-            )}
-
-            {spatialGateError && (
-              <div className="mb-4 p-4 border border-red-900/50 bg-red-950/20 rounded">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-red-400 mb-2">
-                  Contrato espacial bloqueó la inversión
-                </p>
-                {spatialGateError.message && (
-                  <p className="text-[10px] text-red-300 font-mono mb-2">{spatialGateError.message}</p>
-                )}
-                {spatialGateError.required_action && (
-                  <p className="text-[10px] text-yellow-400 font-mono mb-2">{spatialGateError.required_action}</p>
-                )}
-                {spatialGateError.missing_fields && spatialGateError.missing_fields.length > 0 && (
-                  <div className="mb-2">
-                    <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Campos faltantes:</p>
-                    <ul className="list-disc list-inside text-[10px] text-red-400 font-mono">
-                      {spatialGateError.missing_fields.map((f: string, i: number) => <li key={i}>{f}</li>)}
-                    </ul>
-                  </div>
-                )}
-                {spatialGateError.required_acknowledgement && (
-                  <p className="text-[9px] text-yellow-500/80 font-mono italic mt-1">{spatialGateError.required_acknowledgement}</p>
-                )}
-                {spatialGateError.blocked_outputs && spatialGateError.blocked_outputs.length > 0 && (
-                  <div className="mt-2">
-                    <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Salidas bloqueadas:</p>
-                    <ul className="list-disc list-inside text-[10px] text-red-400/70 font-mono">
-                      {spatialGateError.blocked_outputs.map((o: string, i: number) => <li key={i}>{o}</li>)}
-                    </ul>
-                  </div>
-                )}
-                {spatialGateError.allowed_outputs && spatialGateError.allowed_outputs.length > 0 && (
-                  <div className="mt-2">
-                    <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Salidas permitidas:</p>
-                    <ul className="list-disc list-inside text-[10px] text-green-400/70 font-mono">
-                      {spatialGateError.allowed_outputs.map((o: string, i: number) => <li key={i}>{o}</li>)}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {regionalGateError && (
-              <div className="mb-4 p-4 border border-red-900/50 bg-red-950/20 rounded">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-red-400 mb-2">
-                  Preflight de escala bloqueó la inversión
-                </p>
-                {regionalGateError.scale_class && (
-                  <p className="text-[9px] uppercase tracking-widest text-orange-400 mb-1 font-mono">
-                    Clase: {regionalGateError.scale_class}
-                  </p>
-                )}
-                {regionalGateError.message && (
-                  <p className="text-[10px] text-red-300 font-mono mb-2">{regionalGateError.message}</p>
-                )}
-                {regionalGateError.required_action && (
-                  <p className="text-[10px] text-yellow-400 font-mono mb-2">{regionalGateError.required_action}</p>
-                )}
-                {regionalGateError.recommended_action && regionalGateError.recommended_action !== regionalGateError.required_action && (
-                  <p className="text-[9px] text-neutral-400 font-mono mb-2">{regionalGateError.recommended_action}</p>
-                )}
-                {regionalGateError.blocked_reasons && regionalGateError.blocked_reasons.length > 0 && (
-                  <div className="mb-2">
-                    <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Razones de bloqueo:</p>
-                    <ul className="list-disc list-inside text-[10px] text-red-400 font-mono">
-                      {regionalGateError.blocked_reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}
-                    </ul>
-                  </div>
-                )}
-                {regionalGateError.warnings && regionalGateError.warnings.length > 0 && (
-                  <div className="mb-2">
-                    <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Advertencias:</p>
-                    <ul className="list-disc list-inside text-[10px] text-yellow-400/80 font-mono">
-                      {regionalGateError.warnings.map((w: string, i: number) => <li key={i}>{w}</li>)}
-                    </ul>
-                  </div>
-                )}
-                {regionalGateError.allowed_outputs && regionalGateError.allowed_outputs.length > 0 && (
-                  <div className="mt-2">
-                    <p className="text-[9px] uppercase text-neutral-500 tracking-widest mb-1">Salidas permitidas:</p>
-                    <ul className="list-disc list-inside text-[10px] text-green-400/70 font-mono">
-                      {regionalGateError.allowed_outputs.map((o: string, i: number) => <li key={i}>{o}</li>)}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {invertResult && invertResult.status === "error" && (
-              <div className="mb-4 p-4 border border-red-900/50 bg-red-950/20 text-red-400 text-sm font-mono rounded">
-                <div className="flex items-center gap-3 mb-2">
-                  <span className="px-2 py-1 bg-red-900/30 text-red-400 border border-red-900/50 rounded text-[10px] font-bold uppercase tracking-widest">
-                    ERROR
-                  </span>
-                  <span className="text-xs text-red-400 font-mono">
-                    {invertResult.stage === "import" ? "Falló al re-importar el CSV." : "Falló la inversión."}
-                  </span>
-                </div>
-                {invertResult.errors && invertResult.errors.length > 0 && (
-                  <ul className="list-disc list-inside text-xs text-red-300 font-mono mt-2 space-y-1">
-                    {invertResult.errors.map((err: string, i: number) => <li key={i}>{err}</li>)}
-                  </ul>
-                )}
-                {invertResult.warnings && invertResult.warnings.length > 0 && (
-                  <div className="mt-4">
-                    <p className="text-[10px] uppercase text-yellow-500 tracking-widest mb-1">Warnings:</p>
-                    <ul className="list-disc list-inside text-xs text-yellow-500/80 font-mono">
-                      {invertResult.warnings.map((warn: string, i: number) => <li key={i}>{warn}</li>)}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {invertResult && invertResult.status === "done" && (
-              <div className="border border-purple-500/30 bg-purple-500/10 rounded p-4">
-                <div className="flex items-center gap-3 mb-4">
-                  <span className="px-2 py-1 bg-purple-500/20 text-purple-300 border border-purple-500/50 rounded text-[10px] font-bold uppercase tracking-widest">
-                    INVERSIÓN COMPLETADA
-                  </span>
-                  <span className="text-[9px] text-neutral-400 font-mono">
-                    {invertResult.stage === "inversion" ? "Modelo preliminar / anomalía modelada generada." : "Completado."}
-                  </span>
-                </div>
-
-                {invertResult.warnings && invertResult.warnings.length > 0 && (
-                  <div className="mb-4 p-2 border border-yellow-600/30 bg-yellow-600/10 rounded">
-                    <p className="text-[10px] text-yellow-500 font-mono">Hay advertencias técnicas. Revísalas en Datos o en detalle técnico.</p>
-                  </div>
-                )}
-                {invertResult.georef ? (() => {
-                  const conf = invertResult.georef!.confidence;
-                  const badgeClass = getGeorefBadgeClass(conf);
-                  const label = getGeorefBadgeLabel(conf);
-                  const explanation = getGeorefExplanation(conf);
-                  const warnings = invertResult.georef!.warnings ?? [];
-                  const visibleWarnings = warnings.slice(0, 3);
-                  const hiddenCount = warnings.length - 3;
-                  return (
-                    <div className={`mb-4 px-3 py-3 border rounded text-[9px] font-mono flex flex-col gap-1.5 ${badgeClass}`}>
-                      <span className="text-[8px] uppercase tracking-widest text-neutral-500 font-bold">Georreferenciación</span>
-                      <span className="font-bold tracking-widest uppercase text-[10px]">{label}</span>
-                      <span className="text-neutral-300 text-[9px] mt-0.5">{explanation}</span>
-                      {visibleWarnings.map((w: string, i: number) => (
-                        <span key={i} className="text-neutral-500 text-[8px]">⚠ {w}</span>
-                      ))}
-                      {hiddenCount > 0 && (
-                        <span className="text-neutral-600 text-[8px]">+{hiddenCount} advertencias más</span>
-                      )}
-                    </div>
-                  );
-                })() : (() => {
-                  const badge = getGeorefBadge(invertResult.coordinate_transform);
-                  return (
-                    <div className={`mb-4 px-2 py-2 border rounded text-[9px] font-mono flex flex-col gap-1 ${badge.classes}`}>
-                      <span className="text-[8px] uppercase tracking-widest text-neutral-500 font-bold">Georreferenciación</span>
-                      <span className="font-bold tracking-widest uppercase">{badge.label}</span>
-                      <span className="text-neutral-400">{badge.desc}</span>
-                      {(badge.label.includes("BAJA") || badge.label.includes("Sin")) && (
-                        <span className="text-neutral-500 mt-1">
-                          El terreno satelital es contexto visual. La posición del modelo en el mapa no es precisa.
-                        </span>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {invertResult.spatial_readiness && (() => {
-                  const sr = invertResult.spatial_readiness as SpatialReadiness;
-                  const colors = getSpatialReadinessColors(sr.level);
-                  return (
-                    <div className={`mb-4 p-3 border rounded ${colors.border} ${colors.bg}`}>
-                      <p className="text-[8px] uppercase tracking-widest text-neutral-500 font-bold mb-1">Contrato espacial — resultado</p>
-                      <p className={`text-[10px] font-bold uppercase ${colors.text}`}>{sr.level ?? "N/A"}</p>
-                      {sr.rationale && <p className="text-[9px] text-neutral-400 font-mono italic mt-1">{sr.rationale}</p>}
-                      {sr.warnings && sr.warnings.length > 0 && (
-                        <ul className="list-disc list-inside text-[9px] text-yellow-400/70 font-mono mt-1">
-                          {sr.warnings.map((w: string, i: number) => <li key={i}>{w}</li>)}
-                        </ul>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {invertResult.regional_scale_preflight && (() => {
-                  const rsp = invertResult.regional_scale_preflight as RegionalScalePreflight;
-                  const colors = getRegionalScaleColors(rsp.scale_class);
-                  return (
-                    <div className={`mb-4 p-3 border rounded ${colors.border} ${colors.bg}`}>
-                      <p className="text-[8px] uppercase tracking-widest text-neutral-500 font-bold mb-1">Escala del dataset — resultado</p>
-                      <p className={`text-[10px] font-bold uppercase ${colors.text}`}>{rsp.scale_class ?? "N/A"}</p>
-                      {invertResult.acknowledge_regional_scale && (
-                        <p className="text-[9px] text-orange-400 font-mono mt-1">Inversión regional aceptada por usuario.</p>
-                      )}
-                      {rsp.rationale && <p className="text-[9px] text-neutral-400 font-mono italic mt-1">{rsp.rationale}</p>}
-                      {rsp.warnings && rsp.warnings.length > 0 && (
-                        <ul className="list-disc list-inside text-[9px] text-yellow-400/70 font-mono mt-1">
-                          {rsp.warnings.map((w: string, i: number) => <li key={i}>{w}</li>)}
-                        </ul>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {invertResult.inversionResult ? (
-                  <div className="text-[10px] text-white font-mono bg-black/50 p-4 rounded border border-neutral-800">
-                    
-                    {(() => {
-                      const { projectId, runId } = parseCsvInversionProjectRun(invertResult.inversionResult || null);
-                      const invObj = isJsonObject(invertResult.inversionResult) ? invertResult.inversionResult : null;
-                      const rep = isJsonObject(invObj?.report) ? invObj?.report : null;
-                      const bestTarget = isJsonObject(invObj?.best_target) ? invObj?.best_target : null;
-
-                      const recommendation = readStringField(rep?.drill_recommendation) ?? readStringField(rep?.recommendation);
-                      const riskLevel = readStringField(rep?.risk_level);
-                      const confidenceLevel = readStringField(rep?.confidence_level) ?? readStringField(bestTarget?.confidence_level);
-
-                      return (
-                        <div className="flex flex-col gap-4">
-                          {projectId && runId && (
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <p className="text-[8px] uppercase tracking-widest text-neutral-500 mb-1">Project ID</p>
-                                <p className="text-[10px] text-[#C2D8C4] font-mono">{projectId}</p>
-                              </div>
-                              <div>
-                                <p className="text-[8px] uppercase tracking-widest text-neutral-500 mb-1">Run ID</p>
-                                <p className="text-[10px] text-[#C2D8C4] font-mono">{runId}</p>
-                              </div>
-                            </div>
-                          )}
-
-                          {(recommendation || riskLevel || confidenceLevel) && (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              {recommendation && (
-                                <div className="col-span-1 sm:col-span-2">
-                                  <p className="text-[8px] uppercase tracking-widest text-neutral-500 mb-1">Clase de prioridad relativa</p>
-                                  <p className="text-[10px] text-white font-mono">{mapPriorityClassLabel(recommendation)}</p>
-                                  <div className="flex items-center gap-2 mt-0.5">
-                                    <span className="text-[8px] uppercase tracking-[0.18em] text-neutral-600 font-bold">Señal Preliminar:</span>
-                                    <span className="text-[9px] font-mono text-neutral-400">{recommendation}</span>
-                                  </div>
-                                  <p className="text-[7px] text-neutral-600 italic mt-0.5">No representa recomendación de perforación.</p>
-                                </div>
-                              )}
-                              {riskLevel && (
-                                <div>
-                                  <p className="text-[8px] uppercase tracking-widest text-neutral-500 mb-1">Confiabilidad técnica</p>
-                                  <p className="text-[10px] text-white font-mono">{riskLevel}</p>
-                                </div>
-                              )}
-                              {confidenceLevel && (
-                                <div>
-                                  <p className="text-[8px] uppercase tracking-widest text-neutral-500 mb-1">Confidence</p>
-                                  <p className="text-[10px] text-white font-mono">{confidenceLevel}</p>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                          
-                          <details className="mt-2 border-t border-neutral-800 pt-3">
-                            <summary className="text-neutral-500 mb-3 cursor-pointer text-[9px] uppercase tracking-widest hover:text-[#C2D8C4] transition-colors focus:outline-none">
-                              Ver resumen técnico de inversión
-                            </summary>
-                            
-                            {invertResult.warnings && invertResult.warnings.length > 0 && (
-                              <div className="mb-4 p-3 border border-yellow-600/30 bg-yellow-600/10 rounded">
-                                <p className="text-[9px] uppercase tracking-widest text-yellow-500 mb-1 font-bold">Warnings de Inversión:</p>
-                                <ul className="list-disc list-inside text-[10px] text-yellow-500/90 font-mono">
-                                  {invertResult.warnings.map((warn: string, i: number) => <li key={i}>{warn}</li>)}
-                                </ul>
-                              </div>
-                            )}
-
-                            {renderInversionSummary(invertResult.inversionResult)}
-
-                          </details>
-
-                          <div className="mt-4 border-t border-neutral-800 pt-4 flex flex-col gap-3">
-                            {projectId && runId && (
-                              <>
-                                <button
-                                  onClick={handleLoadCsvModel3D}
-                                  disabled={loading3D}
-                                  className="h-9 w-full justify-center px-4 bg-purple-500/80 text-white text-[10px] uppercase font-bold tracking-widest rounded hover:bg-purple-500 disabled:opacity-50 transition-colors flex items-center"
-                                >
-                                  {loading3D ? "Cargando..." : "Ver modelo 3D generado desde CSV"}
-                                </button>
-                                {load3DError && (
-                                  <p className="text-[10px] text-red-400 font-mono p-2 bg-red-900/20 rounded border border-red-900/50">
-                                    {load3DError}
-                                  </p>
-                                )}
-                              </>
-                            )}
-                            <button
-                              onClick={() => setView("datos")}
-                              className="h-9 w-full justify-center px-4 border border-neutral-700 bg-neutral-900 text-white text-[10px] uppercase font-bold tracking-widest rounded hover:bg-white hover:text-black transition-colors flex items-center"
-                            >
-                              Ver en Datos
-                            </button>
-                            {!projectId && !runId && (
-                              <p className="text-[10px] text-red-400 font-mono bg-red-900/20 p-2 rounded border border-red-900/50 break-words mt-2">
-                                No se detecto projectId/runId en la respuesta de inversion CSV.
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                ) : (
-                  <p className="text-[10px] text-neutral-500">No hay datos de resultado de inversión para mostrar.</p>
-                )}
-              </div>
-            )}
           </div>
         </div>
       )}
