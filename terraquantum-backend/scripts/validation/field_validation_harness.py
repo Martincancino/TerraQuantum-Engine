@@ -168,19 +168,16 @@ def _boreholes_to_anchor_array(intervals: List[BoreholeInterval]) -> Optional[np
     return np.asarray(rows, dtype=np.float64)
 
 
-def run_project(p: FieldProject, *, anchor_boreholes: bool = False) -> CaseStudy:
-    """Invierte un proyecto sintético y lo valida vs sondaje.
+def _simulate_observations(p: FieldProject):
+    """Genera la señal gravimétrica sintética (malla forward fina, anti-inverse-crime).
 
-    Args:
-        anchor_boreholes: si False, GRAVIMETRÍA SOLA (los sondajes sólo validan, no
-            restringen). Si True, COMBO grav+sondajes: los intervalos con densidad
-            medida se inyectan como anclaje fuerte (Fase 8/20) en `solve_inversion_lsqr`.
+    Devuelve (sensors, g_obs, sigma_noise). Aislado de la inversión para que el modo
+    leave-one-out invierta MUCHAS veces sobre EXACTAMENTE el mismo dato observado.
     """
     rng = np.random.default_rng(p.seed)
     sensors = _surface_sensors(p)
     n_sensors = sensors.shape[0]
 
-    # ── Señal sintética: malla forward FINA (anti-inverse-crime) ─────────────
     (xf, yf, zf), bf = _forward_grid(p)
     fwd_fine = GravimetryForward(bf, bf, bf, cutoff_radius=8000.0)
     contrast_fine = _sphere_contrast(
@@ -190,16 +187,20 @@ def run_project(p: FieldProject, *, anchor_boreholes: bool = False) -> CaseStudy
     sig = float(np.std(g_clean))
     sigma_noise = p.noise_pct * sig if sig > 0 else 1e-12
     g_obs = g_clean + sigma_noise * rng.standard_normal(n_sensors)
+    return sensors, g_obs, sigma_noise
 
-    # ── Inversión en malla DISTINTA (coarse) ─────────────────────────────────
+
+def _invert(p: FieldProject, sensors, g_obs, sigma_noise, anchor_arr):
+    """Invierte en la malla coarse con el conjunto de anclajes dado (o None).
+
+    Devuelve (dens_full, x_c, y_c, z_c, meta, misfit). Es el núcleo reutilizado por
+    `run_project` (grav-sola / combo) y por `run_leave_one_out` (anclar N−1).
+    """
     x_c, y_c, z_c = _grid_centers(p.nx, p.ny, p.nz, p.block_size)
     inv = GravimetryInversion(p.nx, p.ny, p.nz, p.block_size, base_density=BASE_DENSITY)
     fwd_inv = GravimetryForward(
         p.block_size, p.block_size, p.block_size, cutoff_radius=8000.0
     )
-    boreholes = p.boreholes or _auto_boreholes(p)
-    anchor_arr = _boreholes_to_anchor_array(boreholes) if anchor_boreholes else None
-
     meta: dict = {}
     dens_full, _score, misfit, _sens = inv.solve_inversion_lsqr(
         g_obs, None, y_c,
@@ -213,6 +214,25 @@ def run_project(p: FieldProject, *, anchor_boreholes: bool = False) -> CaseStudy
         compact_max_irls=p.compact_max_irls,
         boreholes=anchor_arr,            # None = grav-sola; (n,5) = combo grav+sondajes
         solver_meta=meta,
+    )
+    return dens_full, x_c, y_c, z_c, meta, misfit
+
+
+def run_project(p: FieldProject, *, anchor_boreholes: bool = False) -> CaseStudy:
+    """Invierte un proyecto sintético y lo valida vs sondaje.
+
+    Args:
+        anchor_boreholes: si False, GRAVIMETRÍA SOLA (los sondajes sólo validan, no
+            restringen). Si True, COMBO grav+sondajes: los intervalos con densidad
+            medida se inyectan como anclaje fuerte (Fase 8/20) en `solve_inversion_lsqr`.
+    """
+    sensors, g_obs, sigma_noise = _simulate_observations(p)
+    n_sensors = sensors.shape[0]
+
+    boreholes = p.boreholes or _auto_boreholes(p)
+    anchor_arr = _boreholes_to_anchor_array(boreholes) if anchor_boreholes else None
+    dens_full, x_c, y_c, z_c, meta, misfit = _invert(
+        p, sensors, g_obs, sigma_noise, anchor_arr
     )
 
     plan = plan_multimodal(
@@ -412,6 +432,217 @@ def _render_combo_table(rows: List[dict]) -> str:
     return "\n".join(lines)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  PASO 3 — VALIDACIÓN CRUZADA LEAVE-ONE-OUT (mata la circularidad)
+# ══════════════════════════════════════════════════════════════════════════════
+# El gate de densidad de la Fase 25 mide la densidad EN los intervalos de sondaje,
+# que en el combo son justo las celdas ANCLADAS. Validar ahí es tautológico: el
+# anclaje fija su propia densidad in-situ, así que el gate pasa POR CONSTRUCCIÓN.
+# Leave-one-out rompe esa circularidad: se ancla con N−1 sondajes y se valida la
+# densidad/profundidad predicha en el sondaje OCULTO N (que la inversión NUNCA vio).
+# Sólo esto cuenta como PODER PREDICTIVO real y sobrevive a un revisor.
+
+# Umbral de densidad para el gate leave-one-out (mismo que el roadmap Fase 25).
+LOO_DENSITY_TOL_T_M3 = 0.3
+LOO_GATE_FRACTION = 0.75
+
+
+def _loo_boreholes(p: FieldProject) -> List[dict]:
+    """Conjunto rico de sondajes sintéticos (≥3) para leave-one-out, con etiqueta.
+
+    Cada sondaje es un intervalo DELGADO (más corto que la celda) que mapea a UN
+    vóxel: varios cruzan el cuerpo (densidad base+contraste) en distintas columnas,
+    otros muestrean roca caja (base). Las posiciones se eligen sobre CENTROS de celda
+    para que el mapeo sea inequívoco. El ground-truth de cada sondaje es consistente
+    con la malla forward fina (la esfera evaluada en ese punto).
+
+    Devuelve dicts {interval, label, kind} para poder reportar por tipo de sondaje;
+    `kind` ∈ {"body","host"}.
+    """
+    cx, cy, cz = p.body_center_xyz
+    rho_body = round(BASE_DENSITY + p.body_contrast, 3)
+    d = p.block_size
+    grid_max = p.nx * p.block_size
+    margin = p.block_size
+
+    def _thin(x, z, rho):
+        return BoreholeInterval(
+            x_m=float(x), z_m=float(z),
+            y_from_m=float(cy - 1.0), y_to_m=float(cy + 1.0),
+            density_t_m3=float(rho),
+        )
+
+    items: List[dict] = []
+    # Sondajes que cruzan el CUERPO en distintas columnas (offset ±1 celda, dentro
+    # del radio → el vóxel a profundidad cy está dentro de la esfera).
+    body_offsets = [(0, 0, "C"), (d, 0, "E"), (-d, 0, "W"), (0, d, "N"), (0, -d, "S")]
+    for ox, oz, tag in body_offsets:
+        bx, bz = cx + ox, cz + oz
+        if not (margin <= bx <= grid_max - margin and margin <= bz <= grid_max - margin):
+            continue
+        # Sólo si el punto está realmente dentro del cuerpo (consistencia ground-truth).
+        if (bx - cx) ** 2 + (bz - cz) ** 2 <= p.body_radius_m ** 2:
+            items.append({"interval": _thin(bx, bz, rho_body), "label": f"BODY-{tag}", "kind": "body"})
+
+    # Sondajes en ROCA CAJA (fondo), lejos del cuerpo y dentro de la grilla.
+    for ox, tag in [(5 * d, "E"), (-5 * d, "W")]:
+        hx = float(min(max(cx + ox, margin), grid_max - margin))
+        if (hx - cx) ** 2 > p.body_radius_m ** 2:   # asegurar que es fondo
+            items.append({"interval": _thin(hx, cz, BASE_DENSITY), "label": f"HOST-{tag}", "kind": "host"})
+
+    return items
+
+
+def run_leave_one_out(p: FieldProject, bh_items: Optional[List[dict]] = None) -> dict:
+    """Validación cruzada leave-one-out sobre los sondajes de un proyecto.
+
+    Para cada sondaje i: ancla con TODOS los demás (N−1), invierte, y mide la densidad
+    y la profundidad del cuerpo PREDICHAS en el sondaje OCULTO i. El dato observado
+    g_obs es idéntico en todos los folds (se simula una sola vez).
+    """
+    bh_items = bh_items or _loo_boreholes(p)
+    if len(bh_items) < 3:
+        raise ValueError(
+            f"leave-one-out requiere ≥3 sondajes para ser significativo; "
+            f"el proyecto '{p.name}' generó {len(bh_items)}."
+        )
+
+    sensors, g_obs, sigma_noise = _simulate_observations(p)
+    folds: List[dict] = []
+    for i, held in enumerate(bh_items):
+        train = [it["interval"] for j, it in enumerate(bh_items) if j != i]
+        anchor_arr = _boreholes_to_anchor_array(train)
+        dens_full, x_c, y_c, z_c, meta, misfit = _invert(
+            p, sensors, g_obs, sigma_noise, anchor_arr
+        )
+        held_iv = held["interval"]
+        m = validate_against_boreholes(
+            [held_iv], dens_full, x_c, y_c, z_c, p.block_size
+        )
+        res = m.residuals[0] if m.residuals else {}
+        loc = estimate_location_error(
+            dens_full, x_c, y_c, z_c, p.body_center_xyz, base_density=BASE_DENSITY,
+        )
+        abs_err = res.get("residual_t_m3")
+        abs_err = None if abs_err is None else abs(abs_err)
+        folds.append({
+            "held_out_label": held["label"],
+            "kind": held["kind"],
+            "held_out_xz_m": [held_iv.x_m, held_iv.z_m],
+            "held_out_depth_m": round(0.5 * (held_iv.y_from_m + held_iv.y_to_m), 1),
+            "density_measured_t_m3": res.get("density_measured_t_m3"),
+            "density_predicted_t_m3": (None if res.get("density_predicted_t_m3") is None
+                                       else round(res["density_predicted_t_m3"], 4)),
+            "density_abs_err_t_m3": None if abs_err is None else round(abs_err, 4),
+            "within_0_3": (None if abs_err is None else bool(abs_err <= LOO_DENSITY_TOL_T_M3)),
+            "status": res.get("status"),
+            "body_depth_err_m": loc.get("depth_error_m"),
+            "n_anchored_vox": meta.get("n_anchored_voxels"),
+            "misfit": round(float(misfit), 5),
+        })
+
+    return {
+        "project": p.name,
+        "n_folds": len(folds),
+        "folds": folds,
+        "summary": _summarize_loo(p, folds),
+        "table_markdown": _render_loo_table(p.name, folds),
+    }
+
+
+def _summarize_loo(p: FieldProject, folds: List[dict]) -> dict:
+    """Agrega los folds. El veredicto se centra en los sondajes de CUERPO (el caso
+    informativo): la roca caja se predice trivialmente y no debe inflar el gate."""
+    body = [f for f in folds if f["kind"] == "body" and f["density_abs_err_t_m3"] is not None]
+    host = [f for f in folds if f["kind"] == "host" and f["density_abs_err_t_m3"] is not None]
+    eval_all = [f for f in folds if f["density_abs_err_t_m3"] is not None]
+
+    def _frac_within(items):
+        return (None if not items
+                else round(sum(1 for f in items if f["within_0_3"]) / len(items), 3))
+
+    def _median(vals):
+        vals = [v for v in vals if v is not None]
+        return None if not vals else round(float(np.median(vals)), 3)
+
+    body_depth_errs = [f["body_depth_err_m"] for f in folds if f["body_depth_err_m"] is not None]
+
+    density_frac_body = _frac_within(body)
+    depth_median = _median(body_depth_errs)
+    density_ok = density_frac_body is not None and density_frac_body >= LOO_GATE_FRACTION
+    depth_ok = depth_median is not None and depth_median <= DEPTH_TARGET_M
+
+    return {
+        "n_body_folds": len(body),
+        "n_host_folds": len(host),
+        "median_density_abs_err_body_t_m3": _median([f["density_abs_err_t_m3"] for f in body]),
+        "median_density_abs_err_all_t_m3": _median([f["density_abs_err_t_m3"] for f in eval_all]),
+        "frac_within_0_3_body": density_frac_body,
+        "frac_within_0_3_all": _frac_within(eval_all),
+        "median_body_depth_err_m": depth_median,
+        "density_tol_t_m3": LOO_DENSITY_TOL_T_M3,
+        "gate_fraction": LOO_GATE_FRACTION,
+        "depth_target_m": DEPTH_TARGET_M,
+        "density_thesis_met": density_ok,
+        "depth_thesis_met": depth_ok,
+        "verdict": "GO" if (density_ok and depth_ok) else "NO_GO",
+    }
+
+
+def _render_loo_table(name: str, folds: List[dict]) -> str:
+    header = (
+        f"### Leave-one-out — {name}\n\n"
+        "| Sondaje OCULTO | tipo | prof | ρ medida | ρ predicha | |Δρ| | <0.3 | prof_cuerpo_err |\n"
+        "|----------------|------|------|----------|------------|------|------|-----------------|"
+    )
+    lines = [header]
+    for f in folds:
+        def _n(v, s="{:.3f}"):
+            return "—" if v is None else s.format(v)
+        ok = "—" if f["within_0_3"] is None else ("✓" if f["within_0_3"] else "✗")
+        lines.append(
+            f"| {f['held_out_label']} | {f['kind']} | {f['held_out_depth_m']:.0f}m | "
+            f"{_n(f['density_measured_t_m3'])} | {_n(f['density_predicted_t_m3'])} | "
+            f"{_n(f['density_abs_err_t_m3'])} | {ok} | "
+            f"{_n(f['body_depth_err_m'], '{:.1f}m')} |"
+        )
+    return "\n".join(lines)
+
+
+def default_loo_projects() -> List[FieldProject]:
+    """Proyectos para leave-one-out: cuerpo en CENTRO de celda (mapeo inequívoco) y
+    radio amplio para alojar varios sondajes de cuerpo en columnas distintas."""
+    bs = 25.0
+    # Centro en (137.5,137.5,137.5) = centro de la celda (5,5,5) con bs=25.
+    return [
+        FieldProject(
+            name="LOO-Shallow", nx=12, ny=12, nz=12, block_size=bs,
+            body_center_xyz=(137.5, 137.5, 137.5), body_radius_m=55.0,
+            body_contrast=0.8, forward_block=12.5, sensor_half_span_m=130.0,
+            compact_max_irls=3, data_quality_score=88.0,
+        ),
+        FieldProject(
+            name="LOO-Deep", nx=12, ny=12, nz=12, block_size=bs,
+            body_center_xyz=(137.5, 187.5, 137.5), body_radius_m=55.0,
+            body_contrast=0.8, forward_block=12.5, sensor_half_span_m=130.0,
+            compact_max_irls=3, data_quality_score=82.0, seed=20260620,
+        ),
+    ]
+
+
+def run_leave_one_out_campaign(projects: Optional[List[FieldProject]] = None) -> dict:
+    projects = projects or default_loo_projects()
+    per_project = [run_leave_one_out(p) for p in projects]
+    # Veredicto global: GO sólo si TODOS los proyectos cumplen densidad+profundidad
+    # en el sondaje oculto de CUERPO.
+    verdicts = [pp["summary"]["verdict"] for pp in per_project]
+    global_verdict = "GO" if verdicts and all(v == "GO" for v in verdicts) else "NO_GO"
+    return {
+        "projects": per_project,
+        "global_verdict": global_verdict,
+    }
+
+
 def main():
     try:  # consola Windows (cp1252) no imprime los iconos de estado por defecto
         sys.stdout.reconfigure(encoding="utf-8")
@@ -445,6 +676,24 @@ def main():
           f"{'CUMPLE' if t['density_gate_thesis_met'] else 'NO cumple'}")
     print(f"VEREDICTO TESIS grav+sondajes: {t['verdict']}")
     report["combo_comparison"] = combo
+
+    # ── PASO 3: LEAVE-ONE-OUT — poder predictivo en sondaje OCULTO ───────────
+    loo = run_leave_one_out_campaign()
+    print("\n" + "=" * 78)
+    print("LEAVE-ONE-OUT — densidad/profundidad en el sondaje OCULTO (no circular)")
+    print("=" * 78)
+    for pp in loo["projects"]:
+        print("\n" + pp["table_markdown"])
+        s = pp["summary"]
+        print(
+            f"\n  {pp['project']}: ρ oculta CUERPO mediana |Δρ|="
+            f"{s['median_density_abs_err_body_t_m3']} t/m³  "
+            f"(<0.3 en {s['frac_within_0_3_body']} de folds cuerpo) | "
+            f"prof_cuerpo mediana={s['median_body_depth_err_m']}m | "
+            f"VEREDICTO={s['verdict']}"
+        )
+    print(f"\nVEREDICTO GLOBAL leave-one-out: {loo['global_verdict']}")
+    report["leave_one_out"] = loo
 
     out = Path(__file__).resolve().parent / "field_validation_report.json"
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
