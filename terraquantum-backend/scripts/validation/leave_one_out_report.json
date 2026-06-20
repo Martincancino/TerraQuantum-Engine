@@ -1,0 +1,287 @@
+{
+  "projects": [
+    {
+      "project": "LOO-Shallow",
+      "n_folds": 7,
+      "folds": [
+        {
+          "held_out_label": "BODY-C",
+          "kind": "body",
+          "held_out_xz_m": [
+            137.5,
+            137.5
+          ],
+          "held_out_depth_m": 137.5,
+          "density_measured_t_m3": 3.4,
+          "density_predicted_t_m3": 2.6214,
+          "density_abs_err_t_m3": 0.7786,
+          "within_0_3": false,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 2e-05
+        },
+        {
+          "held_out_label": "BODY-E",
+          "kind": "body",
+          "held_out_xz_m": [
+            162.5,
+            137.5
+          ],
+          "held_out_depth_m": 137.5,
+          "density_measured_t_m3": 3.4,
+          "density_predicted_t_m3": 2.6607,
+          "density_abs_err_t_m3": 0.7393,
+          "within_0_3": false,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 2e-05
+        },
+        {
+          "held_out_label": "BODY-W",
+          "kind": "body",
+          "held_out_xz_m": [
+            112.5,
+            137.5
+          ],
+          "held_out_depth_m": 137.5,
+          "density_measured_t_m3": 3.4,
+          "density_predicted_t_m3": 2.6523,
+          "density_abs_err_t_m3": 0.7477,
+          "within_0_3": false,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 2e-05
+        },
+        {
+          "held_out_label": "BODY-N",
+          "kind": "body",
+          "held_out_xz_m": [
+            137.5,
+            162.5
+          ],
+          "held_out_depth_m": 137.5,
+          "density_measured_t_m3": 3.4,
+          "density_predicted_t_m3": 2.6599,
+          "density_abs_err_t_m3": 0.7401,
+          "within_0_3": false,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 2e-05
+        },
+        {
+          "held_out_label": "BODY-S",
+          "kind": "body",
+          "held_out_xz_m": [
+            137.5,
+            112.5
+          ],
+          "held_out_depth_m": 137.5,
+          "density_measured_t_m3": 3.4,
+          "density_predicted_t_m3": 2.6602,
+          "density_abs_err_t_m3": 0.7398,
+          "within_0_3": false,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 2e-05
+        },
+        {
+          "held_out_label": "HOST-E",
+          "kind": "host",
+          "held_out_xz_m": [
+            262.5,
+            137.5
+          ],
+          "held_out_depth_m": 137.5,
+          "density_measured_t_m3": 2.6,
+          "density_predicted_t_m3": 2.6148,
+          "density_abs_err_t_m3": 0.0148,
+          "within_0_3": true,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 5e-05
+        },
+        {
+          "held_out_label": "HOST-W",
+          "kind": "host",
+          "held_out_xz_m": [
+            25.0,
+            137.5
+          ],
+          "held_out_depth_m": 137.5,
+          "density_measured_t_m3": 2.6,
+          "density_predicted_t_m3": 2.6301,
+          "density_abs_err_t_m3": 0.0301,
+          "within_0_3": true,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 6,
+          "misfit": 2e-05
+        }
+      ],
+      "summary": {
+        "n_body_folds": 5,
+        "n_host_folds": 2,
+        "median_density_abs_err_body_t_m3": 0.74,
+        "median_density_abs_err_all_t_m3": 0.74,
+        "frac_within_0_3_body": 0.0,
+        "frac_within_0_3_all": 0.286,
+        "median_body_depth_err_m": 0.0,
+        "density_tol_t_m3": 0.3,
+        "gate_fraction": 0.75,
+        "depth_target_m": 15.0,
+        "density_thesis_met": false,
+        "depth_thesis_met": true,
+        "verdict": "NO_GO"
+      },
+      "table_markdown": "### Leave-one-out — LOO-Shallow\n\n| Sondaje OCULTO | tipo | prof | ρ medida | ρ predicha | |Δρ| | <0.3 | prof_cuerpo_err |\n|----------------|------|------|----------|------------|------|------|-----------------|\n| BODY-C | body | 138m | 3.400 | 2.621 | 0.779 | ✗ | 0.0m |\n| BODY-E | body | 138m | 3.400 | 2.661 | 0.739 | ✗ | 0.0m |\n| BODY-W | body | 138m | 3.400 | 2.652 | 0.748 | ✗ | 0.0m |\n| BODY-N | body | 138m | 3.400 | 2.660 | 0.740 | ✗ | 0.0m |\n| BODY-S | body | 138m | 3.400 | 2.660 | 0.740 | ✗ | 0.0m |\n| HOST-E | host | 138m | 2.600 | 2.615 | 0.015 | ✓ | 0.0m |\n| HOST-W | host | 138m | 2.600 | 2.630 | 0.030 | ✓ | 0.0m |"
+    },
+    {
+      "project": "LOO-Deep",
+      "n_folds": 7,
+      "folds": [
+        {
+          "held_out_label": "BODY-C",
+          "kind": "body",
+          "held_out_xz_m": [
+            137.5,
+            137.5
+          ],
+          "held_out_depth_m": 187.5,
+          "density_measured_t_m3": 3.4,
+          "density_predicted_t_m3": 2.6111,
+          "density_abs_err_t_m3": 0.7889,
+          "within_0_3": false,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 1e-05
+        },
+        {
+          "held_out_label": "BODY-E",
+          "kind": "body",
+          "held_out_xz_m": [
+            162.5,
+            137.5
+          ],
+          "held_out_depth_m": 187.5,
+          "density_measured_t_m3": 3.4,
+          "density_predicted_t_m3": 2.6327,
+          "density_abs_err_t_m3": 0.7673,
+          "within_0_3": false,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 1e-05
+        },
+        {
+          "held_out_label": "BODY-W",
+          "kind": "body",
+          "held_out_xz_m": [
+            112.5,
+            137.5
+          ],
+          "held_out_depth_m": 187.5,
+          "density_measured_t_m3": 3.4,
+          "density_predicted_t_m3": 2.633,
+          "density_abs_err_t_m3": 0.767,
+          "within_0_3": false,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 1e-05
+        },
+        {
+          "held_out_label": "BODY-N",
+          "kind": "body",
+          "held_out_xz_m": [
+            137.5,
+            162.5
+          ],
+          "held_out_depth_m": 187.5,
+          "density_measured_t_m3": 3.4,
+          "density_predicted_t_m3": 2.6329,
+          "density_abs_err_t_m3": 0.7671,
+          "within_0_3": false,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 1e-05
+        },
+        {
+          "held_out_label": "BODY-S",
+          "kind": "body",
+          "held_out_xz_m": [
+            137.5,
+            112.5
+          ],
+          "held_out_depth_m": 187.5,
+          "density_measured_t_m3": 3.4,
+          "density_predicted_t_m3": 2.6345,
+          "density_abs_err_t_m3": 0.7655,
+          "within_0_3": false,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 1e-05
+        },
+        {
+          "held_out_label": "HOST-E",
+          "kind": "host",
+          "held_out_xz_m": [
+            262.5,
+            137.5
+          ],
+          "held_out_depth_m": 187.5,
+          "density_measured_t_m3": 2.6,
+          "density_predicted_t_m3": 2.619,
+          "density_abs_err_t_m3": 0.019,
+          "within_0_3": true,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 7,
+          "misfit": 1e-05
+        },
+        {
+          "held_out_label": "HOST-W",
+          "kind": "host",
+          "held_out_xz_m": [
+            25.0,
+            137.5
+          ],
+          "held_out_depth_m": 187.5,
+          "density_measured_t_m3": 2.6,
+          "density_predicted_t_m3": 2.6293,
+          "density_abs_err_t_m3": 0.0293,
+          "within_0_3": true,
+          "status": "EVALUATED",
+          "body_depth_err_m": 0.0,
+          "n_anchored_vox": 6,
+          "misfit": 1e-05
+        }
+      ],
+      "summary": {
+        "n_body_folds": 5,
+        "n_host_folds": 2,
+        "median_density_abs_err_body_t_m3": 0.767,
+        "median_density_abs_err_all_t_m3": 0.767,
+        "frac_within_0_3_body": 0.0,
+        "frac_within_0_3_all": 0.286,
+        "median_body_depth_err_m": 0.0,
+        "density_tol_t_m3": 0.3,
+        "gate_fraction": 0.75,
+        "depth_target_m": 15.0,
+        "density_thesis_met": false,
+        "depth_thesis_met": true,
+        "verdict": "NO_GO"
+      },
+      "table_markdown": "### Leave-one-out — LOO-Deep\n\n| Sondaje OCULTO | tipo | prof | ρ medida | ρ predicha | |Δρ| | <0.3 | prof_cuerpo_err |\n|----------------|------|------|----------|------------|------|------|-----------------|\n| BODY-C | body | 188m | 3.400 | 2.611 | 0.789 | ✗ | 0.0m |\n| BODY-E | body | 188m | 3.400 | 2.633 | 0.767 | ✗ | 0.0m |\n| BODY-W | body | 188m | 3.400 | 2.633 | 0.767 | ✗ | 0.0m |\n| BODY-N | body | 188m | 3.400 | 2.633 | 0.767 | ✗ | 0.0m |\n| BODY-S | body | 188m | 3.400 | 2.635 | 0.765 | ✗ | 0.0m |\n| HOST-E | host | 188m | 2.600 | 2.619 | 0.019 | ✓ | 0.0m |\n| HOST-W | host | 188m | 2.600 | 2.629 | 0.029 | ✓ | 0.0m |"
+    }
+  ],
+  "global_verdict": "NO_GO"
+}
