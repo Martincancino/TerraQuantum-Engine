@@ -1079,6 +1079,18 @@ export type GravityCsvInvertPayload = {
   paddingKappa?: number;
   anchorKappa?: number;
   autoKappa?: boolean;
+  // FASE 20 — Sondajes que anclan la inversión (combo grav+sondajes). El backend
+  // los parsea desde boreholes_json e inyecta en GeophysicsInvertInput.boreholes.
+  boreholes?: Array<{
+    x_m: number;
+    z_m: number;
+    y_from_m: number;
+    y_to_m: number;
+    density_t_m3?: number;
+    susceptibility_si?: number;
+  }>;
+  // FASE 19 (Caso B) — Puntos de control Helmert (georef de coords locales).
+  helmertControlPointsJson?: string | null;
 };
 
 export type InversionResultPayload = {
@@ -1209,6 +1221,14 @@ export async function invertGravityCsv(
   if (payload.paddingKappa !== undefined) formData.append("padding_kappa", String(payload.paddingKappa));
   if (payload.anchorKappa !== undefined) formData.append("anchor_kappa", String(payload.anchorKappa));
   if (payload.autoKappa !== undefined) formData.append("auto_kappa", String(payload.autoKappa));
+  // FASE 20 — Sondajes (anclaje grav+sondajes). El backend parsea boreholes_json.
+  if (payload.boreholes && payload.boreholes.length > 0) {
+    formData.append("boreholes_json", JSON.stringify(payload.boreholes));
+  }
+  // FASE 19 (Caso B) — Puntos de control Helmert (georef de coords locales).
+  if (payload.helmertControlPointsJson) {
+    formData.append("helmert_control_points_json", payload.helmertControlPointsJson);
+  }
 
   try {
     const res = await fetch("/api/gravity-import/invert", {
@@ -1239,6 +1259,54 @@ export async function invertGravityCsv(
       data: null,
       error: message || "Error de red",
     };
+  }
+}
+
+// FASE 19 — Descargar el "CSV limpio" (validado + enriquecido) del backend.
+// Devuelve el Blob + nombre sugerido; el componente dispara la descarga (mantiene
+// frontendApi sin dependencias del DOM). El backend (build_clean_csv_from_import)
+// produce las columnas normalizadas; aquí NO se recalcula nada.
+export type ExportCleanCsvResult = {
+  ok: boolean;
+  status: number;
+  blob: Blob | null;
+  filename: string;
+  error: string | null;
+};
+
+export async function exportCleanCsv(
+  file: File,
+  dataType: "gravity" | "magnetic" = "gravity"
+): Promise<ExportCleanCsvResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const base = file.name.replace(/\.csv$/i, "");
+  const fallbackName = `${base}_clean.csv`;
+  try {
+    const res = await fetch(
+      `/api/gravity-import/export-clean-csv?data_type=${encodeURIComponent(dataType)}`,
+      { method: "POST", body: formData }
+    );
+    if (!res.ok) {
+      let detail = `Error ${res.status}`;
+      try {
+        const d = await res.json();
+        if (typeof d?.detail === "string") detail = d.detail;
+        else if (d?.detail?.message) detail = String(d.detail.message);
+      } catch {
+        /* respuesta no-JSON: se conserva el mensaje genérico */
+      }
+      return { ok: false, status: res.status, blob: null, filename: fallbackName, error: detail };
+    }
+    const blob = await res.blob();
+    // Nombre desde Content-Disposition si el backend lo envió.
+    const cd = res.headers.get("content-disposition") || "";
+    const match = cd.match(/filename="?([^"]+)"?/i);
+    const filename = match ? match[1] : fallbackName;
+    return { ok: true, status: res.status, blob, filename, error: null };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, status: 500, blob: null, filename: fallbackName, error: message };
   }
 }
 
