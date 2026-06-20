@@ -1794,7 +1794,30 @@ class GravimetryInversion:
         # fila i es w_i·(contraste_i − target_i), por lo que d_small_i = w_i·target_i.
         _small_target = np.zeros(_n_active_sol, dtype=np.float64)
         if _has_anchors:
-            _small_target[_anchor_active] = _anchor_contrast_active[_anchor_active]
+            # FASE 25B: el target de anclaje vive en CONTRASTE FÍSICO (t/m³), pero el
+            # bloque smallness opera en m_tilde con  m = base_density + Wz_inv·m_tilde.
+            # Para que la densidad recuperada en la celda anclada sea
+            #   base_density + contraste_medido
+            # el target en m_tilde debe ser  contraste / diag(Wz_inv)  usando el MISMO
+            # Wz_inv que mapea m_tilde→m (ya incluye el column-norm Ws, línea ~1700).
+            # Esta es exactamente la misma transformación que los bounds (líneas
+            # 1674/1698): bound_tilde = (densidad − base) / diag(Wz_inv). Sin ella,
+            # anclar m_tilde→contraste deja la densidad en base + diag·contraste ≈ base
+            # (atenuada por el depth-weighting) — el bug medido E2E en Fase 25.
+            # NOTA: NO se toca m_ref_sol (línea ~1739): la suavidad opera como
+            # L_active·(Wz_inv·m_tilde − m_ref) = L_active·(m_phys − m_ref), por lo que
+            # ahí el contraste físico es el espacio CORRECTO.
+            _wz_inv_comb_diag = np.asarray(Wz_inv.diagonal(), dtype=np.float64)
+            # Protección contra división por cero: diag(Wz_inv) es estrictamente > 0
+            # por construcción ((depth+z0)^β/2 · 1/‖col‖), pero se blinda igualmente.
+            _wz_safe = np.where(
+                np.abs(_wz_inv_comb_diag) < 1e-12,
+                1e-12,
+                _wz_inv_comb_diag,
+            )
+            _small_target[_anchor_active] = (
+                _anchor_contrast_active[_anchor_active] / _wz_safe[_anchor_active]
+            )
 
         # ── FASE 24B Tarea 1: control de norma de regularización ──────────────
         # L2 → un único solve idéntico al motor histórico (n_irls=1, focus=None).
