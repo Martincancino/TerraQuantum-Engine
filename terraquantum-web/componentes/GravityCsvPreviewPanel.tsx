@@ -11,6 +11,7 @@ import { type VoxelMineralModel, type VoxelData } from "../lib/terraQuantumGeolo
 import { isJsonObject, readStringField, readNumberField } from "./datos/helpers";
 import { PgiParamsForm, type PgiParamsUI } from "./PgiParamsForm";
 import { MagneticRemanenceForm, type MagneticRemanenceParamsUI } from "./MagneticRemanenceForm";
+import { buildCsvPackage, downloadCsvPackage, type CsvPackageParams } from "../lib/terraquantum/csvPackage";
 
 // ─── Georef UX helpers (R1-FE-3) ──────────────────────────────────────────
 
@@ -463,6 +464,9 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
   // FASE 19 — Descarga de "CSV limpio".
   const [cleanCsvLoading, setCleanCsvLoading] = useState(false);
   const [cleanCsvError, setCleanCsvError] = useState<string | null>(null);
+  // FASE R3 — Generación del "paquete CSV" (CSV limpio + parámetros) para LoadPanel.
+  const [packageError, setPackageError] = useState<string | null>(null);
+  const [packageMessage, setPackageMessage] = useState<string | null>(null);
   // FASE 19 — Contexto del survey (alimenta el ruteo multimodal / interpretación).
   const [expectedRock, setExpectedRock] = useState<string>("");
   const [expectedDepth, setExpectedDepth] = useState<string>("");
@@ -1520,6 +1524,83 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
     }
   }
 
+  // FASE R3 — Genera y descarga el "paquete CSV" (CSV limpio/corregido + todos
+  // los parámetros de inversión). LoadPanel (vista 3D) lo sube y corre la
+  // inversión. No invierte aquí: solo empaqueta el dato preparado.
+  const handleGeneratePackage = async () => {
+    setPackageError(null);
+    setPackageMessage(null);
+
+    const isMagnetic = dataType === "magnetic";
+    const sourceFile = isMagnetic ? fileMagnetometry : (correctedFile ?? file);
+    if (!sourceFile) {
+      setPackageError(
+        isMagnetic
+          ? "Selecciona un CSV de magnetometría antes de generar el paquete."
+          : "Selecciona y valida un CSV antes de generar el paquete.",
+      );
+      return;
+    }
+
+    const geoErr = validateCoords();
+    if (geoErr) {
+      setPackageError(geoErr);
+      return;
+    }
+    if (utmZone.trim() && utmZoneError) {
+      setPackageError(utmZoneError);
+      return;
+    }
+
+    let csvText: string;
+    try {
+      csvText = await sourceFile.text();
+    } catch {
+      setPackageError("No se pudo leer el contenido del CSV.");
+      return;
+    }
+
+    const params: CsvPackageParams = {
+      strict,
+      allowGRaw: allowGRaw || correctedFile !== null,
+      densityMin,
+      densityMax,
+      densityPreset,
+      gravimeterType,
+      lambdaMode,
+      lambdaCustom,
+      paddingKappaLog,
+      anchorKappaLog,
+      autoKappa,
+      utmZone,
+      acknowledgeSpatialRisk,
+      acknowledgeRegionalScale,
+      expectedRock,
+      expectedDepth,
+      inclinationDeg,
+      declinationDeg,
+      fieldIntensityNt,
+      suscMin,
+      suscMax,
+    };
+
+    const pkg = buildCsvPackage({
+      dataType,
+      csvFilename: sourceFile.name,
+      csvText,
+      corrected: !isMagnetic && correctedFile !== null,
+      params,
+      pgiParams,
+      remanenceParams,
+      boreholes,
+    });
+
+    downloadCsvPackage(pkg);
+    setPackageMessage(
+      "Paquete CSV generado. Súbelo en la vista 3D para cargar el modelo.",
+    );
+  };
+
   return (
     <div className="w-full min-w-0 max-w-full overflow-hidden border border-neutral-800 bg-black/50 p-3 rounded-xl shrink-0">
       {errorModalView && (
@@ -2411,6 +2492,33 @@ export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewP
                   ? "Cargando modelo 3D..."
                   : "Invertir y cargar modelo 3D"}
               </button>
+              {/* FASE R3 — Genera el paquete CSV (prep) para cargarlo en la vista 3D. */}
+              <button
+                onClick={handleGeneratePackage}
+                disabled={
+                  invertLoading ||
+                  loading3D ||
+                  !(dataType === "magnetic" ? fileMagnetometry : file) ||
+                  csvValidation?.can_invert === false ||
+                  result.spatial_readiness?.level === "NO_SPATIAL_DATA" ||
+                  (result.spatial_readiness?.requires_user_acknowledgement === true && !acknowledgeSpatialRisk) ||
+                  result.regional_scale_preflight?.can_run_single_inversion === false ||
+                  (result.regional_scale_preflight?.requires_user_acknowledgement === true && !acknowledgeRegionalScale)
+                }
+                className="h-9 w-full justify-center px-4 bg-[#C2D8C4] text-black text-[10px] uppercase font-bold tracking-widest rounded hover:bg-white disabled:opacity-50 transition-colors flex items-center"
+              >
+                ↓ Generar paquete CSV
+              </button>
+              {packageMessage && (
+                <p className="text-[10px] text-emerald-400 font-mono text-center">
+                  {packageMessage}
+                </p>
+              )}
+              {packageError && (
+                <p className="text-[10px] text-red-400 font-mono text-center">
+                  {packageError}
+                </p>
+              )}
               {result.spatial_readiness?.level === "NO_SPATIAL_DATA" && (
                 <p className="text-[10px] text-red-400 font-mono text-center">
                   No es posible continuar sin coordenadas por estación.
