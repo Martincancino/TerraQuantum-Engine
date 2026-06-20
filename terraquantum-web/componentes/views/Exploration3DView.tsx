@@ -6,6 +6,7 @@ import { useAppStore } from "../../store/useAppStore";
 import { VoxelMineralModel } from "../../lib/terraQuantumGeology";
 
 import Scene3D from "../Scene3D";
+import LoadPanel from "../LoadPanel";
 import MviDirectionPanel from "../MviDirectionPanel";
 import InversionQualityBadge from "../InversionQualityBadge";
 import WorkspaceLayout from "../workspace/WorkspaceLayout";
@@ -596,10 +597,7 @@ export default function Exploration3DView() {
         sidebar={
           <div className="flex flex-col">
             <SidebarSection title="Modelo 3D">
-              <p className="text-[8px] text-white/40 font-mono mb-3 leading-relaxed">
-                Prepara y ejecuta la inversión en la vista «Preparación». El modelo
-                generado se carga aquí automáticamente.
-              </p>
+              <LoadPanel />
             </SidebarSection>
             {show3D && model && (
               <SidebarSection title="Corte caja A-A' / B-B'">
