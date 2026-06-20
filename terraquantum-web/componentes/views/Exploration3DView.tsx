@@ -9,6 +9,7 @@ import Scene3D from "../Scene3D";
 import GravityCsvPreviewPanel from "../GravityCsvPreviewPanel";
 import BoreholeUploadPanel from "../BoreholeUploadPanel";
 import MultimodalComboPanel from "../MultimodalComboPanel";
+import MviDirectionPanel from "../MviDirectionPanel";
 import InversionQualityBadge from "../InversionQualityBadge";
 import WorkspaceLayout from "../workspace/WorkspaceLayout";
 import CommandBar from "../workspace/CommandBar";
@@ -272,6 +273,7 @@ export default function Exploration3DView() {
   const viewMode = useAppStore((s) => s.viewMode);
   const isWorkerProcessing = useAppStore((s) => s.isWorkerProcessing);
   const susceptibilityDataAvailable = useAppStore((s) => s.susceptibilityDataAvailable);
+  const report = useAppStore((s) => s.report);
 
   // Etiqueta legible del objeto físico en cálculo (HITO 6 overlay).
   const viewModeLabel =
@@ -840,6 +842,8 @@ export default function Exploration3DView() {
                   </p>
                 )}
               </Panel>
+
+              <MviDirectionPanel model={model} report={report} />
 
               <Panel title="Calidad de Inversión">
                 <InversionQualityBadge />

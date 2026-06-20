@@ -1594,6 +1594,11 @@ async function _buildBlockModelResponseFromArrow(
   const densityT = hasCol("density_t_m3") ? getF32("density_t_m3") : null;
   const densityContrast = hasCol("density_contrast_t_m3") ? getF32("density_contrast_t_m3") : null;
 
+  // FASE 20C — MVI: dirección de magnetización recuperada por celda (sólo presente en
+  // parquets de inversión vectorial). NaN en celdas de aire. El FE sólo las muestra.
+  const magInc = hasCol("magnetization_inc_deg") ? getF32("magnetization_inc_deg") : null;
+  const magDec = hasCol("magnetization_dec_deg") ? getF32("magnetization_dec_deg") : null;
+
   // Headers autoritativos del backend (emitidos sobre el modelo COMPLETO, no el subconjunto).
   // El FE los consume directamente en vez de re-inferir física desde coordenadas parciales.
   const hCellSize = parseFloat(headers.get("x-tq-cell-size")  ?? "");
@@ -1657,6 +1662,8 @@ async function _buildBlockModelResponseFromArrow(
     if (jointStructuralScores) cell.joint_structural_score = jointStructuralScores[i];
     if (densityT) cell.density_t_m3 = densityT[i];
     if (densityContrast) cell.density_contrast_t_m3 = densityContrast[i];
+    if (magInc) cell.magnetization_inc_deg = magInc[i];
+    if (magDec) cell.magnetization_dec_deg = magDec[i];
     cells[i] = cell;
   }
 
