@@ -498,6 +498,16 @@ class MagnetometryInversion:
         extra_reg_blocks: Optional[list] = None,
         extra_reg_rhs: Optional[list] = None,
         m_ref: Optional[np.ndarray] = None,
+        # ── FASE 20B Tarea 3: Observable Domain Pruning (R-05) ───────────────
+        # Excluye del solver los vóxeles con sensibilidad ~0 (fuera del cutoff para
+        # TODOS los sensores): columnas nulas de G que solo añaden plateau de mínima
+        # norma y saturación espuria. Mismo threshold relativo que gravimetry.py.
+        # Default False = comportamiento magnético histórico EXACTO (sin poda) y
+        # joint INTACTO (joint_inversion no pasa este flag → magnético opera sobre nC).
+        # Contrato joint (igual que gravedad Fase 15): si se activa con extra_reg_blocks
+        # presentes, el CALLER debe recortar las columnas al dominio observable
+        # (B[:, obs_mask]) — la verificación de dimensión de extra_reg_blocks lo exige.
+        prune_observable_domain: bool = False,
     ):
         """
         LSQR + Tikhonov 3D sobre susceptibilidad. Pre-condicionamiento algebraico de
@@ -608,6 +618,36 @@ class MagnetometryInversion:
             _anchor_active = _anchor_mask_full[active_cells]
             _anchor_value_active = _anchor_value_full[active_cells]
 
+        # ── FASE 20B Tarea 3: Observable Domain (R-05) — excluir vóxeles muertos ─
+        # Vóxeles más allá del cutoff_radius para TODOS los sensores tienen columnas
+        # cero en G_active. Incluirlos produce plateau de chi² por mínima norma y
+        # saturación espuria en susc_min. Misma lógica/threshold que gravimetry.py.
+        _col_sens_r05 = np.asarray(G_active.power(2).sum(axis=0)).ravel()
+        _sens_thr_r05 = 1e-6 * max(float(np.max(_col_sens_r05)), 1e-30)
+        if prune_observable_domain:
+            _obs_in_active = _col_sens_r05 > _sens_thr_r05
+        else:
+            _obs_in_active = np.ones(n_active, dtype=bool)
+        _n_obs_domain = int(np.sum(_obs_in_active))
+        _n_dead = n_active - _n_obs_domain
+
+        if prune_observable_domain and _n_dead > 0:
+            print(
+                f"[MAG R-05] Observable Domain: {_n_obs_domain:,}/{n_active:,} "
+                f"({100.0 * _n_obs_domain / n_active:.1f}%) | "
+                f"Muertos (sens~0): {_n_dead:,} -> excluidos del solver"
+            )
+            G_active = G_active[:, _obs_in_active]
+            y_c_active = y_c_active[_obs_in_active]
+            _topo_sol = topo_depth[active_cells][_obs_in_active]
+            if _anchor_active is not None:
+                _anchor_active = _anchor_active[_obs_in_active]
+                _anchor_value_active = _anchor_value_active[_obs_in_active]
+            _n_active_sol = _n_obs_domain
+        else:
+            _topo_sol = topo_depth[active_cells]
+            _n_active_sol = n_active
+
         _has_anchors = _anchor_active is not None and bool(np.any(_anchor_active))
         if _has_anchors:
             print(
@@ -645,7 +685,7 @@ class MagnetometryInversion:
         # z0 = 0.5·dy estabiliza el peso en la primera capa (Li & Oldenburg: z0 del
         # orden de medio voxel, NO un valor grande arbitrario).
         z0 = 0.5 * self.dy
-        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
+        true_depth = np.clip(y_c_active - _topo_sol, a_min=1.0, a_max=None)
         wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))   # (depth+z0)^{+β/2}
         wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)               # escala global ~1
         Wz_inv = sp.diags(wz_inv_diag)
@@ -663,10 +703,13 @@ class MagnetometryInversion:
         # ── Laplaciano reducido a celdas activas:  L · W_z^{-1} ──────────────
         L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
         L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+        if _n_dead > 0:
+            # R-05: reducir el Laplaciano al dominio observable (mismas filas/columnas).
+            L_active = L_active.tocsr()[_obs_in_active, :][:, _obs_in_active]
 
         # Relajación local del Laplaciano en filas ancladas (mitiga halos/bullseyes).
         if _has_anchors:
-            _lap_row_scale = np.ones(n_active, dtype=np.float64)
+            _lap_row_scale = np.ones(_n_active_sol, dtype=np.float64)
             _lap_row_scale[_anchor_active] = float(laplacian_relax_alpha)
             L_active = (sp.diags(_lap_row_scale) @ L_active).tocsr()
 
@@ -695,16 +738,18 @@ class MagnetometryInversion:
                     f"m_ref debe tener longitud {self.total_voxels} (grilla completa) "
                     f"o {n_active} (celdas activas), got {m_ref.shape[0]}."
                 )
+            if _n_dead > 0:
+                m_ref_sol = m_ref_sol[_obs_in_active]
             if not np.isfinite(m_ref_sol).all():
                 raise ValueError("m_ref contiene NaN o Inf.")
 
         if _has_anchors:
             if m_ref_sol is None:
-                m_ref_sol = np.zeros(n_active, dtype=np.float64)
+                m_ref_sol = np.zeros(_n_active_sol, dtype=np.float64)
             m_ref_sol[_anchor_active] = _anchor_value_active[_anchor_active]
 
         if m_ref_sol is None:
-            d_reg = np.zeros(n_active, dtype=np.float64)
+            d_reg = np.zeros(_n_active_sol, dtype=np.float64)
         else:
             d_reg = lambda_spatial * (L_active @ m_ref_sol)
 
@@ -715,7 +760,8 @@ class MagnetometryInversion:
         # Los bloques llegan en ESPACIO FÍSICO del modelo (m); el solver trabaja en
         # la variable m̃ con m = Wz_inv·m̃, de modo que cada bloque B se convierte vía
         # B·Wz_inv (igual que L_scaled = L_active·Wz_inv). El RHS se apila tal cual.
-        # Las columnas (n_active) deben conformar con el modelo.
+        # Las columnas deben conformar con el modelo activo (post-poda R-05 si aplica):
+        # con prune_observable_domain=True el caller debe pasar B[:, obs_mask].
         if extra_reg_blocks:
             _xg_mats = [G_aug]
             _xg_rhs  = [d_aug]
@@ -724,7 +770,8 @@ class MagnetometryInversion:
                 if _blk.shape[1] != Wz_inv.shape[0]:
                     raise ValueError(
                         f"extra_reg_blocks[{_bi}] tiene {_blk.shape[1]} columnas; "
-                        f"se esperaban {Wz_inv.shape[0]} (celdas activas)."
+                        f"se esperaban {Wz_inv.shape[0]} (modelo activo post-poda). "
+                        f"Recorta columnas al dominio observable: B[:, obs_mask]."
                     )
                 _xg_mats.append(_blk @ Wz_inv)
                 if extra_reg_rhs is not None and _bi < len(extra_reg_rhs):
@@ -754,14 +801,14 @@ class MagnetometryInversion:
         # (el clip de la reconstrucción física impone los bounds igual). TRF se
         # reserva para mallas pequeñas, donde sí es ágil y maximiza precisión.
         _MAG_TRF_MAX_CELLS = 2500
-        _use_bc_m_eff = _USE_BC_M and n_active <= _MAG_TRF_MAX_CELLS
+        _use_bc_m_eff = _USE_BC_M and _n_active_sol <= _MAG_TRF_MAX_CELLS
         if _USE_BC_M and not _use_bc_m_eff:
             print(
-                f"[MAG INVERSIÓN] n_active={n_active:,} > {_MAG_TRF_MAX_CELLS:,}: "
+                f"[MAG INVERSIÓN] n_active_sol={_n_active_sol:,} > {_MAG_TRF_MAX_CELLS:,}: "
                 f"usando LSQR+clip (rápido) en vez de TRF con bounds (evita cuelgue)."
             )
         if _has_anchors:
-            _w_small = np.full(n_active, float(lambda_mag), dtype=np.float64)
+            _w_small = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64)
             _w_small = np.where(_anchor_active, float(anchor_kappa) * float(lambda_mag), _w_small)
             # FASE 20B Tarea 1 — anclaje en MAGNITUD (verificado, NO portar el fix de
             # gravedad aquí). El bloque smallness magnético es `diags(w)·Wz_inv`, así que
@@ -776,7 +823,7 @@ class MagnetometryInversion:
             # tests/test_fase20b_anchor_magnitude.py). Dividir el target por diag(Wz_inv)
             # aquí SOBRE-corregiría a χ=contraste/wz → NO hacerlo.
             _small_block = sp.diags(_w_small) @ Wz_inv
-            _small_target = np.zeros(n_active, dtype=np.float64)
+            _small_target = np.zeros(_n_active_sol, dtype=np.float64)
             _small_target[_anchor_active] = _anchor_value_active[_anchor_active]
             _d_small = _w_small * _small_target
             A_sys = sp.vstack([G_aug, _small_block]).tocsr()
@@ -798,9 +845,9 @@ class MagnetometryInversion:
         else:
             if _use_bc_m_eff:
                 from scipy.optimize import lsq_linear as _lsq_linear_m
-                _eye_lam_m = sp.eye(n_active, format='csr', dtype=np.float64) * float(lambda_mag)
+                _eye_lam_m = sp.eye(_n_active_sol, format='csr', dtype=np.float64) * float(lambda_mag)
                 _A_bc_m = sp.vstack([G_aug, _eye_lam_m]).tocsr()
-                _b_bc_m = np.concatenate([d_aug, np.zeros(n_active, dtype=np.float64)])
+                _b_bc_m = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
                 _bc_m = _lsq_linear_m(
                     _A_bc_m, _b_bc_m,
                     bounds=(_lb_tilde_m, _ub_tilde_m),
@@ -824,9 +871,9 @@ class MagnetometryInversion:
             # En el branch sin anclajes A_sys/b_sys no existen (LSQR usó damp=λ).
             # Construirlos explícitamente: sistema aumentado equivalente [G; λI] m̃ = [d; 0].
             if not _has_anchors:
-                _eye_lam_fista = sp.eye(n_active, format='csr', dtype=np.float64) * float(lambda_mag)
+                _eye_lam_fista = sp.eye(_n_active_sol, format='csr', dtype=np.float64) * float(lambda_mag)
                 A_sys = sp.vstack([G_aug, _eye_lam_fista]).tocsr()
-                b_sys = np.concatenate([d_aug, np.zeros(n_active, dtype=np.float64)])
+                b_sys = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
             _t_pgd_mag = time.perf_counter()
             m_tilde, _pgd_info = solve_inversion_pgd_fista(
                 A_sys, b_sys, _lb_tilde_m, _ub_tilde_m, x0=m_tilde,
@@ -839,11 +886,11 @@ class MagnetometryInversion:
                 solver_meta["pgd_magnetic"] = _pgd_info
 
         # Destransformación Li & Oldenburg: m = W_z^{-1} · m̃ (susceptibilidad real).
-        susc_contrast_active = Wz_inv @ m_tilde
+        susc_contrast_sol = Wz_inv @ m_tilde
 
-        if len(susc_contrast_active) != n_active:
+        if len(susc_contrast_sol) != _n_active_sol:
             raise RuntimeError("LSQR devolvió un vector de susceptibilidad con tamaño incorrecto.")
-        if not np.isfinite(susc_contrast_active).all():
+        if not np.isfinite(susc_contrast_sol).all():
             raise RuntimeError("LSQR devolvió susceptibilidades no finitas.")
 
         if _acond > 1e12:
@@ -851,6 +898,27 @@ class MagnetometryInversion:
                 f"[MAG INVERSIÓN] WARN cond(A)={_acond:.2e} > 1e12. "
                 f"Revisar lambda_mag={lambda_mag:.2e} / anchor_kappa={anchor_kappa:.0e}."
             )
+
+        # ── Misfit + error por vóxel en el dominio OBSERVABLE (antes de expandir) ──
+        # G_active y susc_contrast_sol viven en el dominio observable (n_active_sol);
+        # el misfit se calcula aquí con shapes consistentes.
+        d_model = G_active @ susc_contrast_sol
+        residual_sensor = d_observed - d_model
+        _voxel_err_obs = np.abs(G_active.T @ residual_sensor)   # (n_active_sol,)
+
+        # ── R-05: expandir del dominio observable al espacio activo completo ──
+        # Vóxeles muertos: contraste 0 → susc = base_susc; sensibilidad/score 0.
+        if _n_dead > 0:
+            susc_contrast_active = np.zeros(n_active, dtype=np.float64)
+            susc_contrast_active[_obs_in_active] = susc_contrast_sol
+            voxel_error_active = np.zeros(n_active, dtype=np.float64)
+            voxel_error_active[_obs_in_active] = _voxel_err_obs
+            _norm_sens_active = np.zeros(n_active, dtype=np.float64)
+            _norm_sens_active[_obs_in_active] = normalized_sensitivity_active
+        else:
+            susc_contrast_active = susc_contrast_sol
+            voxel_error_active = _voxel_err_obs
+            _norm_sens_active = normalized_sensitivity_active
 
         # ── Reconstrucción física: NaN en celdas de aire, clip a bounds ──────
         susc_raw = self.base_susc + susc_contrast_active
@@ -872,13 +940,9 @@ class MagnetometryInversion:
             )
 
         normalized_sensitivity = np.full(self.total_voxels, np.nan, dtype=np.float64)
-        normalized_sensitivity[active_cells] = normalized_sensitivity_active
+        normalized_sensitivity[active_cells] = _norm_sens_active
 
-        # ── Misfit + score relativo de objetivo ──────────────────────────────
-        d_model = G_active @ susc_contrast_active
-        residual_sensor = d_observed - d_model
-        voxel_error_active = np.abs(G_active.T @ residual_sensor)
-
+        # ── Score relativo de objetivo ────────────────────────────────────────
         residual_error = float(np.linalg.norm(residual_sensor))
         observed_norm = float(np.linalg.norm(d_observed))
         misfit_percent = 0.0 if observed_norm <= 0 else float((residual_error / observed_norm) * 100.0)
@@ -914,6 +978,11 @@ class MagnetometryInversion:
             solver_meta["anchor_kappa"] = float(anchor_kappa) if _has_anchors else None
             solver_meta["laplacian_relax_alpha"] = float(laplacian_relax_alpha) if _has_anchors else None
             solver_meta["field_unit_vector"] = [float(v) for v in forward_model.f_hat]
+            # FASE 20B Tarea 3: diagnóstico de dominio observable (R-05)
+            solver_meta["prune_observable_domain"] = bool(prune_observable_domain)
+            solver_meta["n_dead_voxels"] = int(_n_dead)
+            solver_meta["n_observable"] = int(_n_obs_domain)
+            solver_meta["observable_ratio"] = round(float(_n_obs_domain) / max(n_active, 1), 4)
 
         return susceptibility_full, relative_score_full, misfit_percent, normalized_sensitivity
 
