@@ -1,0 +1,800 @@
+{
+  "cases": [
+    {
+      "project": "Synthetic-Shallow",
+      "route": "gravity_only",
+      "n_sensors_gravity": 100,
+      "n_sensors_magnetic": 0,
+      "n_boreholes": 2,
+      "depth_range_m": [
+        0.0,
+        300.0
+      ],
+      "data_quality_score": 88.0,
+      "confidence": 0.572,
+      "confidence_pct": 57.2,
+      "metrics": {
+        "n_evaluated": 2,
+        "n_total": 2,
+        "mae_t_m3": 0.3868,
+        "rmse_t_m3": 0.5399,
+        "max_abs_diff_t_m3": 0.7634,
+        "bias_t_m3": -0.3767,
+        "pct_within": {
+          "0.2": 0.5,
+          "0.3": 0.5,
+          "0.5": 0.5
+        },
+        "passes_gate": false,
+        "gate": {
+          "threshold_t_m3": 0.3,
+          "min_fraction": 0.75
+        },
+        "residuals": [
+          {
+            "hole_id": null,
+            "depth_from_m": 110.0,
+            "depth_to_m": 190.0,
+            "density_measured_t_m3": 3.4,
+            "density_predicted_t_m3": 2.6365678155924597,
+            "residual_t_m3": -0.7634321844075402,
+            "status": "EVALUATED"
+          },
+          {
+            "hole_id": null,
+            "depth_from_m": 110.0,
+            "depth_to_m": 190.0,
+            "density_measured_t_m3": 2.6,
+            "density_predicted_t_m3": 2.610115389453913,
+            "residual_t_m3": 0.010115389453912993,
+            "status": "EVALUATED"
+          }
+        ]
+      },
+      "depth_error": {
+        "depth_recovered_m": 124.5,
+        "depth_true_m": 150.0,
+        "depth_error_m": 25.5,
+        "depth_error_pct": 17.0,
+        "peak_depth_m": 87.5,
+        "n_anomalous_voxels": 86
+      },
+      "location_error": {
+        "horizontal_error_m": 0.3,
+        "depth_error_m": 16.3,
+        "recovered_x_m": 150.3,
+        "recovered_y_m": 133.7,
+        "recovered_z_m": 149.9,
+        "true_xyz_m": [
+          150.0,
+          150.0,
+          150.0
+        ],
+        "n_strong": 145
+      },
+      "chi2_reduced": 9.868821748469185e-11,
+      "status": "FAIL",
+      "notes": [
+        "mode=grav-sola",
+        "misfit=0.001%",
+        "horiz_err=0.3m",
+        "depth_err=16.3m"
+      ]
+    },
+    {
+      "project": "Synthetic-Deep",
+      "route": "gravity_only",
+      "n_sensors_gravity": 100,
+      "n_sensors_magnetic": 0,
+      "n_boreholes": 2,
+      "depth_range_m": [
+        0.0,
+        300.0
+      ],
+      "data_quality_score": 82.0,
+      "confidence": 0.533,
+      "confidence_pct": 53.3,
+      "metrics": {
+        "n_evaluated": 2,
+        "n_total": 2,
+        "mae_t_m3": 0.3949,
+        "rmse_t_m3": 0.5473,
+        "max_abs_diff_t_m3": 0.7739,
+        "bias_t_m3": -0.379,
+        "pct_within": {
+          "0.2": 0.5,
+          "0.3": 0.5,
+          "0.5": 0.5
+        },
+        "passes_gate": false,
+        "gate": {
+          "threshold_t_m3": 0.3,
+          "min_fraction": 0.75
+        },
+        "residuals": [
+          {
+            "hole_id": null,
+            "depth_from_m": 155.0,
+            "depth_to_m": 245.0,
+            "density_measured_t_m3": 3.4,
+            "density_predicted_t_m3": 2.626115983685397,
+            "residual_t_m3": -0.7738840163146028,
+            "status": "EVALUATED"
+          },
+          {
+            "hole_id": null,
+            "depth_from_m": 155.0,
+            "depth_to_m": 245.0,
+            "density_measured_t_m3": 2.6,
+            "density_predicted_t_m3": 2.6159501919192345,
+            "residual_t_m3": 0.015950191919234413,
+            "status": "EVALUATED"
+          }
+        ]
+      },
+      "depth_error": {
+        "depth_recovered_m": 268.3,
+        "depth_true_m": 200.0,
+        "depth_error_m": 68.3,
+        "depth_error_pct": 34.1,
+        "peak_depth_m": 287.5,
+        "n_anomalous_voxels": 87
+      },
+      "location_error": {
+        "horizontal_error_m": 4.2,
+        "depth_error_m": 32.3,
+        "recovered_x_m": 149.0,
+        "recovered_y_m": 232.3,
+        "recovered_z_m": 145.9,
+        "true_xyz_m": [
+          150.0,
+          200.0,
+          150.0
+        ],
+        "n_strong": 694
+      },
+      "chi2_reduced": 8.743159110456369e-11,
+      "status": "FAIL",
+      "notes": [
+        "mode=grav-sola",
+        "misfit=0.001%",
+        "horiz_err=4.2m",
+        "depth_err=32.3m"
+      ]
+    },
+    {
+      "project": "Synthetic-Noisy",
+      "route": "gravity_only",
+      "n_sensors_gravity": 100,
+      "n_sensors_magnetic": 0,
+      "n_boreholes": 2,
+      "depth_range_m": [
+        0.0,
+        300.0
+      ],
+      "data_quality_score": 70.0,
+      "confidence": 0.455,
+      "confidence_pct": 45.5,
+      "metrics": {
+        "n_evaluated": 2,
+        "n_total": 2,
+        "mae_t_m3": 0.388,
+        "rmse_t_m3": 0.5425,
+        "max_abs_diff_t_m3": 0.7671,
+        "bias_t_m3": -0.3791,
+        "pct_within": {
+          "0.2": 0.5,
+          "0.3": 0.5,
+          "0.5": 0.5
+        },
+        "passes_gate": false,
+        "gate": {
+          "threshold_t_m3": 0.3,
+          "min_fraction": 0.75
+        },
+        "residuals": [
+          {
+            "hole_id": null,
+            "depth_from_m": 110.0,
+            "depth_to_m": 190.0,
+            "density_measured_t_m3": 3.4,
+            "density_predicted_t_m3": 2.632882251305556,
+            "residual_t_m3": -0.767117748694444,
+            "status": "EVALUATED"
+          },
+          {
+            "hole_id": null,
+            "depth_from_m": 110.0,
+            "depth_to_m": 190.0,
+            "density_measured_t_m3": 2.6,
+            "density_predicted_t_m3": 2.6088891277383137,
+            "residual_t_m3": 0.008889127738313629,
+            "status": "EVALUATED"
+          }
+        ]
+      },
+      "depth_error": {
+        "depth_recovered_m": 119.0,
+        "depth_true_m": 150.0,
+        "depth_error_m": 31.0,
+        "depth_error_pct": 20.6,
+        "peak_depth_m": 87.5,
+        "n_anomalous_voxels": 86
+      },
+      "location_error": {
+        "horizontal_error_m": 3.7,
+        "depth_error_m": 20.9,
+        "recovered_x_m": 153.6,
+        "recovered_y_m": 129.1,
+        "recovered_z_m": 151.0,
+        "true_xyz_m": [
+          150.0,
+          150.0,
+          150.0
+        ],
+        "n_strong": 164
+      },
+      "chi2_reduced": 8.496866758937891e-11,
+      "status": "FAIL",
+      "notes": [
+        "mode=grav-sola",
+        "misfit=0.003%",
+        "horiz_err=3.7m",
+        "depth_err=20.9m"
+      ]
+    }
+  ],
+  "summary": {
+    "n_projects": 3,
+    "n_projects_with_borehole": 3,
+    "n_projects_passing_gate": 0,
+    "global_mae_t_m3": 0.3899,
+    "global_pct_within_0_3": 0.5,
+    "confidence_corr": null,
+    "confidence_predictive": null,
+    "gate_threshold_t_m3": 0.3,
+    "gate_min_fraction": 0.75,
+    "go_no_go": "NO_GO"
+  },
+  "table_markdown": "| Project | n_sens | n_bh | Depth | DQ% | Conf | MAE | %<0.2 | Status |\n|---------|--------|------|-------|-----|------|-----|-------|--------|\n| Synthetic-Shallow | 100 | 2 | 300m | 88 | 57% | 0.39 | 50% | ❌ FAIL |\n| Synthetic-Deep | 100 | 2 | 300m | 82 | 53% | 0.39 | 50% | ❌ FAIL |\n| Synthetic-Noisy | 100 | 2 | 300m | 70 | 45% | 0.39 | 50% | ❌ FAIL |",
+  "combo_comparison": {
+    "rows": [
+      {
+        "project": "Synthetic-Shallow",
+        "true_depth_m": 150.0,
+        "depth_err_solo_m": 16.3,
+        "depth_err_combo_m": 16.8,
+        "depth_improvement_m": -0.5,
+        "pct_within_0_3_solo": 0.5,
+        "pct_within_0_3_combo": 0.5,
+        "n_anchored_vox": "24"
+      },
+      {
+        "project": "Synthetic-Deep",
+        "true_depth_m": 200.0,
+        "depth_err_solo_m": 32.3,
+        "depth_err_combo_m": 33.9,
+        "depth_improvement_m": -1.6,
+        "pct_within_0_3_solo": 0.5,
+        "pct_within_0_3_combo": 0.5,
+        "n_anchored_vox": "32"
+      },
+      {
+        "project": "Synthetic-Noisy",
+        "true_depth_m": 150.0,
+        "depth_err_solo_m": 20.9,
+        "depth_err_combo_m": 13.4,
+        "depth_improvement_m": 7.5,
+        "pct_within_0_3_solo": 0.5,
+        "pct_within_0_3_combo": 0.5,
+        "n_anchored_vox": "24"
+      }
+    ],
+    "thesis": {
+      "depth_target_m": 15.0,
+      "gate_fraction_target": 0.75,
+      "median_depth_err_combo_m": 16.8,
+      "median_depth_err_solo_m": 20.9,
+      "depth_thesis_met": false,
+      "density_gate_thesis_met": false,
+      "verdict": "NO_GO"
+    },
+    "comparison_table_markdown": "| Proyecto | y_real | prof_err SOLA | prof_err COMBO | Δprof | %<0.3 SOLA | %<0.3 COMBO |\n|----------|--------|---------------|----------------|-------|------------|-------------|\n| Synthetic-Shallow | 150m | 16.3m | 16.8m | -0.5m | 50% | 50% |\n| Synthetic-Deep | 200m | 32.3m | 33.9m | -1.6m | 50% | 50% |\n| Synthetic-Noisy | 150m | 20.9m | 13.4m | 7.5m | 50% | 50% |",
+    "cases_solo": [
+      {
+        "project": "Synthetic-Shallow",
+        "route": "gravity_only",
+        "n_sensors_gravity": 100,
+        "n_sensors_magnetic": 0,
+        "n_boreholes": 2,
+        "depth_range_m": [
+          0.0,
+          300.0
+        ],
+        "data_quality_score": 88.0,
+        "confidence": 0.572,
+        "confidence_pct": 57.2,
+        "metrics": {
+          "n_evaluated": 2,
+          "n_total": 2,
+          "mae_t_m3": 0.3868,
+          "rmse_t_m3": 0.5399,
+          "max_abs_diff_t_m3": 0.7634,
+          "bias_t_m3": -0.3767,
+          "pct_within": {
+            "0.2": 0.5,
+            "0.3": 0.5,
+            "0.5": 0.5
+          },
+          "passes_gate": false,
+          "gate": {
+            "threshold_t_m3": 0.3,
+            "min_fraction": 0.75
+          },
+          "residuals": [
+            {
+              "hole_id": null,
+              "depth_from_m": 110.0,
+              "depth_to_m": 190.0,
+              "density_measured_t_m3": 3.4,
+              "density_predicted_t_m3": 2.6365678155924597,
+              "residual_t_m3": -0.7634321844075402,
+              "status": "EVALUATED"
+            },
+            {
+              "hole_id": null,
+              "depth_from_m": 110.0,
+              "depth_to_m": 190.0,
+              "density_measured_t_m3": 2.6,
+              "density_predicted_t_m3": 2.610115389453913,
+              "residual_t_m3": 0.010115389453912993,
+              "status": "EVALUATED"
+            }
+          ]
+        },
+        "depth_error": {
+          "depth_recovered_m": 124.5,
+          "depth_true_m": 150.0,
+          "depth_error_m": 25.5,
+          "depth_error_pct": 17.0,
+          "peak_depth_m": 87.5,
+          "n_anomalous_voxels": 86
+        },
+        "location_error": {
+          "horizontal_error_m": 0.3,
+          "depth_error_m": 16.3,
+          "recovered_x_m": 150.3,
+          "recovered_y_m": 133.7,
+          "recovered_z_m": 149.9,
+          "true_xyz_m": [
+            150.0,
+            150.0,
+            150.0
+          ],
+          "n_strong": 145
+        },
+        "chi2_reduced": 9.868821748469185e-11,
+        "status": "FAIL",
+        "notes": [
+          "mode=grav-sola",
+          "misfit=0.001%",
+          "horiz_err=0.3m",
+          "depth_err=16.3m"
+        ]
+      },
+      {
+        "project": "Synthetic-Deep",
+        "route": "gravity_only",
+        "n_sensors_gravity": 100,
+        "n_sensors_magnetic": 0,
+        "n_boreholes": 2,
+        "depth_range_m": [
+          0.0,
+          300.0
+        ],
+        "data_quality_score": 82.0,
+        "confidence": 0.533,
+        "confidence_pct": 53.3,
+        "metrics": {
+          "n_evaluated": 2,
+          "n_total": 2,
+          "mae_t_m3": 0.3949,
+          "rmse_t_m3": 0.5473,
+          "max_abs_diff_t_m3": 0.7739,
+          "bias_t_m3": -0.379,
+          "pct_within": {
+            "0.2": 0.5,
+            "0.3": 0.5,
+            "0.5": 0.5
+          },
+          "passes_gate": false,
+          "gate": {
+            "threshold_t_m3": 0.3,
+            "min_fraction": 0.75
+          },
+          "residuals": [
+            {
+              "hole_id": null,
+              "depth_from_m": 155.0,
+              "depth_to_m": 245.0,
+              "density_measured_t_m3": 3.4,
+              "density_predicted_t_m3": 2.626115983685397,
+              "residual_t_m3": -0.7738840163146028,
+              "status": "EVALUATED"
+            },
+            {
+              "hole_id": null,
+              "depth_from_m": 155.0,
+              "depth_to_m": 245.0,
+              "density_measured_t_m3": 2.6,
+              "density_predicted_t_m3": 2.6159501919192345,
+              "residual_t_m3": 0.015950191919234413,
+              "status": "EVALUATED"
+            }
+          ]
+        },
+        "depth_error": {
+          "depth_recovered_m": 268.3,
+          "depth_true_m": 200.0,
+          "depth_error_m": 68.3,
+          "depth_error_pct": 34.1,
+          "peak_depth_m": 287.5,
+          "n_anomalous_voxels": 87
+        },
+        "location_error": {
+          "horizontal_error_m": 4.2,
+          "depth_error_m": 32.3,
+          "recovered_x_m": 149.0,
+          "recovered_y_m": 232.3,
+          "recovered_z_m": 145.9,
+          "true_xyz_m": [
+            150.0,
+            200.0,
+            150.0
+          ],
+          "n_strong": 694
+        },
+        "chi2_reduced": 8.743159110456369e-11,
+        "status": "FAIL",
+        "notes": [
+          "mode=grav-sola",
+          "misfit=0.001%",
+          "horiz_err=4.2m",
+          "depth_err=32.3m"
+        ]
+      },
+      {
+        "project": "Synthetic-Noisy",
+        "route": "gravity_only",
+        "n_sensors_gravity": 100,
+        "n_sensors_magnetic": 0,
+        "n_boreholes": 2,
+        "depth_range_m": [
+          0.0,
+          300.0
+        ],
+        "data_quality_score": 70.0,
+        "confidence": 0.455,
+        "confidence_pct": 45.5,
+        "metrics": {
+          "n_evaluated": 2,
+          "n_total": 2,
+          "mae_t_m3": 0.388,
+          "rmse_t_m3": 0.5425,
+          "max_abs_diff_t_m3": 0.7671,
+          "bias_t_m3": -0.3791,
+          "pct_within": {
+            "0.2": 0.5,
+            "0.3": 0.5,
+            "0.5": 0.5
+          },
+          "passes_gate": false,
+          "gate": {
+            "threshold_t_m3": 0.3,
+            "min_fraction": 0.75
+          },
+          "residuals": [
+            {
+              "hole_id": null,
+              "depth_from_m": 110.0,
+              "depth_to_m": 190.0,
+              "density_measured_t_m3": 3.4,
+              "density_predicted_t_m3": 2.632882251305556,
+              "residual_t_m3": -0.767117748694444,
+              "status": "EVALUATED"
+            },
+            {
+              "hole_id": null,
+              "depth_from_m": 110.0,
+              "depth_to_m": 190.0,
+              "density_measured_t_m3": 2.6,
+              "density_predicted_t_m3": 2.6088891277383137,
+              "residual_t_m3": 0.008889127738313629,
+              "status": "EVALUATED"
+            }
+          ]
+        },
+        "depth_error": {
+          "depth_recovered_m": 119.0,
+          "depth_true_m": 150.0,
+          "depth_error_m": 31.0,
+          "depth_error_pct": 20.6,
+          "peak_depth_m": 87.5,
+          "n_anomalous_voxels": 86
+        },
+        "location_error": {
+          "horizontal_error_m": 3.7,
+          "depth_error_m": 20.9,
+          "recovered_x_m": 153.6,
+          "recovered_y_m": 129.1,
+          "recovered_z_m": 151.0,
+          "true_xyz_m": [
+            150.0,
+            150.0,
+            150.0
+          ],
+          "n_strong": 164
+        },
+        "chi2_reduced": 8.496866758937891e-11,
+        "status": "FAIL",
+        "notes": [
+          "mode=grav-sola",
+          "misfit=0.003%",
+          "horiz_err=3.7m",
+          "depth_err=20.9m"
+        ]
+      }
+    ],
+    "cases_combo": [
+      {
+        "project": "Synthetic-Shallow",
+        "route": "gravity_with_constraints",
+        "n_sensors_gravity": 100,
+        "n_sensors_magnetic": 0,
+        "n_boreholes": 2,
+        "depth_range_m": [
+          0.0,
+          300.0
+        ],
+        "data_quality_score": 88.0,
+        "confidence": 0.748,
+        "confidence_pct": 74.8,
+        "metrics": {
+          "n_evaluated": 2,
+          "n_total": 2,
+          "mae_t_m3": 0.389,
+          "rmse_t_m3": 0.5502,
+          "max_abs_diff_t_m3": 0.7781,
+          "bias_t_m3": -0.389,
+          "pct_within": {
+            "0.2": 0.5,
+            "0.3": 0.5,
+            "0.5": 0.5
+          },
+          "passes_gate": false,
+          "gate": {
+            "threshold_t_m3": 0.3,
+            "min_fraction": 0.75
+          },
+          "residuals": [
+            {
+              "hole_id": null,
+              "depth_from_m": 110.0,
+              "depth_to_m": 190.0,
+              "density_measured_t_m3": 3.4,
+              "density_predicted_t_m3": 2.621947430794886,
+              "residual_t_m3": -0.7780525692051139,
+              "status": "EVALUATED"
+            },
+            {
+              "hole_id": null,
+              "depth_from_m": 110.0,
+              "depth_to_m": 190.0,
+              "density_measured_t_m3": 2.6,
+              "density_predicted_t_m3": 2.6000000000386523,
+              "residual_t_m3": 3.86521925577199e-11,
+              "status": "EVALUATED"
+            }
+          ]
+        },
+        "depth_error": {
+          "depth_recovered_m": 168.6,
+          "depth_true_m": 150.0,
+          "depth_error_m": 18.6,
+          "depth_error_pct": 12.4,
+          "peak_depth_m": 162.5,
+          "n_anomalous_voxels": 85
+        },
+        "location_error": {
+          "horizontal_error_m": 0.7,
+          "depth_error_m": 16.8,
+          "recovered_x_m": 150.7,
+          "recovered_y_m": 166.8,
+          "recovered_z_m": 149.9,
+          "true_xyz_m": [
+            150.0,
+            150.0,
+            150.0
+          ],
+          "n_strong": 116
+        },
+        "chi2_reduced": 2.9333683671970607e-10,
+        "status": "FAIL",
+        "notes": [
+          "mode=grav+sondajes",
+          "misfit=0.002%",
+          "horiz_err=0.7m",
+          "depth_err=16.8m",
+          "n_anchored_vox=24",
+          "density_gate_in_sample=True"
+        ]
+      },
+      {
+        "project": "Synthetic-Deep",
+        "route": "gravity_with_constraints",
+        "n_sensors_gravity": 100,
+        "n_sensors_magnetic": 0,
+        "n_boreholes": 2,
+        "depth_range_m": [
+          0.0,
+          300.0
+        ],
+        "data_quality_score": 82.0,
+        "confidence": 0.697,
+        "confidence_pct": 69.7,
+        "metrics": {
+          "n_evaluated": 2,
+          "n_total": 2,
+          "mae_t_m3": 0.3831,
+          "rmse_t_m3": 0.5418,
+          "max_abs_diff_t_m3": 0.7663,
+          "bias_t_m3": -0.3831,
+          "pct_within": {
+            "0.2": 0.5,
+            "0.3": 0.5,
+            "0.5": 0.5
+          },
+          "passes_gate": false,
+          "gate": {
+            "threshold_t_m3": 0.3,
+            "min_fraction": 0.75
+          },
+          "residuals": [
+            {
+              "hole_id": null,
+              "depth_from_m": 155.0,
+              "depth_to_m": 245.0,
+              "density_measured_t_m3": 3.4,
+              "density_predicted_t_m3": 2.6337206721662967,
+              "residual_t_m3": -0.7662793278337032,
+              "status": "EVALUATED"
+            },
+            {
+              "hole_id": null,
+              "depth_from_m": 155.0,
+              "depth_to_m": 245.0,
+              "density_measured_t_m3": 2.6,
+              "density_predicted_t_m3": 2.600000000004573,
+              "residual_t_m3": 4.572786593826095e-12,
+              "status": "EVALUATED"
+            }
+          ]
+        },
+        "depth_error": {
+          "depth_recovered_m": 239.1,
+          "depth_true_m": 200.0,
+          "depth_error_m": 39.1,
+          "depth_error_pct": 19.6,
+          "peak_depth_m": 287.5,
+          "n_anomalous_voxels": 85
+        },
+        "location_error": {
+          "horizontal_error_m": 1.6,
+          "depth_error_m": 33.9,
+          "recovered_x_m": 149.4,
+          "recovered_y_m": 233.9,
+          "recovered_z_m": 148.5,
+          "true_xyz_m": [
+            150.0,
+            200.0,
+            150.0
+          ],
+          "n_strong": 118
+        },
+        "chi2_reduced": 2.2844764874520046e-10,
+        "status": "FAIL",
+        "notes": [
+          "mode=grav+sondajes",
+          "misfit=0.002%",
+          "horiz_err=1.6m",
+          "depth_err=33.9m",
+          "n_anchored_vox=32",
+          "density_gate_in_sample=True"
+        ]
+      },
+      {
+        "project": "Synthetic-Noisy",
+        "route": "gravity_with_constraints",
+        "n_sensors_gravity": 100,
+        "n_sensors_magnetic": 0,
+        "n_boreholes": 2,
+        "depth_range_m": [
+          0.0,
+          300.0
+        ],
+        "data_quality_score": 70.0,
+        "confidence": 0.595,
+        "confidence_pct": 59.5,
+        "metrics": {
+          "n_evaluated": 2,
+          "n_total": 2,
+          "mae_t_m3": 0.3725,
+          "rmse_t_m3": 0.5269,
+          "max_abs_diff_t_m3": 0.7451,
+          "bias_t_m3": -0.3725,
+          "pct_within": {
+            "0.2": 0.5,
+            "0.3": 0.5,
+            "0.5": 0.5
+          },
+          "passes_gate": false,
+          "gate": {
+            "threshold_t_m3": 0.3,
+            "min_fraction": 0.75
+          },
+          "residuals": [
+            {
+              "hole_id": null,
+              "depth_from_m": 110.0,
+              "depth_to_m": 190.0,
+              "density_measured_t_m3": 3.4,
+              "density_predicted_t_m3": 2.6549191574216957,
+              "residual_t_m3": -0.7450808425783042,
+              "status": "EVALUATED"
+            },
+            {
+              "hole_id": null,
+              "depth_from_m": 110.0,
+              "depth_to_m": 190.0,
+              "density_measured_t_m3": 2.6,
+              "density_predicted_t_m3": 2.600000000001777,
+              "residual_t_m3": 1.7768009286101005e-12,
+              "status": "EVALUATED"
+            }
+          ]
+        },
+        "depth_error": {
+          "depth_recovered_m": 160.1,
+          "depth_true_m": 150.0,
+          "depth_error_m": 10.1,
+          "depth_error_pct": 6.7,
+          "peak_depth_m": 162.5,
+          "n_anomalous_voxels": 84
+        },
+        "location_error": {
+          "horizontal_error_m": 3.8,
+          "depth_error_m": 13.4,
+          "recovered_x_m": 153.7,
+          "recovered_y_m": 163.4,
+          "recovered_z_m": 151.1,
+          "true_xyz_m": [
+            150.0,
+            150.0,
+            150.0
+          ],
+          "n_strong": 121
+        },
+        "chi2_reduced": 1.0592736145581442e-09,
+        "status": "FAIL",
+        "notes": [
+          "mode=grav+sondajes",
+          "misfit=0.010%",
+          "horiz_err=3.8m",
+          "depth_err=13.4m",
+          "n_anchored_vox=24",
+          "density_gate_in_sample=True"
+        ]
+      }
+    ]
+  }
+}

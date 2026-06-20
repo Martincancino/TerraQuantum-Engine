@@ -271,3 +271,80 @@ def test_gate_constants_match_roadmap():
     # GO/NO-GO Fase 25: error <0.3 t/m³ en ≥75% de los intervalos.
     assert GATE_THRESHOLD_T_M3 == 0.3
     assert GATE_MIN_FRACTION == 0.75
+
+
+# ─────────────────────────────────────────────────────────────────────────
+#  PASO 2 — Ruta del COMBO grav+sondajes (harness): partes deterministas
+#  (la inversión real es lenta y vive en el harness; aquí sólo helpers + veredicto)
+# ─────────────────────────────────────────────────────────────────────────
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "scripts", "validation"))
+import field_validation_harness as H  # noqa: E402
+
+
+def test_boreholes_to_anchor_array_shape_and_filter():
+    # 2 intervalos con densidad + 1 sin densidad (solo susceptibilidad) → (2,5).
+    intervals = [
+        BoreholeInterval(x_m=10.0, z_m=20.0, y_from_m=100.0, y_to_m=140.0, density_t_m3=3.4),
+        BoreholeInterval(x_m=80.0, z_m=20.0, y_from_m=100.0, y_to_m=140.0, density_t_m3=2.6),
+        BoreholeInterval(x_m=50.0, z_m=20.0, y_from_m=100.0, y_to_m=140.0, susceptibility_si=0.01),
+    ]
+    arr = H._boreholes_to_anchor_array(intervals)
+    assert arr is not None
+    assert arr.shape == (2, 5)
+    # Orden de columnas que consume el solver: [x_m, z_m, y_from_m, y_to_m, density].
+    assert list(arr[0]) == [10.0, 20.0, 100.0, 140.0, 3.4]
+
+
+def test_boreholes_to_anchor_array_none_when_no_density():
+    intervals = [
+        BoreholeInterval(x_m=50.0, z_m=20.0, y_from_m=100.0, y_to_m=140.0, susceptibility_si=0.01),
+    ]
+    assert H._boreholes_to_anchor_array(intervals) is None
+
+
+def test_evaluate_thesis_go_when_both_met():
+    # Combo: profundidad ≤15m en todos + ≥75% proyectos pasan gate densidad >75%.
+    rows = [
+        {"depth_err_solo_m": 28.0, "depth_err_combo_m": 9.0, "pct_within_0_3_solo": 0.5, "pct_within_0_3_combo": 1.0},
+        {"depth_err_solo_m": 24.0, "depth_err_combo_m": 12.0, "pct_within_0_3_solo": 0.5, "pct_within_0_3_combo": 0.8},
+    ]
+    t = H.evaluate_thesis(rows)
+    assert t["depth_thesis_met"] is True
+    assert t["density_gate_thesis_met"] is True
+    assert t["verdict"] == "GO"
+    assert t["median_depth_err_combo_m"] == pytest.approx(10.5)
+
+
+def test_evaluate_thesis_no_go_when_depth_too_large():
+    rows = [
+        {"depth_err_solo_m": 28.0, "depth_err_combo_m": 22.0, "pct_within_0_3_solo": 0.5, "pct_within_0_3_combo": 1.0},
+    ]
+    t = H.evaluate_thesis(rows)
+    assert t["depth_thesis_met"] is False
+    assert t["verdict"] == "NO_GO"
+
+
+def test_evaluate_thesis_no_go_when_gate_not_met():
+    # Profundidad cumple, pero el gate de densidad NO (<75% de proyectos pasan).
+    rows = [
+        {"depth_err_solo_m": 28.0, "depth_err_combo_m": 8.0, "pct_within_0_3_solo": 0.3, "pct_within_0_3_combo": 0.4},
+        {"depth_err_solo_m": 24.0, "depth_err_combo_m": 9.0, "pct_within_0_3_solo": 0.3, "pct_within_0_3_combo": 0.5},
+    ]
+    t = H.evaluate_thesis(rows)
+    assert t["depth_thesis_met"] is True
+    assert t["density_gate_thesis_met"] is False
+    assert t["verdict"] == "NO_GO"
+
+
+def test_render_combo_table_format():
+    rows = [{
+        "project": "Synthetic-Shallow", "true_depth_m": 150.0,
+        "depth_err_solo_m": 28.0, "depth_err_combo_m": 9.0, "depth_improvement_m": 19.0,
+        "pct_within_0_3_solo": 0.5, "pct_within_0_3_combo": 1.0, "n_anchored_vox": "3",
+    }]
+    table = H._render_combo_table(rows)
+    assert table.splitlines()[0].startswith("| Proyecto | y_real | prof_err SOLA")
+    assert "Synthetic-Shallow" in table
+    assert "9.0m" in table
+    assert "100%" in table
