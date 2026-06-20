@@ -316,3 +316,30 @@ def test_service_routes_vector_mvi():
     assert "magnetization_amplitude" in v0
     assert "magnetization_inc_deg" in v0 and "magnetization_dec_deg" in v0
     assert float(res["misfit_error_percent"]) < 25.0
+
+
+def test_mvi_parquet_direction_columns_valid(tmp_path):
+    """Persistencia: el parquet magnético con columnas de dirección MVI extra sigue
+    cumpliendo el contrato de schema (run_type='magnetic'). Las columnas required no
+    cambian; las de dirección son adicionales."""
+    import polars as pl
+    from core.block_model_store import validate_parquet_schema
+
+    n = 5
+    df = pl.DataFrame({
+        "x_m": [0.0] * n, "y_m": [0.0] * n, "z_m": [0.0] * n,
+        "susceptibility_si": [0.1] * n,
+        "magnetization_amplitude_si": [0.1] * n,
+        "magnetization_inc_deg": [-30.0, -31.0, float("nan"), -29.0, -30.5],
+        "magnetization_dec_deg": [2.0, 1.5, float("nan"), 2.2, 1.8],
+        "magnetization_model": ["vector"] * n,
+        "run_type": ["magnetic"] * n,
+        "schema_version": ["v4.0"] * n,
+    })
+    p = tmp_path / "mvi_block_model.parquet"
+    df.write_parquet(str(p))
+    result = validate_parquet_schema(p, expected_run_type="magnetic")
+    assert result["valid"], f"parquet MVI inválido: {result['errors']}"
+    # Las columnas de dirección quedaron persistidas
+    cols = set(pl.read_parquet(str(p), n_rows=1).columns)
+    assert {"magnetization_inc_deg", "magnetization_dec_deg"} <= cols

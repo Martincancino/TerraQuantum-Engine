@@ -1485,7 +1485,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         _susc_safe = np.nan_to_num(susc_full, nan=0.0)
         _active_mag = np.isfinite(susc_full)
 
-        _df_mag = pl.DataFrame({
+        _mag_cols = {
             "x_c": x_c.astype(float).tolist(),
             "y_c": y_c.astype(float).tolist(),
             "z_c": z_c.astype(float).tolist(),
@@ -1504,7 +1504,16 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             "is_active": _active_mag.tolist(),
             "run_type": ["magnetic"] * _nC_mag,
             "schema_version": ["v4.0"] * _nC_mag,
-        })
+        }
+        # FASE 20C: persistir la dirección de magnetización recuperada (columnas extra,
+        # opcionales — el validador solo exige las required). susceptibility_si ya lleva
+        # |M| (susc. efectiva). NaN en celdas de aire (dirección indefinida).
+        if _is_mvi:
+            _mag_cols["magnetization_amplitude_si"] = _susc_safe.astype(float).tolist()
+            _mag_cols["magnetization_inc_deg"] = np.asarray(_mvi_inc_full, dtype=float).tolist()
+            _mag_cols["magnetization_dec_deg"] = np.asarray(_mvi_dec_full, dtype=float).tolist()
+            _mag_cols["magnetization_model"] = ["vector"] * _nC_mag
+        _df_mag = pl.DataFrame(_mag_cols)
 
         _mag_ref = get_run_block_model_reference(
             project_id=params.project_id,
