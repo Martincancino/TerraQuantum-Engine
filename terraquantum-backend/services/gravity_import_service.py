@@ -1764,3 +1764,64 @@ def build_clean_csv_from_import(
             row.append(_fmt(mags[i]))
         writer.writerow(row)
     return buf.getvalue()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FASE 19 (Caso B) — Georef Helmert cableada al flujo de inversión
+# Cuando el CSV trae coordenadas LOCALES y el usuario aporta ≥2 puntos de control,
+# resolvemos la transformada de similitud y georeferenciamos las estaciones ANTES
+# de calcular el footprint del modelo. Servicio additivo: NO toca la física ni la
+# grilla (que opera en metros locales, invariante a traslación/rotación); produce
+# la ubicación real del modelo + la validación del anclaje (residual).
+# ═════════════════════════════════════════════════════════════════════════════
+def georeference_stations_with_helmert(
+    control_input,
+    station_local_xz: "list[tuple[float, float]]",
+) -> dict:
+    """Resuelve Helmert y georeferencia las estaciones locales → (E, N) reales.
+
+    Args:
+        control_input: HelmertControlPointsInput (≥2 puntos local↔real).
+        station_local_xz: [(x_local, z_local), ...] de las estaciones del survey.
+
+    Returns:
+        dict con: transform (HelmertTransformResult como dict), confidence,
+        georeferenced_center {e, n}, georeferenced_extent {e_m, n_m},
+        n_stations, warnings. Pensado para auto_params_metadata["helmert_georef"].
+
+    Lanza ValueError si hay <2 puntos o son coincidentes (vía el servicio Helmert).
+    """
+    from core.utils import model_to_dict
+    from services.helmert_transform_service import (
+        apply_similarity_transform,
+        solve_similarity_transform,
+    )
+
+    pts = list(getattr(control_input, "points", []) or [])
+    local_points = [(float(p.local_x), float(p.local_z)) for p in pts]
+    real_points = [(float(p.real_e), float(p.real_n)) for p in pts]
+    residual_warn_m = float(getattr(control_input, "residual_warn_m", 10.0) or 10.0)
+
+    transform = solve_similarity_transform(
+        local_points, real_points, residual_warn_m=residual_warn_m,
+    )
+
+    real_xz = apply_similarity_transform(transform, list(station_local_xz)) if station_local_xz else []
+    warnings_out = list(transform.warnings)
+    center = None
+    extent = None
+    if real_xz:
+        es = [e for e, _ in real_xz]
+        ns = [n for _, n in real_xz]
+        center = {"e": float(sum(es) / len(es)), "n": float(sum(ns) / len(ns))}
+        extent = {"e_m": float(max(es) - min(es)), "n_m": float(max(ns) - min(ns))}
+
+    return {
+        "version": "helmert_georef_v0_1",
+        "transform": model_to_dict(transform),
+        "confidence": transform.confidence,
+        "georeferenced_center": center,
+        "georeferenced_extent": extent,
+        "n_stations": len(real_xz),
+        "warnings": warnings_out,
+    }

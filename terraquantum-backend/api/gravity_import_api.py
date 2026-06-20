@@ -915,6 +915,11 @@ async def invert_gravity_csv(
     padding_kappa: float = Form(1e5),
     anchor_kappa: float = Form(1e4),
     auto_kappa: bool = Form(True),
+    # FASE 19 (Caso B) — Georef Helmert: ≥2 puntos de control local↔real (JSON).
+    # Cuando el CSV es de coordenadas LOCALES, georeferencia las estaciones y valida
+    # el anclaje (residual). Formato: {"points":[{"local_x","local_z","real_e","real_n",
+    # "label"?}, ...], "residual_warn_m"?}. Vacío/None = sin georef Helmert.
+    helmert_control_points_json: Optional[str] = Form(None),
 ):
     if not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must end with .csv")
@@ -1199,6 +1204,47 @@ async def invert_gravity_csv(
         auto_params_metadata["acknowledge_regional_scale"] = acknowledge_regional_scale
         # H-B2 — record corrections applied (empty dict = no corrections)
         auto_params_metadata["gravity_corrections"] = _corrections_meta
+
+        # ── FASE 19 (Caso B): Georef Helmert con puntos de control ────────────
+        # Si el usuario aportó ≥2 puntos de control y el CSV es de coordenadas
+        # LOCALES, resolvemos la transformada de similitud y georeferenciamos las
+        # estaciones (footprint real + validación del anclaje por residual). NO se
+        # toca la grilla (opera en metros locales, invariante a traslación/rotación).
+        if helmert_control_points_json:
+            try:
+                from schemas.gravity_import_schema import HelmertControlPointsInput
+                from services.gravity_import_service import georeference_stations_with_helmert
+
+                _hc_input = HelmertControlPointsInput(**json.loads(helmert_control_points_json))
+                _cs_local = (_cs_detected_invert or "").lower() in (
+                    "local_meters", "local", "unknown",
+                )
+                if _cs_local:
+                    _station_xz = [(float(o.x_m), float(o.z_m)) for o in _effective_observations]
+                    _helmert_georef = georeference_stations_with_helmert(_hc_input, _station_xz)
+                    auto_params_metadata["helmert_georef"] = _helmert_georef
+                    _corrections_warnings.append(
+                        f"[Fase 19] Georef Helmert aplicada: {_helmert_georef['n_stations']} "
+                        f"estaciones, confidence={_helmert_georef['confidence']}, "
+                        f"residual_rms={_helmert_georef['transform'].get('residual_rms_m')} m."
+                    )
+                    _corrections_warnings.extend(_helmert_georef.get("warnings", []))
+                else:
+                    auto_params_metadata["helmert_georef"] = {
+                        "skipped": True,
+                        "reason": (
+                            f"Coordenadas del CSV no son locales (detectado: "
+                            f"{_cs_detected_invert}); Helmert no aplica."
+                        ),
+                    }
+                    _corrections_warnings.append(
+                        "[Fase 19] Puntos de control Helmert ignorados: el CSV ya trae "
+                        f"coordenadas georreferenciadas ({_cs_detected_invert})."
+                    )
+            except (ValueError, ValidationError, json.JSONDecodeError) as _hexc:
+                _corrections_warnings.append(
+                    f"[Fase 19] Georef Helmert no aplicada (entrada inválida): {_hexc}."
+                )
 
         # ── Topografía activa: elevaciones de estación (cualquier coord type) ──
         # Solo si todas las estaciones tienen elevación y el relieve supera 10 m

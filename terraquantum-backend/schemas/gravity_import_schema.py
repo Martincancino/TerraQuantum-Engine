@@ -206,6 +206,31 @@ class HelmertTransformResult(BaseModel):
     b: float
 
 
+class HelmertControlPoint(BaseModel):
+    """Un punto de control para georef Helmert: coord local (x,z) ↔ coord real (E,N).
+
+    `local_x`/`local_z` están en el sistema local del CSV (mismas unidades que las
+    estaciones). `real_e`/`real_n` son Easting/Northing reales en una zona UTM (o un
+    sistema proyectado coherente, en metros). `label` es opcional (ej. "BH-01").
+    """
+    local_x: float
+    local_z: float
+    real_e: float
+    real_n: float
+    label: Optional[str] = None
+
+
+class HelmertControlPointsInput(BaseModel):
+    """Fase 19 Caso B — contrato de entrada de puntos de control para /invert.
+
+    Se requieren ≥2 puntos para resolver posición + rotación + escala. El motor de
+    inversión lo recibe (como JSON en el form) y, si las coordenadas del CSV son
+    LOCALES, georeferencia las estaciones antes de calcular el footprint del modelo.
+    """
+    points: List[HelmertControlPoint] = Field(default_factory=list, min_length=2)
+    residual_warn_m: float = 10.0
+
+
 class DataTypeDetection(BaseModel):
     """Fase 19 Tarea 1 — tipo de dato inferido desde las columnas del CSV."""
     version: str = "data_type_detection_v0_1"
