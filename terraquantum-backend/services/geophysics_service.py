@@ -1233,6 +1233,15 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     )
     inversor = MagnetometryInversion(nx, ny, nz, dx)
 
+    # ── FASE 20C: Magnetic Vector Inversion (MVI) — modo OPT-IN ───────────────
+    # magnetization_model="vector" invierte el VECTOR M=(Mx,My,Mz) por celda y
+    # recupera la DIRECCIÓN de magnetización desde los datos (maneja remanencia
+    # oblicua sin asumirla). Reemplaza conceptualmente la remanencia Q-ratio (Fase 12)
+    # y NO usa anclaje de sondajes (fuera de alcance). El observable de targeting es
+    # la amplitud |M| (susceptibilidad efectiva), que se publica en la columna
+    # susceptibility_si para reutilizar todo el payload/parquet escalar sin duplicar.
+    _is_mvi = getattr(params, "magnetization_model", "scalar") == "vector"
+
     # ── Anclaje por sondajes (FASE 9B): el motor magnético lee ESTRICTAMENTE
     # susceptibility_si. Los intervalos sin susceptibilidad (None) se SALTAN: un
     # sondaje netamente gravimétrico no aporta restricción magnética. Validado
@@ -1268,7 +1277,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     _override_kernel = None
     _q_sweep_result = None
 
-    if _use_remanence and _rem.inversion_mode == "total_field":
+    if _use_remanence and _rem.inversion_mode == "total_field" and not _is_mvi:
         _update("running", 0.35, "building_kernel_rem", f"Construyendo kernel total J_ind + {_rem.q_ratio:.2f}·J_rem...")
         # Necesitamos las celdas activas para construir el kernel; usamos grilla completa
         # (sin topografía en este punto — topography_elevations=None → todas activas)
@@ -1299,27 +1308,54 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
                 susc_max=params.susc_max,
             )
 
-    _update("running", 0.4, "solving_lsqr", "Resolviendo inversión magnética LSQR + Tikhonov...")
     solver_meta = {}
-    susc_full, score_full, misfit_percent, sens_full = inversor.solve_magnetic_inversion_lsqr(
-        d_observed=mag,
-        y_c=y_c,
-        lambda_mag=(params.lambda_mag if params.lambda_mag > 0 else 1e-4),
-        alpha_spatial=params.alpha_spatial,
-        topography_elevations=None,
-        sensor_coords=sensor_coords,
-        x_c=x_c,
-        z_c=z_c,
-        forward_model=forward,
-        susc_min=params.susc_min,
-        susc_max=params.susc_max,
-        boreholes=boreholes_arr,
-        detect_outliers=bool(getattr(params, "robust_sigma", True)),  # FASE 20B Tarea 4
-        auto_kappa=bool(getattr(params, "auto_kappa", True)),         # FASE 20B Tarea 5
-        regularization_norm=getattr(params, "regularization_norm", "L2"),  # FASE 20B Tarea 6
-        solver_meta=solver_meta,
-        override_kernel=_override_kernel,
-    )
+    # ── FASE 20C: campos de dirección MVI (None en modo escalar) ──────────────
+    _mvi_inc_full = None
+    _mvi_dec_full = None
+    if _is_mvi:
+        _update("running", 0.4, "solving_mvi", "Resolviendo MVI (vector de magnetización, modelo 3N) LSQR...")
+        _mvi = inversor.solve_mvi_inversion_lsqr(
+            d_observed=mag,
+            y_c=y_c,
+            forward_model=forward,
+            sensor_coords=sensor_coords,
+            x_c=x_c,
+            z_c=z_c,
+            lambda_mag=(params.lambda_mag if params.lambda_mag > 0 else 1e-3),
+            alpha_spatial=params.alpha_spatial,
+            topography_elevations=None,
+            detect_outliers=bool(getattr(params, "robust_sigma", True)),
+            solver_meta=solver_meta,
+        )
+        # |M| (susceptibilidad efectiva) ocupa la columna susceptibility_si: reutiliza
+        # todo el payload/parquet escalar. La dirección se inyecta aparte (voxels+report).
+        susc_full = _mvi["amplitude_full"]
+        score_full = _mvi["relative_score_full"]
+        sens_full = np.full_like(susc_full, np.nan)   # MVI no expone proxy de sensibilidad
+        misfit_percent = _mvi["misfit_percent"]
+        _mvi_inc_full = _mvi["inclination_full"]
+        _mvi_dec_full = _mvi["declination_full"]
+    else:
+        _update("running", 0.4, "solving_lsqr", "Resolviendo inversión magnética LSQR + Tikhonov...")
+        susc_full, score_full, misfit_percent, sens_full = inversor.solve_magnetic_inversion_lsqr(
+            d_observed=mag,
+            y_c=y_c,
+            lambda_mag=(params.lambda_mag if params.lambda_mag > 0 else 1e-4),
+            alpha_spatial=params.alpha_spatial,
+            topography_elevations=None,
+            sensor_coords=sensor_coords,
+            x_c=x_c,
+            z_c=z_c,
+            forward_model=forward,
+            susc_min=params.susc_min,
+            susc_max=params.susc_max,
+            boreholes=boreholes_arr,
+            detect_outliers=bool(getattr(params, "robust_sigma", True)),  # FASE 20B Tarea 4
+            auto_kappa=bool(getattr(params, "auto_kappa", True)),         # FASE 20B Tarea 5
+            regularization_norm=getattr(params, "regularization_norm", "L2"),  # FASE 20B Tarea 6
+            solver_meta=solver_meta,
+            override_kernel=_override_kernel,
+        )
 
     _update("running", 0.85, "building_payload", "Construyendo payload de susceptibilidad...")
 
@@ -1336,14 +1372,24 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         s = float(susc_full[j])
         if s < susc_cutoff:
             break   # orden descendente → el resto queda bajo cutoff
-        voxels.append({
+        _vox = {
             "ix": int(ix[j]), "iy": int(iy[j]), "iz": int(iz[j]),
             "x_m": float(x_c[j]), "y_m": float(y_c[j]), "z_m": float(z_c[j]),
             "susceptibility": s,
             "relative_target_score": float(score_full[j]) if np.isfinite(score_full[j]) else None,
             "sensitivity_proxy": float(sens_full[j]) if np.isfinite(sens_full[j]) else None,
             "is_active": True,
-        })
+        }
+        if _is_mvi:
+            # MVI: |M| (susceptibilidad efectiva) + dirección de magnetización recuperada.
+            _vox["magnetization_amplitude"] = s
+            _vox["magnetization_inc_deg"] = (
+                float(_mvi_inc_full[j]) if np.isfinite(_mvi_inc_full[j]) else None
+            )
+            _vox["magnetization_dec_deg"] = (
+                float(_mvi_dec_full[j]) if np.isfinite(_mvi_dec_full[j]) else None
+            )
+        voxels.append(_vox)
         if len(voxels) >= 5000:
             break
 
@@ -1368,11 +1414,31 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         }
 
     report = {
-        "method": "magnetic_dipole_tmi_phase9a",
+        "method": "magnetic_vector_inversion_phase20c" if _is_mvi else "magnetic_dipole_tmi_phase9a",
         "engine": (
-            f"MagnetometryInversion (J_ind + {_rem.q_ratio:.2f}·J_rem, Fase 12)"
-            if _use_remanence and _rem is not None
-            else "MagnetometryInversion (magnetización inducida, sin remanencia)"
+            "MagnetometryInversion MVI (vector M=Mx,My,Mz; dirección recuperada, Fase 20C)"
+            if _is_mvi
+            else (
+                f"MagnetometryInversion (J_ind + {_rem.q_ratio:.2f}·J_rem, Fase 12)"
+                if _use_remanence and _rem is not None
+                else "MagnetometryInversion (magnetización inducida, sin remanencia)"
+            )
+        ),
+        "magnetization_model": "vector" if _is_mvi else "scalar",
+        "mvi": (
+            {
+                "amplitude_is_effective_susceptibility": True,
+                "amplitude_max_si": solver_meta.get("amplitude_max"),
+                "n_unknowns": solver_meta.get("n_unknowns"),
+                "note": (
+                    "|M| (susceptibilidad efectiva) publicado en susceptibility_si; "
+                    "dirección por vóxel en magnetization_inc_deg/dec_deg. Sin bounds de "
+                    "no-negatividad (las componentes tienen signo). Anclaje de sondajes y "
+                    "remanencia Q-ratio NO aplican en modo MVI."
+                ),
+            }
+            if _is_mvi
+            else None
         ),
         "is_joint_inversion": False,
         "field": {

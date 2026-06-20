@@ -257,3 +257,62 @@ def test_mvi_no_worse_than_scalar_pure_induced():
     )
     # MVI tiene más libertad → su misfit debe ser comparable o menor (no peor por un margen)
     assert out["misfit_percent"] <= misfit_scalar + 2.0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# RUTEO E2E — geophysics_service.run_geophysics_inversion con magnetization_model
+# ══════════════════════════════════════════════════════════════════════════
+def _make_mag_input(model):
+    """Input magnético-aislado (g=0) con TMI sintetizada en la grilla del servicio."""
+    from schemas.geophysics_schema import GeophysicsInvertInput, GravityObservation
+    from services.geophysics_service import build_voxel_grid
+
+    nx, ny, nz, block = 6, 8, 6, 20.0
+    obs = []
+    for i in range(6):
+        for j in range(6):
+            obs.append(GravityObservation(x_m=10 + i * 20, y_m=0.0, z_m=10 + j * 20, g=0.0))
+    sensors = np.array([[o.x_m, o.y_m, o.z_m] for o in obs], dtype=float)
+
+    base = GeophysicsInvertInput(
+        project_id=None, run_id=None,
+        depth=120, nir=50, fe=30, region="desconocida", lat="-23.5", lon="-70.2",
+        nx=nx, ny=ny, nz=nz, block_size=block, cutoff_radius=200.0,
+        lambda_mag=1e-3, alpha_spatial=1.0,
+        observations=obs,
+        magnetic_nt=[0.0] * len(obs),  # placeholder; se reemplaza con señal real abajo
+        inclination_deg=INC, declination_deg=DEC, field_intensity_nt=B0,
+    )
+    ix, iy, iz, x_c, y_c, z_c = build_voxel_grid(base)
+    fwd = MagnetometryForward(block, block, block, cutoff_radius=200.0,
+                              inclination_deg=INC, declination_deg=DEC, field_intensity_nt=B0)
+    G = fwd.build_sparse_kernel(x_c, y_c, z_c, sensors)
+    kappa = np.zeros(len(x_c))
+    kappa[((x_c - 60) ** 2 + (y_c - 50) ** 2 + (z_c - 60) ** 2) < 25 ** 2] = 0.2
+    d = G @ kappa
+    return base.model_copy(update={"magnetic_nt": d.tolist(), "magnetization_model": model})
+
+
+def test_service_routes_scalar_by_default():
+    from services.geophysics_service import run_geophysics_inversion
+    res = run_geophysics_inversion(_make_mag_input("scalar"))
+    assert res["report"]["method"] == "magnetic_dipole_tmi_phase9a"
+    assert res["report"]["magnetization_model"] == "scalar"
+    # El camino escalar NO emite dirección de magnetización
+    assert "magnetization_inc_deg" not in res["voxels"][0]
+
+
+def test_service_routes_vector_mvi():
+    from services.geophysics_service import run_geophysics_inversion
+    res = run_geophysics_inversion(_make_mag_input("vector"))
+    rep = res["report"]
+    assert rep["method"] == "magnetic_vector_inversion_phase20c"
+    assert rep["magnetization_model"] == "vector"
+    assert rep["mvi"]["amplitude_is_effective_susceptibility"] is True
+    assert rep["mvi"]["n_unknowns"] == 3 * rep["solver"]["n_active"]
+    assert res["voxels"], "MVI no devolvió vóxeles"
+    v0 = res["voxels"][0]
+    # Cada vóxel MVI expone amplitud + dirección recuperada
+    assert "magnetization_amplitude" in v0
+    assert "magnetization_inc_deg" in v0 and "magnetization_dec_deg" in v0
+    assert float(res["misfit_error_percent"]) < 25.0
