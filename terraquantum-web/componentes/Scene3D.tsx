@@ -25,6 +25,7 @@ import { buildTerrainTextureProxyUrl } from "../lib/terraquantum/frontendApi";
 import { updateInstancedBuffers } from "../lib/terraQuantumGeology";
 import { fmtNum, fmtSci, asRecord, safeNumber, clamp01, readFiniteRecordNumber } from "./datos/helpers";
 import { motion } from "framer-motion";
+import MagnetizationVectors from "./MagnetizationVectors";
 
 // Tipos mínimos locales para las celdas del modelo 3D
 interface SceneCell {
@@ -1840,6 +1841,11 @@ export default function Scene3D() {
             />
             <MineralComplex
               elevationVisualState={elevationVisualState}
+              clippingPlanes={allClippingPlanes}
+            />
+            <MagnetizationVectors
+              elevationEnabled={elevationVisualState.enabled}
+              refElev={elevationVisualState.refElev}
               clippingPlanes={allClippingPlanes}
             />
             <AnomalyEnvelope

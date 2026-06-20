@@ -55,6 +55,8 @@ export default function MultiPhysicsControls() {
   const threshold     = useAppStore((s) => s.jointThreshold);
   const setThreshold  = useAppStore((s) => s.setJointThreshold);
   const model         = useAppStore((s) => s.model);
+  const showMviVectors    = useAppStore((s) => s.showMviVectors);
+  const setShowMviVectors = useAppStore((s) => s.setShowMviVectors);
 
   const [collapsed, setCollapsed] = useState(false);
 
@@ -71,6 +73,12 @@ export default function MultiPhysicsControls() {
   );
   const jointQa = useMemo(
     () => classifyViewModeAvailability("joint", cells),
+    [cells]
+  );
+  // FASE 20C iter 2: ¿hay dirección de magnetización (MVI) en el modelo?
+  // .some() corta en el primer match → barato en práctica.
+  const mviAvailable = useMemo(
+    () => cells.some((c) => Number.isFinite(Number(c["magnetization_inc_deg"]))),
     [cells]
   );
 
@@ -280,6 +288,35 @@ export default function MultiPhysicsControls() {
                   </p>
                   <ColormapStrip mode={viewMode} />
                 </div>
+
+                {/* ── Overlay de flechas MVI (sólo si hay dirección invertida) ── */}
+                {mviAvailable && (
+                  <div className="flex flex-col gap-1 pt-2 border-t border-white/6">
+                    <button
+                      id="mvi-vectors-toggle"
+                      type="button"
+                      onClick={() => setShowMviVectors(!showMviVectors)}
+                      className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg border transition-all duration-150"
+                      style={{
+                        borderColor: showMviVectors ? "rgba(232,121,249,0.5)" : "rgba(255,255,255,0.08)",
+                        background: showMviVectors ? "rgba(232,121,249,0.12)" : "rgba(255,255,255,0.02)",
+                        color: showMviVectors ? "#e879f9" : "rgba(255,255,255,0.5)",
+                        boxShadow: showMviVectors ? "0 0 12px rgba(232,121,249,0.22)" : "none",
+                      }}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-[12px] leading-none">↗</span>
+                        <span className="text-[8px] font-mono uppercase tracking-[0.12em]">Vectores MVI</span>
+                      </span>
+                      <span className="text-[7px] font-mono tracking-wider">
+                        {showMviVectors ? "ON" : "OFF"}
+                      </span>
+                    </button>
+                    <p className="text-[7px] font-mono text-white/30 leading-relaxed">
+                      Dirección de magnetización recuperada (largo ∝ |M|). Glifos de mayor amplitud.
+                    </p>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}

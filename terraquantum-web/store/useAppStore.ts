@@ -230,6 +230,10 @@ export interface AppState {
   setHighlightedCellCount: (n: number) => void;
   susceptibilityDataAvailable: boolean;
   setSusceptibilityDataAvailable: (val: boolean) => void;
+  // FASE 20C iter 2: overlay de flechas de magnetización (MVI). Independiente del
+  // viewMode: se superpone a cualquier capa. Default off.
+  showMviVectors: boolean;
+  setShowMviVectors: (val: boolean) => void;
   totalVoxels: number | null;
   storedVoxels: number | null;
   anomalyVoxels: number | null;
@@ -520,6 +524,8 @@ export const useAppStore = create<AppState>((set) => ({
   setHighlightedCellCount: (n) => set({ highlightedCellCount: n }),
   susceptibilityDataAvailable: true,
   setSusceptibilityDataAvailable: (val) => set({ susceptibilityDataAvailable: val }),
+  showMviVectors: false,
+  setShowMviVectors: (val) => set({ showMviVectors: val }),
   totalVoxels: null,
   storedVoxels: null,
   anomalyVoxels: null,
