@@ -32,6 +32,7 @@ import {
   getGeophysicsStatus,
   getProjectRunDetail,
   exportRunUrl,
+  boreholeSurveyToIntervals,
 } from "../../lib/terraquantum/frontendApi";
 import { AppState, VoxelInfo } from "../../store/useAppStore";
 import type { BlockModelDataMode } from "../../store/useAppStore";
@@ -184,6 +185,12 @@ function hasValidElevationRange(range: AppState["blockModelElevationRange"]) {
 }
 
 export default function Exploration3DView() {
+  // FASE 20 — Sondajes confirmados en BoreholeUploadPanel, en el formato que el
+  // payload de inversión consume. Se pasan a GravityCsvPreviewPanel (anclaje) y al
+  // panel multimodal (conteo que decide el combo recomendado).
+  const [boreholeIntervals, setBoreholeIntervals] = useState<
+    ReturnType<typeof boreholeSurveyToIntervals>
+  >([]);
   const {
     model,
     setModel,
@@ -600,20 +607,27 @@ export default function Exploration3DView() {
               <p className="text-[8px] text-white/40 font-mono mb-3 leading-relaxed">
                 Importar y validar survey gravimétrico (CSV) antes de invertir.
               </p>
-              <GravityCsvPreviewPanel />
+              <GravityCsvPreviewPanel boreholes={boreholeIntervals} />
             </SidebarSection>
             <SidebarSection title="Sondajes (Fase 20)">
               <p className="text-[8px] text-white/40 font-mono mb-3 leading-relaxed">
                 Cargar sondajes para anclar la inversión y validar densidades.
               </p>
-              <BoreholeUploadPanel />
+              <BoreholeUploadPanel
+                onConfirm={(_survey, intervals) => setBoreholeIntervals(intervals)}
+              />
             </SidebarSection>
             <SidebarSection title="Fusión multimodal (Fase 21)">
               <p className="text-[8px] text-white/40 font-mono mb-3 leading-relaxed">
                 Combo recomendado, confianza y error de profundidad según los datos
                 disponibles. La decisión la calcula el backend.
               </p>
-              <MultimodalComboPanel />
+              <MultimodalComboPanel
+                key={`mm-${boreholeIntervals.length}`}
+                nBoreholesWithDensity={
+                  boreholeIntervals.filter((b) => b.density_t_m3 != null).length
+                }
+              />
             </SidebarSection>
             {show3D && model && (
               <SidebarSection title="Corte caja A-A' / B-B'">

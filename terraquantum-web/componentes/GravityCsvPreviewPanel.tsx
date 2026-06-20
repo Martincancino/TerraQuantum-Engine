@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useMemo, useRef, useEffect } from "react";
-import { previewGravityCsv, GravityImportPreviewResponse, invertGravityCsv, GravityCsvInvertResponse, GravityCsvInvertPayload, getExplorationBlockModelForRun, getExplorationBlockModelForRunWithArrow, CoordinateTransformData, CrsInfo, SpatialReadiness, SpatialReadinessGateError, RegionalScalePreflight, RegionalScaleGateError, GravityCorrectionReport, connectGeophysicsStatusStream } from "../lib/terraquantum/frontendApi";
+import { previewGravityCsv, GravityImportPreviewResponse, invertGravityCsv, GravityCsvInvertResponse, GravityCsvInvertPayload, getExplorationBlockModelForRun, getExplorationBlockModelForRunWithArrow, CoordinateTransformData, CrsInfo, SpatialReadiness, SpatialReadinessGateError, RegionalScalePreflight, RegionalScaleGateError, GravityCorrectionReport, connectGeophysicsStatusStream, exportCleanCsv } from "../lib/terraquantum/frontendApi";
+import ErrorModal from "./ErrorModal";
+import WarningBanner from "./WarningBanner";
+import { parseBackendError, TQErrorView } from "../lib/terraquantum/errorContract";
 import { useAppStore } from "../store/useAppStore";
 import GravityCorrectionWizard from "./GravityCorrectionWizard";
 import { type VoxelMineralModel, type VoxelData } from "../lib/terraQuantumGeology";
@@ -423,7 +426,13 @@ const INVERT_STAGE_LABELS: Record<string, string> = {
   error: "Error en inversión",
 };
 
-export default function GravityCsvPreviewPanel() {
+type GravityCsvPreviewPanelProps = {
+  // FASE 20 — Sondajes que anclan la inversión (combo grav+sondajes). Vienen del
+  // BoreholeUploadPanel vía Exploration3DView. Se inyectan en el payload de invert.
+  boreholes?: GravityCsvInvertPayload["boreholes"];
+};
+
+export default function GravityCsvPreviewPanel({ boreholes }: GravityCsvPreviewPanelProps = {}) {
   const {
     fileGravimetry, setFileGravimetry,
     fileMagnetometry, setFileMagnetometry,
@@ -448,6 +457,15 @@ export default function GravityCsvPreviewPanel() {
   const [invertErrorMsg, setInvertErrorMsg] = useState<string | null>(null);
   const [invertStage, setInvertStage] = useState<string | null>(null);
   const [invertProgress, setInvertProgress] = useState<number>(0);
+
+  // FASE 23 — Error accionable parseado del backend (ErrorModal 3 pestañas).
+  const [errorModalView, setErrorModalView] = useState<TQErrorView | null>(null);
+  // FASE 19 — Descarga de "CSV limpio".
+  const [cleanCsvLoading, setCleanCsvLoading] = useState(false);
+  const [cleanCsvError, setCleanCsvError] = useState<string | null>(null);
+  // FASE 19 — Contexto del survey (alimenta el ruteo multimodal / interpretación).
+  const [expectedRock, setExpectedRock] = useState<string>("");
+  const [expectedDepth, setExpectedDepth] = useState<string>("");
 
   // Fase 9A — Magnetometría: "gravity" (default) | "magnetic". Lo fija el input
   // de archivo usado; en modo magnetic la inversión rutea al motor de susceptibilidad.
@@ -936,6 +954,8 @@ export default function GravityCsvPreviewPanel() {
       paddingKappa: Math.pow(10, paddingKappaLog),
       anchorKappa: Math.pow(10, anchorKappaLog),
       autoKappa,
+      // FASE 20 — Sondajes que anclan la inversión (combo grav+sondajes).
+      ...(boreholes && boreholes.length > 0 ? { boreholes } : {}),
     };
 
     const effectiveFile = isMagnetic ? invFile : (correctedFile ?? invFile);
@@ -972,6 +992,10 @@ export default function GravityCsvPreviewPanel() {
       }
       const errMsg = res.error || "Error al solicitar la inversión geofísica.";
       setInvertErrorMsg(errMsg);
+      // FASE 23 — Error accionable parseado (ErrorModal). Acepta el contrato del
+      // backend (user_message/suggested_action/technical_details) o un detalle suelto.
+      const rawDetail = isJsonObject(rawData) ? (rawData.detail ?? rawData) : rawData;
+      setErrorModalView(parseBackendError(rawDetail, errMsg));
       setActiveRun({ source: "csv", status: "error", error: errMsg });
       return;
     }
@@ -1474,8 +1498,37 @@ export default function GravityCsvPreviewPanel() {
     );
   }
 
+  // FASE 19 — Descargar el CSV limpio (validado + enriquecido) del backend.
+  async function handleDownloadCleanCsv() {
+    if (!file) return;
+    setCleanCsvError(null);
+    setCleanCsvLoading(true);
+    try {
+      const res = await exportCleanCsv(file, dataType);
+      if (!res.ok || !res.blob) {
+        setCleanCsvError(res.error || "No se pudo generar el CSV limpio.");
+        return;
+      }
+      const url = URL.createObjectURL(res.blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setCleanCsvLoading(false);
+    }
+  }
+
   return (
     <div className="w-full min-w-0 max-w-full overflow-hidden border border-neutral-800 bg-black/50 p-3 rounded-xl shrink-0">
+      {errorModalView && (
+        <ErrorModal
+          error={errorModalView}
+          onClose={() => setErrorModalView(null)}
+          onRetry={() => setErrorModalView(null)}
+        />
+      )}
       <div className="flex flex-col gap-3 mb-4 min-w-0">
         <div className="w-full min-w-0 flex flex-col gap-3">
           <div>
@@ -1794,6 +1847,23 @@ export default function GravityCsvPreviewPanel() {
             {loading ? "Validando..." : dataType === "magnetic" ? "Validar CSV magnético" : "Validar CSV"}
           </button>
         </div>
+
+        {/* FASE 19 — Descargar CSV limpio (validado + enriquecido por el backend) */}
+        {file && (
+          <div className="flex flex-col gap-1">
+            <button
+              onClick={handleDownloadCleanCsv}
+              disabled={cleanCsvLoading}
+              title="Descarga el CSV normalizado (unidades, coordenadas, sigma, elevación) que consumirá la inversión."
+              className="h-8 w-full justify-center px-4 border border-[#C2D8C4]/40 text-[#C2D8C4] text-[10px] uppercase font-bold tracking-widest rounded hover:bg-[#C2D8C4]/10 disabled:opacity-50 transition-colors flex items-center"
+            >
+              {cleanCsvLoading ? "Generando..." : "↓ Descargar CSV limpio"}
+            </button>
+            {cleanCsvError && (
+              <span className="text-[9px] text-red-400 font-mono">{cleanCsvError}</span>
+            )}
+          </div>
+        )}
       </div>
 
       {errorMsg && (
@@ -1801,6 +1871,27 @@ export default function GravityCsvPreviewPanel() {
           <span className="font-bold mr-2">ERROR:</span> {errorMsg}
         </div>
       )}
+
+      {/* FASE 23 — Avisos no bloqueantes del backend (validación / inversión) */}
+      {(() => {
+        const backendWarnings: string[] = [
+          ...((result?.warnings as string[] | undefined) ?? []),
+          ...((invertResult?.warnings as string[] | undefined) ?? []),
+        ].filter((w): w is string => typeof w === "string" && w.trim().length > 0);
+        if (backendWarnings.length === 0) return null;
+        const views: TQErrorView[] = backendWarnings.slice(0, 12).map((msg, i) => ({
+          code: `BACKEND_WARNING_${i}`,
+          severity: "warning",
+          userMessage: msg,
+          suggestedAction: "",
+          technicalDetails: {},
+        }));
+        return (
+          <div className="mb-4">
+            <WarningBanner warnings={views} showAction={false} />
+          </div>
+        );
+      })()}
 
       {result && result.status === "error" && result.spatial_readiness && renderSpatialReadinessPanel(result.spatial_readiness, "mb-4")}
 
@@ -2198,6 +2289,56 @@ export default function GravityCsvPreviewPanel() {
             <h4 className="text-[12px] uppercase tracking-[0.2em] text-[#C2D8C4] font-bold mb-6">
               Inversión 3D
             </h4>
+
+            {/* FASE 19 — Contexto del survey (roca/profundidad esperadas) + estado
+                de sondajes. La roca/profundidad esperadas guían la interpretación;
+                los sondajes anclados ALIMENTAN el ruteo multimodal (panel Fase 21). */}
+            <div className="mb-5 p-3 border border-neutral-800 bg-neutral-900/40 rounded">
+              <p className="text-[9px] uppercase tracking-widest text-neutral-500 mb-2">
+                Contexto del survey (Fase 19)
+              </p>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <label className="flex flex-col gap-1">
+                  <span className="text-[8px] uppercase text-neutral-500">Roca esperada</span>
+                  <select
+                    value={expectedRock}
+                    onChange={(e) => setExpectedRock(e.target.value)}
+                    className="bg-neutral-800 border border-neutral-700 rounded text-[10px] text-neutral-300 px-2 py-1"
+                  >
+                    <option value="">—</option>
+                    <option value="granito">Granito</option>
+                    <option value="magnetita">Magnetita</option>
+                    <option value="cobre">Cobre / pórfido</option>
+                    <option value="diorita">Diorita</option>
+                    <option value="otra">Otra</option>
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[8px] uppercase text-neutral-500">Profundidad esperada</span>
+                  <select
+                    value={expectedDepth}
+                    onChange={(e) => setExpectedDepth(e.target.value)}
+                    className="bg-neutral-800 border border-neutral-700 rounded text-[10px] text-neutral-300 px-2 py-1"
+                  >
+                    <option value="">—</option>
+                    <option value="100-500">100–500 m</option>
+                    <option value="500-2000">500 m – 2 km</option>
+                    <option value=">2000">&gt; 2 km</option>
+                  </select>
+                </label>
+              </div>
+              <div className="text-[9px] font-mono">
+                {boreholes && boreholes.length > 0 ? (
+                  <span className="text-[#C2D8C4]">
+                    ✓ {boreholes.length} sondaje(s) anclado(s) → combo grav+sondajes
+                  </span>
+                ) : (
+                  <span className="text-neutral-500">
+                    Sin sondajes cargados → gravimetría sola (carga sondajes en el panel Fase 20)
+                  </span>
+                )}
+              </div>
+            </div>
 
             {/* Fase 7B — Botones de parámetros avanzados */}
             <div className="flex gap-2 mb-4 flex-wrap">
