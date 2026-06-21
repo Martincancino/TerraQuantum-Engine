@@ -32,6 +32,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from exploration.magnetometry import MagnetometryForward, MagnetometryInversion
+from services.inversion_kernel_service import build_padded_tensor_grid
 from scripts.validation.ingest_raglan import (
     RaglanMagneticSurvey,
     RaglanReference,
@@ -58,6 +59,15 @@ LAMBDA_MAG = 1e-3
 SUSC_MIN = 0.0
 SUSC_MAX = 0.5            # κ máx de referencia ≈ 0.31
 
+# ── Padding de malla (condición de frontera física) ──────────────────────────────
+# Rodea el core (20×5×20 @200 m) con N_PAD capas que crecen geométricamente hacia afuera
+# (factor 1.3) en las 6 caras → extiende el dominio ~600-1000 m más allá del survey. La
+# anomalía dominante de Raglan (5221 nT en X≈4478, justo en el borde Este) deja de saturar
+# la pared del core: las celdas de padding le dan dónde ubicarse (BC m→fondo). Default ON.
+N_PAD = 4
+PAD_FACTOR = 1.3
+PADDING_KAPPA = 1e5      # smallness diferencial: ancla el padding al fondo (R-02 gravedad)
+
 # Tolerancia de targeting a esta escala (survey 4 km, celdas 200 m, cuerpo difuso): <400 m.
 TARGETING_TOL_M = 400.0
 
@@ -77,19 +87,42 @@ def _subsample(arrays, stride):
     return [a[idx] for a in arrays], idx
 
 
-def invert_magnetic(survey: RaglanMagneticSurvey, fr: LocalFrame):
+def invert_magnetic(survey: RaglanMagneticSurvey, fr: LocalFrame, use_padding: bool = True):
+    """Inversión magnética del survey de Raglan.
+
+    use_padding=True (default): malla con padding geométrico (BC física) → la fuente del
+    borde Este deja de saturar la pared del core. use_padding=False reproduce el harness
+    histórico (grilla uniforme sin padding) para la comparación lado a lado.
+
+    Devuelve siempre arrays en la grilla CORE (el padding se descarta del modelo reportado),
+    de modo que las métricas son comparables entre ambos modos.
+    """
     (e, n, z, tmi, sig), _ = _subsample(
         [survey.east, survey.north, survey.elevation, survey.tmi_nt, survey.sigma_nt],
         SENSOR_STRIDE,
     )
     # Sensores en el frame del motor: x=Norte←north, y=prof←(datum−elev), z=Este←east.
     sensors = fr.sensors(e, n, z)
-    x_c, y_c, z_c = _grid_centers_fortran(NX, NY, NZ, BLOCK_SIZE)
+
+    if use_padding:
+        mesh = build_padded_tensor_grid(NX, NY, NZ, BLOCK_SIZE, n_pad=N_PAD, pad_factor=PAD_FACTOR)
+        x_c, y_c, z_c = mesh["x_c"], mesh["y_c"], mesh["z_c"]      # grilla COMPLETA (core+pad)
+        is_core = mesh["is_core"]
+        hx, hy, hz = mesh["hx"], mesh["hy"], mesh["hz"]            # Laplaciano no-uniforme
+        padding_mask = ~is_core
+        nxt, nyt, nzt = mesh["nx_total"], mesh["ny_total"], mesh["nz_total"]
+        inv = MagnetometryInversion(nxt, nyt, nzt, BLOCK_SIZE)
+    else:
+        x_c, y_c, z_c = _grid_centers_fortran(NX, NY, NZ, BLOCK_SIZE)
+        is_core = np.ones(x_c.size, dtype=bool)
+        hx = hy = hz = None
+        padding_mask = None
+        inv = MagnetometryInversion(NX, NY, NZ, BLOCK_SIZE)
+
     # σ = Std real de la estación (constante = mediana, ya que el motor usa σ escalar
     # floor+pct·|d|; noise_pct=0 → σ constante). Las anomalías fuertes son SEÑAL (cuerpo
     # coherente), NO outliers → detect_outliers=False (no se downpesa el cuerpo).
     sigma_floor = float(np.median(sig))
-    inv = MagnetometryInversion(NX, NY, NZ, BLOCK_SIZE)
     fwd = MagnetometryForward(
         BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, cutoff_radius=CUTOFF,
         inclination_deg=survey.inclination_deg,
@@ -106,9 +139,16 @@ def invert_magnetic(survey: RaglanMagneticSurvey, fr: LocalFrame):
         detect_outliers=False,
         auto_kappa=True, prune_observable_domain=True,
         regularization_norm="compact", compact_max_irls=COMPACT_IRLS,
+        hx=hx, hy=hy, hz=hz,
+        padding_mask=padding_mask, padding_kappa=PADDING_KAPPA,
         solver_meta=meta,
     )
-    return np.asarray(chi_full, dtype=np.float64), float(misfit), x_c, y_c, z_c, int(sensors.shape[0]), sigma_floor
+    chi_full = np.asarray(chi_full, dtype=np.float64)
+    # Reportar SOLO la grilla core (el padding es BC, no modelo): aísla en x_c/y_c/z_c core.
+    chi_core = chi_full[is_core]
+    x_core, y_core, z_core = x_c[is_core], y_c[is_core], z_c[is_core]
+    return (chi_core, float(misfit), x_core, y_core, z_core,
+            int(sensors.shape[0]), sigma_floor, meta)
 
 
 def _corr(a, b):
@@ -231,35 +271,66 @@ def measure(chi, x_c, y_c, z_c, ref: RaglanReference, fr: LocalFrame) -> dict:
     }
 
 
-def run(from_saved: bool = False) -> dict:
+def _evaluate(chi, x_c, y_c, z_c, ref, fr, misfit) -> dict:
+    """measure + correlación estructural + misfit → dict de geometría comparable."""
+    geom = measure(chi, x_c, y_c, z_c, ref, fr)
+    geom["misfit_percent"] = None if (misfit is None or not np.isfinite(misfit)) else round(misfit, 3)
+    geom.update(_structural_correlation(chi, x_c, y_c, z_c, fr))
+    return geom
+
+
+def _invert_mode(survey, fr, ref, use_padding, grid_path, from_saved):
+    """Invierte (o re-deriva desde grid guardado) un modo y devuelve (geom, n_sensors, sigma, meta)."""
+    if from_saved and grid_path.exists():
+        tag = "con padding" if use_padding else "sin padding"
+        print(f"\n[modo {tag}] Re-derivando desde el modelo guardado (sin re-invertir)...")
+        d = np.load(grid_path)
+        chi, x_c, y_c, z_c = d["chi"], d["x_c"], d["y_c"], d["z_c"]
+        misfit = None
+        n_sensors = int(np.arange(0, survey.n, SENSOR_STRIDE).shape[0])
+        sigma_floor = float(np.median(survey.sigma_nt[::SENSOR_STRIDE]))
+        meta = {}
+    else:
+        tag = "CON PADDING (BC física)" if use_padding else "SIN PADDING (baseline histórico)"
+        print(f"\n[modo {tag}] Inversión MAGNÉTICA escalar (IGRF real, σ=Std)...")
+        chi, misfit, x_c, y_c, z_c, n_sensors, sigma_floor, meta = invert_magnetic(
+            survey, fr, use_padding=use_padding
+        )
+        np.savez(grid_path, chi=chi, x_c=x_c, y_c=y_c, z_c=z_c)
+    geom = _evaluate(chi, x_c, y_c, z_c, ref, fr, misfit)
+    if geom["misfit_percent"] is None:
+        # Re-deriva el misfit del reporte previo si existe.
+        prev = Path(__file__).resolve().parent / "raglan_validation_report.json"
+        if prev.exists():
+            try:
+                _key = "result_scalar" if use_padding else "result_scalar_nopadding"
+                geom["misfit_percent"] = json.loads(prev.read_text(encoding="utf-8")) \
+                    .get(_key, {}).get("misfit_percent")
+            except Exception:
+                pass
+    return geom, n_sensors, sigma_floor, meta
+
+
+def run(from_saved: bool = False, compare: bool = True) -> dict:
     t0 = time.time()
     survey = load_raglan_magnetic()
     ref = load_raglan_reference(survey=survey)
     fr = build_raglan_frame(survey)
+    _dir = Path(__file__).resolve().parent
 
-    grid_path = Path(__file__).resolve().parent / "raglan_recovered_grid.npz"
-    if from_saved and grid_path.exists():
-        print("\n[1/1] Re-derivando desde el modelo guardado (sin re-invertir)...")
-        d = np.load(grid_path)
-        chi, x_c, y_c, z_c = d["chi"], d["x_c"], d["y_c"], d["z_c"]
-        misfit = float("nan")
-        n_sensors = int(np.arange(0, survey.n, SENSOR_STRIDE).shape[0])
-        sigma_floor = float(np.median(survey.sigma_nt[::SENSOR_STRIDE]))
-    else:
-        print("\n[1/1] Inversión MAGNÉTICA escalar (IGRF real, σ=Std)...")
-        chi, misfit, x_c, y_c, z_c, n_sensors, sigma_floor = invert_magnetic(survey, fr)
-        # Guarda el modelo recuperado ANTES del post-proceso (la inversión cuesta ~22 min).
-        np.save(Path(__file__).resolve().parent / "raglan_recovered_model.npy", chi)
-        np.savez(grid_path, chi=chi, x_c=x_c, y_c=y_c, z_c=z_c)
-    geom = measure(chi, x_c, y_c, z_c, ref, fr)
-    geom["misfit_percent"] = None if not np.isfinite(misfit) else round(misfit, 3)
-    if from_saved and geom["misfit_percent"] is None:
-        # Recupera el misfit del reporte previo (la inversión ya corrió y lo escribió).
-        prev = Path(__file__).resolve().parent / "raglan_validation_report.json"
-        if prev.exists():
-            geom["misfit_percent"] = json.loads(prev.read_text(encoding="utf-8")) \
-                .get("result_scalar", {}).get("misfit_percent")
-    geom.update(_structural_correlation(chi, x_c, y_c, z_c, fr))
+    # Modo headline: CON padding (condición de frontera física).
+    grid_pad = _dir / "raglan_recovered_grid.npz"
+    geom, n_sensors, sigma_floor, meta_pad = _invert_mode(
+        survey, fr, ref, use_padding=True, grid_path=grid_pad, from_saved=from_saved
+    )
+
+    # Modo baseline: SIN padding (para la comparación lado a lado del artefacto de borde).
+    geom_nopad = None
+    if compare:
+        grid_nopad = _dir / "raglan_recovered_grid_nopad.npz"
+        geom_nopad, _, _, _ = _invert_mode(
+            survey, fr, ref, use_padding=False, grid_path=grid_nopad, from_saved=from_saved
+        )
 
     horiz = geom.get("horiz_err_peak_vs_ref_peak_m")
     horiz_int = geom.get("horiz_err_interior_peak_vs_ref_m")
@@ -282,8 +353,12 @@ def run(from_saved: bool = False) -> dict:
         },
         "local_frame": {"origin_east": fr.origin_east, "origin_north": fr.origin_north, "datum_elev": fr.datum_elev},
         "mesh": {"nx": NX, "ny": NY, "nz": NZ, "block_size_m": BLOCK_SIZE,
+                 "n_pad": N_PAD, "pad_factor": PAD_FACTOR, "padding_kappa": PADDING_KAPPA,
+                 "n_padding_solved": meta_pad.get("n_padding_solved"),
+                 "n_padding_pruned": meta_pad.get("n_padding_pruned"),
                  "n_sensors_used": n_sensors, "sigma_floor_nt": round(sigma_floor, 3)},
         "result_scalar": geom,
+        "result_scalar_nopadding": geom_nopad,
         "verdict": {
             "targeting_tol_m": TARGETING_TOL_M,
             "horiz_err_global_peak_vs_ref_m": horiz,
@@ -294,14 +369,41 @@ def run(from_saved: bool = False) -> dict:
             "strong_region_iou": geom.get("strong_region_iou"),
             "n_saturated_cells": geom.get("n_saturated_cells"),
             "targeting_pass_interior_body": bool(targeting_pass),
-            "note": "El pico GLOBAL cae en un artefacto de borde (anomalía más fuerte del "
-                    "survey en el límite este, sin padding, susc saturada al bound). El "
-                    "cuerpo dominante INTERIOR localiza la referencia dentro de tolerancia.",
+            "note": "Modo headline = CON padding (BC física). El pico GLOBAL ya no se clava "
+                    "en el borde Este: las celdas de padding absorben la anomalía del límite.",
         },
+        "padding_comparison": _build_comparison(geom, geom_nopad, ref) if geom_nopad else None,
         "elapsed_s": round(time.time() - t0, 1),
     }
     report["table_markdown"] = _render(report)
     return report
+
+
+def _build_comparison(geom_pad: dict, geom_nopad: dict, ref) -> dict:
+    """Comparación lado a lado del artefacto de borde: con vs sin padding."""
+    def _pick(g):
+        return {
+            "global_peak_east": g.get("recovered_peak_east"),
+            "global_peak_north": g.get("recovered_peak_north"),
+            "horiz_err_global_peak_vs_ref_m": g.get("horiz_err_peak_vs_ref_peak_m"),
+            "interior_peak_east": g.get("recovered_interior_peak_east"),
+            "horiz_err_interior_peak_vs_ref_m": g.get("horiz_err_interior_peak_vs_ref_m"),
+            "model_pearson_corr_horizontal": g.get("model_pearson_corr_horizontal"),
+            "model_pearson_corr_3d": g.get("model_pearson_corr_3d"),
+            "n_saturated_cells": g.get("n_saturated_cells"),
+            "misfit_percent": g.get("misfit_percent"),
+        }
+    _gp = geom_pad.get("horiz_err_peak_vs_ref_peak_m")
+    _gn = geom_nopad.get("horiz_err_peak_vs_ref_peak_m")
+    return {
+        "with_padding": _pick(geom_pad),
+        "without_padding": _pick(geom_nopad),
+        "global_peak_error_reduction_m": (
+            round(_gn - _gp, 1) if (_gp is not None and _gn is not None) else None
+        ),
+        "ref_peak_east": round(ref.peak_east, 1),
+        "ref_peak_north": round(ref.peak_north, 1),
+    }
 
 
 def _render(report: dict) -> str:
@@ -317,6 +419,25 @@ def _render(report: dict) -> str:
         f"| Corr. 3D (penaliza prof.) | {g.get('model_pearson_corr_3d')} | | |",
         f"| Misfit | {g.get('misfit_percent')}% | | |",
     ]
+    cmp = report.get("padding_comparison")
+    if cmp:
+        wp, np_ = cmp["with_padding"], cmp["without_padding"]
+        lines += [
+            "",
+            "**Padding (BC física) vs sin padding — artefacto de borde:**",
+            "| Métrica | SIN padding | CON padding |",
+            "|---------|-------------|-------------|",
+            f"| Pico GLOBAL (E, N) | ({np_['global_peak_east']}, {np_['global_peak_north']}) "
+            f"| ({wp['global_peak_east']}, {wp['global_peak_north']}) |",
+            f"| Err. pico GLOBAL vs ref (m) | {np_['horiz_err_global_peak_vs_ref_m']} "
+            f"| {wp['horiz_err_global_peak_vs_ref_m']} |",
+            f"| Err. pico INTERIOR vs ref (m) | {np_['horiz_err_interior_peak_vs_ref_m']} "
+            f"| {wp['horiz_err_interior_peak_vs_ref_m']} |",
+            f"| Corr. horizontal | {np_['model_pearson_corr_horizontal']} "
+            f"| {wp['model_pearson_corr_horizontal']} |",
+            f"| Celdas saturadas | {np_['n_saturated_cells']} | {wp['n_saturated_cells']} |",
+            f"| Misfit (%) | {np_['misfit_percent']} | {wp['misfit_percent']} |",
+        ]
     return "\n".join(lines)
 
 
@@ -326,7 +447,8 @@ def main():
     except Exception:
         pass
     from_saved = "--from-saved" in sys.argv
-    report = run(from_saved=from_saved)
+    compare = "--no-compare" not in sys.argv
+    report = run(from_saved=from_saved, compare=compare)
     print("\n" + "=" * 80)
     print("RAGLAN — VALIDACIÓN CONTRA BENCHMARK DE DATO REAL (geometría/targeting)")
     print("=" * 80)

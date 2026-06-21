@@ -52,10 +52,38 @@
     "ny": 5,
     "nz": 20,
     "block_size_m": 200.0,
+    "n_pad": 4,
+    "pad_factor": 1.3,
+    "padding_kappa": 100000.0,
+    "n_padding_solved": 4371,
+    "n_padding_pruned": 685,
     "n_sensors_used": 410,
     "sigma_floor_nt": 7.295
   },
   "result_scalar": {
+    "recovered_peak_east": 3000.0,
+    "recovered_peak_north": 39100.0,
+    "recovered_peak_depth_m": 300.0,
+    "recovered_strong_centroid_east": 3523.1,
+    "recovered_strong_centroid_north": 39940.0,
+    "recovered_strong_centroid_depth_m": 222.7,
+    "n_strong_cells": 12,
+    "recovered_interior_peak_east": 3200.0,
+    "recovered_interior_peak_north": 40100.0,
+    "recovered_interior_peak_depth_m": 200.0,
+    "n_saturated_cells": 6,
+    "horiz_err_peak_vs_ref_peak_m": 1202.1,
+    "horiz_err_peak_vs_data_anomaly_m": 1005.0,
+    "horiz_err_interior_peak_vs_ref_m": 212.1,
+    "horiz_err_centroid_vs_ref_peak_m": 355.1,
+    "depth_err_peak_vs_ref_m": 50.0,
+    "depth_err_interior_peak_vs_ref_m": 150.0,
+    "misfit_percent": 8.06,
+    "model_pearson_corr_3d": 0.207,
+    "model_pearson_corr_horizontal": 0.558,
+    "strong_region_iou": 0.029
+  },
+  "result_scalar_nopadding": {
     "recovered_peak_east": 4400.0,
     "recovered_peak_north": 40100.0,
     "recovered_peak_depth_m": 300.0,
@@ -80,16 +108,43 @@
   },
   "verdict": {
     "targeting_tol_m": 400.0,
-    "horiz_err_global_peak_vs_ref_m": 1060.7,
+    "horiz_err_global_peak_vs_ref_m": 1202.1,
     "horiz_err_interior_peak_vs_ref_m": 212.1,
-    "horiz_err_peak_vs_data_anomaly_m": 1001.8,
-    "model_pearson_corr_horizontal": 0.542,
-    "model_pearson_corr_3d": 0.155,
-    "strong_region_iou": 0.087,
-    "n_saturated_cells": 14,
+    "horiz_err_peak_vs_data_anomaly_m": 1005.0,
+    "model_pearson_corr_horizontal": 0.558,
+    "model_pearson_corr_3d": 0.207,
+    "strong_region_iou": 0.029,
+    "n_saturated_cells": 6,
     "targeting_pass_interior_body": true,
-    "note": "El pico GLOBAL cae en un artefacto de borde (anomalía más fuerte del survey en el límite este, sin padding, susc saturada al bound). El cuerpo dominante INTERIOR localiza la referencia dentro de tolerancia."
+    "note": "Modo headline = CON padding (BC física). El pico GLOBAL ya no se clava en el borde Este: las celdas de padding absorben la anomalía del límite."
   },
-  "elapsed_s": 0.0,
-  "table_markdown": "| Métrica | Recuperado (TQ) | Referencia | Error |\n|---------|-----------------|------------|-------|\n| Pico GLOBAL (E, N) | (4400.0, 40100.0) | (3350.0, 40250.0) | 1060.7 m |\n| **Pico INTERIOR (sin borde)** | (3200.0, 40100.0) | (3350.0, 40250.0) | **212.1 m** |\n| Prof. cuerpo interior (m) | 200.2 | 350.0 | 149.8 m |\n| Corr. horizontal (Pearson) | 0.542 | | |\n| Corr. 3D (penaliza prof.) | 0.155 | | |\n| Misfit | 9.495% | | |"
+  "padding_comparison": {
+    "with_padding": {
+      "global_peak_east": 3000.0,
+      "global_peak_north": 39100.0,
+      "horiz_err_global_peak_vs_ref_m": 1202.1,
+      "interior_peak_east": 3200.0,
+      "horiz_err_interior_peak_vs_ref_m": 212.1,
+      "model_pearson_corr_horizontal": 0.558,
+      "model_pearson_corr_3d": 0.207,
+      "n_saturated_cells": 6,
+      "misfit_percent": 8.06
+    },
+    "without_padding": {
+      "global_peak_east": 4400.0,
+      "global_peak_north": 40100.0,
+      "horiz_err_global_peak_vs_ref_m": 1060.7,
+      "interior_peak_east": 3200.0,
+      "horiz_err_interior_peak_vs_ref_m": 212.1,
+      "model_pearson_corr_horizontal": 0.542,
+      "model_pearson_corr_3d": 0.155,
+      "n_saturated_cells": 14,
+      "misfit_percent": 9.495
+    },
+    "global_peak_error_reduction_m": -141.4,
+    "ref_peak_east": 3350.0,
+    "ref_peak_north": 40250.0
+  },
+  "elapsed_s": 1078.0,
+  "table_markdown": "| Métrica | Recuperado (TQ) | Referencia | Error |\n|---------|-----------------|------------|-------|\n| Pico GLOBAL (E, N) | (3000.0, 39100.0) | (3350.0, 40250.0) | 1202.1 m |\n| **Pico INTERIOR (sin borde)** | (3200.0, 40100.0) | (3350.0, 40250.0) | **212.1 m** |\n| Prof. cuerpo interior (m) | 200.0 | 350.0 | 150.0 m |\n| Corr. horizontal (Pearson) | 0.558 | | |\n| Corr. 3D (penaliza prof.) | 0.207 | | |\n| Misfit | 8.06% | | |\n\n**Padding (BC física) vs sin padding — artefacto de borde:**\n| Métrica | SIN padding | CON padding |\n|---------|-------------|-------------|\n| Pico GLOBAL (E, N) | (4400.0, 40100.0) | (3000.0, 39100.0) |\n| Err. pico GLOBAL vs ref (m) | 1060.7 | 1202.1 |\n| Err. pico INTERIOR vs ref (m) | 212.1 | 212.1 |\n| Corr. horizontal | 0.542 | 0.558 |\n| Celdas saturadas | 14 | 6 |\n| Misfit (%) | 9.495 | 8.06 |"
 }
