@@ -1398,6 +1398,108 @@ export async function buildPackage(opts: {
   }
 }
 
+// ── Preparación con ENRIQUECIMIENTO (/enrich-package) ────────────────────────
+export type EnrichmentStep = {
+  key: string;
+  label: string;
+  status:
+    | "derived"
+    | "already_present"
+    | "skipped"
+    | "needs_context"
+    | "not_derivable";
+  method: string | null;
+  detail: string;
+  n_stations: number;
+};
+
+export type EnrichmentSummary = {
+  version: string;
+  steps: EnrichmentStep[];
+  needs_context: string[];
+  columns_added: string[];
+  nothing_fabricated: boolean;
+};
+
+export type EnrichPackageResult =
+  | {
+      ok: true;
+      status: number;
+      filename: string;
+      packageText: string;
+      summary: EnrichmentSummary;
+      plan: Record<string, unknown> | null;
+      warnings: string[];
+      needsContext: string[];
+      nStations: number;
+      error: null;
+    }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Sube los CSV crudos al backend de ENRIQUECIMIENTO: deriva con física real lo que
+ * falte (DEM/correcciones/IGRF/coords/σ/calidad) y devuelve el TQPKG completo
+ * descargable + un resumen estructurado de qué calculó/agregó. Nada se fabrica.
+ */
+export async function enrichPackage(opts: {
+  file: File;
+  magneticFile?: File | null;
+  dataType?: "gravity" | "magnetic";
+  strict?: boolean;
+  allowGRaw?: boolean;
+  enableDem?: boolean;
+  config?: BuildPackageConfig;
+  boreholes?: unknown[] | null;
+}): Promise<EnrichPackageResult> {
+  const dataType = opts.dataType ?? "gravity";
+  const fd = new FormData();
+  fd.append("file", opts.file);
+  if (opts.magneticFile) fd.append("magnetic_file", opts.magneticFile);
+  if (opts.config) fd.append("config_json", JSON.stringify(opts.config));
+  if (opts.boreholes && opts.boreholes.length > 0) {
+    fd.append("boreholes_json", JSON.stringify(opts.boreholes));
+  }
+  const qs = new URLSearchParams({
+    data_type: dataType,
+    strict: String(opts.strict ?? false),
+    allow_g_raw: String(opts.allowGRaw ?? true),
+    enable_dem: String(opts.enableDem ?? true),
+  });
+  try {
+    const res = await fetch(`/api/gravity-import/enrich-package?${qs.toString()}`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = `Error ${res.status}`;
+      try {
+        const d = await res.json();
+        if (typeof d?.detail === "string") detail = d.detail;
+        else if (d?.detail?.message) detail = String(d.detail.message);
+      } catch {
+        /* respuesta no-JSON */
+      }
+      return { ok: false, status: res.status, error: detail };
+    }
+    const data = await res.json();
+    return {
+      ok: true,
+      status: res.status,
+      filename: String(data.filename ?? "package.tqpkg.csv"),
+      packageText: String(data.package_text ?? ""),
+      summary: data.enrichment_summary as EnrichmentSummary,
+      plan: (data.plan as Record<string, unknown>) ?? null,
+      warnings: Array.isArray(data.warnings) ? data.warnings : [],
+      needsContext: Array.isArray(data.needs_context) ? data.needs_context : [],
+      nStations: Number(data.n_stations ?? 0),
+      error: null,
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, status: 500, error: message };
+  }
+}
+
 export type LoadPackageData = {
   status?: string;
   stage?: string;
