@@ -10,7 +10,7 @@ import { type VoxelMineralModel, type VoxelData } from "../lib/terraQuantumGeolo
 import { isJsonObject, readStringField, readNumberField } from "./datos/helpers";
 import { PgiParamsForm, type PgiParamsUI } from "./PgiParamsForm";
 import { MagneticRemanenceForm, type MagneticRemanenceParamsUI } from "./MagneticRemanenceForm";
-import { buildCsvPackage, downloadCsvPackage, type CsvPackageParams } from "../lib/terraquantum/csvPackage";
+import { buildPackage, type BuildPackageConfig } from "../lib/terraquantum/frontendApi";
 
 // ─── Georef UX helpers (R1-FE-3) ──────────────────────────────────────────
 
@@ -880,20 +880,35 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
     }
   }
 
-  // FASE R3 — Genera y descarga el "paquete CSV" (CSV limpio/corregido + todos
-  // los parámetros de inversión). LoadPanel (vista 3D) lo sube y corre la
-  // inversión. No invierte aquí: solo empaqueta el dato preparado.
+  // FASE R4 — Ensambla el "paquete CSV" auto-contenido en el BACKEND (formato
+  // canónico: normaliza + decide combo multimodal + aplica gates) y lo descarga.
+  // La vista 3D (LoadPanel) lo sube y el backend corre la inversión. No invierte
+  // ni calcula física aquí: solo recolecta y manda los datos preparados.
   const handleGeneratePackage = async () => {
     setPackageError(null);
     setPackageMessage(null);
 
-    const isMagnetic = dataType === "magnetic";
-    const sourceFile = isMagnetic ? fileMagnetometry : (correctedFile ?? file);
-    if (!sourceFile) {
+    const gravFile = correctedFile ?? file; // file = fileGravimetry
+    const hasGrav = !!gravFile;
+    const hasMag = !!fileMagnetometry;
+
+    let primaryFile: File | null = null;
+    let magneticFile: File | null = null;
+    let pkgDataType: "gravity" | "magnetic" = "gravity";
+    if (hasGrav && hasMag) {
+      // Ambos presentes → joint co-localizado (el backend valida la colocación).
+      primaryFile = gravFile;
+      magneticFile = fileMagnetometry;
+      pkgDataType = "gravity";
+    } else if (hasGrav) {
+      primaryFile = gravFile;
+      pkgDataType = "gravity";
+    } else if (hasMag) {
+      primaryFile = fileMagnetometry;
+      pkgDataType = "magnetic";
+    } else {
       setPackageError(
-        isMagnetic
-          ? "Selecciona un CSV de magnetometría antes de generar el paquete."
-          : "Selecciona y valida un CSV antes de generar el paquete.",
+        "Selecciona y valida un CSV (gravimetría y/o magnetometría) antes de generar el paquete.",
       );
       return;
     }
@@ -908,50 +923,77 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
       return;
     }
 
-    let csvText: string;
-    try {
-      csvText = await sourceFile.text();
-    } catch {
-      setPackageError("No se pudo leer el contenido del CSV.");
+    const config: BuildPackageConfig = {
+      region: "norte_chile",
+      lat: latNorth.trim() || null,
+      lon: lonWest.trim() || null,
+      density_min: Number(densityMin),
+      density_max: Number(densityMax),
+      lambda_mag: lambdaMode === "custom" ? Number(lambdaCustom) : 0,
+      gravimeter_type: gravimeterType,
+      padding_kappa: Math.pow(10, paddingKappaLog),
+      anchor_kappa: Math.pow(10, anchorKappaLog),
+      auto_kappa: autoKappa,
+      inclination_deg: inclinationDeg,
+      declination_deg: declinationDeg,
+      field_intensity_nt: fieldIntensityNt,
+      susc_min: Number(suscMin),
+      susc_max: Number(suscMax),
+      utm_zone: utmZone.trim() && !utmZoneError ? utmZone.trim().toUpperCase() : null,
+      acknowledge_spatial_risk: acknowledgeSpatialRisk,
+      acknowledge_regional_scale: acknowledgeRegionalScale,
+      ...(pgiParams?.enabled
+        ? {
+            pgi_params: {
+              components: [
+                { mean_density_t_m3: 2.6, std_density_t_m3: 0.2, weight: 0.5 },
+                { mean_density_t_m3: 3.0, std_density_t_m3: 0.2, weight: 0.5 },
+              ],
+              alpha_pgi: pgiParams.alpha_pgi,
+              max_iter: pgiParams.max_iter,
+              convergence_tol: 0.001,
+              fit_from_model: true,
+              n_components_auto: pgiParams.n_components_auto,
+            },
+          }
+        : {}),
+      ...(remanenceParams?.enabled && pkgDataType === "magnetic"
+        ? {
+            remanence: {
+              enabled: remanenceParams.enabled,
+              q_ratio: remanenceParams.q_ratio,
+              remanence_inc_deg: remanenceParams.remanence_inc_deg,
+              remanence_dec_deg: remanenceParams.remanence_dec_deg,
+              inversion_mode: remanenceParams.inversion_mode,
+              do_q_sweep: remanenceParams.do_q_sweep,
+            },
+          }
+        : {}),
+    };
+
+    setPackageMessage("Ensamblando paquete en el backend...");
+    const res = await buildPackage({
+      file: primaryFile,
+      magneticFile,
+      dataType: pkgDataType,
+      strict,
+      allowGRaw: allowGRaw || correctedFile !== null,
+      config,
+      boreholes: boreholes ?? null,
+    });
+
+    if (!res.ok) {
+      setPackageMessage(null);
+      setPackageError(res.error);
       return;
     }
 
-    const params: CsvPackageParams = {
-      strict,
-      allowGRaw: allowGRaw || correctedFile !== null,
-      densityMin,
-      densityMax,
-      densityPreset,
-      gravimeterType,
-      lambdaMode,
-      lambdaCustom,
-      paddingKappaLog,
-      anchorKappaLog,
-      autoKappa,
-      utmZone,
-      acknowledgeSpatialRisk,
-      acknowledgeRegionalScale,
-      expectedRock,
-      expectedDepth,
-      inclinationDeg,
-      declinationDeg,
-      fieldIntensityNt,
-      suscMin,
-      suscMax,
-    };
-
-    const pkg = buildCsvPackage({
-      dataType,
-      csvFilename: sourceFile.name,
-      csvText,
-      corrected: !isMagnetic && correctedFile !== null,
-      params,
-      pgiParams,
-      remanenceParams,
-      boreholes,
-    });
-
-    downloadCsvPackage(pkg);
+    const url = URL.createObjectURL(res.blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = res.filename;
+    a.click();
+    URL.revokeObjectURL(url);
     setPackageMessage(
       "Paquete CSV generado. Súbelo en la vista 3D para cargar el modelo.",
     );

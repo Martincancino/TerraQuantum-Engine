@@ -1310,6 +1310,146 @@ export async function exportCleanCsv(
   }
 }
 
+// ─── FASE R4 — Paquete CSV auto-contenido (build + load vía backend) ─────────
+// Config que viaja como config_json al backend (claves snake_case = merge_config).
+export type BuildPackageConfig = {
+  region?: string;
+  lat?: string | null;
+  lon?: string | null;
+  nir?: number;
+  fe?: number;
+  density_min?: number;
+  density_max?: number;
+  lambda_mag?: number;
+  alpha_spatial?: number;
+  gravimeter_type?: string;
+  inclination_deg?: number;
+  declination_deg?: number;
+  field_intensity_nt?: number;
+  susc_min?: number;
+  susc_max?: number;
+  padding_kappa?: number;
+  anchor_kappa?: number;
+  auto_kappa?: boolean;
+  utm_zone?: string | null;
+  acknowledge_spatial_risk?: boolean;
+  acknowledge_regional_scale?: boolean;
+  // Fase 7B — params avanzados (objetos anidados; el backend los inyecta al solver).
+  pgi_params?: Record<string, unknown> | null;
+  remanence?: Record<string, unknown> | null;
+};
+
+export type BuildPackageResult =
+  | { ok: true; status: number; blob: Blob; filename: string; route: string | null; error: null }
+  | { ok: false; status: number; blob: null; filename: string; route: null; error: string };
+
+/** Ensambla el paquete CSV auto-contenido en el backend y devuelve el blob descargable. */
+export async function buildPackage(opts: {
+  file: File;
+  magneticFile?: File | null;
+  dataType?: "gravity" | "magnetic";
+  strict?: boolean;
+  allowGRaw?: boolean;
+  config?: BuildPackageConfig;
+  boreholes?: unknown[] | null;
+}): Promise<BuildPackageResult> {
+  const dataType = opts.dataType ?? "gravity";
+  const fd = new FormData();
+  fd.append("file", opts.file);
+  if (opts.magneticFile) fd.append("magnetic_file", opts.magneticFile);
+  if (opts.config) fd.append("config_json", JSON.stringify(opts.config));
+  if (opts.boreholes && opts.boreholes.length > 0) {
+    fd.append("boreholes_json", JSON.stringify(opts.boreholes));
+  }
+  const base = opts.file.name.replace(/\.csv$/i, "");
+  const fallbackName = `${base}_package.tqpkg.csv`;
+  const qs = new URLSearchParams({
+    data_type: dataType,
+    strict: String(opts.strict ?? true),
+    allow_g_raw: String(opts.allowGRaw ?? false),
+  });
+  try {
+    const res = await fetch(`/api/gravity-import/build-package?${qs.toString()}`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = `Error ${res.status}`;
+      try {
+        const d = await res.json();
+        if (typeof d?.detail === "string") detail = d.detail;
+        else if (d?.detail?.message) detail = String(d.detail.message);
+      } catch {
+        /* respuesta no-JSON */
+      }
+      return { ok: false, status: res.status, blob: null, filename: fallbackName, route: null, error: detail };
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("content-disposition") || "";
+    const match = cd.match(/filename="?([^"]+)"?/i);
+    const filename = match ? match[1] : fallbackName;
+    return {
+      ok: true, status: res.status, blob, filename,
+      route: res.headers.get("x-tq-package-route"), error: null,
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, status: 500, blob: null, filename: fallbackName, route: null, error: message };
+  }
+}
+
+export type LoadPackageData = {
+  status?: string;
+  stage?: string;
+  project_id?: string;
+  run_id?: string;
+  route?: string | null;
+  multimodal_plan?: Record<string, unknown>;
+  warnings?: string[];
+  errors?: string[];
+  inversionResult?: unknown;
+};
+
+export type LoadPackageResult = {
+  ok: boolean;
+  status: number;
+  data: LoadPackageData | null;
+  error: string | null;
+};
+
+/** Sube el paquete CSV al backend, que corre la inversión ruteada y persiste el modelo. */
+export async function loadPackage(
+  file: File,
+  opts?: { projectId?: string; runId?: string }
+): Promise<LoadPackageResult> {
+  const fd = new FormData();
+  fd.append("file", file);
+  if (opts?.projectId) fd.append("project_id", opts.projectId);
+  if (opts?.runId) fd.append("run_id", opts.runId);
+  try {
+    const res = await fetch(`/api/gravity-import/load-package`, { method: "POST", body: fd });
+    let data: LoadPackageData | null = null;
+    let errDetail: string | null = null;
+    try {
+      const j = await res.json();
+      if (res.ok) {
+        data = j as LoadPackageData;
+      } else {
+        errDetail =
+          typeof j?.detail === "string" ? j.detail
+          : j?.detail?.message ? String(j.detail.message)
+          : `Error ${res.status}`;
+      }
+    } catch {
+      errDetail = `Error ${res.status}`;
+    }
+    return { ok: res.ok, status: res.status, data, error: errDetail };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, status: 500, data: null, error: message };
+  }
+}
+
 export async function getFavorability(projectId: string, runId: string) {
   return fetchInternalJson<FavorabilityResult>({
     path: `/api/favorability?project_id=${encodeURIComponent(
