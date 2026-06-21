@@ -38,12 +38,43 @@ def build_tensor_mesh_with_padding(
     pad_factor: float = 1.3,
 ) -> dict:
     """
-    F0.9 — Tensor Mesh con Padding Geométrico.
+    F0.9 — Tensor Mesh con Padding Geométrico (wrapper sobre params).
+
+    Lee nx/ny/nz/block_size de un GeophysicsInvertInput y delega en
+    build_padded_tensor_grid. Mantiene la firma histórica usada por
+    geophysics_service (path gravimétrico de producción).
+    """
+    return build_padded_tensor_grid(
+        nx=int(params.nx),
+        ny=int(params.ny),
+        nz=int(params.nz),
+        block_size=float(params.block_size),
+        n_pad=n_pad,
+        pad_factor=pad_factor,
+    )
+
+
+def build_padded_tensor_grid(
+    nx: int,
+    ny: int,
+    nz: int,
+    block_size: float,
+    n_pad: int = 5,
+    pad_factor: float = 1.3,
+) -> dict:
+    """
+    F0.9 — Tensor Mesh con Padding Geométrico (dims explícitas).
 
     Construye una grilla 3D con un bloque CORE uniforme (nx×ny×nz celdas de tamaño dx)
     y n_pad capas de padding en cada cara (+X, -X, +Y, -Y, +Z, -Z).
     Las celdas de padding crecen geométricamente hacia afuera:
         h_{i+1} = h_i * pad_factor
+
+    El padding es la CONDICIÓN DE FRONTERA físicamente correcta de campos potenciales:
+    la Tierra no termina en el borde del survey. Sin padding, una fuente en el límite no
+    tiene dónde ubicarse y satura las celdas del core (artefacto de borde, medido en
+    Raglan). Las celdas de padding proveen vecinos al Laplaciano (BC suave m→fondo) y
+    absorben el far-field. El solver las penaliza con padding_kappa (smallness diferencial).
 
     Los centros de las celdas CORE se alinean exactamente con los de build_voxel_grid:
         x_core_k = (k + 0.5) * dx  para k = 0..nx-1
@@ -61,8 +92,12 @@ def build_tensor_mesh_with_padding(
       is_core : máscara booleana global (True para celdas Core, False para padding)
     ─────────────────────────────────────────────────────────────────────────
     """
-    nx, ny, nz = params.nx, params.ny, params.nz
-    dx = float(params.block_size)
+    nx, ny, nz = int(nx), int(ny), int(nz)
+    dx = float(block_size)
+    if n_pad < 0:
+        raise ValueError("n_pad no puede ser negativo.")
+    if pad_factor < 1.0:
+        raise ValueError("pad_factor debe ser >= 1.0 (las celdas de padding crecen hacia afuera).")
 
     def make_padded_widths(n_core: int, h_core: float) -> np.ndarray:
         # Celdas de padding saliendo del Core:  h, h·f, h·f², …, h·f^(n_pad-1)

@@ -618,6 +618,18 @@ class MagnetometryInversion:
         susc_max: float = 1.0,
         # ── Tensor mesh (Laplaciano no-uniforme) ─────────────────────────────
         hx=None, hy=None, hz=None,
+        # ── Padding de malla (condición de frontera física) — port R-02 gravedad ─
+        # padding_mask: bool (total_voxels,) True en celdas de padding (malla extendida
+        # con BC física), False en core. Default None = comportamiento histórico EXACTO
+        # (sin padding, byte-idéntico). Cuando se provee, las celdas de padding conservan
+        # smallness ABSOLUTA padding_kappa·lambda_mag → ancladas al fondo (susc≈base);
+        # proveen vecinos al Laplaciano no-uniforme (BC suave m→0) y absorben el far-field,
+        # evitando que una fuente en el borde del survey sature las celdas del core
+        # (artefacto de borde medido en Raglan). El foco compacto NO se aplica al padding
+        # (_free_mask &= ~_padding_active) y la poda observable (R-05) conserva el padding
+        # lateral sensible (adyacente a fuentes de borde) y solo descarta el far-field ciego.
+        padding_mask: Optional[np.ndarray] = None,
+        padding_kappa: float = 1e5,
         # ── Data weighting ───────────────────────────────────────────────────
         noise_floor=0.02,
         noise_pct=0.02,
@@ -788,6 +800,22 @@ class MagnetometryInversion:
             _anchor_active = _anchor_mask_full[active_cells]
             _anchor_value_active = _anchor_value_full[active_cells]
 
+        # ── Padding de malla (R-02 magnético) — máscara reducida a celdas activas ─
+        _padding_active = None
+        if padding_mask is not None:
+            _pm = np.asarray(padding_mask, dtype=bool)
+            if _pm.shape[0] != self.total_voxels:
+                raise ValueError(
+                    f"padding_mask debe tener longitud {self.total_voxels} "
+                    f"(total_voxels), got {_pm.shape[0]}."
+                )
+            _padding_active = _pm[active_cells]   # shape=(n_active,)
+            print(
+                f"[MAG R-02] Padding diferencial: "
+                f"core={int(np.sum(~_padding_active)):,} | "
+                f"padding={int(np.sum(_padding_active)):,} | kappa={padding_kappa:.0e}"
+            )
+
         # ── FASE 20B Tarea 3: Observable Domain (R-05) — excluir vóxeles muertos ─
         # Vóxeles más allá del cutoff_radius para TODOS los sensores tienen columnas
         # cero en G_active. Incluirlos produce plateau de chi² por mínima norma y
@@ -801,18 +829,34 @@ class MagnetometryInversion:
         _n_obs_domain = int(np.sum(_obs_in_active))
         _n_dead = n_active - _n_obs_domain
 
+        # Diagnóstico padding/poda: el padding LATERAL adyacente a fuentes de borde es
+        # sensible → sobrevive la poda (es el que absorbe el artefacto). Solo el padding
+        # far-field ciego (sens~0) se descarta. Se mide explícitamente para el reporte.
+        _n_pad_active_pre = int(np.sum(_padding_active)) if _padding_active is not None else 0
+        _n_pad_pruned = (
+            int(np.sum(_padding_active & ~_obs_in_active))
+            if (_padding_active is not None and prune_observable_domain) else 0
+        )
+
         if prune_observable_domain and _n_dead > 0:
             print(
                 f"[MAG R-05] Observable Domain: {_n_obs_domain:,}/{n_active:,} "
                 f"({100.0 * _n_obs_domain / n_active:.1f}%) | "
                 f"Muertos (sens~0): {_n_dead:,} -> excluidos del solver"
             )
+            if _padding_active is not None:
+                print(
+                    f"[MAG R-05/R-02] Padding: {_n_pad_active_pre - _n_pad_pruned:,} "
+                    f"sensibles conservados | {_n_pad_pruned:,} far-field podados"
+                )
             G_active = G_active[:, _obs_in_active]
             y_c_active = y_c_active[_obs_in_active]
             _topo_sol = topo_depth[active_cells][_obs_in_active]
             if _anchor_active is not None:
                 _anchor_active = _anchor_active[_obs_in_active]
                 _anchor_value_active = _anchor_value_active[_obs_in_active]
+            if _padding_active is not None:
+                _padding_active = _padding_active[_obs_in_active]
             _n_active_sol = _n_obs_domain
         else:
             _topo_sol = topo_depth[active_cells]
@@ -1017,6 +1061,10 @@ class MagnetometryInversion:
         _free_mask = np.ones(_n_active_sol, dtype=bool)
         if _has_anchors:
             _free_mask &= ~_anchor_active
+        # El foco compacto (minimum-support) NO se aplica al padding: su rol es BC suave
+        # (susc→fondo), no concentrar cuerpo. Conserva smallness L2 absoluta padding_kappa·λ.
+        if _padding_active is not None:
+            _free_mask &= ~_padding_active
 
         from core.config import USE_PROJECTED_SOLVER as _USE_PGD_MAG
 
@@ -1030,6 +1078,8 @@ class MagnetometryInversion:
             if _has_anchors:
                 def _assemble_anchor(_ak):
                     _ws = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64)
+                    if _padding_active is not None:
+                        _ws = np.where(_padding_active, float(padding_kappa) * float(lambda_mag), _ws)
                     _ws = np.where(_anchor_active, float(_ak) * float(lambda_mag), _ws)
                     if focus_w is not None:
                         _ws = np.where(_free_mask, _ws * focus_w, _ws)
@@ -1063,8 +1113,28 @@ class MagnetometryInversion:
                 else:
                     _res = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
                     _mt, _ac = _res[0], float(_res[6])
+            elif _padding_active is not None:
+                # Padding sin anclajes (L2 o compact): la smallness ya NO es uniforme (las
+                # celdas de padding conservan padding_kappa·λ), así que se ensambla un bloque
+                # diferencial explícito diags(w)·Wz_inv en lugar del damp escalar. El foco
+                # compacto, si lo hay, se aplica SOLO a las celdas libres del core.
+                _ws = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64)
+                _ws = np.where(_padding_active, float(padding_kappa) * float(lambda_mag), _ws)
+                if focus_w is not None:
+                    _ws = np.where(_free_mask, _ws * focus_w, _ws)
+                _blk = sp.diags(_ws) @ Wz_inv
+                A_sys = sp.vstack([G_aug, _blk]).tocsr()
+                b_sys = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
+                if _use_bc_m_eff:
+                    from scipy.optimize import lsq_linear as _lsq_linear_m
+                    _bc = _lsq_linear_m(A_sys, b_sys, bounds=(_lb_tilde_m, _ub_tilde_m),
+                                        method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300)
+                    _mt, _ac = _bc.x, float('nan')
+                else:
+                    _res = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
+                    _mt, _ac = _res[0], float(_res[6])
             elif focus_w is None:
-                # L2 sin anclajes: damp escalar / λI (byte-idéntico al motor histórico).
+                # L2 sin anclajes ni padding: damp escalar / λI (byte-idéntico al histórico).
                 if _use_bc_m_eff:
                     from scipy.optimize import lsq_linear as _lsq_linear_m
                     _eye_lam_m = sp.eye(_n_active_sol, format='csr', dtype=np.float64) * float(lambda_mag)
@@ -1251,6 +1321,16 @@ class MagnetometryInversion:
             solver_meta["n_dead_voxels"] = int(_n_dead)
             solver_meta["n_observable"] = int(_n_obs_domain)
             solver_meta["observable_ratio"] = round(float(_n_obs_domain) / max(n_active, 1), 4)
+            # Padding de malla (R-02 magnético): BC física. n_padding_active = celdas de
+            # padding activas pre-poda; n_padding_pruned = far-field ciego descartado por
+            # R-05 (el padding lateral sensible se CONSERVA para absorber el artefacto).
+            solver_meta["padding_active"] = bool(padding_mask is not None)
+            solver_meta["n_padding_active"] = int(_n_pad_active_pre)
+            solver_meta["n_padding_pruned"] = int(_n_pad_pruned)
+            solver_meta["n_padding_solved"] = (
+                int(np.sum(_padding_active)) if _padding_active is not None else 0
+            )
+            solver_meta["padding_kappa"] = float(padding_kappa) if padding_mask is not None else None
 
         return susceptibility_full, relative_score_full, misfit_percent, normalized_sensitivity
 
