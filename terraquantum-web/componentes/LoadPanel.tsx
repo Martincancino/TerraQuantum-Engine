@@ -11,16 +11,27 @@
 import { useState } from "react";
 import { useAppStore } from "../store/useAppStore";
 import { loadModelFromPackage } from "../lib/terraquantum/packageInversion";
+import { errorViewFromString, type TQErrorView } from "../lib/terraquantum/errorContract";
+import ErrorModal from "./ErrorModal";
 
 export default function LoadPanel() {
   const displayResolutionFactor = useAppStore((s) => s.displayResolutionFactor);
 
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // FASE 23 — error accionable del backend (load-package): se normaliza al contrato
+  // TQErrorView y se muestra en ErrorModal (RESUMEN/DETALLES/ACCIÓN), no inline plano.
+  const [errorView, setErrorView] = useState<TQErrorView | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const reportError = (msg: string) => {
+    setErrorView(errorViewFromString(msg, "Error al cargar el modelo 3D desde el paquete."));
+    setModalOpen(true);
+  };
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setErrorMsg(null);
+    setErrorView(null);
+    setModalOpen(false);
     const f = e.target.files?.[0] ?? null;
     setFile(f);
   };
@@ -28,12 +39,13 @@ export default function LoadPanel() {
   const handleLoadModel = async () => {
     if (!file) return;
     setLoading(true);
-    setErrorMsg(null);
+    setErrorView(null);
+    setModalOpen(false);
     try {
       const res = await loadModelFromPackage(file, displayResolutionFactor);
-      if (!res.ok) setErrorMsg(res.error);
+      if (!res.ok) reportError(res.error);
     } catch (err) {
-      setErrorMsg(
+      reportError(
         err instanceof Error ? err.message : "Error inesperado al cargar el modelo 3D.",
       );
     } finally {
@@ -89,8 +101,25 @@ export default function LoadPanel() {
         </div>
       )}
 
-      {errorMsg && (
-        <p className="text-[10px] text-red-400 font-mono">{errorMsg}</p>
+      {errorView && (
+        <div className="rounded border border-red-900/50 bg-red-950/20 p-2 text-[10px] font-mono text-red-400">
+          <p className="mb-1 break-words">{errorView.userMessage}</p>
+          <button
+            type="button"
+            onClick={() => setModalOpen(true)}
+            className="underline underline-offset-2 hover:text-red-300"
+          >
+            Ver detalle y acción sugerida
+          </button>
+        </div>
+      )}
+
+      {errorView && modalOpen && (
+        <ErrorModal
+          error={errorView}
+          onClose={() => setModalOpen(false)}
+          onRetry={() => { setModalOpen(false); void handleLoadModel(); }}
+        />
       )}
     </div>
   );

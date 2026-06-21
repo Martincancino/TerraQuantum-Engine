@@ -3,7 +3,8 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { previewGravityCsv, GravityCsvInvertPayload, getExplorationBlockModelForRunWithArrow, CoordinateTransformData, SpatialReadiness, RegionalScalePreflight, GravityCorrectionReport, exportCleanCsv } from "../lib/terraquantum/frontendApi";
 import WarningBanner from "./WarningBanner";
-import { TQErrorView } from "../lib/terraquantum/errorContract";
+import ErrorModal from "./ErrorModal";
+import { TQErrorView, errorViewFromString } from "../lib/terraquantum/errorContract";
 import { useAppStore } from "../store/useAppStore";
 import GravityCorrectionWizard from "./GravityCorrectionWizard";
 import { type VoxelMineralModel, type VoxelData } from "../lib/terraQuantumGeology";
@@ -386,8 +387,12 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   const [cleanCsvLoading, setCleanCsvLoading] = useState(false);
   const [cleanCsvError, setCleanCsvError] = useState<string | null>(null);
   // FASE R3 — Generación del "paquete CSV" (CSV limpio + parámetros) para LoadPanel.
-  const [packageError, setPackageError] = useState<string | null>(null);
   const [packageMessage, setPackageMessage] = useState<string | null>(null);
+  // FASE 23 — error accionable del backend (build-package) normalizado a TQErrorView
+  // y mostrado en ErrorModal (RESUMEN/DETALLES/ACCIÓN) en vez de un mensaje plano.
+  const [packageErrorView, setPackageErrorView] = useState<TQErrorView | null>(null);
+  const [packageModalOpen, setPackageModalOpen] = useState(false);
+  const clearPackageError = () => { setPackageErrorView(null); setPackageModalOpen(false); };
   // FASE 19 — Contexto del survey (alimenta el ruteo multimodal / interpretación).
   const [expectedRock, setExpectedRock] = useState<string>("");
   const [expectedDepth, setExpectedDepth] = useState<string>("");
@@ -529,7 +534,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
       setDataType("gravity");
       setResult(null);
       setErrorMsg(null);
-      setPackageError(null);
+      clearPackageError();
       setPackageMessage(null);
       setGeoError(null);
       setUtmZone("");
@@ -548,7 +553,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
       setDataType("magnetic");
       setResult(null);
       setErrorMsg(null);
-      setPackageError(null);
+      clearPackageError();
       setPackageMessage(null);
       setGeoError(null);
       setCorrectedFile(null);
@@ -570,7 +575,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
     setLoading(true);
     setErrorMsg(null);
     setResult(null);
-    setPackageError(null);
+    clearPackageError();
     setPackageMessage(null);
 
     const effectiveFile = isMagnetic ? valFile : (correctedFile ?? file ?? valFile);
@@ -884,8 +889,15 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   // canónico: normaliza + decide combo multimodal + aplica gates) y lo descarga.
   // La vista 3D (LoadPanel) lo sube y el backend corre la inversión. No invierte
   // ni calcula física aquí: solo recolecta y manda los datos preparados.
+  // Normaliza y muestra un error del paso «generar paquete» en el ErrorModal.
+  const raisePackageError = (msg: string) => {
+    setPackageMessage(null);
+    setPackageErrorView(errorViewFromString(msg, "No se pudo generar el paquete CSV."));
+    setPackageModalOpen(true);
+  };
+
   const handleGeneratePackage = async () => {
-    setPackageError(null);
+    clearPackageError();
     setPackageMessage(null);
 
     const gravFile = correctedFile ?? file; // file = fileGravimetry
@@ -907,7 +919,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
       primaryFile = fileMagnetometry;
       pkgDataType = "magnetic";
     } else {
-      setPackageError(
+      raisePackageError(
         "Selecciona y valida un CSV (gravimetría y/o magnetometría) antes de generar el paquete.",
       );
       return;
@@ -915,11 +927,11 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
 
     const geoErr = validateCoords();
     if (geoErr) {
-      setPackageError(geoErr);
+      raisePackageError(geoErr);
       return;
     }
     if (utmZone.trim() && utmZoneError) {
-      setPackageError(utmZoneError);
+      raisePackageError(utmZoneError);
       return;
     }
 
@@ -983,8 +995,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
     });
 
     if (!res.ok) {
-      setPackageMessage(null);
-      setPackageError(res.error);
+      raisePackageError(res.error);
       return;
     }
 
@@ -1883,10 +1894,17 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
                   {packageMessage}
                 </p>
               )}
-              {packageError && (
-                <p className="text-[10px] text-red-400 font-mono text-center">
-                  {packageError}
-                </p>
+              {packageErrorView && (
+                <div className="rounded border border-red-900/50 bg-red-950/20 p-2 text-[10px] font-mono text-red-400 text-center">
+                  <p className="mb-1 break-words">{packageErrorView.userMessage}</p>
+                  <button
+                    type="button"
+                    onClick={() => setPackageModalOpen(true)}
+                    className="underline underline-offset-2 hover:text-red-300"
+                  >
+                    Ver detalle y acción sugerida
+                  </button>
+                </div>
               )}
               {result.spatial_readiness?.level === "NO_SPATIAL_DATA" && (
                 <p className="text-[10px] text-red-400 font-mono text-center">
@@ -1902,6 +1920,14 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
 
           </div>
         </div>
+      )}
+
+      {packageErrorView && packageModalOpen && (
+        <ErrorModal
+          error={packageErrorView}
+          onClose={() => setPackageModalOpen(false)}
+          onRetry={() => { setPackageModalOpen(false); void handleGeneratePackage(); }}
+        />
       )}
     </div>
   );

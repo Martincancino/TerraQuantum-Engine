@@ -119,6 +119,28 @@ export function parseBackendError(
   };
 }
 
+/**
+ * Conveniencia para los paneles cuyo cliente API devuelve `error` como STRING
+ * (buildPackage / loadPackage). El backend puede mandar el detail como contrato
+ * JSON serializado; intentamos parsearlo para recuperar los campos ricos (code,
+ * suggested_action, technical_details). Si es un string plano, degrada al error
+ * genérico accionable de `parseBackendError`. No inventa nada: solo normaliza.
+ */
+export function errorViewFromString(
+  message: string | null | undefined,
+  fallbackMessage?: string,
+): TQErrorView {
+  const raw = (message ?? "").trim();
+  if (raw.startsWith("{") || raw.startsWith("[")) {
+    try {
+      return parseBackendError(JSON.parse(raw), fallbackMessage ?? raw);
+    } catch {
+      /* no era JSON: cae al string plano */
+    }
+  }
+  return parseBackendError(raw, fallbackMessage);
+}
+
 /** Etiqueta y paleta por severidad (consumidas por el modal y el banner). */
 export const SEVERITY_META: Record<
   TQErrorSeverity,
