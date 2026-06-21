@@ -173,6 +173,20 @@ def load_raglan_reference(
     )
 
 
+def load_reference_cube(*, root: Optional[Path] = None):
+    """Devuelve (cube[nx,ny,nz], xc(Este), yc(Norte), zc(prof+abajo)) del modelo de
+    referencia, con el ordenamiento UBC validado. Para comparación estructural en el
+    dominio del modelo (no solo picos)."""
+    root = Path(root) if root else _DEFAULT_RAGLAN_ROOT
+    refdir = root / "data" / "Raglan_1997"
+    nx, ny, nz, x0, y0, hx, hy, hz = _read_ubc_msh_2d(refdir / "mesh.msh")
+    xc = x0 + (np.arange(nx) + 0.5) * hx
+    yc = y0 + (np.arange(ny) + 0.5) * hy
+    zc = (np.arange(nz) + 0.5) * hz
+    cube = _ref_cube(np.loadtxt(refdir / "maginv3d.sus"), nx, ny, nz)
+    return cube, xc, yc, zc
+
+
 def _read_ubc_msh_2d(path: Path):
     """Lee la malla UBC compacta de Raglan: `nx ny nz` / `x0 y0 z0` / `40*100.0` ...."""
     lines = Path(path).read_text().splitlines()

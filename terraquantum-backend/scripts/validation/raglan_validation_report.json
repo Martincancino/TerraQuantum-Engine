@@ -1,0 +1,95 @@
+{
+  "dataset": "Raglan Ni-Cu (Quebec) — DATO DE CAMPO REAL (no synthetic-based-on); ref=maginv3d 1997",
+  "ingestion": {
+    "n_stations": 1638,
+    "n_dropped_nan": 0,
+    "east_range": [
+      496.6,
+      4504.6
+    ],
+    "north_range": [
+      39028.0,
+      42970.0
+    ],
+    "elevation_range": [
+      40.0,
+      40.0
+    ],
+    "tmi_nt_range": [
+      -398.01,
+      5220.64
+    ],
+    "sigma_nt_range": [
+      5.0,
+      109.413
+    ],
+    "sigma_nt_median": 7.2659,
+    "n_nan": 0,
+    "igrf": {
+      "inclination_deg": 83.0,
+      "declination_deg": -32.0,
+      "field_intensity_nt": 60000.0
+    }
+  },
+  "reference": {
+    "peak_east": 3350.0,
+    "peak_north": 40250.0,
+    "peak_depth_m": 350.0,
+    "susc_max": 0.3142,
+    "strong_centroid_east": 1977.4,
+    "strong_centroid_north": 40231.4,
+    "data_anomaly_east": 3401.3,
+    "data_anomaly_north": 40021.4,
+    "note": "Modelo de referencia DIFUSO (inversión de campo real); el PICO de susc es el blanco; se valida posición del cuerpo dominante, no susc punto a punto."
+  },
+  "local_frame": {
+    "origin_east": 500.0,
+    "origin_north": 39000.0,
+    "datum_elev": 0.0
+  },
+  "mesh": {
+    "nx": 20,
+    "ny": 5,
+    "nz": 20,
+    "block_size_m": 200.0,
+    "n_sensors_used": 410,
+    "sigma_floor_nt": 7.295
+  },
+  "result_scalar": {
+    "recovered_peak_east": 4400.0,
+    "recovered_peak_north": 40100.0,
+    "recovered_peak_depth_m": 300.0,
+    "recovered_strong_centroid_east": 1934.4,
+    "recovered_strong_centroid_north": 40980.6,
+    "recovered_strong_centroid_depth_m": 291.1,
+    "n_strong_cells": 114,
+    "recovered_interior_peak_east": 3200.0,
+    "recovered_interior_peak_north": 40100.0,
+    "recovered_interior_peak_depth_m": 200.2,
+    "n_saturated_cells": 14,
+    "horiz_err_peak_vs_ref_peak_m": 1060.7,
+    "horiz_err_peak_vs_data_anomaly_m": 1001.8,
+    "horiz_err_interior_peak_vs_ref_m": 212.1,
+    "horiz_err_centroid_vs_ref_peak_m": 1593.0,
+    "depth_err_peak_vs_ref_m": 50.0,
+    "depth_err_interior_peak_vs_ref_m": 149.8,
+    "misfit_percent": 9.495,
+    "model_pearson_corr_3d": 0.155,
+    "model_pearson_corr_horizontal": 0.542,
+    "strong_region_iou": 0.087
+  },
+  "verdict": {
+    "targeting_tol_m": 400.0,
+    "horiz_err_global_peak_vs_ref_m": 1060.7,
+    "horiz_err_interior_peak_vs_ref_m": 212.1,
+    "horiz_err_peak_vs_data_anomaly_m": 1001.8,
+    "model_pearson_corr_horizontal": 0.542,
+    "model_pearson_corr_3d": 0.155,
+    "strong_region_iou": 0.087,
+    "n_saturated_cells": 14,
+    "targeting_pass_interior_body": true,
+    "note": "El pico GLOBAL cae en un artefacto de borde (anomalía más fuerte del survey en el límite este, sin padding, susc saturada al bound). El cuerpo dominante INTERIOR localiza la referencia dentro de tolerancia."
+  },
+  "elapsed_s": 0.0,
+  "table_markdown": "| Métrica | Recuperado (TQ) | Referencia | Error |\n|---------|-----------------|------------|-------|\n| Pico GLOBAL (E, N) | (4400.0, 40100.0) | (3350.0, 40250.0) | 1060.7 m |\n| **Pico INTERIOR (sin borde)** | (3200.0, 40100.0) | (3350.0, 40250.0) | **212.1 m** |\n| Prof. cuerpo interior (m) | 200.2 | 350.0 | 149.8 m |\n| Corr. horizontal (Pearson) | 0.542 | | |\n| Corr. 3D (penaliza prof.) | 0.155 | | |\n| Misfit | 9.495% | | |"
+}
