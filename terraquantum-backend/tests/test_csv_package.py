@@ -259,6 +259,45 @@ def test_e2e_gravity_with_boreholes():
     assert body["inversionResult"]
 
 
+def _enrich(client, files, params=None, data=None):
+    return client.post(
+        "/v2/gravity-import/enrich-package",
+        files=files, params=params or {}, data=data or {},
+    )
+
+
+def test_e2e_enrich_returns_summary_and_loadable_package():
+    """enrich-package devuelve resumen + un TQPKG que load-package puede invertir."""
+    c = _client()
+    re = _enrich(c, files={"file": ("grav.csv", _GRAV, "text/csv")},
+                 data={"config_json": json.dumps({"gravimeter_type": "scintrex_cg6"})})
+    assert re.status_code == 200, re.text
+    body = re.json()
+    summ = body["enrichment_summary"]
+    keys = {s["key"] for s in summ["steps"]}
+    assert {"coordinates", "elevation", "sigma", "quality"} <= keys
+    assert summ["nothing_fabricated"] is True
+    # El dato ya es bouguer_anomaly → no se re-corrige; σ derivado con piso del CG-6.
+    sigma = next(s for s in summ["steps"] if s["key"] == "sigma")
+    assert sigma["status"] == "derived"
+    # El package_text es un TQPKG válido y cargable.
+    parsed = parse_package_text(body["package_text"])
+    assert "sigma_mgal" in parsed.body_csv.splitlines()[0]
+    rl = _load(c, body["package_text"])
+    assert rl.status_code == 200, rl.text
+    assert rl.json()["status"] == "done"
+
+
+def test_e2e_enrich_magnetic_igrf_not_derivable():
+    c = _client()
+    re = _enrich(c, files={"file": ("mag.csv", _MAG, "text/csv")},
+                 params={"data_type": "magnetic", "strict": "false"})
+    assert re.status_code == 200, re.text
+    summ = re.json()["enrichment_summary"]
+    igrf = next(s for s in summ["steps"] if s["key"] == "igrf")
+    assert igrf["status"] == "not_derivable"
+
+
 def test_e2e_load_rejects_plain_csv():
     c = _client()
     r = _load(c, "lat,lon,bouguer_anomaly,unit,gravity_type\n-27.1,-69.3,5.0,mGal,bouguer_anomaly\n")

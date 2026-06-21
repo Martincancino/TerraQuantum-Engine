@@ -1086,6 +1086,192 @@ async def build_package(
                     pass
 
 
+@router_v2.post("/enrich-package")
+@limiter.limit("10/minute")
+async def enrich_package_endpoint(
+    request: Request,
+    file: UploadFile = File(...),
+    magnetic_file: Optional[UploadFile] = File(None),
+    data_type: str = Query("gravity"),
+    strict: bool = Query(False),
+    allow_g_raw: bool = Query(True),
+    enable_dem: bool = Query(True),
+    config_json: Optional[str] = Form(None),
+    boreholes_json: Optional[str] = Form(None),
+):
+    """Preparación con ENRIQUECIMIENTO: deriva con física real lo que falte y emite
+    un paquete TQPKG completo (descargable) + un resumen de qué calculó/agregó.
+
+    A diferencia de /build-package (que solo fusiona), este endpoint:
+      • completa elevación faltante muestreando un DEM (opentopo),
+      • reduce gravedad cruda a anomalía de Bouguer (GRS80/FAC/BC),
+      • reconstruye lat/lon desde UTM (pyproj),
+      • deriva σ por estación y reporta el score de calidad,
+      • resuelve el IGRF si el contexto lo provee.
+    Devuelve JSON {filename, package_text, enrichment_summary, plan, warnings,
+    needs_context}. Nada se fabrica: lo no-derivable queda fuera + bandera.
+    """
+    from fastapi.responses import JSONResponse
+    from services.csv_package_service import build_package_text, merge_config
+    from services.csv_enrichment_service import enrich_package
+    from services.multimodal_fusion_service import plan_multimodal
+    from core.errors import InsufficientDataError
+
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="File must end with .csv")
+    if data_type not in ("gravity", "magnetic"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"data_type inválido: '{data_type}'. Use 'gravity' o 'magnetic'.",
+        )
+
+    cfg_overrides: dict = {}
+    if config_json:
+        try:
+            cfg_overrides = json.loads(config_json) or {}
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"config_json inválido: {exc}")
+    boreholes: list = []
+    if boreholes_json:
+        try:
+            _bh = json.loads(boreholes_json)
+            if isinstance(_bh, dict):
+                _bh = _bh.get("boreholes") or _bh.get("intervals") or []
+            boreholes = list(_bh or [])
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"boreholes_json inválido: {exc}")
+
+    tmp_primary = Path(TMP_DIR) / f"{uuid.uuid4()}.csv"
+    tmp_mag: "Optional[Path]" = None
+    try:
+        content = await file.read()
+        if len(content) > CSV_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Archivo CSV demasiado grande. Máximo: {CSV_MAX_BYTES // 1048576} MB.",
+            )
+        with open(tmp_primary, "wb") as f:
+            f.write(content)
+
+        primary = import_gravity_csv_v1(
+            tmp_primary, strict=strict, allow_g_raw=allow_g_raw,
+            data_kind="magnetic" if data_type == "magnetic" else "gravity",
+        )
+        if primary.status != "ok":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "CSV_IMPORT_FAILED",
+                    "message": "No se pudo validar el CSV primario para enriquecer.",
+                    "errors": primary.errors,
+                    "warnings": primary.warnings,
+                },
+            )
+
+        magnetic_values: "Optional[list]" = None
+        has_magnetic = (data_type == "magnetic")
+        if magnetic_file is not None and data_type == "gravity":
+            if not magnetic_file.filename.lower().endswith(".csv"):
+                raise HTTPException(status_code=400, detail="magnetic_file must end with .csv")
+            tmp_mag = Path(TMP_DIR) / f"{uuid.uuid4()}.csv"
+            with open(tmp_mag, "wb") as f:
+                f.write(await magnetic_file.read())
+            mag_res = import_gravity_csv_v1(
+                tmp_mag, strict=False, allow_g_raw=True, data_kind="magnetic",
+            )
+            if mag_res.status != "ok":
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "MAGNETIC_CSV_IMPORT_FAILED",
+                        "message": "No se pudo validar el CSV magnético para el joint.",
+                        "errors": mag_res.errors,
+                    },
+                )
+            from services.csv_package_service import align_magnetic_to_stations
+            try:
+                magnetic_values = align_magnetic_to_stations(
+                    list(primary.observations or []), list(mag_res.observations or []),
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "MAGNETIC_NOT_COLOCATED", "message": str(exc)},
+                )
+            has_magnetic = True
+        elif data_type == "gravity":
+            _mv = getattr(primary, "magnetic_values", None)
+            if _mv and any(abs(float(v)) > 0 for v in _mv):
+                has_magnetic = True
+
+        cfg = merge_config(cfg_overrides)
+        cfg["data_type"] = data_type
+        cfg["strict"] = strict
+        cfg["allow_g_raw"] = allow_g_raw
+
+        # ── Pipeline de enriquecimiento (física real, nada fabricado) ─────────
+        enrichment = await enrich_package(
+            primary,
+            data_type=data_type,
+            config=cfg,
+            enable_dem=enable_dem,
+            reduction_density_gcc=float(cfg.get("density_reduction", 2.67) or 2.67),
+        )
+        # Los overrides de config derivados (IGRF, densidad de reducción) entran al
+        # encabezado del paquete para trazabilidad.
+        for k, v in enrichment.config_overrides.items():
+            if k in cfg:
+                cfg[k] = v
+
+        n_sensors = len(primary.observations or [])
+        try:
+            plan = plan_multimodal(
+                has_gravity=(data_type == "gravity"),
+                has_magnetic=has_magnetic,
+                has_borehole=bool(boreholes),
+                n_sensors=n_sensors,
+            ).to_dict()
+        except InsufficientDataError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "INSUFFICIENT_DATA", "message": str(exc)},
+            )
+
+        text = build_package_text(
+            primary_result=primary,
+            data_type=data_type,
+            config=cfg,
+            magnetic_values=magnetic_values,
+            boreholes=boreholes,
+            plan=plan,
+            override_elevations=enrichment.elevations,
+            override_sigmas=enrichment.sigmas,
+            override_latlon=enrichment.latlon,
+            override_g_mgal=enrichment.g_mgal,
+            gravity_type_out=enrichment.gravity_type_out,
+        )
+        out_name = f"{Path(file.filename).stem}_package.tqpkg.csv"
+        summary = enrichment.summary()
+        return JSONResponse(
+            content=sanitize_nan({
+                "filename": out_name,
+                "package_text": text,
+                "enrichment_summary": summary,
+                "plan": plan,
+                "warnings": list(primary.warnings or []),
+                "needs_context": summary["needs_context"],
+                "n_stations": n_sensors,
+            })
+        )
+    finally:
+        for _p in (tmp_primary, tmp_mag):
+            if _p and _p.exists():
+                try:
+                    os.remove(_p)
+                except Exception:
+                    pass
+
+
 @router_v2.post("/load-package")
 @limiter.limit("10/minute")
 async def load_package(

@@ -201,6 +201,11 @@ def build_package_text(
     magnetic_values: "Optional[list]" = None,
     boreholes: "Optional[list]" = None,
     plan: "Optional[dict]" = None,
+    override_elevations: "Optional[list]" = None,
+    override_sigmas: "Optional[list]" = None,
+    override_latlon: "Optional[list]" = None,
+    override_g_mgal: "Optional[list]" = None,
+    gravity_type_out: "Optional[str]" = None,
 ) -> str:
     """Ensambla el texto del paquete a partir de un GravityImportResult normalizado.
 
@@ -213,6 +218,13 @@ def build_package_text(
             magnetometría co-localizada). Ignorado en modo magnetic.
         boreholes: lista de intervalos de sondaje (dicts) para el header.
         plan: dict del plan multimodal (advisory) para el header.
+        override_elevations / override_sigmas / override_latlon / override_g_mgal:
+            columnas DERIVADAS por el pipeline de enriquecimiento (csv_enrichment_
+            service). Cuando se proveen (paralelas a las estaciones), tienen prioridad
+            sobre lo que trae `primary_result` (p.ej. elevación del DEM, σ del
+            gravímetro, gravedad reducida a Bouguer). None = usar el dato original.
+        gravity_type_out: tipo de gravedad de salida tras correcciones (p.ej.
+            "bouguer_anomaly") cuando `override_g_mgal` lleva la gravedad ya reducida.
 
     Returns:
         El paquete completo como texto (encabezado de comentarios + CSV).
@@ -221,9 +233,17 @@ def build_package_text(
     obs = list(primary_result.observations or [])
     n = len(obs)
 
-    elevs = _parallel(getattr(primary_result, "station_elevations", None), n)
-    sigmas = _parallel(getattr(primary_result, "station_uncertainties", None), n)
-    latlon = _parallel(getattr(primary_result, "raw_latlon_elev", None), n)
+    elevs = _parallel(override_elevations, n) or _parallel(
+        getattr(primary_result, "station_elevations", None), n
+    )
+    sigmas = _parallel(override_sigmas, n) or _parallel(
+        getattr(primary_result, "station_uncertainties", None), n
+    )
+    latlon = _parallel(override_latlon, n) or _parallel(
+        getattr(primary_result, "raw_latlon_elev", None), n
+    )
+    g_override = _parallel(override_g_mgal, n)
+    gravity_type_value = gravity_type_out or _GRAVITY_TYPE
 
     # Magnetometría co-localizada para joint: prioridad al argumento explícito,
     # luego a la columna magnética que el import haya capturado del CSV gravimétrico.
@@ -254,10 +274,12 @@ def build_package_text(
             # En modo magnético el import deja la TMI (nT) tal cual en el slot g.
             row = [f"ST{i + 1:04d}", _fmt(o.x_m), _fmt(o.y_m), _fmt(o.z_m), _fmt(o.g)]
         else:
-            # En modo gravedad el import almacena g en m/s² → ×1e5 para mGal.
+            # En modo gravedad el import almacena g en m/s² → ×1e5 para mGal. Si el
+            # enriquecimiento ya redujo la gravedad (Bouguer), se usa override_g_mgal.
+            g_val = g_override[i] if g_override is not None else o.g * 1e5
             row = [
                 f"ST{i + 1:04d}", _fmt(o.x_m), _fmt(o.y_m), _fmt(o.z_m),
-                _fmt(o.g * 1e5), _UNIT_MGAL, _GRAVITY_TYPE,
+                _fmt(g_val), _UNIT_MGAL, gravity_type_value,
             ]
             if sigmas is not None:
                 row.append(_fmt(sigmas[i]))
