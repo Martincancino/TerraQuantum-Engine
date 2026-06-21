@@ -1217,11 +1217,71 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         raise HTTPException(status_code=422, detail="cutoff_radius no puede ser menor que block_size.")
 
     nx, ny, nz, dx = params.nx, params.ny, params.nz, params.block_size
-    ix, iy, iz, x_c, y_c, z_c = build_voxel_grid(params)
+
+    # ── PRODUCCIÓN MAGNÉTICA: Tensor Mesh con Padding (paridad con gravedad) ───
+    # El motor magnético recibía la malla CORE pelada (sin padding) → una fuente
+    # fuerte en el borde del survey saturaba la pared del modelo (artefacto de borde
+    # medido en Raglan). Aquí se construye la misma malla extendida que ya usa el
+    # path gravimétrico (build_tensor_mesh_with_padding): un bloque core uniforme +
+    # n_pad capas geométricas por cara. El padding es la condición de frontera
+    # físicamente correcta de campos potenciales (la Tierra no termina en el borde).
+    #
+    # Criterio FÍSICO del padding (no la métrica Raglan): con n_pad=5 y pad_factor=1.3
+    # el padding extiende ~9 anchos de celda más allá de cada cara
+    # (Σ dx·1.3^k, k=0..4 ≈ 9.04·dx). Para el campo dipolar (decaimiento 1/r³) eso
+    # lleva la magnetización del borde a un nivel despreciable en la frontera externa.
+    # Se reusa el default de producción de gravedad (idéntico criterio, mismo build).
+    mesh         = build_tensor_mesh_with_padding(params)
+    x_c_full     = mesh["x_c"]
+    y_c_full     = mesh["y_c"]
+    z_c_full     = mesh["z_c"]
+    is_core      = mesh["is_core"]
+    hx, hy, hz   = mesh["hx"], mesh["hy"], mesh["hz"]
+    nx_total     = mesh["nx_total"]
+    ny_total     = mesh["ny_total"]
+    nz_total     = mesh["nz_total"]
+    # Arrays CORE (sin padding): índices y centros para voxels/parquet/anclajes.
+    ix  = mesh["ix_core"]
+    iy  = mesh["iy_core"]
+    iz  = mesh["iz_core"]
+    x_c = mesh["x_c_core"]
+    y_c = mesh["y_c_core"]
+    z_c = mesh["z_c_core"]
+    # Máscara de padding sobre la grilla COMPLETA (True = celda de padding).
+    _padding_mask_mag = ~is_core
 
     sensor_coords = np.array([[o.x_m, o.y_m, o.z_m] for o in obs], dtype=float)
     if not np.isfinite(sensor_coords).all():
         raise HTTPException(status_code=422, detail="Coordenadas de sensores con NaN/Inf.")
+
+    # ── Superficie DEM densa (anti-staircase), paridad con gravedad ───────────
+    # Reemplaza topography_elevations=None por la superficie suave interpolada desde
+    # sensor_elevations_masl (interpolación LINEAL dentro del convex hull, nearest en
+    # el padding). Fallback seguro a None si no hay elevaciones o falla la interpolación.
+    _topo_mag = None
+    _topo_used_mag = "flat"
+    _sensor_elevs_mag = getattr(params, "sensor_elevations_masl", None)
+    if _sensor_elevs_mag is not None and len(_sensor_elevs_mag) == len(obs):
+        try:
+            from core.geo_utils import interpolate_surface_depths as _interp_surface_mag
+            _elev_arr_mag = np.asarray(_sensor_elevs_mag, dtype=np.float64)
+            _max_elev_mag = float(np.max(_elev_arr_mag))
+            _surface_depths_mag = _max_elev_mag - _elev_arr_mag  # prof desde el punto más alto
+            _topo_mag, _surf_mode_mag = _interp_surface_mag(
+                sensor_coords[:, [0, 2]],                       # (x=Norte, z=Este)
+                _surface_depths_mag,
+                np.column_stack([x_c_full, z_c_full]),
+            )
+            _topo_used_mag = f"from_sensor_elevations_masl[{_surf_mode_mag}]"
+            _log.info(
+                "magnetic_topography_activated",
+                max_elev_masl=round(_max_elev_mag, 1),
+                surface_mode=_surf_mode_mag,
+            )
+        except Exception as _topo_exc_mag:
+            _log.warning("magnetic_topography_nonfatal", error=str(_topo_exc_mag))
+            _topo_mag = None
+            _topo_used_mag = "flat_fallback"
 
     _update("running", 0.2, "building_kernel", "Construyendo kernel dipolar TMI...")
     forward = MagnetometryForward(
@@ -1231,7 +1291,10 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         declination_deg=params.declination_deg,
         field_intensity_nt=params.field_intensity_nt,
     )
-    inversor = MagnetometryInversion(nx, ny, nz, dx)
+    # Inversor sobre la malla COMPLETA (core + padding) — el Laplaciano no-uniforme
+    # y la smallness diferencial de padding operan en esta grilla; los resultados se
+    # reducen al core (is_core) antes de construir voxels/parquet.
+    inversor = MagnetometryInversion(nx_total, ny_total, nz_total, dx)
 
     # ── FASE 20C: Magnetic Vector Inversion (MVI) — modo OPT-IN ───────────────
     # magnetization_model="vector" invierte el VECTOR M=(Mx,My,Mz) por celda y
@@ -1279,10 +1342,14 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
 
     if _use_remanence and _rem.inversion_mode == "total_field" and not _is_mvi:
         _update("running", 0.35, "building_kernel_rem", f"Construyendo kernel total J_ind + {_rem.q_ratio:.2f}·J_rem...")
-        # Necesitamos las celdas activas para construir el kernel; usamos grilla completa
-        # (sin topografía en este punto — topography_elevations=None → todas activas)
+        # El kernel de remanencia se construye sobre la grilla COMPLETA (core+padding):
+        # el solver lo usa como override y exige shape (n_obs, n_active). En el path de
+        # remanencia se invierte SIN topografía DEM (topography_elevations=None abajo) →
+        # n_active = todas las celdas de la malla extendida, así que el kernel debe
+        # cubrirlas todas. El padding sigue activo vía padding_mask (BC física). Combinar
+        # remanencia Q-ratio con DEM denso queda fuera de alcance (caso raro; usar MVI).
         _override_kernel = forward.build_kernel_with_remanence(
-            x_c, y_c, z_c,
+            x_c_full, y_c_full, z_c_full,
             sensor_coords,
             q_ratio=_rem.q_ratio,
             inc_rem_deg=_rem.remanence_inc_deg,
@@ -1295,9 +1362,9 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             _q_sweep_result = sweep_q_ratio(
                 forward=forward,
                 inversor=inversor,
-                x_c_act=x_c,
-                y_c_act=y_c,
-                z_c_act=z_c,
+                x_c_act=x_c_full,
+                y_c_act=y_c_full,
+                z_c_act=z_c_full,
                 sensor_coords=sensor_coords,
                 d_observed=mag,
                 inc_rem_deg=_rem.remanence_inc_deg,
@@ -1312,18 +1379,26 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     # ── FASE 20C: campos de dirección MVI (None en modo escalar) ──────────────
     _mvi_inc_full = None
     _mvi_dec_full = None
+    # Topografía DEM para el solver: en el path de remanencia (override_kernel
+    # construido sobre TODAS las celdas) se invierte sin topografía para que n_active
+    # coincida con el kernel; en el path inducido/MVI se usa la superficie DEM densa.
+    _topo_for_solve = None if _override_kernel is not None else _topo_mag
+
     if _is_mvi:
         _update("running", 0.4, "solving_mvi", "Resolviendo MVI (vector de magnetización, modelo 3N) LSQR...")
         _mvi = inversor.solve_mvi_inversion_lsqr(
             d_observed=mag,
-            y_c=y_c,
+            y_c=y_c_full,
             forward_model=forward,
             sensor_coords=sensor_coords,
-            x_c=x_c,
-            z_c=z_c,
+            x_c=x_c_full,
+            z_c=z_c_full,
             lambda_mag=(params.lambda_mag if params.lambda_mag > 0 else 1e-3),
             alpha_spatial=params.alpha_spatial,
-            topography_elevations=None,
+            topography_elevations=_topo_mag,
+            hx=hx, hy=hy, hz=hz,                       # Tensor mesh (Laplaciano no-uniforme)
+            padding_mask=_padding_mask_mag,            # R-02: BC física del padding (3C)
+            padding_kappa=float(getattr(params, "padding_kappa", 1e5)),
             detect_outliers=bool(getattr(params, "robust_sigma", True)),
             solver_meta=solver_meta,
         )
@@ -1339,16 +1414,19 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         _update("running", 0.4, "solving_lsqr", "Resolviendo inversión magnética LSQR + Tikhonov...")
         susc_full, score_full, misfit_percent, sens_full = inversor.solve_magnetic_inversion_lsqr(
             d_observed=mag,
-            y_c=y_c,
+            y_c=y_c_full,
             lambda_mag=(params.lambda_mag if params.lambda_mag > 0 else 1e-4),
             alpha_spatial=params.alpha_spatial,
-            topography_elevations=None,
+            topography_elevations=_topo_for_solve,
             sensor_coords=sensor_coords,
-            x_c=x_c,
-            z_c=z_c,
+            x_c=x_c_full,
+            z_c=z_c_full,
             forward_model=forward,
             susc_min=params.susc_min,
             susc_max=params.susc_max,
+            hx=hx, hy=hy, hz=hz,                       # Tensor mesh (Laplaciano no-uniforme)
+            padding_mask=_padding_mask_mag,            # R-02: BC física del padding
+            padding_kappa=float(getattr(params, "padding_kappa", 1e5)),
             boreholes=boreholes_arr,
             detect_outliers=bool(getattr(params, "robust_sigma", True)),  # FASE 20B Tarea 4
             auto_kappa=bool(getattr(params, "auto_kappa", True)),         # FASE 20B Tarea 5
@@ -1356,6 +1434,17 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             solver_meta=solver_meta,
             override_kernel=_override_kernel,
         )
+
+    # ── Reducir las salidas de la malla COMPLETA al CORE (descartar padding) ──
+    # El solver devuelve arrays de longitud total_padded; voxels/parquet/best_target
+    # operan sobre el core (mismo orden Fortran que ix/iy/iz/x_c). El padding cumplió
+    # su rol de BC física y se descarta del modelo reportado (paridad con gravedad).
+    susc_full  = susc_full[is_core]
+    score_full = score_full[is_core]
+    sens_full  = sens_full[is_core]
+    if _is_mvi:
+        _mvi_inc_full = _mvi_inc_full[is_core]
+        _mvi_dec_full = _mvi_dec_full[is_core]
 
     _update("running", 0.85, "building_payload", "Construyendo payload de susceptibilidad...")
 
@@ -1460,6 +1549,16 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             "n_sat_lower": solver_meta.get("n_sat_lower"),
             "n_sat_upper": solver_meta.get("n_sat_upper"),
             "n_anchored_voxels": solver_meta.get("n_anchored_voxels"),
+        },
+        # ── Malla extendida con padding (BC física) + superficie DEM densa ────────
+        "mesh": {
+            "nx_total": int(nx_total), "ny_total": int(ny_total), "nz_total": int(nz_total),
+            "n_core": int(nx * ny * nz),
+            "n_padding": int(np.sum(_padding_mask_mag)),
+            "padding_active": bool(solver_meta.get("padding_active", False)),
+            "n_padding_solved": solver_meta.get("n_padding_solved"),
+            "padding_kappa": solver_meta.get("padding_kappa"),
+            "topography": _topo_used_mag,
         },
         "observation_count": int(len(mag)),
         "tmi_min_nt": float(np.min(mag)),

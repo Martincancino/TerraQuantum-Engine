@@ -1489,6 +1489,17 @@ class MagnetometryInversion:
         noise_pct=0.02,
         depth_beta: float = 1.5,
         hx=None, hy=None, hz=None,
+        # ── Padding de malla (condición de frontera física) — port R-02 escalar ──
+        # padding_mask: bool (total_voxels,) True en celdas de padding de la malla
+        # extendida. Default None = comportamiento histórico EXACTO (sin padding,
+        # smallness uniforme damp=lambda_mag, byte-idéntico). Cuando se provee, las
+        # 3 componentes de M en las celdas de padding conservan smallness ABSOLUTA
+        # padding_kappa·lambda_mag → ancladas al fondo (M≈0); el Laplaciano no-uniforme
+        # (hx/hy/hz) usa el padding como BC suave (M→0 hacia el borde), evitando que
+        # una fuente en el límite del survey sature las celdas del core (artefacto de
+        # borde medido en Raglan). Mismo diseño que solve_magnetic_inversion_lsqr.
+        padding_mask: Optional[np.ndarray] = None,
+        padding_kappa: float = 1e5,
         detect_outliers: bool = False,
         solver_meta: Optional[dict] = None,
     ):
@@ -1612,12 +1623,47 @@ class MagnetometryInversion:
         G_aug = sp.vstack([G_data, L_block]).tocsr()
         d_aug = np.concatenate([d_w, np.zeros(3 * n_active, dtype=np.float64)])
 
+        # ── Padding de malla (R-02 MVI): smallness diferencial por componente ──
+        # Sin padding (default) → damp escalar λ sobre m̃ (byte-idéntico histórico).
+        # Con padding → bloque smallness explícito diags(ws)·Wz_inv por las 3
+        # componentes, con ws=padding_kappa·λ en celdas de padding y λ en el core.
+        # Penaliza la magnetización FÍSICA M (vía Wz_inv) hacia 0 en el padding,
+        # idéntico al diseño del motor escalar (BC m→fondo, absorbe el far-field).
+        _padding_active = None
+        if padding_mask is not None:
+            _pm = np.asarray(padding_mask, dtype=bool)
+            if _pm.shape[0] != self.total_voxels:
+                raise ValueError(
+                    f"padding_mask debe tener longitud {self.total_voxels} "
+                    f"(total_voxels), got {_pm.shape[0]}."
+                )
+            _padding_active = _pm[active_cells]   # shape=(n_active,)
+            print(
+                f"[MAG MVI R-02] Padding diferencial 3C: "
+                f"core={int(np.sum(~_padding_active)):,} | "
+                f"padding={int(np.sum(_padding_active)):,} | kappa={padding_kappa:.0e}"
+            )
+
         print(
             f"[MAG MVI] Ejecutando LSQR 3N. lambda_mag={lambda_mag:.2e} | "
             f"lambda_spatial={lambda_spatial:.2e} | depth_beta={depth_beta}"
         )
-        _res = lsqr(G_aug, d_aug, damp=float(lambda_mag), iter_lim=800,
-                    atol=1e-8, btol=1e-8, show=False)
+        if _padding_active is not None:
+            _ws_cell = np.where(
+                _padding_active,
+                float(padding_kappa) * float(lambda_mag),
+                float(lambda_mag),
+            )                                       # (n_active,)
+            _ws3 = np.concatenate([_ws_cell, _ws_cell, _ws_cell])   # (3N,)
+            _Wz_inv3 = sp.block_diag([Wz_inv, Wz_inv, Wz_inv]).tocsr()
+            _small_blk = sp.diags(_ws3) @ _Wz_inv3
+            _G_solve = sp.vstack([G_aug, _small_blk]).tocsr()
+            _d_solve = np.concatenate([d_aug, np.zeros(3 * n_active, dtype=np.float64)])
+            _res = lsqr(_G_solve, _d_solve, damp=0.0, iter_lim=800,
+                        atol=1e-8, btol=1e-8, show=False)
+        else:
+            _res = lsqr(G_aug, d_aug, damp=float(lambda_mag), iter_lim=800,
+                        atol=1e-8, btol=1e-8, show=False)
         m_tilde = _res[0]
         _acond = float(_res[6])
 
@@ -1683,6 +1729,13 @@ class MagnetometryInversion:
             solver_meta["detect_outliers"] = bool(detect_outliers)
             solver_meta["n_outliers"] = int(np.sum(_is_outlier))
             solver_meta["field_unit_vector"] = [float(v) for v in forward_model.f_hat]
+            solver_meta["padding_active"] = bool(_padding_active is not None)
+            solver_meta["n_padding_solved"] = (
+                int(np.sum(_padding_active)) if _padding_active is not None else 0
+            )
+            solver_meta["padding_kappa"] = (
+                float(padding_kappa) if _padding_active is not None else None
+            )
 
         return {
             "amplitude_full": amplitude_full,

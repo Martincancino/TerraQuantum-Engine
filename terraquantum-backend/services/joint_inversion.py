@@ -370,6 +370,17 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         raise HTTPException(status_code=422, detail="cutoff_radius no puede ser menor que block_size.")
 
     # ── Malla core común a ambas físicas ──────────────────────────────────────
+    # NOTA DE ALCANCE (padding): a diferencia de los paths gravimétrico y magnético
+    # AISLADOS de producción (que usan build_tensor_mesh_with_padding como BC física),
+    # la inversión CONJUNTA opera sobre la malla CORE pelada para AMBAS físicas. El
+    # acoplamiento cross-gradient exige celdas co-localizadas en una malla compartida
+    # y operadores de gradiente (build_gradient_operators) definidos sobre esas mismas
+    # dimensiones; extender el padding aquí obliga a ampliar de forma consistente la
+    # malla compartida, los operadores de gradiente y el bloque cross-gradient en las
+    # dos físicas a la vez (cambio arquitectónico, no un cableado local). Por eso NO
+    # es una regresión específica del magnético: el gravimétrico conjunto TAMPOCO lleva
+    # padding por el mismo motivo de diseño. El padding en joint queda DIFERIDO; el
+    # artefacto de borde se mitiga hoy en los motores aislados (grav/mag de producción).
     nx, ny, nz, dx = params.nx, params.ny, params.nz, params.block_size
     ix, iy, iz, x_c, y_c, z_c = build_voxel_grid(params)
     nC = nx * ny * nz

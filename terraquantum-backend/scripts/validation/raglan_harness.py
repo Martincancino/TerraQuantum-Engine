@@ -151,6 +151,109 @@ def invert_magnetic(survey: RaglanMagneticSurvey, fr: LocalFrame, use_padding: b
             int(sensors.shape[0]), sigma_floor, meta)
 
 
+def invert_via_production(survey: RaglanMagneticSurvey, fr: LocalFrame):
+    """Inversión de Raglan a través del PATH DE PRODUCCIÓN (run_geophysics_inversion).
+
+    A diferencia de invert_magnetic (que llama al motor directo), esto construye un
+    GeophysicsInvertInput y lo rutea por run_geophysics_inversion → run_magnetic_inversion,
+    el MISMO camino que dispara /load-package en la app. Confirma que el padding (BC física)
+    y la malla extendida que ahora cablea producción reducen el artefacto de borde igual que
+    el motor. Devuelve el modelo en la grilla CORE reconstruido desde los vóxeles del payload.
+
+    NOTA honesta: producción usa σ adaptivo (no el Std real por estación del harness aislado),
+    así que los números no son byte-idénticos al modo headline; lo que se valida es que el
+    artefacto de borde se reduce (saturación/centroide fuerte/pico interior), no la igualdad.
+    """
+    from schemas.geophysics_schema import GeophysicsInvertInput, GravityObservation
+    from services.geophysics_service import run_geophysics_inversion, build_voxel_grid
+
+    (e, n, z, tmi, sig), _ = _subsample(
+        [survey.east, survey.north, survey.elevation, survey.tmi_nt, survey.sigma_nt],
+        SENSOR_STRIDE,
+    )
+    sensors = fr.sensors(e, n, z)   # x=Norte, y=prof, z=Este
+    obs = [
+        GravityObservation(x_m=float(sx), y_m=float(sy), z_m=float(sz), g=0.0)
+        for sx, sy, sz in sensors
+    ]
+    inp = GeophysicsInvertInput(
+        project_id=None, run_id=None,
+        depth=int(NY * BLOCK_SIZE), nir=50, fe=30, region="Raglan", lat="61.7", lon="-73.7",
+        nx=NX, ny=NY, nz=NZ, block_size=BLOCK_SIZE, cutoff_radius=CUTOFF,
+        lambda_mag=LAMBDA_MAG, alpha_spatial=1.0,
+        observations=obs,
+        magnetic_nt=[float(t) for t in tmi],
+        inclination_deg=survey.inclination_deg,
+        declination_deg=survey.declination_deg,
+        field_intensity_nt=survey.field_intensity_nt,
+        susc_min=SUSC_MIN, susc_max=SUSC_MAX,
+        regularization_norm="compact",          # paridad con el harness aislado
+        robust_sigma=False,                      # las anomalías fuertes son SEÑAL, no outliers
+    )
+    res = run_geophysics_inversion(inp)
+    mesh_rep = res.get("report", {}).get("mesh", {})
+
+    # Reconstruir la grilla CORE completa desde los vóxeles del payload (Fortran F-order).
+    ix0, iy0, iz0, x_c, y_c, z_c = build_voxel_grid(inp)
+    chi = np.zeros(NX * NY * NZ, dtype=np.float64)
+    for v in res.get("voxels", []):
+        j = int(v["ix"]) + NX * (int(v["iy"]) + NY * int(v["iz"]))   # F-order index
+        chi[j] = float(v.get("susceptibility", 0.0) or 0.0)
+    misfit = res.get("misfit_error_percent")
+    return chi, (None if misfit is None else float(misfit)), x_c, y_c, z_c, int(sensors.shape[0]), mesh_rep
+
+
+def run_via_production() -> dict:
+    """PASO 5: corre Raglan por el PATH DE PRODUCCIÓN y compara el artefacto de borde
+    contra el baseline SIN padding guardado (raglan_recovered_grid_nopad.npz)."""
+    t0 = time.time()
+    survey = load_raglan_magnetic()
+    ref = load_raglan_reference(survey=survey)
+    fr = build_raglan_frame(survey)
+    _dir = Path(__file__).resolve().parent
+
+    print("\n[PRODUCCIÓN] Inversión Raglan vía run_geophysics_inversion (path de /load-package)...")
+    chi, misfit, x_c, y_c, z_c, n_sensors, mesh_rep = invert_via_production(survey, fr)
+    geom_prod = _evaluate(chi, x_c, y_c, z_c, ref, fr, misfit)
+
+    # Baseline SIN padding (modelo guardado de la validación previa del motor).
+    geom_nopad = None
+    nopad_path = _dir / "raglan_recovered_grid_nopad.npz"
+    if nopad_path.exists():
+        d = np.load(nopad_path)
+        geom_nopad = _evaluate(d["chi"], d["x_c"], d["y_c"], d["z_c"], ref, fr, None)
+
+    report = {
+        "dataset": "Raglan Ni-Cu — VÍA PATH DE PRODUCCIÓN (run_geophysics_inversion)",
+        "production_mesh": mesh_rep,
+        "n_sensors_used": n_sensors,
+        "result_production_with_padding": geom_prod,
+        "baseline_without_padding_engine": geom_nopad,
+        "padding_comparison": _build_comparison(geom_prod, geom_nopad, ref) if geom_nopad else None,
+        "elapsed_s": round(time.time() - t0, 1),
+    }
+    out = _dir / "raglan_production_validation_report.json"
+    out.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    print("\n" + "=" * 80)
+    print("RAGLAN — VÍA PRODUCCIÓN (padding cableado en run_magnetic_inversion)")
+    print("=" * 80)
+    print(f"\nMalla producción: {mesh_rep}")
+    print(f"Pico GLOBAL (E,N): ({geom_prod.get('recovered_peak_east')}, {geom_prod.get('recovered_peak_north')}) "
+          f"| err vs ref={geom_prod.get('horiz_err_peak_vs_ref_peak_m')}m")
+    print(f"Pico INTERIOR vs ref: {geom_prod.get('horiz_err_interior_peak_vs_ref_m')}m")
+    print(f"Strong-centroid vs ref peak: {geom_prod.get('horiz_err_centroid_vs_ref_peak_m')}m")
+    print(f"Celdas saturadas: {geom_prod.get('n_saturated_cells')} | n_strong={geom_prod.get('n_strong_cells')}")
+    print(f"Misfit: {geom_prod.get('misfit_percent')}%")
+    if report["padding_comparison"]:
+        c = report["padding_comparison"]
+        print(f"\nComparación (baseline SIN padding del motor → producción CON padding):")
+        print(f"  Pico GLOBAL err vs ref: {c['without_padding']['horiz_err_global_peak_vs_ref_m']}m "
+              f"→ {c['with_padding']['horiz_err_global_peak_vs_ref_m']}m")
+        print(f"  Saturadas: {c['without_padding']['n_saturated_cells']} → {c['with_padding']['n_saturated_cells']}")
+    print(f"\nReporte: {out} | {report['elapsed_s']}s")
+    return report
+
+
 def _corr(a, b):
     a = np.asarray(a, float).ravel(); b = np.asarray(b, float).ravel()
     if a.size < 3 or a.std() == 0 or b.std() == 0:
@@ -446,6 +549,9 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+    if "--via-production" in sys.argv:
+        run_via_production()
+        return
     from_saved = "--from-saved" in sys.argv
     compare = "--no-compare" not in sys.argv
     report = run(from_saved=from_saved, compare=compare)
