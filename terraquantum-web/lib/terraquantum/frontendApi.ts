@@ -1326,6 +1326,9 @@ export type BuildPackageConfig = {
   inclination_deg?: number;
   declination_deg?: number;
   field_intensity_nt?: number;
+  // Fecha del survey (año o ISO, ej. "2016" o "2016-07") — el backend deriva el
+  // IGRF offline (IGRF-14) desde la ubicación + esta fecha.
+  survey_date?: string | null;
   susc_min?: number;
   susc_max?: number;
   padding_kappa?: number;

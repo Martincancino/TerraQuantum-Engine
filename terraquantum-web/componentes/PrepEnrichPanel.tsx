@@ -52,6 +52,7 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
 
   const [utmZone, setUtmZone] = useState("");
   const [gravimeterType, setGravimeterType] = useState("unknown");
+  const [surveyDate, setSurveyDate] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,6 +99,7 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
       region: "norte_chile",
       gravimeter_type: gravimeterType,
       utm_zone: utmZone.trim() ? utmZone.trim().toUpperCase() : null,
+      survey_date: surveyDate.trim() || null,
     };
 
     setLoading(true);
@@ -209,6 +211,21 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
             </select>
             <p className="mt-1 text-[10px] font-mono text-neutral-600">
               Fija el piso de ruido (σ) por estación.
+            </p>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-1">
+              Fecha del survey
+            </label>
+            <input
+              type="text"
+              value={surveyDate}
+              onChange={(e) => setSurveyDate(e.target.value)}
+              placeholder="ej. 2016 o 2016-07"
+              className="w-full bg-black/60 border border-neutral-700 rounded px-3 py-2 text-xs text-neutral-200 placeholder:text-neutral-600"
+            />
+            <p className="mt-1 text-[10px] font-mono text-neutral-600">
+              Para derivar el IGRF offline (magnetometría) en la ubicación + fecha.
             </p>
           </div>
         </div>
@@ -377,6 +394,8 @@ function ResultCard({
 
 const NEEDS_CONTEXT_LABEL: Record<string, string> = {
   utm_zone: "Zona UTM del survey (para georreferenciar y muestrear el DEM).",
+  survey_date:
+    "Fecha del survey (año o ISO) — para derivar el IGRF offline en magnetometría.",
   opentopo_api_key:
     "Clave OPENTOPO_API_KEY en el backend (para descargar el DEM y completar la elevación).",
 };
