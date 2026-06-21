@@ -66,6 +66,7 @@ _CONFIG_DEFAULTS: dict = {
     "inclination_deg": -30.0,
     "declination_deg": 2.0,
     "field_intensity_nt": 23500.0,
+    "survey_date": None,  # fecha del survey (año o ISO) para derivar el IGRF offline
     "susc_min": 0.0,
     "susc_max": 1.0,
     "padding_kappa": 1e5,
