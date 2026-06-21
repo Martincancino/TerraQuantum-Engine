@@ -236,10 +236,11 @@ def derive_sigmas_mgal(
     sigmas = np.maximum(floor, float(noise_pct) * g)
     known = gt in GRAVIMETER_NOISE_FLOOR and gt != "unknown"
     method = f"gravimeter_floor:{gt}" if known else "adaptive_floor"
-    detail = (
-        f"σ = max({floor:.3g} mGal piso {gt}, {noise_pct:.0%}·|g|); "
+    rango = (
         f"rango {sigmas.min():.4g}–{sigmas.max():.4g} mGal"
+        if sigmas.size else "sin estaciones"
     )
+    detail = f"σ = max({floor:.3g} mGal piso {gt}, {noise_pct:.0%}·|g|); {rango}"
     return [float(x) for x in sigmas], method, detail
 
 
