@@ -1222,6 +1222,24 @@ async def load_package(
             if len(_se_fin) == len(_se) and (max(_se_fin) - min(_se_fin)) >= 10.0:
                 sensor_elevs = [float(v) for v in _se]
 
+        # Fase 7B — params avanzados (objetos anidados en el encabezado del paquete).
+        _pgi_parsed = None
+        _pgi_obj = cfg.get("pgi_params")
+        if isinstance(_pgi_obj, dict):
+            from schemas.geophysics_schema import PgiParams as _PgiParams
+            try:
+                _pgi_parsed = _PgiParams(**_pgi_obj)
+            except Exception:
+                _pgi_parsed = None
+        _rem_parsed = None
+        _rem_obj = cfg.get("remanence")
+        if isinstance(_rem_obj, dict):
+            from schemas.geophysics_schema import MagneticRemanenceParams as _RemParams
+            try:
+                _rem_parsed = _RemParams(**_rem_obj)
+            except Exception:
+                _rem_parsed = None
+
         try:
             invert_input = GeophysicsInvertInput(
                 project_id=project_id,
@@ -1253,6 +1271,8 @@ async def load_package(
                 susc_min=float(cfg.get("susc_min", 0.0)),
                 susc_max=float(cfg.get("susc_max", 1.0)),
                 boreholes=boreholes_parsed,
+                pgi_params=_pgi_parsed,
+                remanence=_rem_parsed,
                 padding_kappa=float(cfg.get("padding_kappa", 1e5)),
                 anchor_kappa=float(cfg.get("anchor_kappa", 1e4)),
                 auto_kappa=bool(cfg.get("auto_kappa", True)),

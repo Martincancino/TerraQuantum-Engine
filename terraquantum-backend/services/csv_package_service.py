@@ -76,6 +76,9 @@ _CONFIG_DEFAULTS: dict = {
     "utm_zone": None,
     "acknowledge_spatial_risk": False,
     "acknowledge_regional_scale": False,
+    # Fase 7B — params avanzados (objetos anidados; None = desactivado).
+    "pgi_params": None,
+    "remanence": None,
 }
 
 
