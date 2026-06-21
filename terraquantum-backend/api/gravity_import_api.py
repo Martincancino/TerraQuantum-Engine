@@ -968,22 +968,78 @@ async def build_package(
                     },
                 )
             mag_obs = list(mag_res.observations or [])
-            if len(mag_obs) != len(primary.observations or []):
+            # Alineación por COORDENADA (no por índice): tolera reordenamiento y
+            # estaciones magnéticas sobrantes; exige co-localización real (no
+            # interpola). Lanza ValueError si alguna estación grav queda sin mag.
+            from services.csv_package_service import align_magnetic_to_stations
+            try:
+                magnetic_values = align_magnetic_to_stations(
+                    list(primary.observations or []), mag_obs,
+                )
+            except ValueError as exc:
                 raise HTTPException(
                     status_code=422,
-                    detail=(
-                        "El CSV magnético debe ser CO-LOCALIZADO: mismo número de "
-                        f"estaciones que el gravimétrico ({len(mag_obs)} vs "
-                        f"{len(primary.observations or [])})."
-                    ),
+                    detail={"error": "MAGNETIC_NOT_COLOCATED", "message": str(exc)},
                 )
-            magnetic_values = [float(o.g) for o in mag_obs]
             has_magnetic = True
         elif data_type == "gravity":
             # Magnetometría co-localizada embebida en el propio CSV gravimétrico.
             _mv = getattr(primary, "magnetic_values", None)
             if _mv and any(abs(float(v)) > 0 for v in _mv):
                 has_magnetic = True
+
+        cfg = merge_config(cfg_overrides)
+        cfg["data_type"] = data_type
+        cfg["strict"] = strict
+        cfg["allow_g_raw"] = allow_g_raw
+
+        # ── Gates al ENSAMBLAR (fail-fast donde el usuario prepara) ───────────
+        # Mismo contrato que /invert: bloquea datos sin referencia espacial o de
+        # escala regional. Garantiza que cualquier paquete que EXISTE ya pasó los
+        # gates, de modo que /load-package puede confiar en él sin re-validar.
+        _eff_utm = _effective_utm_zone(cfg.get("utm_zone"), primary)
+        _cs_detected = (
+            getattr(primary.coordinate_transform, "input_coordinate_system", None)
+            if primary.coordinate_transform else None
+        )
+        _anchor_lat = parse_geo_coord(str(cfg.get("lat") or ""), -90.0, 90.0)
+        _anchor_lon = parse_geo_coord(str(cfg.get("lon") or ""), -180.0, 180.0)
+        spatial_readiness = _compute_spatial_readiness_for_import(
+            primary.csv_analysis,
+            coordinate_system_detected=_cs_detected,
+            utm_zone=_eff_utm,
+            anchor_lat=_anchor_lat,
+            anchor_lon=_anchor_lon,
+        )
+        _enforce_spatial_readiness_gate(
+            spatial_readiness,
+            acknowledge_spatial_risk=bool(cfg.get("acknowledge_spatial_risk", False)),
+            gravity_type=getattr(primary.import_metadata, "gravity_type", None),
+        )
+        regional_preflight = build_preflight_from_import_result(primary)
+        if regional_preflight.scale_class == "TOO_LARGE_SINGLE_INVERSION":
+            _raise_regional_scale_gate(
+                regional_preflight,
+                message=(
+                    "El survey excede el tamaño para una inversión única: la grilla "
+                    "necesaria supera los límites por dimensión. Use un subset local "
+                    "o procese por tiles."
+                ),
+                required_action=regional_preflight.recommended_action,
+            )
+        if (
+            regional_preflight.scale_class == "REGIONAL_SCALE"
+            and regional_preflight.requires_user_acknowledgement
+            and not bool(cfg.get("acknowledge_regional_scale", False))
+        ):
+            _raise_regional_scale_gate(
+                regional_preflight,
+                message=(
+                    "El dataset corresponde a escala regional. Para empaquetar debe "
+                    "aceptar explícitamente las limitaciones de escala."
+                ),
+                required_action="Marcar acknowledge_regional_scale=true o usar un subset local.",
+            )
 
         n_sensors = len(primary.observations or [])
         has_gravity = (data_type == "gravity")
@@ -999,11 +1055,9 @@ async def build_package(
                 status_code=422,
                 detail={"error": "INSUFFICIENT_DATA", "message": str(exc)},
             )
-
-        cfg = merge_config(cfg_overrides)
-        cfg["data_type"] = data_type
-        cfg["strict"] = strict
-        cfg["allow_g_raw"] = allow_g_raw
+        # Adjunta el veredicto de gates al plan (transparencia en el encabezado).
+        plan["spatial_readiness_level"] = spatial_readiness.level
+        plan["regional_scale_class"] = regional_preflight.scale_class
 
         text = build_package_text(
             primary_result=primary,
@@ -1069,6 +1123,16 @@ async def load_package(
 
     cfg = parsed.config
     is_magnetic = (parsed.data_type == "magnetic")
+
+    # Fix R4 — IDs auto-generados si el cliente no los provee, para que el block
+    # model SIEMPRE se persista (parquet) y el visor 3D pueda recuperarlo. El
+    # cliente puede pasar los suyos para controlar el run.
+    _stem = Path(file.filename or "package").stem.lower()
+    _stem = "".join(c if c.isalnum() else "_" for c in _stem).strip("_")[:48] or "package"
+    if not project_id:
+        project_id = f"pkg_{_stem}_{uuid.uuid4().hex[:8]}"
+    if not run_id:
+        run_id = f"run_pkg_{uuid.uuid4().hex[:12]}"
 
     tmp = Path(TMP_DIR) / f"{uuid.uuid4()}.csv"
     try:
@@ -1202,6 +1266,16 @@ async def load_package(
                     "errors": exc.errors(),
                 },
             ) from exc
+
+        # Crea el run_dir antes de invertir (igual que /invert) para que el SSE
+        # pueda conectar y el solver persista el block model (parquet).
+        try:
+            update_run_status(
+                project_id=project_id, run_id=run_id, status="queued",
+                progress=0.0, stage="queued", message="Inversión (paquete) en cola.",
+            )
+        except Exception:
+            pass
 
         try:
             inversion_result = run_geophysics_inversion(invert_input)

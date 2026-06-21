@@ -73,6 +73,9 @@ _CONFIG_DEFAULTS: dict = {
     "auto_kappa": True,
     "strict": True,
     "allow_g_raw": False,
+    "utm_zone": None,
+    "acknowledge_spatial_risk": False,
+    "acknowledge_regional_scale": False,
 }
 
 
@@ -111,6 +114,80 @@ def _fmt(v) -> str:
 
 def _parallel(lst: "Optional[list]", n: int) -> "Optional[list]":
     return lst if (lst is not None and len(lst) == n) else None
+
+
+def _estimate_station_tolerance(primary_obs: list) -> float:
+    """Tolerancia de co-localización (m) derivada del espaciamiento del survey.
+
+    Para surveys idénticos (mismas coords) el match es exacto (dist 0); la
+    tolerancia solo absorbe ruido de proyección. Heurística: media de las
+    distancias al vecino más cercano · 0.5, con piso de 1 m.
+    """
+    n = len(primary_obs)
+    if n < 2:
+        return 1.0
+    nn = []
+    for i, p in enumerate(primary_obs):
+        best = None
+        for j, q in enumerate(primary_obs):
+            if i == j:
+                continue
+            d = math.hypot(p.x_m - q.x_m, p.z_m - q.z_m)
+            if best is None or d < best:
+                best = d
+        if best is not None and math.isfinite(best):
+            nn.append(best)
+    if not nn:
+        return 1.0
+    nn.sort()
+    median_nn = nn[len(nn) // 2]
+    return max(1.0, 0.5 * median_nn)
+
+
+def align_magnetic_to_stations(
+    primary_obs: list,
+    mag_obs: list,
+    *,
+    tol_m: "Optional[float]" = None,
+) -> list:
+    """Alinea valores TMI (nT) a las estaciones primarias por COORDENADA (x,z).
+
+    No asume orden ni cardinalidad idéntica: para cada estación gravimétrica busca
+    la magnetométrica más cercana y la acepta si cae dentro de `tol_m`. Las
+    estaciones magnéticas sobrantes se ignoran. Si alguna estación gravimétrica no
+    tiene magnetometría co-localizada dentro de tolerancia, lanza ValueError
+    (no se inventa el dato por interpolación).
+
+    Returns:
+        Lista de TMI (float) paralela a `primary_obs`.
+    """
+    if not mag_obs:
+        raise ValueError("El CSV magnético no contiene estaciones.")
+    if tol_m is None:
+        tol_m = _estimate_station_tolerance(primary_obs)
+
+    out: list = []
+    unmatched = 0
+    for p in primary_obs:
+        best = None
+        best_d = None
+        for m in mag_obs:
+            d = math.hypot(p.x_m - m.x_m, p.z_m - m.z_m)
+            if best_d is None or d < best_d:
+                best_d = d
+                best = m
+        if best is not None and best_d is not None and best_d <= tol_m:
+            out.append(float(best.g))
+        else:
+            unmatched += 1
+            out.append(0.0)
+    if unmatched > 0:
+        raise ValueError(
+            f"{unmatched}/{len(primary_obs)} estaciones gravimétricas no tienen "
+            f"magnetometría co-localizada dentro de {tol_m:.1f} m. Para la inversión "
+            "conjunta los surveys deben compartir ubicaciones (no se interpola)."
+        )
+    return out
 
 
 def build_package_text(

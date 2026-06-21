@@ -21,6 +21,7 @@ from schemas.geophysics_schema import GravityObservation
 from services.csv_package_service import (
     build_package_text,
     parse_package_text,
+    align_magnetic_to_stations,
     PACKAGE_MAGIC,
 )
 
@@ -106,6 +107,35 @@ def test_parse_package_rejects_non_package():
         parse_package_text("lat,lon,g\n-27.1,-69.3,5.0\n")
 
 
+# ── Fix R4 (riesgo 2): alineación joint por coordenada, no por índice ─────────
+def test_align_magnetic_matches_by_coords_reordered():
+    grav = [
+        GravityObservation(x_m=0.0, y_m=0.0, z_m=0.0, g=1e-5),
+        GravityObservation(x_m=100.0, y_m=0.0, z_m=0.0, g=2e-5),
+        GravityObservation(x_m=0.0, y_m=0.0, z_m=100.0, g=3e-5),
+    ]
+    # Magnetometría DESORDENADA respecto a la gravimetría (TMI distinto por lugar).
+    mag = [
+        GravityObservation(x_m=0.0, y_m=0.0, z_m=100.0, g=300.0),
+        GravityObservation(x_m=0.0, y_m=0.0, z_m=0.0, g=100.0),
+        GravityObservation(x_m=100.0, y_m=0.0, z_m=0.0, g=200.0),
+    ]
+    out = align_magnetic_to_stations(grav, mag)
+    # Emparejado por coordenada (no por índice): el viejo código por índice fallaría.
+    assert out == [100.0, 200.0, 300.0]
+
+
+def test_align_magnetic_raises_when_not_colocated():
+    import pytest
+    grav = [
+        GravityObservation(x_m=0.0, y_m=0.0, z_m=0.0, g=1e-5),
+        GravityObservation(x_m=100.0, y_m=0.0, z_m=0.0, g=2e-5),
+    ]
+    mag = [GravityObservation(x_m=5000.0, y_m=0.0, z_m=5000.0, g=100.0)]
+    with pytest.raises(ValueError):
+        align_magnetic_to_stations(grav, mag)
+
+
 # ── Endpoints E2E por combo ──────────────────────────────────────────────────
 def _client():
     from fastapi.testclient import TestClient
@@ -167,6 +197,10 @@ def test_e2e_gravity_only():
     assert body["status"] == "done", body
     assert body["route"] == "gravity_only"
     assert body["inversionResult"]
+    # Fix R4 (riesgo 4): sin project_id/run_id el endpoint los auto-genera y
+    # persiste el block model (el visor puede recuperarlo).
+    assert body["project_id"].startswith("pkg_")
+    assert body["run_id"].startswith("run_pkg_")
 
 
 def test_e2e_magnetic_only():
@@ -230,3 +264,35 @@ def test_e2e_load_rejects_plain_csv():
     r = _load(c, "lat,lon,bouguer_anomaly,unit,gravity_type\n-27.1,-69.3,5.0,mGal,bouguer_anomaly\n")
     assert r.status_code == 422, r.text
     assert r.json()["detail"]["error"] == "INVALID_PACKAGE"
+
+
+# ── Fix R4 (riesgo 3): gates aplicados al ENSAMBLAR (build no invierte → rápido) ─
+def _local_grav_csv(n_side=4):
+    """Coordenadas LOCALES (x_m,z_m) sin lat/lon ni ancla → LOCAL_UNANCHORED."""
+    lines = ["x_m,z_m,g_mgal,unit,gravity_type"]
+    for i in range(n_side):
+        for j in range(n_side):
+            x = i * 100.0
+            z = j * 100.0
+            val = 5.0 + 0.5 * ((i * n_side + j) % 5)
+            lines.append(f"{x:.1f},{z:.1f},{val:.2f},mGal,bouguer_anomaly")
+    return "\n".join(lines) + "\n"
+
+
+def test_e2e_build_gate_blocks_unanchored_without_ack():
+    c = _client()
+    rb = _build(c, files={"file": ("local.csv", _local_grav_csv(), "text/csv")})
+    assert rb.status_code == 422, rb.text
+    assert rb.json()["detail"]["error"] == "SPATIAL_READINESS_GATE"
+
+
+def test_e2e_build_gate_passes_with_ack():
+    c = _client()
+    rb = _build(
+        c, files={"file": ("local.csv", _local_grav_csv(), "text/csv")},
+        data={"config_json": json.dumps({"acknowledge_spatial_risk": True})},
+    )
+    assert rb.status_code == 200, rb.text
+    # El plan en el encabezado registra el veredicto del gate.
+    parsed = parse_package_text(rb.text)
+    assert "spatial_readiness_level" in parsed.plan
