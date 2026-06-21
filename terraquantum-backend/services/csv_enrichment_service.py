@@ -9,7 +9,8 @@ real todo lo que falte para que el dato quede listo para inversión:
   • Coordenadas         → lat/lon ↔ UTM real (coordinate_transform_real / pyproj).
   • σ por estación      → piso del gravímetro o adaptivo (core.config).
   • Calidad             → score 0–100 ya calculado por el import (csv_analysis).
-  • IGRF (magnético)    → valores provistos en el contexto (no se computa offline).
+  • IGRF (magnético)    → derivado offline (armónicos esféricos IGRF-14) desde la
+                          ubicación + fecha del survey (igrf_service), o lo provisto.
 
 GUARDRAIL — NADA inventado: cada columna nueva proviene de una fórmula o de un
 servicio físico existente. Lo que NO se puede derivar queda en `None` (la columna
@@ -244,14 +245,25 @@ def derive_sigmas_mgal(
     return [float(x) for x in sigmas], method, detail
 
 
-def resolve_igrf(config: dict) -> "tuple[dict, EnrichmentStep]":
+def resolve_igrf(
+    config: dict,
+    lats: Optional[np.ndarray] = None,
+    lons: Optional[np.ndarray] = None,
+    elevations: Optional[np.ndarray] = None,
+) -> "tuple[dict, EnrichmentStep, List[str]]":
     """Resuelve el IGRF (inc/dec/intensidad) para magnetometría.
 
-    GUARDRAIL: NO se computa un modelo IGRF offline (no hay librería geomagnética ni
-    es derivable de física básica). Solo se ACEPTA lo que el usuario provea en el
-    contexto (inclination_deg / declination_deg / field_intensity_nt); si no provee
-    valores válidos, el paso queda not_derivable + bandera (pedir valores o cargar
-    datos con IGRF embebido, como en ingest_do27/ingest_raglan).
+    Prioridad:
+      1. Si el usuario provee un IGRF válido y NO-default en el contexto → se acepta
+         tal cual (already_present), no se re-computa.
+      2. Si no, se DERIVA offline con física real (armónicos esféricos IGRF-14,
+         `igrf_service`) desde el centroide del survey (lat/lon) + la fecha del
+         survey. El IGRF varía <0.01° sobre un survey local, así que un valor en el
+         centroide es físicamente correcto (igual que el triple IGRF embebido que
+         usan ingest_do27/ingest_raglan para todo el survey).
+      3. Si falta ubicación o fecha → needs_context (NADA fabricado).
+
+    Devuelve (overrides, step, needs_context_keys).
     """
     inc = _coerce_float(config.get("inclination_deg"))
     dec = _coerce_float(config.get("declination_deg"))
@@ -273,6 +285,8 @@ def resolve_igrf(config: dict) -> "tuple[dict, EnrichmentStep]":
         key="igrf",
         label="Campo geomagnético IGRF (inclinación/declinación/intensidad)",
     )
+
+    # ── 1. Provisto por el usuario (no-default) → se respeta ──────────────────
     if valid and not is_default:
         step.status = STATUS_ALREADY_PRESENT
         step.method = "contexto_usuario"
@@ -281,15 +295,63 @@ def resolve_igrf(config: dict) -> "tuple[dict, EnrichmentStep]":
             "inclination_deg": inc,
             "declination_deg": dec,
             "field_intensity_nt": b0,
-        }, step
+        }, step, []
 
-    step.status = STATUS_NOT_DERIVABLE
-    step.detail = (
-        "IGRF no es derivable offline (sin modelo geomagnético). Indique "
-        "inclinación, declinación e intensidad del campo, o cargue datos con el IGRF "
-        "embebido en el encabezado. Mientras tanto se usan los defaults del schema."
+    # ── 2/3. Derivación offline desde ubicación + fecha ───────────────────────
+    needs: List[str] = []
+    has_location = lats is not None and lons is not None and len(lats) > 0
+    raw_date = config.get("survey_date")
+    if raw_date is None or (isinstance(raw_date, str) and not raw_date.strip()):
+        needs.append("survey_date")
+    if not has_location:
+        needs.append("utm_zone")
+
+    if needs:
+        step.status = STATUS_NEEDS_CONTEXT
+        faltan = []
+        if "survey_date" in needs:
+            faltan.append("la fecha del survey (año o ISO, ej. 2016 o 2016-07)")
+        if "utm_zone" in needs:
+            faltan.append("la ubicación (lat/lon o zona UTM)")
+        step.detail = (
+            "IGRF derivable offline (IGRF-14), pero falta " + " y ".join(faltan) +
+            ". Aporte ese contexto y se computará inclinación/declinación/intensidad."
+        )
+        return {}, step, needs
+
+    from services.igrf_service import (
+        igrf_field, decimal_year, METHOD_LABEL, IgrfError,
     )
-    return {}, step
+
+    lat0 = float(np.mean(np.asarray(lats, dtype=np.float64)))
+    lon0 = float(np.mean(np.asarray(lons, dtype=np.float64)))
+    elev0 = (
+        float(np.mean(np.asarray(elevations, dtype=np.float64)))
+        if elevations is not None and len(elevations) > 0 else 0.0
+    )
+    try:
+        yr = decimal_year(raw_date)
+        field = igrf_field(lat0, lon0, elev0, yr)
+    except (IgrfError, ValueError) as exc:
+        step.status = STATUS_NEEDS_CONTEXT
+        step.detail = (
+            f"No se pudo derivar el IGRF para la fecha '{raw_date}': {exc}. "
+            "Aporte una fecha dentro de 1900–2030 o el IGRF medido."
+        )
+        return {}, step, ["survey_date"]
+
+    step.status = STATUS_DERIVED
+    step.method = METHOD_LABEL
+    step.detail = (
+        f"Derivado en el centroide del survey ({lat0:.3f}°, {lon0:.3f}°, {elev0:.0f} m) "
+        f"para {yr:.1f}: I={field.inclination_deg:.2f}°, D={field.declination_deg:.2f}°, "
+        f"B0={field.total_intensity_nt:.0f} nT (armónicos esféricos, sin red)."
+    )
+    return {
+        "inclination_deg": field.inclination_deg,
+        "declination_deg": field.declination_deg,
+        "field_intensity_nt": field.total_intensity_nt,
+    }, step, []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -394,9 +456,12 @@ async def enrich_package(
 
     # ── 4. IGRF (magnético) ───────────────────────────────────────────────────
     if is_magnetic:
-        igrf_overrides, igrf_step = resolve_igrf(config)
+        igrf_overrides, igrf_step, igrf_needs = resolve_igrf(
+            config, lats, lons, elevations,
+        )
         igrf_step.n_stations = n
         result.config_overrides.update(igrf_overrides)
+        result.needs_context.extend(igrf_needs)
         result.steps.append(igrf_step)
 
     # ── 5. σ por estación ─────────────────────────────────────────────────────

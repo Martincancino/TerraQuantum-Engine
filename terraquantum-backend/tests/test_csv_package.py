@@ -288,14 +288,29 @@ def test_e2e_enrich_returns_summary_and_loadable_package():
     assert rl.json()["status"] == "done"
 
 
-def test_e2e_enrich_magnetic_igrf_not_derivable():
+def test_e2e_enrich_magnetic_igrf_needs_date():
+    """Magnético con ubicación pero SIN fecha → IGRF needs_context (pide la fecha)."""
     c = _client()
     re = _enrich(c, files={"file": ("mag.csv", _MAG, "text/csv")},
                  params={"data_type": "magnetic", "strict": "false"})
     assert re.status_code == 200, re.text
     summ = re.json()["enrichment_summary"]
     igrf = next(s for s in summ["steps"] if s["key"] == "igrf")
-    assert igrf["status"] == "not_derivable"
+    assert igrf["status"] == "needs_context"
+    assert "survey_date" in summ["needs_context"]
+
+
+def test_e2e_enrich_magnetic_igrf_derived_with_date():
+    """Magnético con ubicación + fecha → IGRF derivado offline (IGRF-14, sin red)."""
+    c = _client()
+    re = _enrich(c, files={"file": ("mag.csv", _MAG, "text/csv")},
+                 params={"data_type": "magnetic", "strict": "false"},
+                 data={"config_json": json.dumps({"survey_date": "2016"})})
+    assert re.status_code == 200, re.text
+    summ = re.json()["enrichment_summary"]
+    igrf = next(s for s in summ["steps"] if s["key"] == "igrf")
+    assert igrf["status"] == "derived"
+    assert "survey_date" not in summ["needs_context"]
 
 
 def test_e2e_load_rejects_plain_csv():

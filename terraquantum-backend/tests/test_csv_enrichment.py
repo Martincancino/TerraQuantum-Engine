@@ -105,20 +105,39 @@ def test_sigma_adaptive_for_unknown_gravimeter():
 
 # ── 3. IGRF ──────────────────────────────────────────────────────────────────
 def test_igrf_accepts_provided_context():
-    overrides, step = resolve_igrf(
+    overrides, step, needs = resolve_igrf(
         {"inclination_deg": 60.0, "declination_deg": 5.0, "field_intensity_nt": 50000.0}
     )
     assert step.status == STATUS_ALREADY_PRESENT
     assert overrides["field_intensity_nt"] == 50000.0
+    assert needs == []
 
 
-def test_igrf_not_derivable_with_defaults():
-    """Defaults del schema = NO es una medición real → not_derivable + bandera."""
-    overrides, step = resolve_igrf(
+def test_igrf_needs_context_without_location_or_date():
+    """Defaults del schema + sin ubicación/fecha → needs_context (NADA fabricado)."""
+    overrides, step, needs = resolve_igrf(
         {"inclination_deg": -30.0, "declination_deg": 2.0, "field_intensity_nt": 23500.0}
     )
-    assert step.status == STATUS_NOT_DERIVABLE
+    assert step.status == STATUS_NEEDS_CONTEXT
     assert overrides == {}
+    assert "survey_date" in needs and "utm_zone" in needs
+
+
+def test_igrf_derived_offline_from_location_and_date():
+    """Con ubicación (centroide) + fecha → IGRF-14 derivado offline (física real)."""
+    import numpy as np
+
+    lats = np.array([64.5, 64.6])
+    lons = np.array([-110.9, -110.8])
+    overrides, step, needs = resolve_igrf(
+        {"survey_date": "2016"}, lats=lats, lons=lons,
+    )
+    assert step.status == STATUS_DERIVED
+    assert step.method.startswith("IGRF-14")
+    assert needs == []
+    # Zona ártica de DO-27 (~64.5°N): inclinación alta (>80°).
+    assert overrides["inclination_deg"] > 80.0
+    assert 50000.0 < overrides["field_intensity_nt"] < 65000.0
 
 
 # ── 4. Coordenadas: reconstrucción UTM→lat/lon ───────────────────────────────
@@ -214,10 +233,25 @@ def test_enrich_magnetic_igrf_provided():
     assert _step(res, "sigma").status == STATUS_SKIPPED
 
 
-def test_enrich_magnetic_igrf_not_derivable():
+def test_enrich_magnetic_igrf_needs_context_without_location_date():
     primary = _primary(n=8, raw_latlon=None)
     res = asyncio.run(enrich_package(primary, data_type="magnetic", config={}, enable_dem=False))
-    assert _step(res, "igrf").status == STATUS_NOT_DERIVABLE
+    assert _step(res, "igrf").status == STATUS_NEEDS_CONTEXT
+    assert "survey_date" in res.summary()["needs_context"]
+    assert res.summary()["nothing_fabricated"] is True
+
+
+def test_enrich_magnetic_igrf_derived_offline():
+    """Magnetometría con lat/lon + fecha → IGRF derivado offline en el orquestador."""
+    raw = [{"lat_deg": 64.5, "lon_deg": -110.9, "elev_m": 400.0} for _ in range(6)]
+    primary = _primary(n=6, raw_latlon=raw)
+    res = asyncio.run(enrich_package(
+        primary, data_type="magnetic", config={"survey_date": "2016-07"}, enable_dem=False,
+    ))
+    step = _step(res, "igrf")
+    assert step.status == STATUS_DERIVED
+    assert step.method.startswith("IGRF-14")
+    assert res.config_overrides["inclination_deg"] > 80.0
     assert res.summary()["nothing_fabricated"] is True
 
 
