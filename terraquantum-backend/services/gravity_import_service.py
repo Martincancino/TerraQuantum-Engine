@@ -517,16 +517,82 @@ def read_csv_headers(file_path: str | Path) -> list[str]:
     if not path.exists():
         return []
     try:
-        import pandas as pd
-
-        df = pd.read_csv(
-            path, sep=r"[,;]", engine="python", encoding="utf-8",
-            on_bad_lines="skip", nrows=0,
-        )
+        df, _ = _read_csv_dataframe(path, nrows=0)
         df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
         return [normalize_header_name(str(h)) for h in df.columns if h]
     except Exception:
         return []
+
+# PILAR 4 (Fase 4) — Errores de fila que son DATOS sucios (NaN/vacío/no-numérico en
+# una estación puntual): se OMITEN con aviso (tolerante), no rompen el import. Los
+# errores estructurales/de consistencia (sin coords, unidad/tipo no soportado o mixto,
+# lat/lon imposible) NO están aquí → siguen siendo fatales.
+_SKIPPABLE_ROW_MARKERS = (
+    "Invalid numeric value",
+    "Empty/missing x coordinate",
+    "Empty/missing z coordinate",
+    "NaN or Inf not allowed",
+    "Empty unit",
+)
+
+
+def _is_skippable_row_error(msg: str) -> bool:
+    return any(m in msg for m in _SKIPPABLE_ROW_MARKERS)
+
+
+def _choose_read_sep(path: "str | Path", encoding: str) -> str:
+    """Sniff del delimitador desde la primera línea no vacía: , ; tab |.
+
+    Para mantener CERO regresión, los CSV de coma/punto-y-coma siguen el mismo
+    camino histórico (regex `[,;]`); solo tab y pipe activan un delimitador nuevo.
+    """
+    try:
+        with open(path, encoding=encoding, errors="replace") as fh:
+            first = ""
+            for line in fh:
+                if line.strip():
+                    first = line
+                    break
+    except Exception:
+        return r"[,;]"
+    if not first:
+        return r"[,;]"
+    counts = {
+        ",": first.count(","), ";": first.count(";"),
+        "\t": first.count("\t"), "|": first.count("|"),
+    }
+    best = max(counts, key=lambda k: counts[k])
+    if counts[best] == 0 or best in (",", ";"):
+        return r"[,;]"
+    return "\t" if best == "\t" else r"\|"
+
+
+def _read_csv_dataframe(path: "str | Path", nrows: "int | None" = None):
+    """Lee el CSV tolerando BOM/encoding y delimitadores (, ; tab |).
+
+    Devuelve (df, warnings). `utf-8-sig` quita el BOM transparente; si el archivo no
+    es UTF-8 se reintenta como latin-1 con aviso. Propaga pd.errors.EmptyDataError.
+    """
+    import pandas as pd
+
+    warns: list[str] = []
+    encoding = "utf-8-sig"
+    try:
+        sep = _choose_read_sep(path, encoding)
+        df = pd.read_csv(
+            path, sep=sep, engine="python", encoding=encoding,
+            on_bad_lines="skip", nrows=nrows,
+        )
+    except UnicodeDecodeError:
+        encoding = "latin-1"
+        warns.append("El archivo no es UTF-8; se leyó como latin-1.")
+        sep = _choose_read_sep(path, encoding)
+        df = pd.read_csv(
+            path, sep=sep, engine="python", encoding=encoding,
+            on_bad_lines="skip", nrows=nrows,
+        )
+    return df, warns
+
 
 def import_gravity_csv_v1(
     file_path: str | Path,
@@ -555,12 +621,17 @@ def import_gravity_csv_v1(
         
     try:
         import pandas as pd
-        df = pd.read_csv(path, sep=r'[,;]', engine='python', encoding='utf-8', on_bad_lines='skip')
-        
+        try:
+            df, _read_warns = _read_csv_dataframe(path)
+        except pd.errors.EmptyDataError:
+            errors_list.append("El archivo CSV está vacío (sin columnas ni datos).")
+            return _build_error_result(path.name, errors_list, warnings_list)
+        warnings_list.extend(_read_warns)
+
         if df.empty and len(df.columns) == 0:
             errors_list.append("Empty file or missing headers")
             return _build_error_result(path.name, errors_list, warnings_list)
-        
+
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
         df = df.fillna("")
         
@@ -693,6 +764,9 @@ def import_gravity_csv_v1(
         row_count = 0
         valid_rows = 0
         rejected_rows = 0
+        # PILAR 4 — filas de DATOS sucios omitidas (tolerante, no fatal).
+        skipped_dirty_rows = 0
+        skipped_examples: "list[str]" = []
 
         first_unit = None
         first_gravity_type = None
@@ -897,10 +971,27 @@ def import_gravity_csv_v1(
                     })
             except ValueError as e:
                 error_msg = str(e)
-                errors_list.append(error_msg)
                 rejected_rows += 1
-                _log.warning("csv_row_rejected", row_num=row_num, reason=error_msg)
-        
+                # PILAR 4 — fila de DATOS sucios (NaN/vacío/no-numérico) → OMITIR con
+                # aviso (tolerante). Errores estructurales/consistencia → fatal.
+                if _is_skippable_row_error(error_msg):
+                    skipped_dirty_rows += 1
+                    if len(skipped_examples) < 3:
+                        skipped_examples.append(error_msg)
+                    _log.warning("csv_row_skipped", row_num=row_num, reason=error_msg)
+                else:
+                    errors_list.append(error_msg)
+                    _log.warning("csv_row_rejected", row_num=row_num, reason=error_msg)
+
+        # PILAR 4 — aviso agregado de filas sucias omitidas (no fatal por sí mismo;
+        # si quedan <10 válidas, el gate posterior falla con mensaje claro).
+        if skipped_dirty_rows:
+            warnings_list.append(
+                f"{skipped_dirty_rows} fila(s) con datos inválidos/vacíos (coords o "
+                "valores no numéricos, NaN) se omitieron. "
+                f"Ejemplos: {'; '.join(skipped_examples)}"
+            )
+
         csv_analysis = analyze_csv_observations(
             observations=observations,
             declared_unit=first_unit,
