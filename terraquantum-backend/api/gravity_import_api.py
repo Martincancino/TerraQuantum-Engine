@@ -1156,7 +1156,8 @@ async def analyze_columns_endpoint(
 @limiter.limit("10/minute")
 async def enrich_package_endpoint(
     request: Request,
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    gravity_file: Optional[UploadFile] = File(None),
     magnetic_file: Optional[UploadFile] = File(None),
     data_type: str = Query("gravity"),
     strict: bool = Query(False),
@@ -1168,6 +1169,12 @@ async def enrich_package_endpoint(
 ):
     """Preparación con ENRIQUECIMIENTO: deriva con física real lo que falte y emite
     un paquete TQPKG completo (descargable) + un resumen de qué calculó/agregó.
+
+    PILAR 2 — contrato HONESTO por ROL. Recibe los datos por su rol, sin exigir
+    gravimetría: gravity_file / magnetic_file (explícito), o file + data_type
+    (legacy). Combinaciones: grav-sola, mag-sola, grav+mag (joint), y cualquiera +
+    sondajes (boreholes_json, que solo anclan). Un CSV de sólo sondajes (o vacío) se
+    RECHAZA con error claro (PILAR 6): no define una inversión por sí mismo.
 
     A diferencia de /build-package (que solo fusiona), este endpoint:
       • completa elevación faltante muestreando un DEM (opentopo),
@@ -1184,13 +1191,45 @@ async def enrich_package_endpoint(
     from services.multimodal_fusion_service import plan_multimodal
     from core.errors import InsufficientDataError
 
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="File must end with .csv")
     if data_type not in ("gravity", "magnetic"):
         raise HTTPException(
             status_code=422,
             detail=f"data_type inválido: '{data_type}'. Use 'gravity' o 'magnetic'.",
         )
+
+    # ── PILAR 2 — Resolución por ROL ──────────────────────────────────────────
+    # Roles explícitos (gravity_file/magnetic_file) o legacy file+data_type. La
+    # gravimetría manda; con solo magnetometría el primario es magnético.
+    _grav_up = gravity_file
+    _mag_up = magnetic_file
+    if file is not None:
+        if data_type == "magnetic" and _mag_up is None:
+            _mag_up = file
+        elif _grav_up is None:
+            _grav_up = file
+    if _grav_up is None and _mag_up is None:
+        # Sólo sondajes / vacío → error claro (no se fabrica una inversión).
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "INSUFFICIENT_DATA",
+                "message": (
+                    "Se necesita al menos un campo potencial: gravimetría O "
+                    "magnetometría. Un CSV de sólo sondajes (o vacío) no define una "
+                    "inversión; cárgalo junto con gravimetría/magnetometría para "
+                    "usarlo como restricción."
+                ),
+            },
+        )
+    data_type = "gravity" if _grav_up is not None else "magnetic"
+    file = _grav_up if _grav_up is not None else _mag_up
+    magnetic_file = _mag_up if _grav_up is not None else None
+
+    for _up, _label in ((file, "file"), (magnetic_file, "magnetic_file")):
+        if _up is not None and not (_up.filename or "").lower().endswith(".csv"):
+            raise HTTPException(
+                status_code=400, detail=f"{_label} must end with .csv",
+            )
 
     cfg_overrides: dict = {}
     if config_json:
