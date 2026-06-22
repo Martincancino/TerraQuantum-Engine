@@ -28,7 +28,8 @@ from core.geo_utils import compute_footprint_from_center, extract_utm_zone_safe
 from schemas.geophysics_schema import GeophysicsInvertInput
 from schemas.gravity_import_schema import SpatialReadiness, RegionalScalePreflight
 from schemas.response_schema import GravityImportPreviewResponse, GravityImportInvertResponse
-from services.gravity_import_service import import_gravity_csv_v1
+from services.gravity_import_service import import_gravity_csv_v1, read_csv_headers
+from services.column_mapping_service import build_column_mapping_plan
 from services.regional_scale_preflight_service import build_preflight_from_import_result
 from services.spatial_readiness_service import classify_from_csv_analysis
 from services.geophysics_service import run_geophysics_inversion
@@ -1086,6 +1087,71 @@ async def build_package(
                     pass
 
 
+@router_v2.post("/analyze-columns")
+@limiter.limit("30/minute")
+async def analyze_columns_endpoint(
+    request: Request,
+    file: UploadFile = File(...),
+    data_type: str = Query("gravity"),
+    column_map_json: Optional[str] = Form(None),
+):
+    """PILAR 1 (KEYSTONE) — Devuelve el PLAN DE MAPEO de columnas de un CSV.
+
+    Lee SOLO los encabezados (sin invertir), corre la auto-detección fuzzy y, si la
+    confianza es baja (falta algún rol requerido), reporta `needs_mapping=True` junto
+    con las columnas crudas + los roles a asignar. Un `column_map_json` opcional
+    sobre-escribe la auto-detección (para previsualizar un mapeo manual antes de
+    enriquecer). Nada se invierte ni se fabrica: solo se re-etiquetan columnas reales.
+    """
+    from fastapi.responses import JSONResponse
+
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="File must end with .csv")
+    if data_type not in ("gravity", "magnetic"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"data_type inválido: '{data_type}'. Use 'gravity' o 'magnetic'.",
+        )
+
+    column_map: Optional[dict] = None
+    if column_map_json:
+        try:
+            column_map = json.loads(column_map_json) or None
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"column_map_json inválido: {exc}")
+        if column_map is not None and not isinstance(column_map, dict):
+            raise HTTPException(status_code=422, detail="column_map debe ser un objeto {rol: columna}.")
+
+    tmp = Path(TMP_DIR) / f"{uuid.uuid4()}.csv"
+    try:
+        content = await file.read()
+        if len(content) > CSV_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Archivo CSV demasiado grande. Máximo: {CSV_MAX_BYTES // 1048576} MB.",
+            )
+        with open(tmp, "wb") as f:
+            f.write(content)
+
+        headers = read_csv_headers(tmp)
+        if not headers:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "CSV_NO_HEADERS",
+                    "message": "No se pudieron leer columnas del CSV (archivo vacío o ilegible).",
+                },
+            )
+        plan = build_column_mapping_plan(headers, data_kind=data_type, column_map=column_map)
+        return JSONResponse(content=sanitize_nan({"column_mapping": plan}))
+    finally:
+        if tmp.exists():
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+
 @router_v2.post("/enrich-package")
 @limiter.limit("10/minute")
 async def enrich_package_endpoint(
@@ -1098,6 +1164,7 @@ async def enrich_package_endpoint(
     enable_dem: bool = Query(True),
     config_json: Optional[str] = Form(None),
     boreholes_json: Optional[str] = Form(None),
+    column_map_json: Optional[str] = Form(None),
 ):
     """Preparación con ENRIQUECIMIENTO: deriva con física real lo que falte y emite
     un paquete TQPKG completo (descargable) + un resumen de qué calculó/agregó.
@@ -1153,9 +1220,41 @@ async def enrich_package_endpoint(
         with open(tmp_primary, "wb") as f:
             f.write(content)
 
+        # PILAR 1 — mapeo manual (opcional). column_map del form (JSON {rol: columna}).
+        column_map: Optional[dict] = None
+        if column_map_json:
+            try:
+                column_map = json.loads(column_map_json) or None
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=f"column_map_json inválido: {exc}")
+            if column_map is not None and not isinstance(column_map, dict):
+                raise HTTPException(
+                    status_code=422,
+                    detail="column_map debe ser un objeto {rol: columna}.",
+                )
+
+        # Si la auto-detección no resuelve los roles requeridos y el usuario NO aportó
+        # mapeo → responder needs_mapping (200, sin paquete) para mostrar el MAPEO.
+        _primary_headers = read_csv_headers(tmp_primary)
+        _plan = build_column_mapping_plan(
+            _primary_headers, data_kind=data_type, column_map=column_map,
+        )
+        if _plan["needs_mapping"]:
+            return JSONResponse(
+                content=sanitize_nan({
+                    "needs_mapping": True,
+                    "column_mapping": _plan,
+                    "message": (
+                        "No se reconocieron automáticamente todas las columnas "
+                        "requeridas. Asigne manualmente los roles e intente de nuevo."
+                    ),
+                })
+            )
+
         primary = import_gravity_csv_v1(
             tmp_primary, strict=strict, allow_g_raw=allow_g_raw,
             data_kind="magnetic" if data_type == "magnetic" else "gravity",
+            column_map=column_map,
         )
         if primary.status != "ok":
             raise HTTPException(

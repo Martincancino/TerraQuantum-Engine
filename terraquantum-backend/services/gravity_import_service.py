@@ -24,6 +24,10 @@ from services.csv_analysis_service import (
     UNCERTAINTY_ALIASES,
 )
 from services.grid_calculator_service import compute_auto_grid
+from services.column_mapping_service import (
+    normalize_token as _norm,
+    resolve_mapped_column as _resolve_mapped,
+)
 from scipy.spatial import cKDTree as _cKDTree
 
 _log = get_logger(__name__)
@@ -87,17 +91,77 @@ _ELEVATION_SURFACE_ALIASES: frozenset = frozenset({
 def _find_first_alias(
     headers_lower: list[str], headers: list[str], aliases: frozenset
 ) -> "str | None":
+    # Pase 1 — match exacto (comportamiento histórico, sin regresión).
     for i, h in enumerate(headers_lower):
         if h in aliases:
+            return headers[i]
+    # Pase 2 — match fuzzy normalizado (acentos/mayúsculas/separadores). Aditivo:
+    # solo dispara cuando el exacto falló, así no cambia detecciones previas.
+    norm_aliases = {_norm(a) for a in aliases}
+    for i, h in enumerate(headers_lower):
+        if _norm(h) in norm_aliases:
             return headers[i]
     return None
 
 
+def _coords_from_column_map(
+    headers: list[str], headers_lower: list[str], column_map: dict
+) -> "dict | None":
+    """PILAR 1 — Construye el slot de coordenadas desde un `column_map` manual.
+
+    Devuelve None si el mapeo no resuelve las dos horizontales (x, y) → se cae a la
+    auto-detección. El tipo de coordenada se toma de `coordinate_system` si se provee;
+    si no, se infiere por el NOMBRE de las columnas mapeadas (lon/lat → latlon,
+    easting/northing → utm, otro → local).
+    """
+    x_col = _resolve_mapped(column_map.get("x"), headers)
+    y_col = _resolve_mapped(column_map.get("y"), headers)  # 2.ª horizontal → z_m slot
+    if not x_col or not y_col:
+        return None
+
+    elev_col = _resolve_mapped(column_map.get("elevation"), headers)
+    depth_col = _resolve_mapped(column_map.get("depth"), headers)  # → y_m slot
+
+    coord_sys = (column_map.get("coordinate_system") or "").strip().lower() or None
+    if coord_sys not in (None, "latlon", "utm", "local"):
+        coord_sys = None
+    if coord_sys is None:
+        xn, yn = _norm(x_col), _norm(y_col)
+        lon_n = {_norm(a) for a in _LON_ALIASES}
+        lat_n = {_norm(a) for a in _LAT_ALIASES}
+        east_n = {_norm(a) for a in _UTM_EASTING_ALIASES}
+        north_n = {_norm(a) for a in _UTM_NORTHING_ALIASES}
+        if xn in lon_n and yn in lat_n:
+            coord_sys = "latlon"
+        elif xn in east_n and yn in north_n:
+            coord_sys = "utm"
+        else:
+            coord_sys = "local"
+
+    utm_zone_col = (
+        _find_first_alias(headers_lower, headers, _UTM_ZONE_COL_ALIASES)
+        if coord_sys == "utm" else None
+    )
+    return {
+        "coord_type": coord_sys,
+        "x_col": x_col, "y_col": depth_col, "z_col": y_col,
+        "utm_zone_col": utm_zone_col,
+        "elev_col": elev_col,
+        "errors": [], "warnings": [],
+        "raw_cols": {"x": x_col, "z": y_col},
+    }
+
+
 def _resolve_coordinate_columns(
-    headers_lower: list[str], headers: list[str]
+    headers_lower: list[str], headers: list[str],
+    column_map: "dict | None" = None,
 ) -> dict:
     """
     Detect coordinate format from CSV headers and return slot mapping.
+
+    Si `column_map` resuelve las horizontales (x, y), ese mapeo MANUAL gana sobre la
+    auto-detección (PILAR 1). En cualquier otro caso se usa la detección automática
+    (ahora fuzzy: tolera acentos/mayúsculas/separadores vía _find_first_alias).
 
     coord_type: "legacy" | "latlon" | "utm" | "local" | None
     x_col: original column name for x_m slot (lon / easting / local_x)
@@ -107,6 +171,11 @@ def _resolve_coordinate_columns(
     errors/warnings: validation messages
     raw_cols: mapping of slot → original column name for metadata
     """
+    if column_map:
+        mapped = _coords_from_column_map(headers, headers_lower, column_map)
+        if mapped is not None:
+            return mapped
+
     errors: list[str] = []
     warnings: list[str] = []
     h_set = set(headers_lower)
@@ -246,6 +315,12 @@ def choose_gravity_column(headers: list[str]) -> str | None:
         if col in headers_lower:
             idx = headers_lower.index(col)
             return headers[idx]
+    # Fallback fuzzy normalizado (aditivo): solo si el exacto no halló nada.
+    norm_headers = [_norm(h) for h in headers_lower]
+    for col in GRAVITY_COLUMN_PRIORITY:
+        nc = _norm(col)
+        if nc in norm_headers:
+            return headers[norm_headers.index(nc)]
     return None
 
 
@@ -275,6 +350,12 @@ def choose_magnetic_column(headers: list[str]) -> str | None:
         if col in headers_lower:
             idx = headers_lower.index(col)
             return headers[idx]
+    # Fallback fuzzy normalizado (aditivo): solo si el exacto no halló nada.
+    norm_headers = [_norm(h) for h in headers_lower]
+    for col in MAGNETIC_COLUMN_PRIORITY:
+        nc = _norm(col)
+        if nc in norm_headers:
+            return headers[norm_headers.index(nc)]
     return None
 
 # \u2500\u2500 Sondajes (Fase 20): columnas de intervalo de profundidad / litolog\u00eda \u2500\u2500\u2500\u2500\u2500
@@ -371,12 +452,40 @@ def detect_csv_data_type(headers: list[str]) -> dict:
 def normalize_header_name(header: str) -> str:
     return header.replace("\ufeff", "").strip()
 
+
+def read_csv_headers(file_path: str | Path) -> list[str]:
+    """Extrae los encabezados crudos del CSV con el MISMO parseo que el importador.
+
+    (sep=[,;], engine python, descarta columnas 'Unnamed', normaliza BOM/espacios.)
+    Devuelve [] si el archivo no existe o no es parseable. Lo usa el plan de mapeo
+    manual (/analyze-columns) para ofrecer las columnas reales al usuario.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        return []
+    try:
+        import pandas as pd
+
+        df = pd.read_csv(
+            path, sep=r"[,;]", engine="python", encoding="utf-8",
+            on_bad_lines="skip", nrows=0,
+        )
+        df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
+        return [normalize_header_name(str(h)) for h in df.columns if h]
+    except Exception:
+        return []
+
 def import_gravity_csv_v1(
     file_path: str | Path,
     strict: bool = True,
     allow_g_raw: bool = False,
     data_kind: str = "gravity",
+    column_map: "dict | None" = None,
 ) -> GravityImportResult:
+    # PILAR 1 — `column_map` (opcional) re-etiqueta columnas crudas a roles
+    # (x, y, elevation, depth, gravity_value, gravity_type, magnetic_value, sigma,
+    # station_id) + literales `unit`/`coordinate_system`. Sobre-escribe la
+    # auto-detección. column_map=None → comportamiento histórico idéntico.
     # data_kind="magnetic" (Fase 9A): parsea una columna TMI (nT) en lugar de
     # gravedad, reusando coordenadas/UTM/elevación. El valor TMI se guarda en el
     # slot escalar `g` de cada observación (sin conversión de unidades); el endpoint
@@ -413,13 +522,19 @@ def import_gravity_csv_v1(
             
         headers_lower = [h.lower() for h in headers]
 
+        # PILAR 1 — mapeo manual: literales y overrides de columnas por rol.
+        _cmap = column_map or {}
+        _forced_unit = (str(_cmap.get("unit") or "").strip()) or None
+        _gtype_col = _resolve_mapped(_cmap.get("gravity_type"), headers) or "gravity_type"
+
         # Fase 19 Tarea 1 — auto-detección del tipo de dato desde las columnas.
         # Informativo (no altera el ruteo, que sigue gobernado por data_kind):
         # el frontend lo usa para pre-seleccionar el tipo o pedir confirmación.
         _detected_data_type = DataTypeDetection(**detect_csv_data_type(headers))
 
-        # Magnetometría: la columna `unit` es opcional (nT implícito).
-        if "unit" not in headers_lower and not _is_magnetic:
+        # Magnetometría: la columna `unit` es opcional (nT implícito). Gravedad: se
+        # exige columna `unit` salvo que el mapeo manual provea una unidad literal.
+        if "unit" not in headers_lower and not _is_magnetic and not _forced_unit:
             errors_list.append("Missing required column: unit")
 
         # R3.5-K — station_id is optional; auto-generate if column absent
@@ -429,12 +544,16 @@ def import_gravity_csv_v1(
         _station_id_original_col: "str | None" = (
             headers[_sid_idx] if _sid_idx is not None else None
         )
+        # PILAR 1 — override manual del station_id.
+        _sid_override = _resolve_mapped(_cmap.get("station_id"), headers)
+        if _sid_override:
+            _station_id_original_col = _sid_override
         if _station_id_original_col is None:
             warnings_list.append(
                 "No se encontró station_id; se generaron IDs automáticos por orden de fila."
             )
 
-        coord_map = _resolve_coordinate_columns(headers_lower, headers)
+        coord_map = _resolve_coordinate_columns(headers_lower, headers, _cmap)
         if coord_map["coord_type"] is None:
             errors_list.extend(coord_map["errors"])
         else:
@@ -442,25 +561,34 @@ def import_gravity_csv_v1(
         
         if _is_magnetic:
             # El "value column" es la anomalía TMI (nT). gravity_type no se exige.
-            gravity_col = choose_magnetic_column(headers)
+            gravity_col = (
+                _resolve_mapped(_cmap.get("magnetic_value"), headers)
+                or choose_magnetic_column(headers)
+            )
             if not gravity_col:
                 errors_list.append(
                     "Missing magnetic column (magnetic_nt, tmi, magnetic_anomaly, ...)"
                 )
         else:
-            gravity_col = choose_gravity_column(headers)
+            gravity_col = (
+                _resolve_mapped(_cmap.get("gravity_value"), headers)
+                or choose_gravity_column(headers)
+            )
             if not gravity_col:
                 errors_list.append("Missing gravity column (g, gravity_anomaly, g_corrected, or g_raw)")
             elif gravity_col.lower() == "g_raw" and not allow_g_raw:
                 errors_list.append("Only g_raw is present but allow_g_raw is False")
 
-            if strict and "gravity_type" not in headers:
+            if strict and _gtype_col not in headers:
                 errors_list.append("Missing required column: gravity_type (strict mode)")
 
         # Fase 9C: en modo gravedad, detectar si el CSV trae ADEMÁS una columna
         # magnética (survey co-localizado) → se captura paralela a observations
         # para habilitar la inversión conjunta (joint cross-gradient).
-        _joint_mag_col = None if _is_magnetic else choose_magnetic_column(headers)
+        _joint_mag_col = None if _is_magnetic else (
+            _resolve_mapped(_cmap.get("magnetic_value"), headers)
+            or choose_magnetic_column(headers)
+        )
         _has_joint_mag = _joint_mag_col is not None
         joint_mag_values: "list[float]" = []
 
@@ -477,7 +605,10 @@ def import_gravity_csv_v1(
         station_elev_list: "list[float]" = []      # m s.n.m. (NaN si ausente)
         station_unc_list: "list[float]" = []       # mGal (NaN si ausente)
         _elev_col_any = coord_map.get("elev_col")
-        _unc_col_any = _find_first_alias(headers_lower, headers, UNCERTAINTY_ALIASES)
+        _unc_col_any = (
+            _resolve_mapped(_cmap.get("sigma"), headers)
+            or _find_first_alias(headers_lower, headers, UNCERTAINTY_ALIASES)
+        )
         dup_coords_log = []
         seen_coords = set()
         exact_duplicate_count = 0
@@ -538,7 +669,7 @@ def import_gravity_csv_v1(
                 else:
                     station_id = f"ST_{row_count:06d}"
                     
-                unit = row.get("unit", "").strip()
+                unit = row.get("unit", "").strip() or (_forced_unit or "")
                 if _is_magnetic:
                     # nT implícito; si se declara unidad, validarla como magnética.
                     if unit and unit.lower() not in ALLOWED_MAGNETIC_UNITS:
@@ -561,7 +692,7 @@ def import_gravity_csv_v1(
                         first_gravity_type = "magnetic_only"
                     g_type = ""
                 else:
-                    g_type = row.get("gravity_type", "").strip()
+                    g_type = row.get(_gtype_col, "").strip()
                     if strict and not g_type:
                         raise ValueError(f"Row {row_num}: gravity_type cannot be empty in strict mode")
                 if g_type:
