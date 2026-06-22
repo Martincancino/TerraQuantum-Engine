@@ -32,7 +32,40 @@ from scipy.spatial import cKDTree as _cKDTree
 
 _log = get_logger(__name__)
 
-ALLOWED_UNITS = {"m/s2", "m/s²", "mGal", "uGal", "µGal"}
+ALLOWED_UNITS = {"m/s2", "m/s²", "mGal", "uGal", "µGal", "Gal"}
+
+# PILAR 3 (Fase 3) — Canonicalización de unidades: acepta variantes de ortografía
+# (mayúsculas/espacios/µ vs u/superíndices/sinónimos) y las mapea a la forma canónica.
+# Clave = forma normalizada (minúsculas, sin espacios, ² → 2, ^ y · quitados, µ/μ → u).
+_GRAVITY_UNIT_CANON = {
+    "mgal": "mGal", "milligal": "mGal", "milligals": "mGal", "miligal": "mGal",
+    "ugal": "µGal", "microgal": "µGal", "microgals": "µGal",
+    "gal": "Gal", "gals": "Gal",
+    "m/s2": "m/s2", "ms2": "m/s2", "m/s^2": "m/s2", "ms-2": "m/s2",
+    "ms2-": "m/s2", "meterspersecondsquared": "m/s2",
+}
+_MAGNETIC_UNIT_CANON = {
+    "nt": "nT", "ntesla": "nT", "nanotesla": "nT", "nanoteslas": "nT",
+    "gamma": "nT", "gammas": "nT",
+}
+
+
+def _unit_key(raw: str) -> str:
+    s = str(raw).strip().lower()
+    s = (
+        s.replace("²", "2").replace("^", "").replace(" ", "")
+        .replace("·", "").replace("µ", "u").replace("μ", "u")
+    )
+    return s
+
+
+def canonicalize_unit(raw: str, *, magnetic: bool = False) -> str:
+    """Devuelve la forma canónica de la unidad (o el original sin espacios si es
+    desconocida, para que la validación la rechace con claridad)."""
+    if raw is None:
+        return ""
+    table = _MAGNETIC_UNIT_CANON if magnetic else _GRAVITY_UNIT_CANON
+    return table.get(_unit_key(raw), str(raw).strip())
 ALLOWED_GRAVITY_TYPES = {
     "absolute_gravity",
     "g_raw",            # alias de absolute_gravity (datos de campo sin corregir)
@@ -291,14 +324,34 @@ def normalize_unit(unit: str) -> str:
     return unit.strip()
 
 def convert_to_ms2(value: float, unit: str) -> float:
-    u = normalize_unit(unit)
+    u = canonicalize_unit(unit)
     if u in ("m/s2", "m/s²"):
         return value
     elif u == "mGal":
-        return value * 0.00001
+        return value * 0.00001          # 1 mGal = 1e-5 m/s²
     elif u in ("uGal", "µGal"):
-        return value * 0.00000001
+        return value * 0.00000001       # 1 µGal = 1e-8 m/s²
+    elif u == "Gal":
+        return value * 0.01             # 1 Gal  = 1e-2 m/s²
     raise ValueError(f"Unknown unit: {unit}")
+
+def _is_metadata_row(row: dict, coord_cols: list[str]) -> bool:
+    """True si la fila es METADATA: alguna columna de coordenada tiene texto no-numérico.
+
+    Discrimina filas de cabecera/IGRF embebidas en CSVs crudos (texto donde debería
+    ir una coordenada) de datos reales (coords numéricas). Coords vacías → NO metadata
+    (se deja a la validación por fila, que las rechaza con mensaje claro).
+    """
+    for c in coord_cols:
+        v = str(row.get(c, "") or "").strip()
+        if not v:
+            continue
+        try:
+            float(v)
+        except (ValueError, TypeError):
+            return True
+    return False
+
 
 def parse_float(value: str, field_name: str, row_number: int) -> float:
     try:
@@ -598,6 +651,31 @@ def import_gravity_csv_v1(
                 detected_data_type=_detected_data_type,
             )
 
+        # PILAR 3/4 (Fase 3) — Pre-filtro de filas de METADATA/no-numéricas. CSVs
+        # crudos (ej. DO-27 magnético) traen líneas de cabecera/IGRF embebidas con
+        # texto en las columnas de coordenadas. Una fila cuya coordenada X o Z lleva
+        # texto NO es un dato → se omite con un aviso agregado (no rompe el import ni
+        # contamina errors_list). Las filas con coords vacías siguen a la validación
+        # por fila (se rechazan con mensaje claro).
+        _coord_key_cols = [
+            c for c in (coord_map.get("x_col"), coord_map.get("z_col")) if c
+        ]
+        if _coord_key_cols:
+            _kept_rows = []
+            _meta_dropped = 0
+            for _r in reader:
+                if _is_metadata_row(_r, _coord_key_cols):
+                    _meta_dropped += 1
+                else:
+                    _kept_rows.append(_r)
+            if _meta_dropped:
+                reader = _kept_rows
+                warnings_list.append(
+                    f"{_meta_dropped} fila(s) de metadata/no-numéricas detectadas y "
+                    "omitidas (texto en columnas de coordenadas; p. ej. IGRF embebido "
+                    "en CSV crudo)."
+                )
+
         observations = []
         raw_gravity_values = []
         raw_latlon_elev_list: "list[dict]" = []  # H-B2: per-station lat/lon/elev (latlon surveys)
@@ -669,18 +747,21 @@ def import_gravity_csv_v1(
                 else:
                     station_id = f"ST_{row_count:06d}"
                     
-                unit = row.get("unit", "").strip() or (_forced_unit or "")
+                # PILAR 3 — canonicaliza la unidad (acepta mgal/Gal/m·s⁻²/nT, etc.).
+                unit_raw = row.get("unit", "").strip() or (_forced_unit or "")
                 if _is_magnetic:
                     # nT implícito; si se declara unidad, validarla como magnética.
-                    if unit and unit.lower() not in ALLOWED_MAGNETIC_UNITS:
-                        raise ValueError(f"Row {row_num}: Unsupported magnetic unit: {unit}")
+                    unit = canonicalize_unit(unit_raw, magnetic=True) if unit_raw else ""
+                    if unit_raw and unit != "nT":
+                        raise ValueError(f"Row {row_num}: Unsupported magnetic unit: {unit_raw}")
                     if first_unit is None:
                         first_unit = unit or "nT"
                 else:
-                    if not unit:
+                    if not unit_raw:
                         raise ValueError(f"Row {row_num}: Empty unit")
+                    unit = canonicalize_unit(unit_raw)
                     if unit not in ALLOWED_UNITS:
-                        raise ValueError(f"Row {row_num}: Unsupported unit: {unit}")
+                        raise ValueError(f"Row {row_num}: Unsupported unit: {unit_raw}")
                     if first_unit is None:
                         first_unit = unit
                     elif unit != first_unit:
