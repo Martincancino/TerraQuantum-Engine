@@ -1475,9 +1475,9 @@ export type EnrichPackageResult =
  * descargable + un resumen estructurado de qué calculó/agregó. Nada se fabrica.
  */
 export async function enrichPackage(opts: {
-  file: File;
+  // PILAR 2 — los datos se envían por ROL; el backend deriva el tipo y el combo.
+  gravityFile?: File | null;
   magneticFile?: File | null;
-  dataType?: "gravity" | "magnetic";
   strict?: boolean;
   allowGRaw?: boolean;
   enableDem?: boolean;
@@ -1486,10 +1486,20 @@ export async function enrichPackage(opts: {
   // PILAR 1 — mapeo manual de columnas (rol → columna real del CSV primario).
   columnMap?: Record<string, string> | null;
 }): Promise<EnrichPackageResult> {
-  const dataType = opts.dataType ?? "gravity";
+  const gravityFile = opts.gravityFile ?? null;
+  const magneticFile = opts.magneticFile ?? null;
+  if (!gravityFile && !magneticFile) {
+    return {
+      ok: false,
+      status: 0,
+      error: "Sube al menos un CSV (gravimetría y/o magnetometría).",
+    };
+  }
+  // Tipo primario (hint): gravimetría manda; el backend lo deriva igualmente.
+  const dataType: "gravity" | "magnetic" = gravityFile ? "gravity" : "magnetic";
   const fd = new FormData();
-  fd.append("file", opts.file);
-  if (opts.magneticFile) fd.append("magnetic_file", opts.magneticFile);
+  if (gravityFile) fd.append("gravity_file", gravityFile);
+  if (magneticFile) fd.append("magnetic_file", magneticFile);
   if (opts.config) fd.append("config_json", JSON.stringify(opts.config));
   if (opts.boreholes && opts.boreholes.length > 0) {
     fd.append("boreholes_json", JSON.stringify(opts.boreholes));

@@ -88,6 +88,18 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
   const primaryFile = gravFile ?? magFile;
   const dataType: "gravity" | "magnetic" = isMagOnly ? "magnetic" : "gravity";
 
+  // PILAR 2 — combo explícito (sin parches frágiles): lo que se enviará por rol.
+  const hasBoreholes = (boreholes?.length ?? 0) > 0;
+  const comboLabel =
+    !gravFile && !magFile
+      ? null
+      : (gravFile && magFile
+          ? "Gravimetría + Magnetometría → inversión conjunta"
+          : gravFile
+            ? "Gravimetría sola"
+            : "Magnetometría sola") +
+        (hasBoreholes ? " + sondajes (anclaje)" : "");
+
   async function handleGenerate(mapOverride?: Record<string, string>) {
     setError(null);
     setResult(null);
@@ -99,7 +111,6 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
       setError(utmError);
       return;
     }
-    const primary = primaryFile as File;
     const map = mapOverride ?? columnMap;
 
     const config: BuildPackageConfig = {
@@ -112,9 +123,8 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
     setLoading(true);
     try {
       const res = await enrichPackage({
-        file: primary,
-        magneticFile: isMagOnly ? null : magFile,
-        dataType,
+        gravityFile: gravFile,
+        magneticFile: magFile,
         config,
         boreholes: boreholes ?? null,
         columnMap: Object.keys(map).length > 0 ? map : null,
@@ -273,6 +283,13 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
           </div>
         </div>
       </div>
+
+      {/* Combo detectado (PILAR 2) */}
+      {comboLabel && (
+        <div className="rounded-lg border border-sky-900/60 bg-sky-950/20 px-4 py-2 text-[11px] font-mono text-sky-300">
+          Combo detectado: <span className="font-bold">{comboLabel}</span>
+        </div>
+      )}
 
       {/* Botones */}
       <div className="flex flex-col sm:flex-row gap-3">
