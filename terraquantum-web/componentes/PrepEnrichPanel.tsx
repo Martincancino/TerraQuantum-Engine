@@ -491,7 +491,7 @@ function prefillMap(
   return out;
 }
 
-const GRAVITY_UNITS = ["mGal", "µGal", "m/s2"];
+const GRAVITY_UNITS = ["mGal", "µGal", "Gal", "m/s2"];
 const COORD_SYSTEMS: { value: string; label: string }[] = [
   { value: "", label: "(auto-detectar)" },
   { value: "latlon", label: "Lat/Lon (WGS84)" },
