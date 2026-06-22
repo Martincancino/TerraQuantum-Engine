@@ -334,6 +334,19 @@ _SPECS = [
         "celdas; activa el modo out-of-core (Zarr) si necesitas la malla completa.",
     ),
     ErrorSpec(
+        "SOLVER_KERNEL_TOO_DENSE", SEVERITY_ERROR,
+        "El kernel de sensibilidad sería demasiado denso para la memoria disponible: "
+        "se estiman {kernel_mb} MB (fill {fill_pct}% con cutoff {cutoff_m} m, "
+        "{n_active} celdas × {n_obs} estaciones) frente a {available_mb} MB libres. "
+        "Un cutoff_radius grande respecto de un levantamiento pequeño hace que casi "
+        "todas las celdas interactúen con todas las estaciones, inflando el kernel "
+        "sin mejorar la resolución real. El número de celdas NO es el problema: lo "
+        "es la DENSIDAD del kernel.",
+        "Reduce cutoff_radius acercándolo a la profundidad de investigación "
+        "(≈ extensión del survey / 3), o aumenta el tamaño de bloque; si necesitas "
+        "la malla completa con cutoff amplio, ejecuta el modo out-of-core (Zarr).",
+    ),
+    ErrorSpec(
         "SOLVER_REGIONAL_SCALE", SEVERITY_WARNING,
         "El área del levantamiento ({extent_km} km) excede la escala local validada "
         "de TerraQuantum (<50 km). A escala regional la ambigüedad de profundidad "
@@ -678,6 +691,16 @@ class InsufficientDataError(TerraquantumError, ValueError):
 class SolverDivergenceError(TerraquantumError):
     """La inversión no convergió o produjo un resultado no finito."""
     default_code = "SOLVER_DIVERGED_HIGH_NOISE"
+
+
+class SolverMemoryError(TerraquantumError, MemoryError):
+    """El kernel de sensibilidad excedería la memoria disponible.
+
+    Red de SEGURIDAD (no un tope de vóxeles): se dispara cuando el kernel disperso,
+    estimado ANTES de materializarlo, no cabe en la RAM libre — típicamente por un
+    cutoff_radius desproporcionado, no por el número de celdas. Subclasea también
+    `MemoryError` por compatibilidad con código que captura fallos de memoria."""
+    default_code = "SOLVER_KERNEL_TOO_DENSE"
 
 
 class ConflictingDataError(TerraquantumError):

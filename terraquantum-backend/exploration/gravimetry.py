@@ -12,6 +12,63 @@ from scipy.spatial import cKDTree  # F0.2: HPC KDTree kernel híbrido
 logger = logging.getLogger(__name__)
 
 
+# ── Red de seguridad de memoria del kernel disperso (NO un tope de vóxeles) ──────
+# El kernel CSR + sus arrays transitorios (rows/cols/data antes del coalesce) cuesta
+# ~24 B por no-cero como cota superior. Si la estimación supera esta fracción de la
+# RAM libre se aborta con un error CLARO en vez de tumbar el proceso por OOM. El
+# guard depende de la DISPERSIÓN real (geometría × cutoff), NO del conteo de celdas:
+# un kernel disperso de millones de celdas pasa; uno denso de pocas celdas se detiene.
+_KERNEL_BYTES_PER_NNZ = 24
+_KERNEL_MEM_SAFETY_FRACTION = 0.6
+
+
+def _guard_sparse_kernel_memory(tree, sensor_coords, cutoff_radius, n_active, n_obs):
+    """Estima el tamaño del kernel disperso ANTES de materializarlo y aborta con un
+    error accionable (SOLVER_KERNEL_TOO_DENSE) si no cabe en la RAM disponible.
+
+    Usa ``query_ball_point(return_length=True)``: devuelve SÓLO el conteo de vecinos
+    por sensor (O(n_obs) memoria), sin materializar las listas de índices — que para
+    un kernel denso son justamente lo que dispara el OOM. NO limita el número de
+    vóxeles; sólo protege ante un kernel patológicamente denso (cutoff desmedido).
+
+    Retorna el NNZ estimado (para logging/tests) o None si SciPy no soporta el conteo
+    rápido (degradación segura: no se estima, no se rompe nada).
+    """
+    try:
+        counts = tree.query_ball_point(
+            np.asarray(sensor_coords, dtype=np.float64),
+            r=float(cutoff_radius),
+            return_length=True,
+        )
+    except TypeError:
+        # SciPy antiguo sin return_length → no estimamos (no es un fallo).
+        return None
+
+    nnz = int(np.sum(counts))
+    bytes_est = nnz * _KERNEL_BYTES_PER_NNZ
+
+    try:
+        import psutil
+        available = int(psutil.virtual_memory().available)
+    except Exception:
+        available = None
+
+    if available is not None and bytes_est > available * _KERNEL_MEM_SAFETY_FRACTION:
+        fill = nnz / max(1, int(n_active) * int(n_obs))
+        from core.errors import SolverMemoryError
+        raise SolverMemoryError(
+            "SOLVER_KERNEL_TOO_DENSE",
+            kernel_mb=round(bytes_est / 1e6, 1),
+            available_mb=round(available / 1e6, 1),
+            fill_pct=round(fill * 100.0, 1),
+            cutoff_m=round(float(cutoff_radius), 1),
+            n_active=int(n_active),
+            n_obs=int(n_obs),
+            technical_details={"nnz_estimate": nnz},
+        )
+    return nnz
+
+
 def _sigma_adaptive(
     g_observed: np.ndarray,
     detect_outliers: bool = True,
@@ -369,6 +426,11 @@ class GravimetryForward:
         voxel_centers = np.column_stack([x_c_act, y_c_act, z_c_act])
         tree = cKDTree(voxel_centers)
 
+        # Red de seguridad: estima la densidad del kernel ANTES de materializar las
+        # listas de vecinos; aborta con error claro si no cabe en RAM (no es un tope
+        # de vóxeles, depende del cutoff/geometría). Ver _guard_sparse_kernel_memory.
+        _guard_sparse_kernel_memory(tree, sensor_coords, self.cutoff_radius, n_active, n_obs)
+
         # Bulk query: 2 calls for ALL sensors (vs 2×n_obs calls in the serial loop)
         t_q0 = time.perf_counter()
         near_lists   = tree.query_ball_point(sensor_coords, r=threshold)
@@ -528,6 +590,11 @@ class GravimetryForward:
 
         voxel_centers = np.column_stack([x_c_act, y_c_act, z_c_act])
         tree = cKDTree(voxel_centers)
+
+        # Red de seguridad de memoria (idéntica a la ruta uniforme): aborta con error
+        # claro si el kernel disperso TreeMesh excediera la RAM disponible.
+        _guard_sparse_kernel_memory(tree, sensor_coords, self.cutoff_radius, n_active, n_obs)
+
         cutoff_lists = tree.query_ball_point(sensor_coords, r=self.cutoff_radius)
 
         _x, _y, _z = x_c_act, y_c_act, z_c_act
@@ -2551,9 +2618,24 @@ def solve_inversion_treemesh(
         f"lambda_mag={lambda_mag:.2e} lambda_spatial={lambda_spatial:.2e} beta={depth_beta}"
     )
 
-    result = lsqr(G_aug, d_aug, damp=0.0, iter_lim=iter_lim, atol=atol, btol=atol, show=False)
-    m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
-    _acond = result[6]
+    # Paridad de escalabilidad con el path regular (Fase 10): para mallas grandes el
+    # sistema mal condicionado converge mejor con LSMR (Fong & Saunders 2011) que con
+    # LSQR. Gateado por LSMR_THRESHOLD_N_ACTIVE → las mallas pequeñas siguen usando
+    # LSQR (byte-idéntico al comportamiento previo; sin regresión en tests existentes).
+    from core.config import USE_LSMR_LARGE as _USE_LSMR, LSMR_THRESHOLD_N_ACTIVE as _LSMR_THRESH
+    _itn = 0
+    if _USE_LSMR and n_cells > _LSMR_THRESH:
+        from exploration.solver_preconditioned import solve_inversion_lsmr as _lsmr_solve
+        m_tilde, _acond = _lsmr_solve(
+            G_aug, d_aug, _lb_tilde, _ub_tilde, maxiter=max(1000, iter_lim), tol=atol,
+        )
+        _itn = -1   # LSMR no expone el conteo de iteraciones de forma compatible
+        print(f"[TREEMESH SOLVER] LSMR (Fase 10, n>{_LSMR_THRESH:,}) cond(A)~{_acond:.2e}")
+    else:
+        result = lsqr(G_aug, d_aug, damp=0.0, iter_lim=iter_lim, atol=atol, btol=atol, show=False)
+        m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
+        _acond = result[6]
+        _itn = int(result[2])
 
     density_contrast = Ws @ m_tilde
     if not np.isfinite(density_contrast).all():
@@ -2590,7 +2672,7 @@ def solve_inversion_treemesh(
 
     if solver_meta is not None:
         solver_meta["acond"] = float(_acond)
-        solver_meta["itn"] = int(result[2])
+        solver_meta["itn"] = int(_itn)
         solver_meta["chi2_final"] = float(_chi2_final)
         solver_meta["misfit_percent"] = misfit_percent
         solver_meta["n_cells"] = n_cells

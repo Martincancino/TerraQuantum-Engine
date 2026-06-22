@@ -193,15 +193,41 @@ def compute_auto_grid(
         if safe_x > 0 and safe_z > 0 and safe_count > 0
         else block_size * 2.0
     )
-    # El cutoff debe cubrir al menos la profundidad del modelo: un vóxel
-    # directamente bajo una estación a profundidad z requiere cutoff >= z para
-    # ser sensado. Con solo max(3·block, 2·spacing), los surveys dispersos
-    # quedaban con >80% de vóxeles muertos y misfit >80% (caso Laguna del Maule).
-    cutoff_radius_m = max(block_size * 3.0, mean_spacing * 2.0, float(depth_m))
+    # El cutoff debe cubrir la profundidad RESOLUBLE del modelo: un vóxel bajo una
+    # estación a profundidad z requiere cutoff >= z para ser sensado. Con solo
+    # max(3·block, 2·spacing), los surveys dispersos quedaban con >80% de vóxeles
+    # muertos (caso Laguna del Maule). PERO atar el cutoff al `depth_m` FLOOREADO a
+    # MIN_DEPTH_M (1000 m) lo sobre-extiende para surveys pequeños: en DO-27 (600 m,
+    # 961 est) el cutoff de 1000 m hacía el kernel ~93% denso (144M no-ceros, ~1.7 GB
+    # por kernel) → OOM. La profundidad de investigación confiable de un survey de
+    # extensión L es ~L/DEPTH_SENS_FACTOR (≈L/3), NO el espesor floored del modelo:
+    # por la decaída 1/r² de la gravedad, más allá de esa profundidad la sensibilidad
+    # cae bajo el ruido y el vóxel queda correctamente sin sensar (se reporta vía el
+    # warning de observable_ratio). Atar el cutoff a la profundidad de investigación
+    # SIN floor mantiene el kernel DISPERSO sin recortar sensibilidad real. Sólo
+    # afecta surveys con max_extent < DEPTH_SENS_FACTOR·1000 (~3 km); para surveys
+    # mayores investigation_depth == depth_m (cero regresión).
+    investigation_depth_m = max(max_extent / DEPTH_SENS_FACTOR, block_size * 3.0)
+    cutoff_radius_m = max(block_size * 3.0, mean_spacing * 2.0, investigation_depth_m)
     rationale.append(
-        "cutoff_radius_m = max(block_size_m * 3, mean_spacing_m * 2, depth_m) "
-        "— cubre la profundidad del modelo para evitar voxeles muertos."
+        "cutoff_radius_m = max(block_size_m * 3, mean_spacing_m * 2, "
+        "max_extent / DEPTH_SENS_FACTOR) — cubre la profundidad de INVESTIGACIÓN "
+        "(no el espesor floored) para mantener el kernel disperso sin voxeles muertos."
     )
+
+    # ── Eficiencia: block_size vs espaciado de estaciones (informativo) ──────────
+    # Resolver celdas mucho más finas que el espaciado del dato no aporta resolución
+    # real (el dato no soporta esa frecuencia) y multiplica el conteo de vóxeles y el
+    # costo del kernel. block_size se fija en ~mean_spacing/2 (2 celdas por estación,
+    # razonable); si por algún clamp queda más fino que ~mean_spacing/3 se avisa. NO
+    # es un error ni el fix de memoria (ese es el cutoff disperso); sólo orienta al
+    # usuario a engrosar el bloque para acelerar sin perder resolución útil.
+    if mean_spacing > 0 and block_size < mean_spacing / 3.0:
+        warnings.append(
+            f"block_size_m={block_size:.1f} m es más fino que ~1/3 del espaciado de "
+            f"estaciones ({mean_spacing:.1f} m): no añade resolución real y encarece la "
+            f"inversión. Considera aumentar block_size para acelerar."
+        )
 
     # Sprint 3 — parámetros Octree calibrados (base, refine, radius, min_cell)
     oct_p = compute_octree_params(

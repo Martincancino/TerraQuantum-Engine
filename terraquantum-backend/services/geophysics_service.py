@@ -1859,22 +1859,6 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         cutoff_radius=params.cutoff_radius,
     )
 
-    # kernel_sparse: SOLO sobre grilla Core — para build_fit_diagnostics.
-    # El solver LSQR opera sobre la grilla completa (Core + Padding) vía HPC F0.2.
-    kernel_sparse = forward.build_sparse_kernel(
-        x_c,
-        y_c,
-        z_c,
-        sensor_coords,
-    )
-    _update("running", 0.25, "building_kernel",
-            "Kernel diagnóstico construido. Tensor Mesh F0.9 + Noise Floor activos...")
-
-    if kernel_sparse.shape[0] != len(g_observed):
-        raise RuntimeError(
-            "La matriz forward no coincide con la cantidad de observaciones gravimétricas."
-        )
-
     # ── Sprint 3 cierre: TreeMesh — auto-default para surveys grandes/regionales ──
     # Auto-select: se activa cuando el survey supera 50 km de extensión O la grilla
     # regular excede 50k celdas (RAM/compute costoso). El flag use_treemesh del schema
@@ -1884,6 +1868,29 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     _z_extent_m = float(nz * dx)
     _treemesh_flag = getattr(params, "use_treemesh", False)
     _use_treemesh = _treemesh_flag or should_auto_use_treemesh(total_voxels, _x_extent_m, _z_extent_m)
+
+    # kernel_sparse (diagnóstico, grilla Core) se construye SÓLO en el path regular.
+    # Antes se armaba aquí incondicionalmente y el path TreeMesh lo DESCARTABA: con
+    # un cutoff denso eso era un kernel de ~1.7 GB tirado a la basura (DOBLE BUILD:
+    # regular 160k + TreeMesh 220k → OOM en DO-27). El path TreeMesh construye su
+    # propio kernel desde la malla Octree; no necesita este diagnóstico Core.
+    kernel_sparse = None
+    if not _use_treemesh:
+        # kernel_sparse: SOLO sobre grilla Core — para build_fit_diagnostics.
+        # El solver LSQR opera sobre la grilla completa (Core + Padding) vía HPC F0.2.
+        kernel_sparse = forward.build_sparse_kernel(
+            x_c,
+            y_c,
+            z_c,
+            sensor_coords,
+        )
+        _update("running", 0.25, "building_kernel",
+                "Kernel diagnóstico construido. Tensor Mesh F0.9 + Noise Floor activos...")
+
+        if kernel_sparse.shape[0] != len(g_observed):
+            raise RuntimeError(
+                "La matriz forward no coincide con la cantidad de observaciones gravimétricas."
+            )
 
     if _use_treemesh:
         from exploration.gravimetry import solve_inversion_treemesh
