@@ -1424,9 +1424,38 @@ export type EnrichmentSummary = {
   nothing_fabricated: boolean;
 };
 
+// PILAR 1 (KEYSTONE) — plan de MAPEO MANUAL de columnas devuelto por el backend.
+export type ColumnRole =
+  | "x"
+  | "y"
+  | "elevation"
+  | "depth"
+  | "gravity_value"
+  | "gravity_type"
+  | "magnetic_value"
+  | "sigma"
+  | "station_id";
+
+export type ColumnMappingPlan = {
+  data_kind: string;
+  raw_columns: string[];
+  auto_detected: Record<string, string | null>;
+  roles: Record<string, string | null>;
+  overridden: Record<string, string>;
+  invalid_overrides: Record<string, string>;
+  required_roles: string[];
+  optional_roles: string[];
+  missing_required: string[];
+  needs_mapping: boolean;
+  confidence: "high" | "low";
+  role_labels: Record<string, string>;
+  literals: Record<string, string>;
+};
+
 export type EnrichPackageResult =
   | {
       ok: true;
+      needsMapping?: false;
       status: number;
       filename: string;
       packageText: string;
@@ -1437,6 +1466,7 @@ export type EnrichPackageResult =
       nStations: number;
       error: null;
     }
+  | { ok: true; needsMapping: true; status: number; mappingPlan: ColumnMappingPlan }
   | { ok: false; status: number; error: string };
 
 /**
@@ -1453,6 +1483,8 @@ export async function enrichPackage(opts: {
   enableDem?: boolean;
   config?: BuildPackageConfig;
   boreholes?: unknown[] | null;
+  // PILAR 1 — mapeo manual de columnas (rol → columna real del CSV primario).
+  columnMap?: Record<string, string> | null;
 }): Promise<EnrichPackageResult> {
   const dataType = opts.dataType ?? "gravity";
   const fd = new FormData();
@@ -1461,6 +1493,9 @@ export async function enrichPackage(opts: {
   if (opts.config) fd.append("config_json", JSON.stringify(opts.config));
   if (opts.boreholes && opts.boreholes.length > 0) {
     fd.append("boreholes_json", JSON.stringify(opts.boreholes));
+  }
+  if (opts.columnMap && Object.keys(opts.columnMap).length > 0) {
+    fd.append("column_map_json", JSON.stringify(opts.columnMap));
   }
   const qs = new URLSearchParams({
     data_type: dataType,
@@ -1485,8 +1520,18 @@ export async function enrichPackage(opts: {
       return { ok: false, status: res.status, error: detail };
     }
     const data = await res.json();
+    // El backend pide MAPEO: faltan roles requeridos y no se envió column_map.
+    if (data?.needs_mapping) {
+      return {
+        ok: true,
+        needsMapping: true,
+        status: res.status,
+        mappingPlan: data.column_mapping as ColumnMappingPlan,
+      };
+    }
     return {
       ok: true,
+      needsMapping: false,
       status: res.status,
       filename: String(data.filename ?? "package.tqpkg.csv"),
       packageText: String(data.package_text ?? ""),
@@ -1500,6 +1545,45 @@ export async function enrichPackage(opts: {
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Error de red";
     return { ok: false, status: 500, error: message };
+  }
+}
+
+/**
+ * PILAR 1 — Pide al backend el PLAN DE MAPEO de columnas de un CSV (sin invertir).
+ * Útil para abrir el paso de mapeo manual proactivamente (botón «Mapear columnas»).
+ */
+export async function analyzeColumns(opts: {
+  file: File;
+  dataType?: "gravity" | "magnetic";
+  columnMap?: Record<string, string> | null;
+}): Promise<{ ok: true; plan: ColumnMappingPlan } | { ok: false; error: string }> {
+  const fd = new FormData();
+  fd.append("file", opts.file);
+  if (opts.columnMap && Object.keys(opts.columnMap).length > 0) {
+    fd.append("column_map_json", JSON.stringify(opts.columnMap));
+  }
+  const qs = new URLSearchParams({ data_type: opts.dataType ?? "gravity" });
+  try {
+    const res = await fetch(`/api/gravity-import/analyze-columns?${qs.toString()}`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = `Error ${res.status}`;
+      try {
+        const d = await res.json();
+        if (typeof d?.detail === "string") detail = d.detail;
+        else if (d?.detail?.message) detail = String(d.detail.message);
+      } catch {
+        /* respuesta no-JSON */
+      }
+      return { ok: false, error: detail };
+    }
+    const data = await res.json();
+    return { ok: true, plan: data.column_mapping as ColumnMappingPlan };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, error: message };
   }
 }
 

@@ -4,7 +4,9 @@ import React, { useMemo, useState } from "react";
 
 import {
   enrichPackage,
+  analyzeColumns,
   type BuildPackageConfig,
+  type ColumnMappingPlan,
   type EnrichmentStep,
   type EnrichmentSummary,
 } from "../lib/terraquantum/frontendApi";
@@ -56,6 +58,10 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // PILAR 1 — MAPEO MANUAL de columnas. `mappingPlan` no-nulo → mostrar el paso de
+  // mapeo; `columnMap` (rol → columna) se persiste y se envía en cada generación.
+  const [mappingPlan, setMappingPlan] = useState<ColumnMappingPlan | null>(null);
+  const [columnMap, setColumnMap] = useState<Record<string, string>>({});
   const [result, setResult] = useState<
     | {
         filename: string;
@@ -77,7 +83,12 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
 
   const canGenerate = (gravFile !== null || magFile !== null) && !loading && !utmError;
 
-  async function handleGenerate() {
+  // Tipo de dato primario: gravimetría manda; solo magnética → primario magnético.
+  const isMagOnly = !gravFile && !!magFile;
+  const primaryFile = gravFile ?? magFile;
+  const dataType: "gravity" | "magnetic" = isMagOnly ? "magnetic" : "gravity";
+
+  async function handleGenerate(mapOverride?: Record<string, string>) {
     setError(null);
     setResult(null);
     if (!gravFile && !magFile) {
@@ -88,12 +99,8 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
       setError(utmError);
       return;
     }
-
-    // Inferir el tipo de dato primario: gravimetría manda; si solo hay magnética
-    // el primario es magnético. Una magnetometría junto a gravimetría → joint.
-    const isMagOnly = !gravFile && !!magFile;
-    const primary = (gravFile ?? magFile) as File;
-    const dataType: "gravity" | "magnetic" = isMagOnly ? "magnetic" : "gravity";
+    const primary = primaryFile as File;
+    const map = mapOverride ?? columnMap;
 
     const config: BuildPackageConfig = {
       region: "norte_chile",
@@ -110,11 +117,22 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         dataType,
         config,
         boreholes: boreholes ?? null,
+        columnMap: Object.keys(map).length > 0 ? map : null,
       });
       if (!res.ok) {
         setError(res.error);
         return;
       }
+      // El backend pide MAPEO: mostrar el paso y prellenar con lo auto-detectado.
+      if (res.needsMapping) {
+        setMappingPlan(res.mappingPlan);
+        setColumnMap((prev) => prefillMap(res.mappingPlan, { ...prev, ...map }));
+        setError(
+          "No se reconocieron todas las columnas requeridas. Asigna los roles abajo y vuelve a generar."
+        );
+        return;
+      }
+      setMappingPlan(null);
       setResult({
         filename: res.filename,
         packageText: res.packageText,
@@ -122,6 +140,31 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         warnings: res.warnings,
         nStations: res.nStations,
       });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Abrir el mapeo manual proactivamente (sin esperar a que el backend lo pida).
+  async function handleOpenMapping() {
+    setError(null);
+    if (!primaryFile) {
+      setError("Sube al menos un CSV para mapear sus columnas.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await analyzeColumns({
+        file: primaryFile,
+        dataType,
+        columnMap: Object.keys(columnMap).length > 0 ? columnMap : null,
+      });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setMappingPlan(res.plan);
+      setColumnMap((prev) => prefillMap(res.plan, prev));
     } finally {
       setLoading(false);
     }
@@ -231,20 +274,42 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         </div>
       </div>
 
-      {/* Botón grande */}
-      <button
-        type="button"
-        onClick={handleGenerate}
-        disabled={!canGenerate}
-        className="w-full rounded-xl py-4 text-sm font-black uppercase tracking-widest transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-[#C2D8C4] text-black hover:bg-white"
-      >
-        {loading ? "Enriqueciendo en el backend…" : "Generar CSV completo"}
-      </button>
+      {/* Botones */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <button
+          type="button"
+          onClick={() => handleGenerate()}
+          disabled={!canGenerate}
+          className="flex-1 rounded-xl py-4 text-sm font-black uppercase tracking-widest transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-[#C2D8C4] text-black hover:bg-white"
+        >
+          {loading ? "Enriqueciendo en el backend…" : "Generar CSV completo"}
+        </button>
+        <button
+          type="button"
+          onClick={handleOpenMapping}
+          disabled={!primaryFile || loading}
+          className="rounded-xl px-5 py-4 text-xs font-bold uppercase tracking-widest border border-neutral-700 text-neutral-300 hover:bg-neutral-900 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Mapear columnas
+        </button>
+      </div>
 
       {error && (
         <div className="rounded-xl border border-rose-800 bg-rose-950/40 p-4 text-xs font-mono text-rose-300 leading-5">
           {error}
         </div>
+      )}
+
+      {mappingPlan && (
+        <ColumnMappingStep
+          plan={mappingPlan}
+          columnMap={columnMap}
+          dataType={dataType}
+          loading={loading}
+          onChange={setColumnMap}
+          onApply={() => handleGenerate(columnMap)}
+          onCancel={() => setMappingPlan(null)}
+        />
       )}
 
       {result && (
@@ -388,6 +453,206 @@ function ResultCard({
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── PILAR 1 — Paso de MAPEO MANUAL de columnas ───────────────────────────────
+
+/** Prefija el mapa con lo que el backend ya resolvió (las elecciones previas mandan). */
+function prefillMap(
+  plan: ColumnMappingPlan,
+  existing: Record<string, string>
+): Record<string, string> {
+  const out: Record<string, string> = { ...existing };
+  for (const role of [...plan.required_roles, ...plan.optional_roles]) {
+    if (!out[role] && plan.roles[role]) out[role] = plan.roles[role] as string;
+  }
+  for (const k of ["unit", "coordinate_system"]) {
+    if (!out[k] && plan.literals[k]) out[k] = plan.literals[k];
+  }
+  return out;
+}
+
+const GRAVITY_UNITS = ["mGal", "µGal", "m/s2"];
+const COORD_SYSTEMS: { value: string; label: string }[] = [
+  { value: "", label: "(auto-detectar)" },
+  { value: "latlon", label: "Lat/Lon (WGS84)" },
+  { value: "utm", label: "UTM (este/norte)" },
+  { value: "local", label: "Local (metros)" },
+];
+
+function ColumnMappingStep({
+  plan,
+  columnMap,
+  dataType,
+  loading,
+  onChange,
+  onApply,
+  onCancel,
+}: {
+  plan: ColumnMappingPlan;
+  columnMap: Record<string, string>;
+  dataType: "gravity" | "magnetic";
+  loading: boolean;
+  onChange: (m: Record<string, string>) => void;
+  onApply: () => void;
+  onCancel: () => void;
+}) {
+  function setField(key: string, value: string) {
+    const next = { ...columnMap };
+    if (value) next[key] = value;
+    else delete next[key];
+    onChange(next);
+  }
+
+  const requiredOk = plan.required_roles.every((r) => columnMap[r]);
+  const invalid = Object.entries(plan.invalid_overrides ?? {});
+
+  return (
+    <div className="rounded-2xl border border-amber-900/60 bg-amber-950/10 p-5 flex flex-col gap-5">
+      <div>
+        <h3 className="text-base font-black text-white">Mapeo manual de columnas</h3>
+        <p className="text-[11px] font-mono text-neutral-500 mt-1 leading-5">
+          Asigna qué columna del archivo cumple cada rol. Los roles con{" "}
+          <span className="text-amber-400">*</span> son obligatorios. Nada se inventa:
+          solo se re-etiquetan columnas que ya existen en tu CSV.
+        </p>
+      </div>
+
+      {invalid.length > 0 && (
+        <div className="rounded-lg border border-rose-800 bg-rose-950/30 p-3 text-[11px] font-mono text-rose-300 leading-5">
+          Columnas no encontradas en el archivo:{" "}
+          {invalid.map(([role, col]) => `${role}="${col}"`).join(", ")}.
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {plan.required_roles.map((role) => (
+          <RoleSelect
+            key={role}
+            role={role}
+            required
+            label={plan.role_labels[role] ?? role}
+            columns={plan.raw_columns}
+            value={columnMap[role] ?? ""}
+            onChange={(v) => setField(role, v)}
+          />
+        ))}
+        {plan.optional_roles.map((role) => (
+          <RoleSelect
+            key={role}
+            role={role}
+            label={plan.role_labels[role] ?? role}
+            columns={plan.raw_columns}
+            value={columnMap[role] ?? ""}
+            onChange={(v) => setField(role, v)}
+          />
+        ))}
+      </div>
+
+      {/* Literales (no son columnas): unidad gravimétrica + sistema de coordenadas */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {dataType === "gravity" && (
+          <div>
+            <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-1">
+              Unidad gravimétrica
+            </label>
+            <select
+              value={columnMap.unit ?? ""}
+              onChange={(e) => setField("unit", e.target.value)}
+              className="w-full bg-black/60 border border-neutral-700 rounded px-3 py-2 text-xs text-neutral-200"
+            >
+              <option value="">(desde columna «unit» o nT)</option>
+              {GRAVITY_UNITS.map((u) => (
+                <option key={u} value={u}>
+                  {u}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[10px] font-mono text-neutral-600">
+              Úsala si el archivo no trae columna de unidad.
+            </p>
+          </div>
+        )}
+        <div>
+          <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-1">
+            Sistema de coordenadas
+          </label>
+          <select
+            value={columnMap.coordinate_system ?? ""}
+            onChange={(e) => setField("coordinate_system", e.target.value)}
+            className="w-full bg-black/60 border border-neutral-700 rounded px-3 py-2 text-xs text-neutral-200"
+          >
+            {COORD_SYSTEMS.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-3">
+        <button
+          type="button"
+          onClick={onApply}
+          disabled={!requiredOk || loading}
+          className="flex-1 rounded-xl py-3 text-xs font-black uppercase tracking-widest bg-[#C2D8C4] text-black hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {loading ? "Generando…" : "Aplicar mapeo y generar"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={loading}
+          className="rounded-xl px-5 py-3 text-xs font-bold uppercase tracking-widest border border-neutral-700 text-neutral-300 hover:bg-neutral-900 disabled:opacity-40"
+        >
+          Cerrar
+        </button>
+      </div>
+      {!requiredOk && (
+        <p className="text-[10px] font-mono text-amber-400">
+          Asigna todos los roles obligatorios (*) para continuar.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function RoleSelect({
+  role,
+  label,
+  columns,
+  value,
+  onChange,
+  required,
+}: {
+  role: string;
+  label: string;
+  columns: string[];
+  value: string;
+  onChange: (v: string) => void;
+  required?: boolean;
+}) {
+  return (
+    <div>
+      <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-1">
+        {label} {required && <span className="text-amber-400">*</span>}
+      </label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-black/60 border border-neutral-700 rounded px-3 py-2 text-xs text-neutral-200"
+        data-role={role}
+      >
+        <option value="">— sin asignar —</option>
+        {columns.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
