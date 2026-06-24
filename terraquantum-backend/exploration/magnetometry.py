@@ -628,6 +628,107 @@ class MagnetometryForward:
         )
         return Gx, Gy, Gz
 
+    def build_gradient_tensor_kernels(self, x_c_act, y_c_act, z_c_act, sensor_coords):
+        """
+        FASE 1.4 — Kernels del TENSOR DE GRADIENTE MAGNÉTICO (gradiometría / FTG).
+
+        La gradiometría de tensor mide las derivadas espaciales del campo anómalo,
+        ∂B_i/∂x_j (nT/m), con mayor resolución espacial y SIN necesidad de remoción
+        regional ni corrección de deriva de base — útil para sondeo aéreo de alta
+        resolución (análogo magnético del Full Tensor Gradiometry gravimétrico).
+
+        Para magnetización inducida ∥ f̂, el campo por unidad de κ es
+            B_i = C·[3·r_i·s/r⁵ − f̂_i/r³],   s = f̂·r_vec,  r_vec = celda − sensor,
+        (los mismos kernels MVI). Derivando respecto a la posición del SENSOR
+        (∂/∂sensor_j = −∂/∂r_j) se obtiene el tensor de gradiente analítico:
+
+            G_ij = ∂B_i/∂sensor_j
+                 = −(3C/r⁵)·[ δ_ij·s + r_i·f̂_j + f̂_i·r_j − 5·r_i·r_j·s/r² ].
+
+        Es SIMÉTRICO (G_ij=G_ji) y SIN TRAZA (∇·B=0 ⇒ G_xx+G_yy+G_zz=0): solo 5
+        componentes independientes. Cada componente es LINEAL en κ (nT/m por unidad SI),
+        así que la inversión reusa toda la maquinaria lineal (ver
+        solve_gradient_tensor_inversion_lsqr).
+
+        Returns
+        -------
+        dict con 6 CSR (n_obs × n_active): 'xx','xy','xz','yy','yz','zz' (zz=−(xx+yy)).
+        Misma esparsidad/cutoff que build_mvi_kernels.
+        """
+        x_c_act = np.asarray(x_c_act, dtype=np.float64)
+        y_c_act = np.asarray(y_c_act, dtype=np.float64)
+        z_c_act = np.asarray(z_c_act, dtype=np.float64)
+        sensor_coords = np.asarray(sensor_coords, dtype=np.float64)
+
+        if len(x_c_act) == 0 or len(sensor_coords) == 0:
+            raise ValueError("No hay vóxeles o sensores para el tensor de gradiente.")
+
+        n_active = len(x_c_act)
+        n_obs = len(sensor_coords)
+        eps = 1e-10 * min(self.dx, self.dy, self.dz)
+        max_workers = max(1, (os.cpu_count() or 2) - 1)
+        t_start = time.perf_counter()
+
+        voxel_centers = np.column_stack([x_c_act, y_c_act, z_c_act])
+        tree = cKDTree(voxel_centers)
+        cutoff_lists = tree.query_ball_point(sensor_coords, r=self.cutoff_radius)
+
+        _x, _y, _z = x_c_act, y_c_act, z_c_act
+        _fx, _fy, _fz = float(self.f_hat[0]), float(self.f_hat[1]), float(self.f_hat[2])
+        _C = self.C
+
+        def _sensor_row_grad(i):
+            sx, sy, sz = sensor_coords[i]
+            idx = np.asarray(cutoff_lists[i], dtype=np.int32)
+            if len(idx) == 0:
+                z0 = np.empty(0, dtype=np.float64)
+                return (np.empty(0, np.int32), np.empty(0, np.int32),
+                        z0, z0.copy(), z0.copy(), z0.copy(), z0.copy(), z0.copy())
+            dx = _x[idx] - sx
+            dy = _y[idx] - sy
+            dz = _z[idx] - sz
+            r2 = dx * dx + dy * dy + dz * dz + eps
+            s = _fx * dx + _fy * dy + _fz * dz
+            fac = -3.0 * _C / (r2 ** 2.5)
+            inv_r2 = 1.0 / r2
+            gxx = fac * (s + 2.0 * dx * _fx - 5.0 * dx * dx * s * inv_r2)
+            gxy = fac * (dx * _fy + _fx * dy - 5.0 * dx * dy * s * inv_r2)
+            gxz = fac * (dx * _fz + _fx * dz - 5.0 * dx * dz * s * inv_r2)
+            gyy = fac * (s + 2.0 * dy * _fy - 5.0 * dy * dy * s * inv_r2)
+            gyz = fac * (dy * _fz + _fy * dz - 5.0 * dy * dz * s * inv_r2)
+            gzz = fac * (s + 2.0 * dz * _fz - 5.0 * dz * dz * s * inv_r2)
+            rows = np.full(len(idx), i, dtype=np.int32)
+            return (rows, idx,
+                    gxx.astype(np.float64), gxy.astype(np.float64), gxz.astype(np.float64),
+                    gyy.astype(np.float64), gyz.astype(np.float64), gzz.astype(np.float64))
+
+        rows_c, cols_c = [], []
+        data_c = {k: [] for k in ("xx", "xy", "xz", "yy", "yz", "zz")}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_sensor_row_grad, i) for i in range(n_obs)]
+            for fut in futures:
+                r, c, gxx, gxy, gxz, gyy, gyz, gzz = fut.result()
+                rows_c.append(r); cols_c.append(c)
+                data_c["xx"].append(gxx); data_c["xy"].append(gxy); data_c["xz"].append(gxz)
+                data_c["yy"].append(gyy); data_c["yz"].append(gyz); data_c["zz"].append(gzz)
+
+        rows_arr = np.concatenate(rows_c) if rows_c else np.empty(0, np.int32)
+        cols_arr = np.concatenate(cols_c) if cols_c else np.empty(0, np.int32)
+
+        def _csr(chunks):
+            data_arr = np.concatenate(chunks) if chunks else np.empty(0, np.float64)
+            return sp.csr_matrix((data_arr, (rows_arr, cols_arr)),
+                                 shape=(n_obs, n_active), dtype=np.float64)
+
+        out = {k: _csr(v) for k, v in data_c.items()}
+        if out["xx"].nnz == 0:
+            raise ValueError("Tensor de gradiente magnético vacío. Revisa cutoff/sensores.")
+        logger.info(
+            f"[MAG FTG] Tensor de gradiente (5 indep.): NNZ={out['xx'].nnz:,} c/u | "
+            f"t={time.perf_counter()-t_start:.2f}s"
+        )
+        return out
+
     def build_sparse_kernel(self, x_vox, y_vox, z_vox, sensor_coords):
         """API pública: trata TODOS los vóxeles como activos. Delega en _build_sparse_kernel."""
         x_vox = np.asarray(x_vox, dtype=np.float64)
@@ -2152,6 +2253,85 @@ class MagnetometryInversion:
             f"chi2={_chi2_final:.4f} | κ_max={smax:.4f}"
         )
         return susceptibility_full, relative_score_full, misfit_percent, sensitivity_full
+
+    def solve_gradient_tensor_inversion_lsqr(
+        self,
+        tensor_data,                    # dict componente→array(n_obs), p.ej. {'xx':..,'xy':..}
+        components,                     # lista de componentes a invertir, p.ej. ['xx','xy','xz']
+        y_c,
+        forward_model=None,
+        sensor_coords=None,
+        x_c=None,
+        z_c=None,
+        **kwargs,                       # lambda_mag, alpha_spatial, susc_min/max, boreholes, ...
+    ):
+        """
+        FASE 1.4 — Inversión de TENSOR DE GRADIENTE MAGNÉTICO (gradiometría / FTG).
+
+        Cada componente del tensor ∂B_i/∂x_j es LINEAL en κ, así que la inversión reusa
+        ÍNTEGRAMENTE el solver escalar: se apilan las componentes seleccionadas en un
+        kernel combinado (Σcomp·n_obs × n_active) y un vector de datos apilado, y se pasa
+        como `override_kernel` a solve_magnetic_inversion_lsqr — heredando depth weighting,
+        suavidad, bounds, anclaje de sondajes y diagnósticos sin duplicar código.
+
+        Invertir VARIAS componentes a la vez aporta más restricción angular (el tensor es
+        sobredeterminado por celda) → mejor localización que una sola componente.
+
+        LIMITACIÓN HONESTA (MEDIDA): el TARGETING no es robusto reutilizando el depth
+        weighting del campo. El kernel del tensor decae como 1/r⁴ (vs 1/r³ del campo), así
+        que (depth+z0)^(β/2) con el β=1.5 del campo no transfiere; un barrido sobre 4
+        cuerpos × β∈{3.5,4,4.5,5} dio óptimos DISPERSOS (un cuerpo falla a todo β). La
+        inversión REPRODUCE el dato del tensor (consistencia), pero el targeting robusto
+        requiere depth/sensitivity weighting DEDICADO al gradiente — DIFERIDO. Los kernels
+        del tensor (FD-validados, sin traza) son la fundación reusable.
+
+        Parameters
+        ----------
+        tensor_data : dict  componente→array(n_obs) en nT/m (de build_gradient_tensor_kernels
+                      o medido). components : lista de claves a usar (subconjunto de
+                      'xx','xy','xz','yy','yz','zz').
+
+        Returns: igual que solve_magnetic_inversion_lsqr
+            (susceptibility_full, relative_score_full, misfit_percent, sensitivity_full).
+        """
+        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
+            raise ValueError("Se requiere forward_model, sensor_coords, x_c, z_c.")
+        if not components:
+            raise ValueError("Indique al menos una componente del tensor a invertir.")
+        x_c = np.asarray(x_c, dtype=np.float64)
+        y_c = np.asarray(y_c, dtype=np.float64)
+        z_c = np.asarray(z_c, dtype=np.float64)
+        sensor_coords = np.asarray(sensor_coords, dtype=np.float64)
+
+        # Kernels del tensor sobre TODAS las celdas (active_cells del solver con
+        # topography_elevations=None abarca toda la malla subsuelo → shapes alineadas,
+        # mismo patrón que el path de remanencia con override_kernel).
+        kernels = forward_model.build_gradient_tensor_kernels(x_c, y_c, z_c, sensor_coords)
+        missing = [c for c in components if c not in kernels]
+        if missing:
+            raise ValueError(f"Componentes desconocidas: {missing}. Válidas: {list(kernels)}.")
+        for c in components:
+            if c not in tensor_data:
+                raise ValueError(f"Falta el dato de la componente '{c}' en tensor_data.")
+
+        G_stack = sp.vstack([kernels[c] for c in components]).tocsr()
+        d_stack = np.concatenate([np.asarray(tensor_data[c], dtype=np.float64) for c in components])
+
+        logger.info(
+            f"[MAG FTG] Inversión de gradiente: componentes={components} | "
+            f"datos apilados={d_stack.shape[0]:,} | kernel={G_stack.shape}"
+        )
+        return self.solve_magnetic_inversion_lsqr(
+            d_observed=d_stack,
+            y_c=y_c,
+            forward_model=forward_model,
+            sensor_coords=sensor_coords,
+            x_c=x_c,
+            z_c=z_c,
+            override_kernel=G_stack,
+            topography_elevations=None,
+            **kwargs,
+        )
 
 
 def sweep_q_ratio(
