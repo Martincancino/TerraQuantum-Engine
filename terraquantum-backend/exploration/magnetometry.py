@@ -1889,6 +1889,270 @@ class MagnetometryInversion:
             "relative_score_full": relative_score_full,
         }
 
+    def solve_amplitude_inversion_lsqr(
+        self,
+        d_observed,                     # AMPLITUD |B| del campo anómalo (nT, ≥0)
+        y_c,
+        forward_model=None,
+        sensor_coords=None,
+        x_c=None,
+        z_c=None,
+        lambda_mag=1e-4,
+        alpha_spatial=1.0,
+        topography_elevations=None,
+        noise_floor=0.02,
+        noise_pct=0.02,
+        depth_beta: float = 1.5,
+        hx=None, hy=None, hz=None,
+        susc_min: float = 0.0,
+        susc_max: float = 1.0,
+        padding_mask: Optional[np.ndarray] = None,
+        padding_kappa: float = 1e5,
+        detect_outliers: bool = False,
+        max_gn_iter: int = 8,
+        gn_tol: float = 1e-3,
+        solver_meta: Optional[dict] = None,
+    ):
+        """
+        FASE 1.3 — INVERSIÓN DE AMPLITUD (magnetic amplitude inversion).
+
+        Invierte la AMPLITUD del campo magnético anómalo |B|=√(Bx²+By²+Bz²) en vez de
+        la TMI. La amplitud es DÉBILMENTE dependiente de la dirección de magnetización
+        de la fuente, así que localiza cuerpos con REMANENCIA desconocida (oblicua) sin
+        asumir su dirección — robustez que la TMI inducida NO tiene (Shearer & Li 2004;
+        Li, Nabighian & Li 2010).
+
+        Física: para magnetización inducida ∥ f̂, las 3 componentes del campo por unidad
+        de susceptibilidad κ son EXACTAMENTE los kernels MVI (Gx,Gy,Gz): B=(Gxκ,Gyκ,Gzκ),
+        porque G_a = Σ_c f̂_c·H_{a,c} es la componente-a del campo de una magnetización
+        unitaria a lo largo de f̂. La amplitud Ba(κ)=√(Σ_a(G_aκ)²) es NO LINEAL en κ →
+        Gauss-Newton: la sensibilidad en cada iteración es
+            J = diag(Bx/Ba)·Gx + diag(By/Ba)·Gy + diag(Bz/Ba)·Gz,
+        y se resuelve el sistema linealizado con depth weighting (Li & Oldenburg),
+        suavidad (Laplaciano), smallness Tikhonov y bounds [susc_min,susc_max]
+        (no-negatividad física). Reusa el andamiaje del motor escalar/MVI.
+
+        Returns (paridad de firma con solve_magnetic_inversion_lsqr):
+            (susceptibility_full, relative_score_full, misfit_percent, sensitivity_full)
+        longitud total_voxels (NaN en aire).
+        """
+        logger.info("[MAG AMP] Preparando inversión de AMPLITUD (Gauss-Newton no-lineal).")
+
+        d_observed = np.asarray(d_observed, dtype=np.float64)
+        y_c = np.asarray(y_c, dtype=np.float64)
+
+        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
+            raise ValueError(
+                "solve_amplitude_inversion_lsqr requiere forward_model, sensor_coords, x_c, z_c."
+            )
+        if not np.isfinite(d_observed).all():
+            raise ValueError("d_observed (amplitud) contiene NaN o Inf.")
+        if np.any(d_observed < 0):
+            raise ValueError("La amplitud |B| no puede ser negativa.")
+        if lambda_mag <= 0:
+            raise ValueError("lambda_mag debe ser mayor que 0.")
+        if susc_max <= susc_min:
+            raise ValueError("susc_max debe ser mayor que susc_min.")
+
+        # ── Celdas activas (topografía; y positivo hacia abajo) ──────────────
+        if topography_elevations is None:
+            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
+        else:
+            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
+            if topo_depth.shape[0] != self.total_voxels:
+                raise ValueError(
+                    f"topography_elevations debe tener {self.total_voxels} elementos."
+                )
+        voxel_top = y_c - (self.dy / 2.0)
+        active_cells = voxel_top >= topo_depth
+        n_active = int(np.sum(active_cells))
+        if n_active == 0:
+            raise ValueError("Ningún vóxel activo bajo la topografía dada.")
+
+        n_sensors = len(d_observed)
+        y_c_active = y_c[active_cells]
+        x_c_arr = np.asarray(x_c, dtype=np.float64)
+        z_c_arr = np.asarray(z_c, dtype=np.float64)
+
+        # ── Kernels 3C (campo por unidad de κ) — mismos que MVI ──────────────
+        Gx, Gy, Gz = forward_model.build_mvi_kernels(
+            x_c_arr[active_cells], y_c_active, z_c_arr[active_cells],
+            np.asarray(sensor_coords, dtype=np.float64),
+        )
+
+        # ── Data weighting Wd (sigma adaptivo / paramétrico, igual que escalar) ─
+        _is_outlier = np.zeros(n_sensors, dtype=bool)
+        if noise_floor == 0.02 and noise_pct == 0.02:
+            sigma, _is_outlier = _sigma_adaptive(d_observed, detect_outliers=detect_outliers)
+        else:
+            sigma = sigma_parametric(d_observed, noise_floor, noise_pct)
+        Wd = sp.diags(1.0 / sigma)
+
+        # ── Depth weighting (cambio de variable Li & Oldenburg) ──────────────
+        z0 = 0.5 * self.dy
+        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
+        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
+        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
+        Wz_inv = sp.diags(wz_inv_diag)
+
+        # ── Suavidad (Laplaciano) escalada por Wz_inv ────────────────────────
+        lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
+        L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
+        L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+        L_scaled = (L_active @ Wz_inv).tocsr() * lambda_spatial
+
+        # ── Smallness diferencial con padding (mismo diseño escalar/MVI) ─────
+        _padding_active = None
+        if padding_mask is not None:
+            _pm = np.asarray(padding_mask, dtype=bool)
+            if _pm.shape[0] != self.total_voxels:
+                raise ValueError(f"padding_mask debe tener longitud {self.total_voxels}.")
+            _padding_active = _pm[active_cells]
+        if _padding_active is not None:
+            _ws_cell = np.where(_padding_active,
+                                float(padding_kappa) * float(lambda_mag),
+                                float(lambda_mag))
+            _small_blk = sp.diags(_ws_cell) @ Wz_inv
+
+        eps_amp = 1e-12 * max(float(np.max(np.abs(d_observed))), 1.0)
+
+        def _amplitude(kappa):
+            bx = Gx @ kappa
+            by = Gy @ kappa
+            bz = Gz @ kappa
+            return bx, by, bz, np.sqrt(bx * bx + by * by + bz * bz + eps_amp ** 2)
+
+        _last_acond = {"v": np.nan}
+
+        def _linear_solve(K, rhs):
+            """Resuelve K·κ ≈ rhs con depth weighting + suavidad + smallness/padding.
+
+            Devuelve κ (clip a bounds). Reusa exactamente el andamiaje del motor escalar:
+            sistema aumentado [Wd·K·Wz_inv ; λs·L̃ ; smallness] en el espacio m̃ y
+            destransforma κ = Wz_inv·m̃.
+            """
+            K_s = (Wd @ K) @ Wz_inv
+            rhs_w = Wd @ np.asarray(rhs, dtype=np.float64)
+            if _padding_active is not None:
+                A = sp.vstack([K_s, L_scaled, _small_blk]).tocsr()
+                b = np.concatenate([rhs_w, np.zeros(2 * n_active)])
+                res = lsqr(A, b, damp=0.0, iter_lim=600, atol=1e-8, btol=1e-8, show=False)
+            else:
+                A = sp.vstack([K_s, L_scaled]).tocsr()
+                b = np.concatenate([rhs_w, np.zeros(n_active)])
+                res = lsqr(A, b, damp=float(lambda_mag), iter_lim=600, atol=1e-8, btol=1e-8, show=False)
+            mt = res[0]
+            _last_acond["v"] = float(res[6])
+            if not np.isfinite(mt).all():
+                raise RuntimeError("LSQR (amplitud) devolvió valores no finitos.")
+            return np.clip(wz_inv_diag * mt, susc_min, susc_max)
+
+        # ── Seed: inversión LINEAL con el kernel de magnitud G_mag=√(Gx²+Gy²+Gz²) ─
+        # Para una fuente puntual |B|=G_mag·κ EXACTO; para múltiples celdas G_mag·κ ≥ |B|
+        # (desigualdad triangular) → seed positivo y bien localizado, lejos del mínimo
+        # local débil del arranque uniforme. El GN refina la no-linealidad de la suma.
+        # Gx,Gy,Gz comparten esparsidad (mismo KDTree) → .data alineadas.
+        G_mag = Gx.copy()
+        G_mag.data = np.sqrt(Gx.data ** 2 + Gy.data ** 2 + Gz.data ** 2)
+        kappa = _linear_solve(G_mag, d_observed)
+
+        observed_norm = float(np.linalg.norm(d_observed))
+
+        def _misfit(kap):
+            _, _, _, ba = _amplitude(kap)
+            r = float(np.linalg.norm(d_observed - ba))
+            return 0.0 if observed_norm <= 0 else (r / observed_norm) * 100.0
+
+        # Gauss-Newton con backtracking line search (la amplitud es NO CONVEXA: un paso
+        # GN sin control oscila). Se conserva SIEMPRE el mejor iterado por misfit.
+        misfit_percent = _misfit(kappa)
+        best_kappa = kappa.copy()
+        best_misfit = misfit_percent
+        _acond = _last_acond["v"]
+        _gn_used = 0
+
+        for _it in range(int(max_gn_iter)):
+            bx, by, bz, Ba = _amplitude(kappa)
+            inv_ba = 1.0 / Ba
+            # Jacobiano de amplitud J = Σ_a diag(B_a/Ba)·G_a   (n_obs × n_active)
+            J = (sp.diags(bx * inv_ba) @ Gx
+                 + sp.diags(by * inv_ba) @ Gy
+                 + sp.diags(bz * inv_ba) @ Gz).tocsr()
+            # Linealización: Ba(κ') ≈ Ba + J(κ'−κ) = d  ⇒  J κ' = d − Ba + J κ
+            d_lin = d_observed - Ba + (J @ kappa)
+            kappa_gn = _linear_solve(J, d_lin)
+            _acond = _last_acond["v"]
+
+            # Line search: aceptar el paso que reduce el misfit (Armijo simplificado).
+            delta = kappa_gn - kappa
+            t = 1.0
+            accepted = False
+            for _bt in range(6):
+                kappa_try = np.clip(kappa + t * delta, susc_min, susc_max)
+                m_try = _misfit(kappa_try)
+                if m_try < misfit_percent - 1e-6:
+                    kappa, misfit_percent, accepted = kappa_try, m_try, True
+                    break
+                t *= 0.5
+            _gn_used = _it + 1
+            _step = float(np.linalg.norm(t * delta) / max(np.linalg.norm(kappa), 1e-30)) if accepted else 0.0
+
+            if misfit_percent < best_misfit:
+                best_misfit, best_kappa = misfit_percent, kappa.copy()
+
+            logger.info(
+                f"[MAG AMP] GN it {_gn_used}: misfit={misfit_percent:.2f}% | "
+                f"paso={_step:.2e} | t={t:.3f} | cond(A)~{_acond:.2e}"
+            )
+            if not accepted or _step < float(gn_tol):
+                break
+
+        # Mejor iterado (garantiza no empeorar el seed lineal G_mag).
+        kappa = best_kappa
+        misfit_percent = best_misfit
+
+        # ── Salidas (paridad con el motor escalar) ───────────────────────────
+        def _expand(vec_active, fill=np.nan):
+            full = np.full(self.total_voxels, fill, dtype=np.float64)
+            full[active_cells] = vec_active
+            return full
+
+        _, _, _, Ba_fin = _amplitude(kappa)
+        _chi2_final = float(np.sum(((d_observed - Ba_fin) / sigma) ** 2)) / max(n_sensors, 1)
+
+        smax = float(np.max(kappa)) if n_active > 0 else 0.0
+        rel_score = (kappa / smax) if smax > 0 else np.zeros_like(kappa)
+        # Proxy de sensibilidad: norma de columna del kernel 3C combinado.
+        col_sens = np.sqrt(
+            np.asarray(Gx.multiply(Gx).sum(axis=0)).ravel()
+            + np.asarray(Gy.multiply(Gy).sum(axis=0)).ravel()
+            + np.asarray(Gz.multiply(Gz).sum(axis=0)).ravel()
+        )
+
+        susceptibility_full = _expand(kappa)
+        relative_score_full = _expand(np.clip(rel_score, 0.0, 1.0))
+        sensitivity_full = _expand(col_sens)
+
+        if solver_meta is not None:
+            solver_meta["inversion_mode"] = "amplitude"
+            solver_meta["acond"] = float(_acond)
+            solver_meta["chi2_final"] = float(_chi2_final)
+            solver_meta["misfit_percent"] = float(misfit_percent)
+            solver_meta["n_active"] = int(n_active)
+            solver_meta["gn_iterations"] = int(_gn_used)
+            solver_meta["depth_beta"] = float(depth_beta)
+            solver_meta["susc_max_recovered"] = float(smax)
+            solver_meta["detect_outliers"] = bool(detect_outliers)
+            solver_meta["n_outliers"] = int(np.sum(_is_outlier))
+            solver_meta["field_unit_vector"] = [float(v) for v in forward_model.f_hat]
+            solver_meta["padding_active"] = bool(_padding_active is not None)
+
+        logger.info(
+            f"[MAG AMP] Convergencia en {_gn_used} it. Misfit={misfit_percent:.2f}% | "
+            f"chi2={_chi2_final:.4f} | κ_max={smax:.4f}"
+        )
+        return susceptibility_full, relative_score_full, misfit_percent, sensitivity_full
+
 
 def sweep_q_ratio(
     forward: "MagnetometryForward",
