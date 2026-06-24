@@ -50,6 +50,41 @@ class PgiParams(BaseModel):
         default=3, ge=2, le=10,
         description="Número de componentes del GMM cuando fit_from_model=True.",
     )
+    # ── FASE 2.2: GMM dinámico (Astic & Oldenburg 2019, §3.2) ────────────────
+    # False (default) = GMM ESTÁTICO histórico (means/stds/weights fijos; el bucle
+    #   solo reasigna la clase MAP). Byte-idéntico al comportamiento de Fase 11.
+    # True = GMM DINÁMICO: cada iteración re-estima la mixtura del modelo invertido
+    #   vía EM MAP regularizado hacia el prior petrofísico (NIW + Dirichlet). Las
+    #   componentes se adaptan al dato sin colapsar ni alejarse del prior.
+    dynamic_gmm: bool = Field(
+        default=False,
+        description=(
+            "Si True, re-estima el GMM en cada iteración (EM con prior NIW) en vez "
+            "de mantenerlo fijo. Permite que las clases petrológicas se adapten al "
+            "dato regularizadas hacia el prior. False = GMM estático (Fase 11)."
+        ),
+    )
+    prior_kappa: float = Field(
+        default=50.0, gt=0.0, le=1e6,
+        description=(
+            "Confianza del prior NIW sobre las MEDIAS del GMM dinámico (pseudo-conteos). "
+            "Mayor = medias más rígidas (≈ estático). Solo aplica si dynamic_gmm=True."
+        ),
+    )
+    prior_nu: float = Field(
+        default=50.0, gt=0.0, le=1e6,
+        description=(
+            "Confianza del prior NIW sobre las VARIANZAS del GMM dinámico. "
+            "Mayor = varianzas más rígidas. Solo aplica si dynamic_gmm=True."
+        ),
+    )
+    weight_concentration: float = Field(
+        default=1.0, ge=0.0, le=1e6,
+        description=(
+            "Pseudo-conteo Dirichlet sobre los PESOS del GMM dinámico (evita "
+            "componentes vacías). Solo aplica si dynamic_gmm=True."
+        ),
+    )
 
 
 class MagneticRemanenceParams(BaseModel):

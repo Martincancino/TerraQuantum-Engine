@@ -2388,6 +2388,23 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             _new_contrast_active = np.nan_to_num(
                 _density_pgi_full[_pgi_active_mask] - inversor_padded.base_density, nan=0.0
             )
+
+            # ── FASE 2.2: GMM DINÁMICO (re-estimar la mixtura del modelo actual) ──
+            # Con dynamic_gmm=True, la mixtura se re-ajusta al modelo invertido en
+            # cada iteración (EM MAP regularizado al prior NIW) antes de recomputar
+            # m_pgi → las clases petrológicas se adaptan al dato. Default (False) =
+            # GMM estático histórico (Fase 11), means/stds/weights sin cambios.
+            if getattr(_pgi_p, "dynamic_gmm", False):
+                _refit_info = _pgi_engine.refit(
+                    _new_contrast_active,
+                    prior_kappa=float(getattr(_pgi_p, "prior_kappa", 50.0)),
+                    prior_nu=float(getattr(_pgi_p, "prior_nu", 50.0)),
+                    weight_concentration=float(getattr(_pgi_p, "weight_concentration", 1.0)),
+                )
+                _log.info("pgi_refit", iter=_pgi_iters_done,
+                          mean_shift_rel=float(_refit_info["mean_shift_rel"]),
+                          means=[float(x) for x in _pgi_engine.means])
+
             m_pgi_new = _pgi_engine.compute_m_pgi(_new_contrast_active)
             _pgi_conv = _pgi_engine.convergence_norm(m_pgi_prev, m_pgi_new)
 
@@ -2418,6 +2435,9 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             "pgi_conv":  float(_pgi_conv),
             "pgi_k":     _pgi_engine.K,
             "pgi_alpha": _pgi_engine.alpha_pgi,
+            "pgi_dynamic_gmm": bool(getattr(_pgi_p, "dynamic_gmm", False)),
+            "pgi_gmm_means": [float(x) for x in _pgi_engine.means],
+            "pgi_gmm_stds":  [float(x) for x in _pgi_engine.stds],
         })
 
         _log.info("pgi_complete", iters=_pgi_iters_done, final_misfit=float(_misfit_pgi),

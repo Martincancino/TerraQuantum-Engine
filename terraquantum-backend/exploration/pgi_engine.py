@@ -85,6 +85,15 @@ class PGIEngine:
         self.base_density = float(base_density)
         self.K = len(means_arr)
 
+        # ── FASE 2.2: prior petrofísico INMUTABLE para el GMM dinámico (NIW) ──
+        # El refit() dinámico (Astic & Oldenburg 2019) re-estima means/stds/weights
+        # del modelo invertido en cada iteración, pero REGULARIZADO hacia este prior
+        # (Normal-Inverse-Wishart + Dirichlet). means/stds/weights de arriba mutan;
+        # estos NO — son el centro del prior (conocimiento de sondaje/bibliografía).
+        self._prior_means   = means_arr.copy()
+        self._prior_vars    = (stds_arr ** 2).copy()
+        self._prior_weights = weights_arr.copy()
+
     # ── Núcleo del GMM ──────────────────────────────────────────────────────
 
     def _log_gaussian(self, m_abs: np.ndarray, k: int) -> np.ndarray:
@@ -124,6 +133,69 @@ class PGIEngine:
         class_map = self.predict_class(m_abs)                   # (n,)
         m_pgi_abs = self.means[class_map]                       # centroide por celda
         return m_pgi_abs - self.base_density                    # contraste
+
+    # ── FASE 2.2: GMM DINÁMICO (EM con prior NIW) ──────────────────────────
+    def refit(
+        self,
+        m_contrast: np.ndarray,
+        prior_kappa: float = 50.0,
+        prior_nu: float = 50.0,
+        weight_concentration: float = 1.0,
+        min_std: float = 0.01,
+    ) -> dict:
+        """Re-estima means/stds/weights del modelo actual con UNA pasada EM MAP.
+
+        Reemplaza el GMM estático (means/stds/weights fijos) por uno DINÁMICO
+        (Astic & Oldenburg 2019, §3.2): cada iteración del bucle PGI re-ajusta la
+        mixtura al modelo invertido, pero REGULARIZADA hacia el prior petrofísico
+        (`_prior_*`) mediante un prior conjugado Normal-Inverse-Wishart (medias +
+        varianzas) y Dirichlet (pesos). Esto permite que las componentes se adapten
+        al dato sin colapsar ni alejarse del conocimiento de sondaje/bibliografía.
+
+        E-step: responsabilidades r_kj con el GMM ACTUAL (predict_proba).
+        M-step MAP (cerrado, conjugado), por componente k:
+            π_k = (N_k + ζ) / (N + Kζ)
+            μ_k = (κ0·μ0_k + N_k·x̄_k) / (κ0 + N_k)
+            v_k = [ν0·v0_k + S_k + (κ0·N_k/(κ0+N_k))·(x̄_k − μ0_k)²] / (ν0 + N_k + 2)
+        donde N_k=Σr_kj, x̄_k=Σr_kj·x_j/N_k, S_k=Σr_kj·(x_j−x̄_k)², y (μ0,v0,ζ) son
+        el prior. κ0/ν0 = confianza del prior (↑ = más rígido ≈ estático); ζ evita
+        componentes vacías. Modifica self.means/stds/weights IN-PLACE.
+
+        Returns: dict con el cambio relativo de medias (diagnóstico de convergencia).
+        """
+        x = np.asarray(m_contrast, dtype=np.float64).ravel() + self.base_density
+        if x.size == 0:
+            return {"n_cells": 0, "mean_shift_rel": 0.0}
+
+        r = self.predict_proba(x)                      # (K, n), GMM ACTUAL
+        Nk = r.sum(axis=1)                              # (K,)
+        Nk_safe = np.where(Nk > 1e-12, Nk, 1.0)
+        sum_rx  = r @ x                                 # (K,)
+        sum_rx2 = r @ (x * x)                           # (K,)
+        xbar = sum_rx / Nk_safe                         # (K,)
+        # Scatter ponderado S_k = Σ r·(x−x̄)² = Σ r·x² − N·x̄² (≥0, clip numérico).
+        Sk = np.maximum(sum_rx2 - Nk * xbar * xbar, 0.0)
+
+        k0, nu0, zeta = float(prior_kappa), float(prior_nu), float(weight_concentration)
+        mu0, v0, w0 = self._prior_means, self._prior_vars, self._prior_weights
+
+        # MAP de las medias (Normal prior) — componentes vacías → quedan en μ0.
+        means_new = (k0 * mu0 + Nk * xbar) / (k0 + Nk)
+        # MAP de las varianzas (Inverse-Gamma/IW prior).
+        shrink = (k0 * Nk) / (k0 + Nk)                  # 0 si N_k=0
+        vars_new = (nu0 * v0 + Sk + shrink * (xbar - mu0) ** 2) / (nu0 + Nk + 2.0)
+        stds_new = np.sqrt(np.maximum(vars_new, float(min_std) ** 2))
+        # MAP de los pesos (Dirichlet con pseudoconteo ζ sobre el prior).
+        w_unnorm = Nk + zeta * w0 * self.K
+        weights_new = w_unnorm / w_unnorm.sum()
+
+        _shift = float(
+            np.linalg.norm(means_new - self.means) / max(np.linalg.norm(self.means), 1e-12)
+        )
+        self.means   = means_new
+        self.stds    = stds_new
+        self.weights = weights_new
+        return {"n_cells": int(x.size), "mean_shift_rel": _shift}
 
     def build_pgi_block(
         self,
@@ -204,3 +276,87 @@ class PGIEngine:
         weights = gm.weights_[order].tolist()
         return cls(means=means, stds=stds, weights=weights,
                    alpha_pgi=alpha_pgi, base_density=base_density)
+
+
+# ── FASE 2.2: GMM 2D en el plano ρ-χ (kernel NIW para joint) ────────────────
+# Foundation para el PGI conjunto dinámico (Fase 3): la mixtura vive en el plano
+# (densidad, susceptibilidad) con covarianza 2×2 plena, de modo que captura la
+# CORRELACIÓN petrofísica ρ↔χ (p.ej. magnetita: alta densidad Y alta susc). Aquí
+# se entrega el actualizador MAP conjugado (E-step responsabilidades + M-step NIW
+# de medias/covarianzas + Dirichlet de pesos), validado en aislamiento. El cableado
+# al solver joint co-localizado se hace en Fase 3 (NO en 2.2).
+def gmm_responsibilities_2d(
+    X: np.ndarray, means: np.ndarray, covs: np.ndarray, weights: np.ndarray
+) -> np.ndarray:
+    """Responsabilidades (soft assignment) de un GMM 2D pleno. Shape (K, n).
+
+    X: (n, 2) puntos (ρ, χ). means: (K, 2). covs: (K, 2, 2) SPD. weights: (K,).
+    Estabilizado por log-sum-exp.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    means = np.asarray(means, dtype=np.float64)
+    covs = np.asarray(covs, dtype=np.float64)
+    weights = np.asarray(weights, dtype=np.float64)
+    K = means.shape[0]
+    n = X.shape[0]
+    log_p = np.empty((K, n), dtype=np.float64)
+    for k in range(K):
+        cov = covs[k]
+        det = np.linalg.det(cov)
+        inv = np.linalg.inv(cov)
+        d = X - means[k]                                   # (n, 2)
+        maha = np.einsum("ni,ij,nj->n", d, inv, d)         # (n,)
+        log_p[k] = np.log(max(weights[k], 1e-300)) - 0.5 * (np.log(max(det, 1e-300)) + maha)
+    log_p -= log_p.max(axis=0, keepdims=True)
+    p = np.exp(log_p)
+    p /= p.sum(axis=0, keepdims=True)
+    return p
+
+
+def niw_map_update_2d(
+    X: np.ndarray,
+    resp: np.ndarray,
+    prior_means: np.ndarray,
+    prior_covs: np.ndarray,
+    prior_weights: np.ndarray,
+    prior_kappa: float = 50.0,
+    prior_nu: float = 50.0,
+    weight_concentration: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """M-step MAP conjugado (Normal-Inverse-Wishart + Dirichlet) en 2D.
+
+    Análogo 2×2 de PGIEngine.refit: re-estima (medias, covarianzas, pesos) de la
+    mixtura ρ-χ regularizada hacia (prior_means, prior_covs, prior_weights). El
+    prior NIW usa Ψ0 = ν0·prior_cov de modo que la moda IW ≈ prior_cov (consistente
+    con el caso 1D: denom ν0+N+d+1, d=2).
+
+    Returns: (means (K,2), covs (K,2,2), weights (K,)).
+    """
+    X = np.asarray(X, dtype=np.float64)
+    resp = np.asarray(resp, dtype=np.float64)              # (K, n)
+    mu0 = np.asarray(prior_means, dtype=np.float64)        # (K, 2)
+    cov0 = np.asarray(prior_covs, dtype=np.float64)        # (K, 2, 2)
+    w0 = np.asarray(prior_weights, dtype=np.float64)       # (K,)
+    K, d = mu0.shape[0], 2
+    k0, nu0, zeta = float(prior_kappa), float(prior_nu), float(weight_concentration)
+
+    Nk = resp.sum(axis=1)                                  # (K,)
+    Nk_safe = np.where(Nk > 1e-12, Nk, 1.0)
+    means = np.empty((K, d), dtype=np.float64)
+    covs = np.empty((K, d, d), dtype=np.float64)
+    for k in range(K):
+        rk = resp[k]                                       # (n,)
+        xbar = (rk[:, None] * X).sum(axis=0) / Nk_safe[k]  # (2,)
+        mean_k = (k0 * mu0[k] + Nk[k] * xbar) / (k0 + Nk[k])
+        dxc = X - xbar                                     # (n, 2)
+        Sk = (rk[:, None, None] * np.einsum("ni,nj->nij", dxc, dxc)).sum(axis=0)
+        dm = (xbar - mu0[k]).reshape(2, 1)
+        Psi_N = nu0 * cov0[k] + Sk + (k0 * Nk[k] / (k0 + Nk[k])) * (dm @ dm.T)
+        cov_k = Psi_N / (nu0 + Nk[k] + d + 1.0)            # moda IW
+        # Blindaje SPD: simetriza y añade piso diagonal mínimo.
+        cov_k = 0.5 * (cov_k + cov_k.T) + 1e-9 * np.eye(d)
+        means[k] = mean_k
+        covs[k] = cov_k
+    w_unnorm = Nk + zeta * w0 * K
+    weights = w_unnorm / w_unnorm.sum()
+    return means, covs, weights
