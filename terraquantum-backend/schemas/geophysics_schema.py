@@ -405,6 +405,20 @@ class GeophysicsInvertInput(BaseModel):
                     "exacto Bhattacharyya/Sharma para r≤4·a_eq, corrige el sesgo de "
                     "amplitud del dipolo en cuerpos someros).",
     )
+    # ── FASE 1.2: Auto-desmagnetización (self-demagnetization) ─────────────────
+    # Factor desmagnetizante N de la forma de la celda. 0.0 (default) = SIN
+    # desmagnetización (κ_eff = κ, comportamiento histórico). >0 activa la corrección
+    # κ_eff = κ/(1+Nκ): el motor invierte la susceptibilidad APARENTE y se reporta la
+    # VERDADERA. Físicamente relevante para κ≳0.1 (magnetita masiva, IOCG, BIF).
+    # N≈1/3 (0.333) para celdas equidimensionales/esfera (Blakely 1995 §5). Es la
+    # aproximación LOCAL (celda aislada); el solve acoplado finite-volume queda diferido.
+    # Solo aplica al modo escalar inducido (no MVI, no remanencia).
+    self_demag_factor: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description="Factor desmagnetizante N para auto-desmagnetización (self-demag). "
+                    "0.0 (default) = desactivado. ~0.333 (esfera) activa la corrección "
+                    "κ_eff=κ/(1+Nκ) para cuerpos de alta susceptibilidad (κ≳0.1).",
+    )
     # ── FASE 9C-2: Inversión Conjunta (Joint Inversion / Cross-Gradient) ──────
     # Cuando el input trae A LA VEZ señal gravimétrica real (g≠0) y magnética
     # (magnetic_nt≠0), el servicio rutea al Orquestador de Inversión Conjunta

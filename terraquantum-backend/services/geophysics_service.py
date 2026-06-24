@@ -1179,6 +1179,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     en este modo. El dato invertido es params.magnetic_nt (anomalía TMI, nT).
     """
     from exploration.magnetometry import MagnetometryForward, MagnetometryInversion
+    from exploration.geophysics_weights import apparent_susceptibility, true_susceptibility
 
     project_id = params.project_id
     run_id = params.run_id
@@ -1306,6 +1307,20 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     # susceptibility_si para reutilizar todo el payload/parquet escalar sin duplicar.
     _is_mvi = getattr(params, "magnetization_model", "scalar") == "vector"
 
+    # ── FASE 1.2: Auto-desmagnetización (self-demag) — cambio de variable κ↔κ_eff ──
+    # El motor lineal invierte la susceptibilidad APARENTE κ_eff = κ/(1+Nκ). Para
+    # mantener el solver INTACTO, la corrección se aplica en la frontera del servicio:
+    # bounds y anclajes VERDADEROS → APARENTES antes de resolver; salida APARENTE →
+    # VERDADERA al reportar. Solo en el modo escalar inducido (no MVI, no remanencia
+    # total_field, que usan otro kernel). κ_eff es monótona en κ → los bounds mapean
+    # sin ambigüedad. Ver exploration/geophysics_weights.py.
+    _demag_N = float(getattr(params, "self_demag_factor", 0.0) or 0.0)
+    _use_demag = _demag_N > 0.0 and not _is_mvi
+    # susc_max APARENTE para los bounds del solver (susc_min=0 → 0 aparente también).
+    _susc_max_solve = (
+        float(apparent_susceptibility(params.susc_max, _demag_N)) if _use_demag else params.susc_max
+    )
+
     # ── Anclaje por sondajes (FASE 9B): el motor magnético lee ESTRICTAMENTE
     # susceptibility_si. Los intervalos sin susceptibilidad (None) se SALTAN: un
     # sondaje netamente gravimétrico no aporta restricción magnética. Validado
@@ -1326,7 +1341,10 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
                         f"no en [{params.susc_min}, {params.susc_max}] SI)."
                     ),
                 )
-            _rows.append([_bh.x_m, _bh.z_m, _bh.y_from_m, _bh.y_to_m, _susc])
+            # FASE 1.2: el sondaje mide la susceptibilidad VERDADERA; el solver ancla
+            # en el espacio APARENTE → convertir antes de anclar.
+            _susc_anchor = float(apparent_susceptibility(_susc, _demag_N)) if _use_demag else _susc
+            _rows.append([_bh.x_m, _bh.z_m, _bh.y_from_m, _bh.y_to_m, _susc_anchor])
         if _rows:
             boreholes_arr = np.asarray(_rows, dtype=np.float64)
 
@@ -1424,7 +1442,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             z_c=z_c_full,
             forward_model=forward,
             susc_min=params.susc_min,
-            susc_max=params.susc_max,
+            susc_max=_susc_max_solve,                  # FASE 1.2: bound APARENTE si self-demag
             hx=hx, hy=hy, hz=hz,                       # Tensor mesh (Laplaciano no-uniforme)
             padding_mask=_padding_mask_mag,            # R-02: BC física del padding
             padding_kappa=float(getattr(params, "padding_kappa", 1e5)),
@@ -1446,6 +1464,13 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     if _is_mvi:
         _mvi_inc_full = _mvi_inc_full[is_core]
         _mvi_dec_full = _mvi_dec_full[is_core]
+
+    # ── FASE 1.2: self-demag — la inversión recuperó la susceptibilidad APARENTE
+    # κ_eff; se reporta la VERDADERA κ = κ_eff/(1−N·κ_eff). Los NaN (celdas inactivas)
+    # se preservan. El misfit/score quedan en el espacio aparente (física correcta del
+    # ajuste). El bound aparente garantiza N·κ_eff < 1 (denominador positivo).
+    if _use_demag:
+        susc_full = true_susceptibility(susc_full, _demag_N)
 
     _update("running", 0.85, "building_payload", "Construyendo payload de susceptibilidad...")
 
@@ -1539,6 +1564,19 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             "axis_convention": "x=Norte, z=Este, y=profundidad(+abajo)",
         },
         "remanence": _remanence_report,
+        "self_demagnetization": (
+            {
+                "enabled": True,
+                "demag_factor_N": _demag_N,
+                "note": (
+                    "Susceptibilidad reportada = VERDADERA κ (corregida por self-demag "
+                    "κ_eff=κ/(1+Nκ)); el solver invirtió la APARENTE. Aproximación LOCAL "
+                    "(celda aislada); el solve acoplado finite-volume queda diferido."
+                ),
+            }
+            if _use_demag
+            else {"enabled": False}
+        ),
         "susceptibility_bounds_si": [params.susc_min, params.susc_max],
         "solver": {
             "cond_A": solver_meta.get("acond"),
