@@ -1447,6 +1447,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             padding_mask=_padding_mask_mag,            # R-02: BC física del padding
             padding_kappa=float(getattr(params, "padding_kappa", 1e5)),
             boreholes=boreholes_arr,
+            anchor_mode=str(getattr(params, "anchor_mode", "soft")),      # FASE 2.1
             detect_outliers=bool(getattr(params, "robust_sigma", True)),  # FASE 20B Tarea 4
             auto_kappa=bool(getattr(params, "auto_kappa", True)),         # FASE 20B Tarea 5
             regularization_norm=getattr(params, "regularization_norm", "L2"),  # FASE 20B Tarea 6
@@ -2026,6 +2027,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     _padding_mask_r02 = ~is_core
     _kappa        = float(getattr(params, "padding_kappa", 1e5))
     _anchor_kappa = float(getattr(params, "anchor_kappa", 1e4))
+    _anchor_mode  = str(getattr(params, "anchor_mode", "soft"))   # FASE 2.1
     _auto_kappa   = bool(getattr(params, "auto_kappa", True))
 
     # ── HITO 5 (B-05): Topografía activa desde sensor_elevations_masl ──────────
@@ -2181,6 +2183,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             padding_kappa=_kappa,
             boreholes=boreholes_arr,        # FASE 8: anclaje por sondajes (None si no hay)
             anchor_kappa=_anchor_kappa,     # FASE 16: configurable desde schema
+            anchor_mode=_anchor_mode,       # FASE 2.1: soft (histórico) / hard (exacto)
             auto_kappa=_auto_kappa,         # FASE 16: ajuste automático si cond>1e12
             noise_floor=_noise_floor_solver, # Fase 2: sigma calibrado por gravímetro
             noise_pct=_noise_pct_solver,
@@ -2368,6 +2371,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
                     padding_kappa=_kappa,
                     boreholes=boreholes_arr,
                     anchor_kappa=_anchor_kappa,
+                    anchor_mode=_anchor_mode,   # FASE 2.1
                     auto_kappa=_auto_kappa,
                     noise_floor=_noise_floor_solver,
                     noise_pct=_noise_pct_solver,
@@ -2823,6 +2827,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             density_min=params.density_min,
             density_max=params.density_max,
             boreholes=boreholes_arr,       # FASE 8: anclar igual que pass-1 → doi_raw coherente
+            anchor_mode=_anchor_mode,      # FASE 2.1: mismo modo que pass-1
             noise_floor=_noise_floor_solver,
             noise_pct=_noise_pct_solver,
         )

@@ -42,6 +42,7 @@ def _run_lsqr_with_heartbeat(
     # ── FASE 8 (Q4): Anclaje por sondajes (boreholes) ─────────────────────────
     boreholes=None,        # array (n,5) [x_m, z_m, y_from_m, y_to_m, density_t_m3] o None
     anchor_kappa=1e4,      # strong soft constraint (NO 1e6: preserva cond(A))
+    anchor_mode="soft",    # FASE 2.1: "soft" (histórico) / "hard" (eliminación exacta)
     laplacian_relax_alpha=0.2,  # relajación de filas del Laplaciano en vóxeles anclados
     # ── FASE 16: Ajuste automático de kappas ─────────────────────────────────
     auto_kappa=True,       # escalar kappas si cond(A) > 1e12 (heurística rápida)
@@ -102,6 +103,7 @@ def _run_lsqr_with_heartbeat(
             padding_kappa=padding_kappa,
             boreholes=boreholes,        # FASE 8: anclaje por sondajes
             anchor_kappa=anchor_kappa,
+            anchor_mode=anchor_mode,    # FASE 2.1: soft (histórico) / hard (exacto)
             laplacian_relax_alpha=laplacian_relax_alpha,
             noise_floor=noise_floor,    # Fase 2: sigma configurable por gravímetro
             noise_pct=noise_pct,

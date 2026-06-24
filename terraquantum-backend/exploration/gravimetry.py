@@ -1371,6 +1371,13 @@ class GravimetryInversion:
         boreholes: Optional[np.ndarray] = None,
         anchor_kappa: float = 1e4,           # NO usar 1e6: destruiría cond(A)
         laplacian_relax_alpha: float = 0.2,
+        # ── FASE 2.1: modo de anclaje ────────────────────────────────────────
+        # "soft" (default, histórico) = strong soft constraint (smallness×anchor_kappa),
+        #   error residual ~2% en la celda anclada (κ finito).
+        # "hard" = restricción EXACTA por eliminación de variables: la celda anclada
+        #   se elimina del sistema (contribución → RHS) y se reinyecta el valor del
+        #   sondaje sin error. anchor_kappa y laplacian_relax_alpha se ignoran.
+        anchor_mode: str = "soft",
         # ── OUT: dict mutable donde el solver escribe diagnósticos numéricos ──
         # Si no es None, escribe: acond, chi2_final, n_sat_lower, n_sat_upper.
         solver_meta: Optional[dict] = None,
@@ -1672,9 +1679,17 @@ class GravimetryInversion:
 
         # FASE 8: ¿hay vóxeles anclados observables tras las reducciones?
         _has_anchors = _anchor_active is not None and bool(np.any(_anchor_active))
+        # FASE 2.1: modo de anclaje (soft histórico / hard por eliminación).
+        _anchor_mode = str(anchor_mode).lower()
+        if _anchor_mode not in ("soft", "hard"):
+            raise ValueError(
+                f"anchor_mode inválido: {anchor_mode!r}. Use 'soft' o 'hard'."
+            )
+        _hard_anchor = _has_anchors and _anchor_mode == "hard"
         if _has_anchors:
             logger.info(
                 f"[FASE 8] Anclaje sondajes: {int(np.sum(_anchor_active)):,} voxeles | "
+                f"modo={_anchor_mode} | "
                 f"kappa={anchor_kappa:.0e} | lap_relax={laplacian_relax_alpha}"
             )
 
@@ -1891,6 +1906,23 @@ class GravimetryInversion:
                 _anchor_contrast_active[_anchor_active] / _wz_safe[_anchor_active]
             )
 
+        # ── FASE 2.1: Anclaje DURO (hard constraint por eliminación de variables) ─
+        # En modo "hard" las celdas ancladas se FIJAN exactamente a su valor de
+        # sondaje: el valor objetivo en m_tilde es _small_target (= contraste/diag(Wz_inv),
+        # de modo que Wz_inv·m_tilde = contraste exacto). Se elimina la celda del sistema
+        # moviendo su contribución G_aug[:,j]·target al RHS y anulando la columna j; tras
+        # resolver se reinyecta el valor exacto. Sin error residual de smallness (~2% soft).
+        if _hard_anchor:
+            _anchor_idx = np.where(_anchor_active)[0]
+            _t_fix = _small_target[_anchor_idx]
+            d_aug = d_aug - np.asarray(G_aug[:, _anchor_idx] @ _t_fix).ravel()
+            _keep_cols = sp.diags((~_anchor_active).astype(np.float64))
+            G_aug = (G_aug @ _keep_cols).tocsr()
+            logger.info(
+                f"[FASE 2.1] Anclaje DURO: {_anchor_idx.size:,} celda(s) eliminada(s) "
+                f"del sistema (valor exacto del sondaje, sin smallness soft)."
+            )
+
         # ── FASE 24B Tarea 1: control de norma de regularización ──────────────
         # L2 → un único solve idéntico al motor histórico (n_irls=1, focus=None).
         # compact/mixed → bucle IRLS de minimum support sobre la smallness.
@@ -1925,7 +1957,10 @@ class GravimetryInversion:
             if _padding_active is not None:
                 w = np.where(_padding_active, float(_pk) * lambda_mag_eff, w)
             if _has_anchors:
-                w = np.where(_anchor_active, float(_ak) * lambda_mag_eff, w)
+                # FASE 2.1: en modo hard la celda anclada ya fue eliminada (columna
+                # nula); su smallness debe ser 0 (no penalizar un DOF inexistente).
+                _aw = 0.0 if _hard_anchor else float(_ak) * lambda_mag_eff
+                w = np.where(_anchor_active, _aw, w)
             if _focus_w is not None:
                 w = np.where(_free_mask, w * _focus_w, w)
             return w
@@ -2077,6 +2112,13 @@ class GravimetryInversion:
                     )
                     if solver_meta is not None:
                         solver_meta["pgd"] = _pgd_info
+
+            # FASE 2.1: reinyecta el valor EXACTO en las celdas de anclaje duro.
+            # Sus columnas fueron eliminadas → el solver las dejó en 0; se restaura
+            # m_tilde[j] = target para que Wz_inv·m_tilde = contraste medido exacto
+            # (también antes del reweighting IRLS, que lee Wz_inv·m_tilde).
+            if _hard_anchor:
+                m_tilde[_anchor_active] = _small_target[_anchor_active]
 
             # ── Reponderación IRLS minimum-support (compact/mixed) ─────────────
             # Foco sobre el CONTRASTE FÍSICO c = Wz_inv·m_tilde (t/m³). Peso
@@ -2248,7 +2290,8 @@ class GravimetryInversion:
                 solver_meta["n_sat_upper_pad"]  = int(np.sum(_sat_upper_active & _padding_active_full))
             # FASE 8: anclajes de sondaje aplicados
             solver_meta["n_anchored_voxels"]    = int(np.sum(_anchor_active)) if _anchor_active is not None else 0
-            solver_meta["anchor_kappa"]         = float(anchor_kappa) if _has_anchors else None
+            solver_meta["anchor_mode"]          = _anchor_mode if _has_anchors else None
+            solver_meta["anchor_kappa"]         = float(anchor_kappa) if (_has_anchors and not _hard_anchor) else None
             solver_meta["laplacian_relax_alpha"] = float(laplacian_relax_alpha) if _has_anchors else None
             solver_meta["lambda_effective"]      = float(lambda_mag_eff)
             # FASE 16: diagnósticos de kappa adaptation

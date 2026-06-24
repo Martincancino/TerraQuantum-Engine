@@ -895,6 +895,11 @@ class MagnetometryInversion:
         boreholes: Optional[np.ndarray] = None,
         anchor_kappa: float = 1e4,      # NO usar 1e6: degradaría cond(A)
         laplacian_relax_alpha: float = 0.2,
+        # ── FASE 2.1: modo de anclaje ────────────────────────────────────────
+        # "soft" (default, histórico) = strong soft constraint (smallness×anchor_kappa).
+        # "hard" = restricción EXACTA por eliminación de variables (celda anclada =
+        #   susceptibilidad medida sin error; anchor_kappa/lap_relax se ignoran).
+        anchor_mode: str = "soft",
         # ── FASE 20B Tarea 5: Ajuste automático de kappa (port Fase 16) ───────
         # Si True y hay anclajes, escala anchor_kappa cuando cond(A) estimado > 1e12
         # (por ratio de normas-columna del sistema ensamblado, O(nnz), sin SVD).
@@ -1102,9 +1107,17 @@ class MagnetometryInversion:
             _n_active_sol = n_active
 
         _has_anchors = _anchor_active is not None and bool(np.any(_anchor_active))
+        # FASE 2.1: modo de anclaje (soft histórico / hard por eliminación).
+        _anchor_mode = str(anchor_mode).lower()
+        if _anchor_mode not in ("soft", "hard"):
+            raise ValueError(
+                f"anchor_mode inválido: {anchor_mode!r}. Use 'soft' o 'hard'."
+            )
+        _hard_anchor = _has_anchors and _anchor_mode == "hard"
         if _has_anchors:
             logger.info(
                 f"[MAG FASE 8] Anclaje sondajes: {int(np.sum(_anchor_active)):,} vóxeles | "
+                f"modo={_anchor_mode} | "
                 f"kappa={anchor_kappa:.0e} | lap_relax={laplacian_relax_alpha}"
             )
 
@@ -1305,6 +1318,27 @@ class MagnetometryInversion:
         if _padding_active is not None:
             _free_mask &= ~_padding_active
 
+        # ── FASE 2.1: Anclaje DURO (hard constraint por eliminación de variables) ─
+        # El bloque smallness magnético opera en χ físico (diags(w)·Wz_inv), por lo que
+        # el valor fijo en m_tilde de una celda anclada a χ medido es χ/diag(Wz_inv)
+        # (susc = Wz_inv·m_tilde ⇒ m_tilde = χ/diag(Wz_inv)). Se elimina la celda del
+        # sistema (contribución → RHS) y se reinyecta tras resolver. Sin error residual.
+        _t_fix_full = np.zeros(_n_active_sol, dtype=np.float64)
+        if _hard_anchor:
+            _wz_d = np.asarray(Wz_inv.diagonal(), dtype=np.float64)
+            _wz_d_safe = np.where(np.abs(_wz_d) < 1e-12, 1e-12, _wz_d)
+            _t_fix_full[_anchor_active] = (
+                _anchor_value_active[_anchor_active] / _wz_d_safe[_anchor_active]
+            )
+            _anchor_idx = np.where(_anchor_active)[0]
+            d_aug = d_aug - np.asarray(G_aug[:, _anchor_idx] @ _t_fix_full[_anchor_idx]).ravel()
+            _keep_cols = sp.diags((~_anchor_active).astype(np.float64))
+            G_aug = (G_aug @ _keep_cols).tocsr()
+            logger.info(
+                f"[MAG FASE 2.1] Anclaje DURO: {_anchor_idx.size:,} celda(s) eliminada(s) "
+                f"del sistema (susceptibilidad medida exacta, sin smallness soft)."
+            )
+
         from core.config import USE_PROJECTED_SOLVER as _USE_PGD_MAG
 
         def _run_solve(focus_w):
@@ -1319,7 +1353,10 @@ class MagnetometryInversion:
                     _ws = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64)
                     if _padding_active is not None:
                         _ws = np.where(_padding_active, float(padding_kappa) * float(lambda_mag), _ws)
-                    _ws = np.where(_anchor_active, float(_ak) * float(lambda_mag), _ws)
+                    # FASE 2.1: en modo hard la celda anclada fue eliminada (columna
+                    # nula); su smallness debe ser 0 (no penalizar un DOF inexistente).
+                    _aw = 0.0 if _hard_anchor else float(_ak) * float(lambda_mag)
+                    _ws = np.where(_anchor_active, _aw, _ws)
                     if focus_w is not None:
                         _ws = np.where(_free_mask, _ws * focus_w, _ws)
                     _blk = sp.diags(_ws) @ Wz_inv
@@ -1425,6 +1462,10 @@ class MagnetometryInversion:
         _acond = float("nan")
         for _irls_it in range(_n_irls):
             m_tilde, _acond = _run_solve(_focus_w)
+            # FASE 2.1: reinyecta el valor EXACTO en celdas de anclaje duro (columnas
+            # eliminadas → el solver las dejó en 0); susc = Wz_inv·m_tilde = χ medido.
+            if _hard_anchor:
+                m_tilde[_anchor_active] = _t_fix_full[_anchor_active]
             if _reg_norm == "l2":
                 break
             # Foco sobre el contraste físico c = Wz_inv·m̃ (χ). f_i=1/√(c²+ε²) media-1
@@ -1543,7 +1584,8 @@ class MagnetometryInversion:
             solver_meta["susc_max"] = float(susc_max)
             solver_meta["depth_beta"] = float(depth_beta)
             solver_meta["n_anchored_voxels"] = int(np.sum(_anchor_active)) if _anchor_active is not None else 0
-            solver_meta["anchor_kappa"] = float(anchor_kappa) if _has_anchors else None
+            solver_meta["anchor_mode"] = _anchor_mode if _has_anchors else None
+            solver_meta["anchor_kappa"] = float(anchor_kappa) if (_has_anchors and not _hard_anchor) else None
             solver_meta["laplacian_relax_alpha"] = float(laplacian_relax_alpha) if _has_anchors else None
             # FASE 20B Tarea 5: bounds + auto_kappa
             solver_meta["cond_a_estimated"] = float(_cond_a_est) if _cond_a_est is not None else None

@@ -504,7 +504,22 @@ class GeophysicsInvertInput(BaseModel):
         description=(
             "Peso del soft constraint para vóxeles anclados por sondaje (1e2–1e8). "
             "Fija la densidad de los intervalos con dato medido. "
-            "NO usar > 1e6: deteriora el condicionamiento de A."
+            "NO usar > 1e6: deteriora el condicionamiento de A. "
+            "Solo aplica con anchor_mode='soft'."
+        ),
+    )
+    # ── FASE 2.1 (God-Tier): modo de anclaje de sondajes ─────────────────────
+    # "soft" (default, histórico) = penalización fuerte (smallness × anchor_kappa);
+    #   deja un error residual ~2% en la celda anclada (κ finito, no infinito).
+    # "hard" = restricción exacta por eliminación de variables: la celda anclada se
+    #   ELIMINA del sistema (su contribución pasa al RHS) y se reinyecta el valor
+    #   medido del sondaje sin error. anchor_kappa se ignora en este modo.
+    anchor_mode: Literal["soft", "hard"] = Field(
+        "soft",
+        description=(
+            "Modo de anclaje por sondaje. 'soft' (default) = penalización fuerte "
+            "(anchor_kappa), error residual ~2%. 'hard' = restricción exacta por "
+            "eliminación de variables (celda anclada = valor medido sin error)."
         ),
     )
     # auto_kappa: True → el solver ajusta kappas automáticamente si cond(A) > 1e12.
