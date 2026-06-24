@@ -413,6 +413,16 @@ class GeophysicsInvertInput(BaseModel):
             "False = comportamiento v1.0 (sin poda, Tier 0.9 — solo para diagnóstico)."
         ),
     )
+    joint_continuation_mode: Literal["step", "log"] = Field(
+        "log",
+        description=(
+            "Forma del ramp-up del peso cross-gradient en el bucle conjunto. "
+            "'log' (default, Fase 0): homotopía log 0.01→1.0 en k≥2 (cumple la "
+            "promesa de 'continuation exponencial' del docstring; evita el salto "
+            "brusco de misfit). 'step': escalón binario histórico (0→1.0 en k≥2), "
+            "conservado para rollback."
+        ),
+    )
     # ── HITO 5 (B-05): Topografía activa ────────────────────────────────────────
     # Elevación MASL de cada sensor de gravedad (m s.n.m.), paralelo a `observations`.
     # Si se provee con la misma longitud que observations, el solver activa la máscara

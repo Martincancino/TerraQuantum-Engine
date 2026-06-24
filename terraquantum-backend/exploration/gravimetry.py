@@ -9,6 +9,8 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import lsqr
 from scipy.spatial import cKDTree  # F0.2: HPC KDTree kernel híbrido
 
+from exploration.geophysics_weights import sigma_parametric as _shared_sigma_parametric
+
 logger = logging.getLogger(__name__)
 
 
@@ -137,9 +139,12 @@ def _sigma_parametric(g_observed: np.ndarray, noise_floor: float, noise_pct: flo
     datos de campo, colapsando chi²_red a ~0.
 
     Unidades: las mismas de g_observed (el caller convierte mGal → m/s²).
+
+    Delega en :func:`exploration.geophysics_weights.sigma_parametric` (definición
+    compartida con el motor magnético); se conserva este wrapper para no romper
+    los call-sites internos.
     """
-    sigma = np.maximum(float(noise_floor), float(noise_pct) * np.abs(g_observed))
-    return np.maximum(sigma, 1e-30)
+    return _shared_sigma_parametric(g_observed, noise_floor, noise_pct)
 
 
 def _validate_gravity_observations(
@@ -405,7 +410,7 @@ class GravimetryForward:
             and np.array_equal(self._kernel_cache[3], z_c_act)
             and np.array_equal(self._kernel_cache[4], sensor_coords)
         ):
-            print("[FORWARD HPC] Cache HIT: G_active reutilizado (misma geometría, sin KDTree).")
+            logger.debug("[FORWARD HPC] Cache HIT: G_active reutilizado (misma geometría, sin KDTree).")
             return self._kernel_cache_mat
 
         n_active = len(x_c_act)
@@ -417,7 +422,7 @@ class GravimetryForward:
         t_start = time.perf_counter()
         max_workers = max(1, (os.cpu_count() or 2) - 1)
 
-        print(
+        logger.debug(
             f"[FORWARD HPC] KDTree Híbrido + ThreadPool({max_workers}w). "
             f"n_active={n_active:,} | n_obs={n_obs:,} | "
             f"threshold={threshold:.1f}m | cutoff={self.cutoff_radius:.0f}m"
@@ -509,7 +514,7 @@ class GravimetryForward:
         t_end = time.perf_counter()
         fill_rate = G_active.nnz / max(1, n_obs * n_active)
 
-        print(
+        logger.debug(
             f"[FORWARD HPC] G_active CSR: NNZ={G_active.nnz:,} | Fill={fill_rate:.4%} | "
             f"Sensores={n_obs:,} | ActiveCells={n_active:,} | Workers={max_workers} | "
             f"t_total={t_end-t_start:.2f}s "
@@ -582,7 +587,7 @@ class GravimetryForward:
         t_start = time.perf_counter()
         max_workers = max(1, (os.cpu_count() or 2) - 1)
 
-        print(
+        logger.debug(
             f"[FORWARD HPC/TreeMesh] KDTree variable-cell + ThreadPool({max_workers}w). "
             f"n_active={n_active:,} | n_obs={n_obs:,} | "
             f"cell_size∈[{cdx.min():.1f},{cdx.max():.1f}]m | cutoff={self.cutoff_radius:.0f}m"
@@ -659,7 +664,7 @@ class GravimetryForward:
         )
 
         fill_rate = G_active.nnz / max(1, n_obs * n_active)
-        print(
+        logger.debug(
             f"[FORWARD HPC/TreeMesh] G_active CSR: NNZ={G_active.nnz:,} | "
             f"Fill={fill_rate:.4%} | t_total={time.perf_counter()-t_start:.2f}s"
         )
@@ -696,7 +701,7 @@ class GravimetryForward:
         Delega internamente a _build_sparse_kernel (F0.2 KDTree + CSR triplets).
         Retorna kernel shape=(n_sensors, n_voxels) — misma firma que versiones anteriores.
         """
-        print(f"[FORWARD] Construyendo Kernel Disperso CSR. Cutoff: {self.cutoff_radius} m")
+        logger.debug(f"[FORWARD] Construyendo Kernel Disperso CSR. Cutoff: {self.cutoff_radius} m")
 
         x_vox = np.asarray(x_vox, dtype=np.float64)
         y_vox = np.asarray(y_vox, dtype=np.float64)
@@ -719,7 +724,7 @@ class GravimetryForward:
         n_voxels = len(x_vox)
         fill_rate = kernel_sparse.nnz / max(1, n_sensors * n_voxels)
 
-        print(
+        logger.debug(
             f"[FORWARD] Kernel CSR creado. "
             f"Sensores: {n_sensors:,} | Vóxeles: {n_voxels:,} | "
             f"NNZ: {kernel_sparse.nnz:,} | Fill rate: {fill_rate:.4%}"
@@ -789,7 +794,7 @@ class GravimetryInversion:
           - Li & Oldenburg 1998 — depth weighting
           - FASE 17: suite de validación completa (test_laplacian_*.py)
         """
-        print(
+        logger.info(
             "[INVERSIÓN] Construyendo Laplaciano 3D sin wrap-around. Orden F. "
             f"Malla {'no-uniforme (F0.9 Tensor Mesh)' if hx is not None else 'uniforme'}."
         )
@@ -866,7 +871,7 @@ class GravimetryInversion:
         diag_mat  = sp.diags(diag_data, 0, dtype=np.float64)
 
         L = (off_diag + diag_mat).tocsr()
-        print(f"[INVERSIÓN] Laplaciano CSR creado. NNZ: {L.nnz:,}")
+        logger.info(f"[INVERSIÓN] Laplaciano CSR creado. NNZ: {L.nnz:,}")
         return L
 
     def _build_spatial_regularizer(self, x_c=None, y_c=None, z_c=None):
@@ -1007,7 +1012,7 @@ class GravimetryInversion:
             np.log10(lambda_min), np.log10(lambda_max), num=n_trials
         )
 
-        print(
+        logger.info(
             f"[L-CURVE] Barrido de {n_trials} lambdas: "
             f"{lambda_min:.2e} → {lambda_max:.2e}"
         )
@@ -1031,7 +1036,7 @@ class GravimetryInversion:
             # lam que se varía, de modo que la esquina elegía un λ no-óptimo.
             roughness_norm = float(np.linalg.norm(w_reg * m_phys))
 
-            print(
+            logger.info(
                 f"  lambda={lam:.2e} | misfit={misfit_norm:.4e} | roughness={roughness_norm:.4e}"
             )
             trials.append({
@@ -1131,8 +1136,8 @@ class GravimetryInversion:
             f"rango {lambda_min:.0e}–{lambda_max:.0e})"
         )
 
-        print(f"[L-CURVE] Lambda óptimo: {lambda_selected:.2e} (índice {corner_idx}/{n_trials-1})")
-        print(f"[L-CURVE] {summary}")
+        logger.info(f"[L-CURVE] Lambda óptimo: {lambda_selected:.2e} (índice {corner_idx}/{n_trials-1})")
+        logger.info(f"[L-CURVE] {summary}")
 
         return {
             "lambda_selected":  lambda_selected,
@@ -1255,7 +1260,7 @@ class GravimetryInversion:
             if _n_dead > 0:
                 _padding_active = _padding_active[_obs_in_active]
 
-        print(
+        logger.info(
             f"[chi2-scan] Escaneando {len(lambda_candidates)} lambdas | "
             f"chi²_target={chi2_target:.1f} | cond_max={cond_max:.0e}"
         )
@@ -1286,7 +1291,7 @@ class GravimetryInversion:
             log_err  = abs(np.log10(max(chi2, 1e-30)) - np.log10(max(chi2_target, 1e-30)))
             feasible = bool(acond < cond_max)
             status   = "OK" if feasible else "COND_FAIL"
-            print(
+            logger.info(
                 f"  lambda={lam:.1e} | chi2={chi2:.4f} | cond(A)~{acond:.2e} | "
                 f"|Dlog10(chi2)|={log_err:.4f} | {status}"
             )
@@ -1302,10 +1307,10 @@ class GravimetryInversion:
         feasible_trials = [t for t in trials if t["feasible"]]
         pool = feasible_trials if feasible_trials else trials
         if not feasible_trials:
-            print(f"[chi2-scan] WARN: Ningun lambda con cond(A) < {cond_max:.0e}. Usando menor Dlog10.")
+            logger.info(f"[chi2-scan] WARN: Ningun lambda con cond(A) < {cond_max:.0e}. Usando menor Dlog10.")
         best = min(pool, key=lambda t: t["log_chi2_error"])
 
-        print(
+        logger.info(
             f"[chi2-scan] OK lambda_opt={best['lambda']:.2e} | "
             f"chi2={best['chi2_final']:.4f} | cond(A)~{best['cond_A']:.2e}"
         )
@@ -1439,7 +1444,7 @@ class GravimetryInversion:
             misfit_percent         : ‖d−Gm‖ / ‖d‖ × 100.
             normalized_sensitivity : proxy de sensibilidad (columna de G) normalizado.
         """
-        print("[INVERSIÓN F0.2] Preparando solver LSQR + Tikhonov (Motor HPC Exclusivo).")
+        logger.info("[INVERSIÓN F0.2] Preparando solver LSQR + Tikhonov (Motor HPC Exclusivo).")
 
         g_observed = np.asarray(g_observed, dtype=np.float64)
         y_c = np.asarray(y_c, dtype=np.float64)
@@ -1458,7 +1463,7 @@ class GravimetryInversion:
             g_observed, sensor_coords
         )
         for _w in _val_warnings:
-            print(f"[VALIDACIÓN F14] {_w}")
+            logger.info(f"[VALIDACIÓN F14] {_w}")
 
         if lambda_mag <= 0:
             raise ValueError("lambda_mag debe ser mayor que 0.")
@@ -1526,7 +1531,7 @@ class GravimetryInversion:
                     "Los sensores deben estar en la superficie, sobre la malla."
                 )
 
-        print(
+        logger.info(
             f"[INVERSIÓN F0.2] Active cells: {n_active:,} / {self.total_voxels:,} "
             f"({100.0 * n_active / self.total_voxels:.1f}% activo, "
             f"{n_air:,} celdas de aire enmascaradas)"
@@ -1544,7 +1549,7 @@ class GravimetryInversion:
             _padding_active = _pm[active_cells]   # shape=(n_active,)
             _n_pad_active  = int(np.sum(_padding_active))
             _n_core_active = n_active - _n_pad_active
-            print(
+            logger.info(
                 f"[R-02] Penalización diferencial padding: "
                 f"core={_n_core_active:,} | padding={_n_pad_active:,} | kappa={padding_kappa:.0e}"
             )
@@ -1558,7 +1563,7 @@ class GravimetryInversion:
         z_c_arr = np.asarray(z_c, dtype=np.float64)
         if kernel_sparse is not None:
             G_active = kernel_sparse
-            print("[GRAV] Usando kernel cacheado (sin reconstrucción).")
+            logger.debug("[GRAV] Usando kernel cacheado (sin reconstrucción).")
         else:
             G_active = forward_model._build_sparse_kernel(
                 x_c_arr[active_cells],
@@ -1572,7 +1577,7 @@ class GravimetryInversion:
                 _frac_active = cell_fraction[active_cells]
                 G_active = (G_active @ sp.diags(_frac_active)).tocsr()
                 _n_partial = int(np.sum((_frac_active > 0.0) & (_frac_active < 1.0)))
-                print(f"[FASE 24B T4] cut-cell activo: {_n_partial:,} celdas fraccionarias ponderadas.")
+                logger.info(f"[FASE 24B T4] cut-cell activo: {_n_partial:,} celdas fraccionarias ponderadas.")
 
         # ── FASE 8 (Q4): Mapeo de vóxeles anclados por sondaje (full → active) ─
         # Para cada intervalo se localiza la COLUMNA (x,z) cuyos centros caen dentro
@@ -1645,7 +1650,7 @@ class GravimetryInversion:
             else:
                 _n_dead_core_a = _n_dead
                 _n_dead_pad_a  = 0
-            print(
+            logger.info(
                 f"[R-05] Observable Domain: {_n_obs_domain:,}/{n_active:,} "
                 f"({100.0*_n_obs_domain/n_active:.1f}%) | "
                 f"Muertos (sens=0): {_n_dead:,} ({100.0*_n_dead/n_active:.1f}%) -> excluidos del solver"
@@ -1668,7 +1673,7 @@ class GravimetryInversion:
         # FASE 8: ¿hay vóxeles anclados observables tras las reducciones?
         _has_anchors = _anchor_active is not None and bool(np.any(_anchor_active))
         if _has_anchors:
-            print(
+            logger.info(
                 f"[FASE 8] Anclaje sondajes: {int(np.sum(_anchor_active)):,} voxeles | "
                 f"kappa={anchor_kappa:.0e} | lap_relax={laplacian_relax_alpha}"
             )
@@ -1682,7 +1687,7 @@ class GravimetryInversion:
         if noise_floor == 0.02 and noise_pct == 0.02:
             sigma, _is_outlier = _sigma_adaptive(g_observed, detect_outliers=detect_outliers)
             if detect_outliers and _is_outlier.any():
-                print(
+                logger.info(
                     f"[SIGMA] Detected {int(_is_outlier.sum())} outliers "
                     f"(MAD > 3σ). Downweighting by 10×"
                 )
@@ -1837,14 +1842,14 @@ class GravimetryInversion:
                     _xg_rhs.append(np.zeros(_blk.shape[0], dtype=np.float64))
             G_aug = sp.vstack(_xg_mats).tocsr()
             d_aug = np.concatenate(_xg_rhs)
-            print(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
+            logger.info(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
 
         # H-A0 Bug 2: lambda scaling con n_active (calibrado a N_CALIB=256).
         # Con Wz_inv la smallness es uniforme en m_tilde; solo se escala la magnitud.
         _N_CALIB = 256
         lambda_mag_eff = float(lambda_mag) * np.sqrt(float(_n_active_sol) / _N_CALIB)
 
-        print(
+        logger.info(
             f"[INVERSIÓN F0.2] Ejecutando LSQR (H-A0: W_z formal). "
             f"lambda_mag={lambda_mag:.2e} | lambda_mag_eff={lambda_mag_eff:.2e} "
             f"| lambda_spatial={lambda_spatial:.2e} | depth_beta={depth_beta}"
@@ -1966,7 +1971,7 @@ class GravimetryInversion:
                 _scale = 1e12 / cond_A_est
                 _padding_kappa_used = float(padding_kappa) * _scale
                 _anchor_kappa_used  = float(anchor_kappa) * _scale
-                print(
+                logger.info(
                     f"[FASE 16] cond(A)~{cond_A_est:.2e} > 1e12: "
                     f"kappas escalados ×{_scale:.2e} "
                     f"(padding {padding_kappa:.0e}→{_padding_kappa_used:.2e}, "
@@ -1991,7 +1996,7 @@ class GravimetryInversion:
             else:
                 _solver_label = "LSQR+clip"
             _norm_tag = f"norm={_reg_norm}" + (f"/irls{_irls_it}" if _reg_norm != "l2" else "")
-            print(
+            logger.info(
                 f"[SOLVER] G_aug=({_G_aug_sm.shape[0]:,}×{_G_aug_sm.shape[1]:,}) "
                 f"n_active_sol={_n_active_sol:,} NNZ={_G_aug_sm.nnz:,} "
                 f"smallness=W_z-formal(H-A0) lambda_eff={lambda_mag_eff:.2e} "
@@ -2007,7 +2012,7 @@ class GravimetryInversion:
                 )
                 m_tilde = _bc.x
                 _acond = float('nan')
-                print(f"[SOLVER] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
+                logger.info(f"[SOLVER] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
             else:
                 from core.config import USE_SPARSE_DIRECT as _USE_SPARSE
                 if _USE_SPARSE:
@@ -2020,7 +2025,7 @@ class GravimetryInversion:
                     )
                     m_tilde = np.clip(m_tilde_raw, _lb_tilde, _ub_tilde)
                     _acond = float('nan')   # SuperLU no expone estimador de cond(A)
-                    print(
+                    logger.info(
                         f"[SOLVER] SuperLU directo (ecuaciones normales) en "
                         f"{time.perf_counter()-_t_solve:.1f}s. "
                         f"residual={_sp_info['residual_norm']:.3e} "
@@ -2036,7 +2041,7 @@ class GravimetryInversion:
                         _G_aug_sm, _d_aug_sm, _lb_tilde, _ub_tilde,
                         maxiter=1000, tol=1e-8,
                     )
-                    print(
+                    logger.info(
                         f"[SOLVER] LSMR (Fase 10) convergido en "
                         f"{time.perf_counter()-_t_solve:.1f}s. "
                         f"cond(A)~{_acond:.2e}"
@@ -2049,7 +2054,7 @@ class GravimetryInversion:
                     )
                     m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
                     _acond = result[6]
-                    print(
+                    logger.info(
                         f"[SOLVER] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
                         f"cond(A)~{_acond:.2e}"
                     )
@@ -2066,7 +2071,7 @@ class GravimetryInversion:
                     m_tilde, _pgd_info = solve_inversion_pgd_fista(
                         _G_aug_sm, _d_aug_sm, _lb_tilde, _ub_tilde, x0=m_tilde,
                     )
-                    print(
+                    logger.info(
                         f"[SOLVER] FISTA proyectado en {time.perf_counter()-_t_pgd:.1f}s "
                         f"(post-{'LSMR' if _use_lsmr else 'LSQR'}+warm-start)."
                     )
@@ -2110,13 +2115,13 @@ class GravimetryInversion:
                 break
 
         if _reg_norm != "l2":
-            print(
+            logger.info(
                 f"[FASE 24B] norma '{_reg_norm}': {len(_compact_hist)} iter IRLS, "
                 f"delta_focus_final={_compact_hist[-1]['focus_delta']:.2e} "
                 f"eps_floor={_eps_floor:.3f}"
             )
         if np.isfinite(_acond) and _acond > 1e12:
-            print(
+            logger.info(
                 f"[SOLVER] WARN cond(A)={_acond:.2e} > 1e12. "
                 f"Revisar padding_kappa={padding_kappa:.0e}, anchor_kappa={anchor_kappa:.0e} "
                 f"o lambda_mag={lambda_mag:.2e}."
@@ -2151,7 +2156,7 @@ class GravimetryInversion:
         estimated_density_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
         estimated_density_full[active_cells] = np.clip(density_raw, density_min, density_max)
         if clip_fraction > 0.0:
-            print(
+            logger.info(
                 f"[INVERSION F0.2] Bound petrofisico [{density_min:.2f}, {density_max:.2f}] t/m3: "
                 f"{n_clipped:,}/{n_active:,} saturadas (low={n_sat_lower} high={n_sat_upper}) "
                 f"= {clip_fraction:.1%}."
@@ -2206,7 +2211,7 @@ class GravimetryInversion:
         _phi_d = float(np.sum((residual_sensor / sigma) ** 2))
         _chi2_final = _phi_d / max(len(g_observed), 1)
 
-        print(
+        logger.info(
             f"[INVERSION F0.2] Convergencia alcanzada. "
             f"Error residual L2: {residual_error:.4e} | Misfit: {misfit_percent:.2f}% | "
             f"chi2_final={_chi2_final:.4f} | cond(A)~{_acond:.2e}"
@@ -2382,7 +2387,7 @@ class GravimetryInversion:
         posterior_std_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
         posterior_std_full[active_cells] = std_active
 
-        print(
+        logger.info(
             f"[UQ Hutchinson] sigma posterior: n_probes={n_probes} | "
             f"sigma_med={float(np.median(std_active)):.4g} t/m3 | "
             f"sigma_p95={float(np.percentile(std_active, 95)):.4g} t/m3"
@@ -2475,7 +2480,7 @@ def compute_jacobian_dask(
         del batch_result   # libera inmediatamente
 
     disk_mb = n_sensors * n_voxels * 4 / 1e6
-    print(
+    logger.info(
         f"[JACOBIAN DASK/OOC] shape=({n_sensors},{n_voxels}) | "
         f"batches={len(batch_ranges)} | batch_size={batch_size} | "
         f"disco={disk_mb:.1f} MB (float32) | zarr={zarr_path}"
@@ -2612,7 +2617,7 @@ def solve_inversion_treemesh(
             np.zeros(n_cells, dtype=np.float64),
         ])
 
-    print(
+    logger.info(
         f"[TREEMESH SOLVER] n_cells={n_cells:,} n_sensors={n_sensors:,} "
         f"G_aug=({G_aug.shape[0]:,}×{G_aug.shape[1]:,}) NNZ={G_aug.nnz:,} "
         f"lambda_mag={lambda_mag:.2e} lambda_spatial={lambda_spatial:.2e} beta={depth_beta}"
@@ -2630,7 +2635,7 @@ def solve_inversion_treemesh(
             G_aug, d_aug, _lb_tilde, _ub_tilde, maxiter=max(1000, iter_lim), tol=atol,
         )
         _itn = -1   # LSMR no expone el conteo de iteraciones de forma compatible
-        print(f"[TREEMESH SOLVER] LSMR (Fase 10, n>{_LSMR_THRESH:,}) cond(A)~{_acond:.2e}")
+        logger.info(f"[TREEMESH SOLVER] LSMR (Fase 10, n>{_LSMR_THRESH:,}) cond(A)~{_acond:.2e}")
     else:
         result = lsqr(G_aug, d_aug, damp=0.0, iter_lim=iter_lim, atol=atol, btol=atol, show=False)
         m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
@@ -2665,7 +2670,7 @@ def solve_inversion_treemesh(
     n_sat_lower = int(np.sum(density_raw < density_min))
     n_sat_upper = int(np.sum(density_raw > density_max))
 
-    print(
+    logger.info(
         f"[TREEMESH SOLVER] Misfit={misfit_percent:.2f}% chi2={_chi2_final:.4f} "
         f"cond(A)~{_acond:.2e} sat=({n_sat_lower}+{n_sat_upper})/{n_cells:,}"
     )
@@ -2712,7 +2717,7 @@ class TargetingEngine:
         export_path="data/block_model_001.parquet",
         posterior_std=None,
     ):
-        print("[TARGETING] Modelando clases geometalúrgicas y exportando block model.")
+        logger.info("[TARGETING] Modelando clases geometalúrgicas y exportando block model.")
 
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
@@ -2808,13 +2813,13 @@ class TargetingEngine:
         anomaly_path = export_path.replace(".parquet", "_anomaly.parquet")
         df_anomaly.write_parquet(anomaly_path)
 
-        print(
+        logger.info(
             f"[TARGETING] Target sugerido: {target_coords} | "
             f"Densidad: {density[target_idx]:.3f} t/m3 | "
             f"Probabilidad: {probability[target_idx]:.1%}"
         )
 
-        print(
+        logger.info(
             f"[TARGETING] Block model completo exportado: {export_path} | "
             f"Bloques totales: {len(df):,} | "
             f"Anomalías: {len(df_anomaly):,}"
@@ -2853,7 +2858,7 @@ if __name__ == "__main__":
         dtype=np.float64
     )
 
-    print(f"[GEOFÍSICA] Test local con {len(sensor_coords)} sensores.")
+    logger.info(f"[GEOFÍSICA] Test local con {len(sensor_coords)} sensores.")
 
     forward = GravimetryForward(
         BLOCK_SIZE,

@@ -455,7 +455,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     mag_fwd_kernel_cache = mag_fwd._build_sparse_kernel(
         _x_c_arr, y_c, _z_c_arr, _sensor_arr,
     )
-    print(
+    _log.info(
         f"[CACHÉ KERNEL] G_gravity: {grav_fwd_kernel_cache.shape} ({grav_fwd_kernel_cache.nnz:,} NNZ) | "
         f"G_magnetic: {mag_fwd_kernel_cache.shape} ({mag_fwd_kernel_cache.nnz:,} NNZ)"
     )
@@ -471,7 +471,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     _obs_mask_g = _obs_mask_from_kernel(grav_fwd_kernel_cache)
     _n_obs_g = int(np.sum(_obs_mask_g))
     _n_dead_g = nC - _n_obs_g
-    print(
+    _log.info(
         f"[JOINT R-05] Dominio observable (gravedad): {_n_obs_g:,}/{nC:,} "
         f"({100.0 * _n_obs_g / nC:.1f}%) | muertos: {_n_dead_g:,} | "
         f"poda={'ON' if _do_prune else 'OFF (joint_observable_pruning=False)'}"
@@ -479,9 +479,9 @@ def run_joint_inversion(params: GeophysicsInvertInput):
 
     # ── Iteración 0 — Warm-up: motores independientes (sin cross-gradient) ───
     _update("running", 0.10, "warmup", "Warm-up: inversiones independientes (k=0)...")
-    print("[FASE 9C-2] Warm-up k=0 — gravedad independiente.")
+    _log.info("[FASE 9C-2] Warm-up k=0 — gravedad independiente.")
     m_rho, _g_score, misfit_g, meta_g = _solve_gravity(None, None, grav_fwd_kernel_cache)
-    print("[FASE 9C-2] Warm-up k=0 — magnetometría independiente.")
+    _log.info("[FASE 9C-2] Warm-up k=0 — magnetometría independiente.")
     m_chi, _m_score, misfit_m, meta_m = _solve_magnetic(None, None, mag_fwd_kernel_cache)
 
     # E_norm primario = métrica por celda grid-independiente (criterio de parada).
@@ -507,7 +507,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         "cond_A_gravity": meta_g.get("acond"),
         "cond_A_magnetic": meta_m.get("acond"),
     }]
-    print(f"[FASE 9C-2] k=0 (warm-up) | E_norm={E_norm:.6f} (cellwise) | "
+    _log.info(f"[FASE 9C-2] k=0 (warm-up) | E_norm={E_norm:.6f} (cellwise) | "
           f"E_l2={E_l2:.6f} | misfit_g={misfit_g:.3f}% | misfit_m={misfit_m:.3f}%")
 
     # ── Bucle alternado con continuation exponencial ──────────────────────────
@@ -518,8 +518,19 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         progress = 0.10 + 0.80 * (k / max(int(params.joint_max_iter), 1))
         _update("running", progress, "joint_loop", f"Inversión conjunta — iteración {k}...")
 
-        # k=1: warm-up sin coupling; k≥2: coupling activo (step function)
-        lambda_cross = 1.0 if k >= 2 else 0.0
+        # k=1: warm-up sin coupling. k≥2: ramp-up del peso cross-gradient.
+        #   'step'  → escalón binario histórico (1.0 fijo).
+        #   'log'   → homotopía log-exponencial 0.01→1.0 (cumple el docstring
+        #             "continuation exponencial"; evita el salto brusco de misfit).
+        # lambda_cross multiplica el peso efectivo abajo (en 'step'=1.0 es byte-idéntico).
+        _cont_mode = getattr(params, "joint_continuation_mode", "log")
+        if k < 2:
+            lambda_cross = 0.0
+        elif _cont_mode == "step":
+            lambda_cross = 1.0
+        else:
+            frac = (k - 1) / max(int(params.joint_max_iter) - 1, 1)
+            lambda_cross = (1e-2) ** (1.0 - frac)
 
         # Paso de gravedad: fija χ, penaliza ∇ρ × ĝ_χ.
         lambda_cross_eff_g = 0.0
@@ -528,7 +539,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             B_chi = _build_cross_gradient_block(hx, hy, hz, Dx, Dy, Dz)
             max_block_nnz = max(max_block_nnz, B_chi.nnz)
             B_chi_norm = float(np.sqrt(B_chi.power(2).sum()))
-            lambda_cross_eff_g = cross_beta * G_norm / max(B_chi_norm, 1e-12)
+            lambda_cross_eff_g = lambda_cross * cross_beta * G_norm / max(B_chi_norm, 1e-12)
             # Joint v1.1: recortar columnas al dominio observable → B.shape[1] = n_obs_g
             _B_chi_g = B_chi[:, _obs_mask_g] if _do_prune else B_chi
             grav_blocks = [lambda_cross_eff_g * _B_chi_g]
@@ -543,7 +554,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             B_rho = _build_cross_gradient_block(hx, hy, hz, Dx, Dy, Dz)
             max_block_nnz = max(max_block_nnz, B_rho.nnz)
             B_rho_norm = float(np.sqrt(B_rho.power(2).sum()))
-            lambda_cross_eff_m = cross_beta * G_norm / max(B_rho_norm, 1e-12)
+            lambda_cross_eff_m = lambda_cross * cross_beta * G_norm / max(B_rho_norm, 1e-12)
             mag_blocks = [lambda_cross_eff_m * B_rho]
         else:
             mag_blocks = None
@@ -560,6 +571,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
 
         history.append({
             "iter": k,
+            "lambda_cross_raw": round(float(lambda_cross), 6),
             "lambda_cross": round(float(lambda_cross_eff_g), 6),
             "lambda_cross_eff_m": round(float(lambda_cross_eff_m), 6),
             "E_norm": round(float(E_curr), 6),
@@ -572,7 +584,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             "cond_A_gravity": meta_g.get("acond"),
             "cond_A_magnetic": meta_m.get("acond"),
         })
-        print(f"[FASE 9C-2] k={k:>2} | lambda_eff_g={lambda_cross_eff_g:.4e} | "
+        _log.info(f"[FASE 9C-2] k={k:>2} | lambda_eff_g={lambda_cross_eff_g:.4e} | "
               f"lambda_eff_m={lambda_cross_eff_m:.4e} | E_norm={E_curr:.6f} | "
               f"E_l2={E_l2:.6f} | dE_rel={dE_rel:.4e} | delta_rho={delta_rho:.4e} | "
               f"delta_chi={delta_chi:.4e} | misfit_g={misfit_g:.3f}% | misfit_m={misfit_m:.3f}%")
@@ -581,11 +593,11 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         converged = (delta_rho < _DELTA_TOL and delta_chi < _DELTA_TOL and dE_rel < _E_REL_TOL)
         if converged:
             stop_reason = "converged_delta_and_E"
-            print(f"[FASE 9C-2] Parada temprana en k={k}: deltas y dE_norm bajo tolerancia.")
+            _log.info(f"[FASE 9C-2] Parada temprana en k={k}: deltas y dE_norm bajo tolerancia.")
             break
         if E_curr < _E_ABS_TOL:
             stop_reason = "E_norm_below_absolute_tol"
-            print(f"[FASE 9C-2] Parada temprana en k={k}: E_norm={E_curr:.4f} < {_E_ABS_TOL}.")
+            _log.info(f"[FASE 9C-2] Parada temprana en k={k}: E_norm={E_curr:.4f} < {_E_ABS_TOL}.")
             break
         E_prev = E_curr
 
@@ -792,9 +804,9 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         )
         report["anomalies_payload"] = anomalies_payload
         _log.info("geological_bodies_extracted", n_bodies=len(anomalies_payload))
-        print(f"[FASE 10-P3] Cuerpos geológicos detectados: {len(anomalies_payload)}")
+        _log.info(f"[FASE 10-P3] Cuerpos geológicos detectados: {len(anomalies_payload)}")
         for a in anomalies_payload:
-            print(
+            _log.info(
                 f"  {a['anomaly_id']}: {a['voxel_count']} vóxeles | "
                 f"vol={a['volume_m3']:.0f} m³ | "
                 f"centroide=({a['centroid']['x_m']:.0f}, {a['centroid']['y_m']:.0f}, "
@@ -818,7 +830,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             "note": "Interpretación Gemini omitida (JOINT_ENABLE_GEMINI!=true) para "
                     "devolver el modelo 3D sin la latencia del LLM.",
         }
-        print("[FASE 10-P4] Gemini: omitido (JOINT_ENABLE_GEMINI!=true).")
+        _log.info("[FASE 10-P4] Gemini: omitido (JOINT_ENABLE_GEMINI!=true).")
     else:
         from services.gemini_agent import request_gemini_interpretation  # noqa: PLC0415
         try:
@@ -827,7 +839,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             n_anomalies = len(gemini_result.get("anomalies", []))
             has_error = "error" in gemini_result
             _log.info("gemini_interpretation_done", n_anomalies=n_anomalies, has_error=has_error)
-            print(f"[FASE 10-P4] Gemini: interpretación completada "
+            _log.info(f"[FASE 10-P4] Gemini: interpretación completada "
                   f"({n_anomalies} anomalías, has_error={has_error}).")
         except Exception as _gem_exc:
             _log.warning("gemini_interpretation_nonfatal", error=str(_gem_exc))
@@ -882,9 +894,9 @@ def _self_test() -> None:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    print("=" * 78)
-    print("[FASE 9C-2] QA — Inversión conjunta sobre dos anomalías desfasadas.")
-    print("=" * 78)
+    _log.info("=" * 78)
+    _log.info("[FASE 9C-2] QA — Inversión conjunta sobre dos anomalías desfasadas.")
+    _log.info("=" * 78)
 
     rng = np.random.default_rng(20260531)
 
@@ -934,9 +946,9 @@ def _self_test() -> None:
     g_obs = g_clean + 0.015 * (g_clean.max() - g_clean.min()) * rng.standard_normal(g_clean.size)
     tmi_obs = tmi_clean + 0.015 * (tmi_clean.max() - tmi_clean.min()) * rng.standard_normal(tmi_clean.size)
 
-    print(f"  malla core: {nx}×{ny}×{nz} = {nC:,} celdas | dx={dx} m | sensores={sensors.shape[0]}")
-    print(f"  g_obs   rango=[{g_obs.min():.3e}, {g_obs.max():.3e}]")
-    print(f"  tmi_obs rango=[{tmi_obs.min():.3e}, {tmi_obs.max():.3e}]")
+    _log.info(f"  malla core: {nx}×{ny}×{nz} = {nC:,} celdas | dx={dx} m | sensores={sensors.shape[0]}")
+    _log.info(f"  g_obs   rango=[{g_obs.min():.3e}, {g_obs.max():.3e}]")
+    _log.info(f"  tmi_obs rango=[{tmi_obs.min():.3e}, {tmi_obs.max():.3e}]")
 
     observations = [
         {"x_m": float(sensors[i, 0]), "y_m": float(sensors[i, 1]),
@@ -960,16 +972,16 @@ def _self_test() -> None:
     result = run_joint_inversion(params)
     rep = result["report"]
 
-    print("-" * 78)
-    print(f"  iteraciones ejecutadas : {rep['continuation']['iterations_done']}")
-    print(f"  stop_reason            : {rep['continuation']['stop_reason']}")
-    print(f"  E_norm final           : {rep['final']['E_norm']}")
-    print(f"  misfit gravedad        : {rep['final']['misfit_gravity_percent']:.3f} %")
-    print(f"  misfit magnetometría   : {rep['final']['misfit_magnetic_percent']:.3f} %")
-    print(f"  vóxeles anómalos        : {rep['anomaly_voxels']}")
+    _log.info("-" * 78)
+    _log.info(f"  iteraciones ejecutadas : {rep['continuation']['iterations_done']}")
+    _log.info(f"  stop_reason            : {rep['continuation']['stop_reason']}")
+    _log.info(f"  E_norm final           : {rep['final']['E_norm']}")
+    _log.info(f"  misfit gravedad        : {rep['final']['misfit_gravity_percent']:.3f} %")
+    _log.info(f"  misfit magnetometría   : {rep['final']['misfit_magnetic_percent']:.3f} %")
+    _log.info(f"  vóxeles anómalos        : {rep['anomaly_voxels']}")
     bt = result["best_target"]
     if bt:
-        print(f"  best_target            : x={bt['x_m']:.0f} y={bt['y_m']:.0f} z={bt['z_m']:.0f} "
+        _log.info(f"  best_target            : x={bt['x_m']:.0f} y={bt['y_m']:.0f} z={bt['z_m']:.0f} "
               f"| rho={bt['density_t_m3']:.3f} t/m3 | chi={bt['susceptibility_si']:.4f} SI")
 
     # ── Aserciones de salud (no explota, converge, malla común) ──────────────
@@ -997,10 +1009,10 @@ def _self_test() -> None:
         assert np.isfinite(body["density_mean"])
         assert np.isfinite(body["susceptibility_mean"])
 
-    print("-" * 78)
-    print(f"  Cuerpos geologicos detectados: {len(bodies)}")
+    _log.info("-" * 78)
+    _log.info(f"  Cuerpos geologicos detectados: {len(bodies)}")
     for body in bodies:
-        print(
+        _log.info(
             f"    {body['anomaly_id']}: {body['voxel_count']} vox | "
             f"vol={body['volume_m3']:.0f} m3 | "
             f"centroide=({body['centroid']['x_m']:.0f}, {body['centroid']['y_m']:.0f}, "
@@ -1008,8 +1020,8 @@ def _self_test() -> None:
             f"rho_mean={body['density_mean']:.3f} | chi_mean={body['susceptibility_mean']:.5f}"
         )
     _trend = "BAJO (mejor acoplamiento estructural)" if E_last <= E_first else "subio"
-    print(f"  E_norm warm-up={E_first:.6f} -> final={E_last:.6f} ({_trend})")
-    print("RESULT: ALL OK - clustering y orquestador terminaron limpiamente.")
+    _log.info(f"  E_norm warm-up={E_first:.6f} -> final={E_last:.6f} ({_trend})")
+    _log.info("RESULT: ALL OK - clustering y orquestador terminaron limpiamente.")
 
 
 if __name__ == "__main__":

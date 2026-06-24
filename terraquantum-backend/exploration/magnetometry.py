@@ -45,6 +45,8 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import lsqr
 from scipy.spatial import cKDTree
 
+from exploration.geophysics_weights import sigma_parametric
+
 logger = logging.getLogger(__name__)
 
 
@@ -201,7 +203,7 @@ class MagnetometryForward:
             and np.array_equal(self._kernel_cache[3], z_c_act)
             and np.array_equal(self._kernel_cache[4], sensor_coords)
         ):
-            print("[MAG FORWARD] Cache HIT: G_active reutilizado (misma geometría/campo).")
+            logger.debug("[MAG FORWARD] Cache HIT: G_active reutilizado (misma geometría/campo).")
             return self._kernel_cache_mat
 
         n_active = len(x_c_act)
@@ -211,7 +213,7 @@ class MagnetometryForward:
         t_start = time.perf_counter()
         max_workers = max(1, (os.cpu_count() or 2) - 1)
 
-        print(
+        logger.debug(
             f"[MAG FORWARD] Kernel dipolar TMI (KDTree + ThreadPool({max_workers}w). "
             f"n_active={n_active:,} | n_obs={n_obs:,} | cutoff={self.cutoff_radius:.0f}m | "
             f"I={self.inclination_deg:.1f} D={self.declination_deg:.1f} B0={self.field_intensity_nt:.0f}nT"
@@ -280,7 +282,7 @@ class MagnetometryForward:
 
         t_end = time.perf_counter()
         fill_rate = G_active.nnz / max(1, n_obs * n_active)
-        print(
+        logger.debug(
             f"[MAG FORWARD] G_active CSR: NNZ={G_active.nnz:,} | Fill={fill_rate:.4%} | "
             f"t_total={t_end-t_start:.2f}s (query={t_q1-t_q0:.3f}s, kernel={t_k1-t_k0:.3f}s)"
         )
@@ -373,7 +375,7 @@ class MagnetometryForward:
         )
 
         G_total = G_ind + q_ratio * G_rem
-        print(
+        logger.info(
             f"[MAG FASE 12] Kernel total J=J_ind+{q_ratio:.2f}·J_rem | "
             f"Inc_rem={inc_rem_deg:.1f}° Dec_rem={dec_rem_deg:.1f}° | "
             f"NNZ_ind={G_ind.nnz:,} NNZ_rem={G_rem.nnz:,}"
@@ -424,7 +426,7 @@ class MagnetometryForward:
         max_workers = max(1, (os.cpu_count() or 2) - 1)
         t_start = time.perf_counter()
 
-        print(
+        logger.info(
             f"[MAG MVI] Kernels 3C (Gx,Gy,Gz) KDTree+ThreadPool({max_workers}w). "
             f"n_active={n_active:,} | n_obs={n_obs:,} | cutoff={self.cutoff_radius:.0f}m | "
             f"I={self.inclination_deg:.1f} D={self.declination_deg:.1f} B0={self.field_intensity_nt:.0f}nT"
@@ -484,7 +486,7 @@ class MagnetometryForward:
                 "Los kernels MVI quedaron vacíos. Revisa cutoff_radius, sensores y active_cells."
             )
 
-        print(
+        logger.info(
             f"[MAG MVI] Gx/Gy/Gz CSR: NNZ={Gx.nnz:,} c/u | "
             f"t={time.perf_counter()-t_start:.2f}s"
         )
@@ -595,7 +597,7 @@ class MagnetometryInversion:
         diag_data = -np.asarray(off_diag.sum(axis=1)).ravel()
         diag_mat = sp.diags(diag_data, 0, dtype=np.float64)
         L = (off_diag + diag_mat).tocsr()
-        print(f"[MAG INVERSIÓN] Laplaciano CSR creado. NNZ: {L.nnz:,}")
+        logger.info(f"[MAG INVERSIÓN] Laplaciano CSR creado. NNZ: {L.nnz:,}")
         return L
 
     def solve_magnetic_inversion_lsqr(
@@ -704,7 +706,7 @@ class MagnetometryInversion:
             misfit_percent          : ‖d − Gm‖ / ‖d‖ × 100.
             normalized_sensitivity  : proxy de sensibilidad (columna de G) normalizado.
         """
-        print("[MAG INVERSIÓN] Preparando solver LSQR + Tikhonov (kernel dipolar TMI).")
+        logger.info("[MAG INVERSIÓN] Preparando solver LSQR + Tikhonov (kernel dipolar TMI).")
 
         d_observed = np.asarray(d_observed, dtype=np.float64)
         y_c = np.asarray(y_c, dtype=np.float64)
@@ -740,7 +742,7 @@ class MagnetometryInversion:
         if n_active == 0:
             raise ValueError("Ningún vóxel activo bajo la topografía dada.")
 
-        print(
+        logger.info(
             f"[MAG INVERSIÓN] Active cells: {n_active:,} / {self.total_voxels:,} "
             f"({100.0 * n_active / self.total_voxels:.1f}% activo, {n_air:,} de aire)"
         )
@@ -760,7 +762,7 @@ class MagnetometryInversion:
                     f"override_kernel shape {G_active.shape} no coincide con "
                     f"(n_obs={n_sensors}, n_active={n_active})."
                 )
-            print(f"[MAG FASE 12] Usando kernel pre-construido (shape={G_active.shape}).")
+            logger.info(f"[MAG FASE 12] Usando kernel pre-construido (shape={G_active.shape}).")
         else:
             G_active = forward_model._build_sparse_kernel(
                 x_c_arr[active_cells], y_c_active, z_c_arr[active_cells],
@@ -810,7 +812,7 @@ class MagnetometryInversion:
                     f"(total_voxels), got {_pm.shape[0]}."
                 )
             _padding_active = _pm[active_cells]   # shape=(n_active,)
-            print(
+            logger.info(
                 f"[MAG R-02] Padding diferencial: "
                 f"core={int(np.sum(~_padding_active)):,} | "
                 f"padding={int(np.sum(_padding_active)):,} | kappa={padding_kappa:.0e}"
@@ -839,13 +841,13 @@ class MagnetometryInversion:
         )
 
         if prune_observable_domain and _n_dead > 0:
-            print(
+            logger.info(
                 f"[MAG R-05] Observable Domain: {_n_obs_domain:,}/{n_active:,} "
                 f"({100.0 * _n_obs_domain / n_active:.1f}%) | "
                 f"Muertos (sens~0): {_n_dead:,} -> excluidos del solver"
             )
             if _padding_active is not None:
-                print(
+                logger.info(
                     f"[MAG R-05/R-02] Padding: {_n_pad_active_pre - _n_pad_pruned:,} "
                     f"sensibles conservados | {_n_pad_pruned:,} far-field podados"
                 )
@@ -864,7 +866,7 @@ class MagnetometryInversion:
 
         _has_anchors = _anchor_active is not None and bool(np.any(_anchor_active))
         if _has_anchors:
-            print(
+            logger.info(
                 f"[MAG FASE 8] Anclaje sondajes: {int(np.sum(_anchor_active)):,} vóxeles | "
                 f"kappa={anchor_kappa:.0e} | lap_relax={laplacian_relax_alpha}"
             )
@@ -875,12 +877,12 @@ class MagnetometryInversion:
         if noise_floor == 0.02 and noise_pct == 0.02:
             sigma, _is_outlier = _sigma_adaptive(d_observed, detect_outliers=detect_outliers)
             if detect_outliers and _is_outlier.any():
-                print(
+                logger.info(
                     f"[MAG SIGMA] {int(_is_outlier.sum())} outlier(s) detectado(s) "
                     f"(MAD > 3σ). Downweighting ×10."
                 )
         else:
-            sigma = np.maximum(noise_floor + noise_pct * np.abs(d_observed), 1e-30)
+            sigma = sigma_parametric(d_observed, noise_floor, noise_pct)
         Wd = sp.diags(1.0 / sigma)
         G_w = Wd @ G_active
         d_w = Wd @ d_observed
@@ -1001,9 +1003,9 @@ class MagnetometryInversion:
                     _xg_rhs.append(np.zeros(_blk.shape[0], dtype=np.float64))
             G_aug = sp.vstack(_xg_mats).tocsr()
             d_aug = np.concatenate(_xg_rhs)
-            print(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
+            logger.info(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
 
-        print(
+        logger.info(
             f"[MAG INVERSIÓN] Ejecutando LSQR. "
             f"lambda_mag={lambda_mag:.2e} | lambda_spatial={lambda_spatial:.2e} | depth_beta={depth_beta}"
         )
@@ -1024,7 +1026,7 @@ class MagnetometryInversion:
         _MAG_TRF_MAX_CELLS = 2500
         _use_bc_m_eff = _USE_BC_M and _n_active_sol <= _MAG_TRF_MAX_CELLS
         if _USE_BC_M and not _use_bc_m_eff:
-            print(
+            logger.info(
                 f"[MAG INVERSIÓN] n_active_sol={_n_active_sol:,} > {_MAG_TRF_MAX_CELLS:,}: "
                 f"usando LSQR+clip (rápido) en vez de TRF con bounds (evita cuelgue)."
             )
@@ -1099,7 +1101,7 @@ class MagnetometryInversion:
                     _scale = 1e12 / _cond_a_est
                     _anchor_kappa_used = float(anchor_kappa) * _scale
                     _auto_kappa_adjusted = True
-                    print(
+                    logger.info(
                         f"[MAG FASE 16] cond(A)~{_cond_a_est:.2e} > 1e12: anchor_kappa "
                         f"escalado ×{_scale:.2e} ({anchor_kappa:.0e}→{_anchor_kappa_used:.2e})"
                     )
@@ -1109,7 +1111,7 @@ class MagnetometryInversion:
                     _bc = _lsq_linear_m(A_sys, b_sys, bounds=(_lb_tilde_m, _ub_tilde_m),
                                         method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300)
                     _mt, _ac = _bc.x, float('nan')
-                    print("[MAG/ANCLA] lsq_linear (bound-constrained, TRF+LSQR) finalizado.")
+                    logger.info("[MAG/ANCLA] lsq_linear (bound-constrained, TRF+LSQR) finalizado.")
                 else:
                     _res = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
                     _mt, _ac = _res[0], float(_res[6])
@@ -1172,7 +1174,7 @@ class MagnetometryInversion:
                     b_sys = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
                 _t_pgd_mag = time.perf_counter()
                 _mt, _pgd_info = solve_inversion_pgd_fista(A_sys, b_sys, _lb_tilde_m, _ub_tilde_m, x0=_mt)
-                print(f"[SOLVER MAG] FISTA proyectado en {time.perf_counter()-_t_pgd_mag:.1f}s.")
+                logger.info(f"[SOLVER MAG] FISTA proyectado en {time.perf_counter()-_t_pgd_mag:.1f}s.")
                 if solver_meta is not None:
                     solver_meta["pgd_magnetic"] = _pgd_info
             return _mt, _ac
@@ -1208,7 +1210,7 @@ class MagnetometryInversion:
             if _irls_it > 0 and _delta < float(compact_tol):
                 break
         if _reg_norm != "l2":
-            print(
+            logger.info(
                 f"[MAG FASE 24B] norma '{_reg_norm}': {len(_compact_hist)} iter IRLS, "
                 f"delta_focus_final={_compact_hist[-1]['focus_delta']:.2e} eps_floor={_eps_floor:.3f}"
             )
@@ -1222,7 +1224,7 @@ class MagnetometryInversion:
             raise RuntimeError("LSQR devolvió susceptibilidades no finitas.")
 
         if _acond > 1e12:
-            print(
+            logger.info(
                 f"[MAG INVERSIÓN] WARN cond(A)={_acond:.2e} > 1e12. "
                 f"Revisar lambda_mag={lambda_mag:.2e} / anchor_kappa={anchor_kappa:.0e}."
             )
@@ -1260,7 +1262,7 @@ class MagnetometryInversion:
         susceptibility_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
         susceptibility_full[active_cells] = np.clip(susc_raw, susc_min, susc_max)
         if clip_fraction > 0.0:
-            print(
+            logger.info(
                 f"[MAG INVERSIÓN] Bound susc [{susc_min:.3f}, {susc_max:.3f}] SI: "
                 f"{n_clipped:,}/{n_active:,} saturadas (low={n_sat_lower} high={n_sat_upper}) "
                 f"= {clip_fraction:.1%}."
@@ -1278,14 +1280,16 @@ class MagnetometryInversion:
         max_voxel_error = float(np.max(voxel_error_active)) if n_active > 0 else 0.0
         relative_score_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
         if max_voxel_error <= 0 or not np.isfinite(max_voxel_error):
-            relative_score_full[active_cells] = 1.0
+            # Datos degenerados: NaN en vez de score=1.0 que finge calidad máxima
+            # (paridad con gravimetry.py).
+            relative_score_full[active_cells] = np.nan
         else:
             relative_score_full[active_cells] = np.clip(1.0 - (voxel_error_active / max_voxel_error), 0.0, 1.0)
 
         # Reusa el sigma ya computado (incluye outlier downweighting si aplica).
         _chi2_final = float(np.sum((residual_sensor / sigma) ** 2)) / max(n_sensors, 1)
 
-        print(
+        logger.info(
             f"[MAG INVERSIÓN] Convergencia. Residual L2: {residual_error:.4e} | "
             f"Misfit: {misfit_percent:.2f}% | chi2_final={_chi2_final:.4f} | cond(A)~{_acond:.2e}"
         )
@@ -1431,7 +1435,7 @@ class MagnetometryInversion:
         if noise_floor == 0.02 and noise_pct == 0.02:
             sigma, _ = _sigma_adaptive(d_observed, detect_outliers=False)
         else:
-            sigma = np.maximum(noise_floor + noise_pct * np.abs(d_observed), 1e-30)
+            sigma = sigma_parametric(d_observed, noise_floor, noise_pct)
         Wd = sp.diags(1.0 / sigma)
         G_w = Wd @ G_active
 
@@ -1467,7 +1471,7 @@ class MagnetometryInversion:
         posterior_std_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
         posterior_std_full[active_cells] = std_active
 
-        print(
+        logger.info(
             f"[UQ MAG Hutchinson] sigma posterior: n_probes={n_probes} | "
             f"sigma_med={float(np.median(std_active)):.4g} SI | "
             f"sigma_p95={float(np.percentile(std_active, 95)):.4g} SI"
@@ -1535,7 +1539,7 @@ class MagnetometryInversion:
             misfit_percent              : ‖d − Gm‖/‖d‖ × 100
             relative_score_full         : score de ranking [0,1] desde la amplitud
         """
-        print("[MAG MVI] Preparando solver MVI (3 componentes, kernel 3C TMI).")
+        logger.info("[MAG MVI] Preparando solver MVI (3 componentes, kernel 3C TMI).")
 
         d_observed = np.asarray(d_observed, dtype=np.float64)
         y_c = np.asarray(y_c, dtype=np.float64)
@@ -1573,7 +1577,7 @@ class MagnetometryInversion:
         x_c_arr = np.asarray(x_c, dtype=np.float64)
         z_c_arr = np.asarray(z_c, dtype=np.float64)
 
-        print(
+        logger.info(
             f"[MAG MVI] Active cells: {n_active:,}/{self.total_voxels:,} | "
             f"modelo 3N = {3 * n_active:,} incógnitas | n_obs={n_sensors:,}"
         )
@@ -1589,7 +1593,7 @@ class MagnetometryInversion:
         if noise_floor == 0.02 and noise_pct == 0.02:
             sigma, _is_outlier = _sigma_adaptive(d_observed, detect_outliers=detect_outliers)
         else:
-            sigma = np.maximum(noise_floor + noise_pct * np.abs(d_observed), 1e-30)
+            sigma = sigma_parametric(d_observed, noise_floor, noise_pct)
         Wd = sp.diags(1.0 / sigma)
 
         # ── Depth weighting (cambio de variable Li & Oldenburg) por componente ─
@@ -1638,13 +1642,13 @@ class MagnetometryInversion:
                     f"(total_voxels), got {_pm.shape[0]}."
                 )
             _padding_active = _pm[active_cells]   # shape=(n_active,)
-            print(
+            logger.info(
                 f"[MAG MVI R-02] Padding diferencial 3C: "
                 f"core={int(np.sum(~_padding_active)):,} | "
                 f"padding={int(np.sum(_padding_active)):,} | kappa={padding_kappa:.0e}"
             )
 
-        print(
+        logger.info(
             f"[MAG MVI] Ejecutando LSQR 3N. lambda_mag={lambda_mag:.2e} | "
             f"lambda_spatial={lambda_spatial:.2e} | depth_beta={depth_beta}"
         )
@@ -1710,8 +1714,8 @@ class MagnetometryInversion:
         relative_score_full = _expand(np.clip(rel_score, 0.0, 1.0))
 
         if _acond > 1e12:
-            print(f"[MAG MVI] WARN cond(A)~{_acond:.2e} > 1e12. Revisar lambda_mag.")
-        print(
+            logger.info(f"[MAG MVI] WARN cond(A)~{_acond:.2e} > 1e12. Revisar lambda_mag.")
+        logger.info(
             f"[MAG MVI] Convergencia. Misfit: {misfit_percent:.2f}% | "
             f"chi2_final={_chi2_final:.4f} | cond(A)~{_acond:.2e} | "
             f"|M|_max={amax:.4f} (SI efectiva)"
@@ -1807,7 +1811,7 @@ def sweep_q_ratio(
     best_idx = int(np.argmin(misfits_arr))
     q_optimal = float(q_values[best_idx])
 
-    print(
+    logger.info(
         f"[MAG FASE 12 Q-SWEEP] Q_optimal={q_optimal:.3f} (misfit={misfits_arr[best_idx]:.2f}%) "
         f"en {len(q_values)} puntos."
     )
@@ -1839,7 +1843,7 @@ if __name__ == "__main__":
     # Sensores en superficie (y=0), malla 8×8 sobre el dominio
     sx, sz = np.meshgrid(np.linspace(10, 110, 8), np.linspace(10, 110, 8))
     sensor_coords = np.column_stack([sx.ravel(), np.zeros(sx.size), sz.ravel()])
-    print(f"[MAG TEST] {len(sensor_coords)} sensores | grilla {NX}x{NY}x{NZ}")
+    logger.info(f"[MAG TEST] {len(sensor_coords)} sensores | grilla {NX}x{NY}x{NZ}")
 
     forward = MagnetometryForward(BLOCK, BLOCK, BLOCK, cutoff_radius=300.0,
                                   inclination_deg=INC, declination_deg=DEC, field_intensity_nt=B0)
@@ -1848,11 +1852,11 @@ if __name__ == "__main__":
     susc_true = np.zeros(len(x_c), dtype=np.float64)
     blob = ((x_c - 60.0) ** 2 + (y_c - 40.0) ** 2 + (z_c - 60.0) ** 2) < 20.0 ** 2
     susc_true[blob] = 0.1
-    print(f"[MAG TEST] Voxeles anomalos (k=0.1): {int(np.sum(blob))}")
+    logger.info(f"[MAG TEST] Voxeles anomalos (k=0.1): {int(np.sum(blob))}")
 
     G = forward.build_sparse_kernel(x_c, y_c, z_c, sensor_coords)
     d_obs = G @ susc_true   # TMI sintetica (nT)
-    print(f"[MAG TEST] TMI sintetica: min={d_obs.min():.3f} max={d_obs.max():.3f} nT")
+    logger.info(f"[MAG TEST] TMI sintetica: min={d_obs.min():.3f} max={d_obs.max():.3f} nT")
 
     inv = MagnetometryInversion(NX, NY, NZ, BLOCK)
     meta = {}
@@ -1863,11 +1867,11 @@ if __name__ == "__main__":
     )
     susc_est_clean = np.nan_to_num(susc_est, nan=0.0)
     peak_idx = int(np.argmax(susc_est_clean))
-    print("-" * 70)
-    print(f"[MAG TEST] cond(A)~{meta['acond']:.2e} (objetivo < 1e14): "
+    logger.info("-" * 70)
+    logger.info(f"[MAG TEST] cond(A)~{meta['acond']:.2e} (objetivo < 1e14): "
           f"{'OK' if meta['acond'] < 1e14 else 'FAIL'}")
-    print(f"[MAG TEST] Misfit: {misfit:.3f}% | chi2_final={meta['chi2_final']:.4f}")
-    print(f"[MAG TEST] k recuperada max: {susc_est_clean.max():.4f} SI "
+    logger.info(f"[MAG TEST] Misfit: {misfit:.3f}% | chi2_final={meta['chi2_final']:.4f}")
+    logger.info(f"[MAG TEST] k recuperada max: {susc_est_clean.max():.4f} SI "
           f"@ (x={x_c[peak_idx]:.0f}, y={y_c[peak_idx]:.0f}, z={z_c[peak_idx]:.0f})")
 
     # Profundidad del PICO (cantidad interpretable) + fracción de masa somera.
@@ -1878,11 +1882,11 @@ if __name__ == "__main__":
     _w = susc_est_clean
     y_centroid = float(np.average(y_c, weights=_w)) if _w.sum() > 0 else float("nan")
     frac_shallow = float(_w[y_c <= 70.0].sum() / max(_w.sum(), 1e-12))
-    print(f"[MAG TEST] Centro verdadero del blob: (60, 40, 60) | "
+    logger.info(f"[MAG TEST] Centro verdadero del blob: (60, 40, 60) | "
           f"centroide y (diag) = {y_centroid:.1f} | masa somera (y<=70) = {frac_shallow:.1%} | "
           f"saturacion bounds: {meta['sat_fraction']:.1%}")
     y_peak = float(y_c[peak_idx])
     y_ok = (abs(y_peak - 40.0) <= 25.0) and (y_peak <= 70.0) and (frac_shallow >= 0.45)
-    print(f"[MAG TEST] Pico en y={y_peak:.0f} (real=40, NO hundido a y>=100): "
+    logger.info(f"[MAG TEST] Pico en y={y_peak:.0f} (real=40, NO hundido a y>=100): "
           f"{'PASS' if y_ok else 'FAIL — revisar pre-condicion W_z'}")
-    print("-" * 70)
+    logger.info("-" * 70)

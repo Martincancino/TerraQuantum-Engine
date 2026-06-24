@@ -108,10 +108,10 @@ def compute_bouguer_correction(
 
 
 # ---------------------------------------------------------------------------
-# 4. Corrección de Terreno (TC) — método de prismas
+# 4. Corrección de Terreno (TC) — aproximación de masa puntual
 # ---------------------------------------------------------------------------
 
-def compute_terrain_correction_prism(
+def compute_terrain_correction_pointmass(
     station_x_m: np.ndarray,
     station_z_m: np.ndarray,
     station_elev_m: np.ndarray,
@@ -123,7 +123,13 @@ def compute_terrain_correction_prism(
     max_radius_m: float = 22000.0,
 ) -> np.ndarray:
     """
-    Corrección de terreno por método de prismas rectangulares [mGal].
+    Corrección de terreno por aproximación de MASA PUNTUAL [mGal].
+
+    Cada celda del DEM se trata como una masa puntual: TC = Σ G·ρ·área·|dh|/r².
+    NO es la fórmula exacta de prisma (Nagy) — esa se reserva para una fase
+    posterior y reutilizaría ``gravimetry.py::_nagy_prism_safe``. La masa puntual
+    converge al prisma en campo lejano (r ≫ tamaño de celda) y sobrestima en el
+    campo cercano (r ≲ celda).
 
     TC es siempre ≥ 0 (propiedad matemática — el terreno alrededor de una
     estación siempre reduce la gravedad medida, ya sea por masa por encima
@@ -168,8 +174,7 @@ def compute_terrain_correction_prism(
         r_m = r[mask]
         dh = dem_flat_elev[mask] - se  # positive = terrain above station
 
-        # Near-field (r < 4*cell_size): exact prism formula
-        # Far-field: point-mass approximation
+        # Masa puntual por celda del DEM (sin rama de prisma exacto).
         # TC contribution (always positive by construction)
         tc_contrib = _G_NEWTON * rho_kg_m3 * cell_area * np.abs(dh) / r_m ** 2
         # Convert m/s² → mGal
@@ -177,6 +182,11 @@ def compute_terrain_correction_prism(
 
     tc = np.maximum(tc, 0.0)  # enforce non-negativity
     return tc
+
+
+# Alias deprecado: el nombre histórico prometía "prisma" pero la implementación
+# es masa puntual. Conservado para no romper callers; preferir el nombre nuevo.
+compute_terrain_correction_prism = compute_terrain_correction_pointmass
 
 
 # ---------------------------------------------------------------------------
