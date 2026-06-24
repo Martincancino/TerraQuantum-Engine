@@ -391,6 +391,20 @@ class GeophysicsInvertInput(BaseModel):
                     "default, asume inducción) o 'vector' (MVI: invierte Mx,My,Mz y "
                     "recupera la dirección desde los datos → maneja remanencia).",
     )
+    # ── FASE 1.1: Régimen del kernel magnético en campo cercano ────────────────
+    # 'dipole' (default, histórico): dipolo puro a toda distancia. Byte-idéntico.
+    # 'prism' : prisma rectangular exacto (Bhattacharyya/Sharma) para celdas con
+    #           r ≤ 4·a_eq y dipolo más lejos. El dipolo sesga la AMPLITUD en cuerpos
+    #           someros (sensor a pocas anchuras de celda) porque ignora la extensión
+    #           finita del vóxel; el prisma la corrige. Recomendado para targeting de
+    #           cuerpos magnéticos someros (kimberlitas, IOCG aflorante).
+    magnetic_near_field: Literal["dipole", "prism"] = Field(
+        "dipole",
+        description="Régimen del kernel magnético inducido en campo cercano: 'dipole' "
+                    "(default, histórico, dipolo a toda distancia) o 'prism' (prisma "
+                    "exacto Bhattacharyya/Sharma para r≤4·a_eq, corrige el sesgo de "
+                    "amplitud del dipolo en cuerpos someros).",
+    )
     # ── FASE 9C-2: Inversión Conjunta (Joint Inversion / Cross-Gradient) ──────
     # Cuando el input trae A LA VEZ señal gravimétrica real (g≠0) y magnética
     # (magnetic_nt≠0), el servicio rutea al Orquestador de Inversión Conjunta

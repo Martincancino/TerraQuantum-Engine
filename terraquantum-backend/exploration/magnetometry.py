@@ -146,6 +146,7 @@ class MagnetometryForward:
         inclination_deg=-30.0,
         declination_deg=2.0,
         field_intensity_nt=23500.0,
+        near_field_mode="dipole",
     ):
         self.dx = float(dx)
         self.dy = float(dy)
@@ -158,8 +159,19 @@ class MagnetometryForward:
         self.field_intensity_nt = float(field_intensity_nt)
         self.f_hat = field_unit_vector(inclination_deg, declination_deg)
 
+        # FASE 1.1 — Régimen del kernel inducido en campo CERCANO:
+        #   "dipole" (default, histórico): dipolo puro a toda distancia. Byte-idéntico.
+        #   "prism" : prisma rectangular exacto (Bhattacharyya/Sharma) para celdas con
+        #             r ≤ 4·a_eq (donde el dipolo sesga la amplitud), y dipolo más lejos.
+        # El dipolo sobre/sub-estima la amplitud en cuerpos someros (sensor a pocas
+        # anchuras de celda) porque ignora la extensión finita del vóxel.
+        self.near_field_mode = str(near_field_mode)
+
         # Prefactor escalar C = B0 · V / 4π  (nT · m³). μ0 ya cancelado.
         self.C = self.field_intensity_nt * self.voxel_volume / (4.0 * np.pi)
+        # Prefactor del prisma D = B0 / 4π  (nT). El volumen NO va aquí: queda dentro
+        # de la integral del tensor T_ij. En campo lejano D·f̂ᵀTf̂ → C·(3cos²θ−1)/r³.
+        self.D = self.field_intensity_nt / (4.0 * np.pi)
 
         # Caché de UNA geometría (misma estrategia que gravimetry): el kernel depende
         # SOLO de geometría + (f̂, B0), NO de λ/ruido/anclajes. Validación por
@@ -167,6 +179,78 @@ class MagnetometryForward:
         self._kernel_cache = None
         self._kernel_cache_mat = None
         self.kernel_build_count = 0
+
+    @staticmethod
+    def _magnetic_prism_kernel(dx_vec, dy_vec, dz_vec, dx, dy, dz, f_hat, D):
+        """
+        FASE 1.1 — Kernel TMI de un PRISMA rectangular (campo cercano).
+
+        Anomalía de intensidad magnética total (por unidad de susceptibilidad
+        inducida κ) de un prisma uniformemente magnetizado en M = κ·(B0/μ0)·f̂,
+        proyectada sobre el campo ambiente:
+
+            ΔT/κ = D · f̂ᵀ T f̂ ,      D = B0 / 4π   (nT, μ0 cancelado)
+
+        T es el tensor simétrico de segundas derivadas del potencial newtoniano
+        ∫_prisma (1/r) dV (Bhattacharyya 1964; Sharma 1966; Blakely 1995, cap. 9).
+        Componentes por suma con signo sobre las 8 esquinas, μ = (−1)^(i+j+k),
+        con (x,y,z) = (esquina − sensor) y r = √(x²+y²+z²):
+
+            T_xx = −Σ μ·atan2(y·z, x·r)      T_xy = Σ μ·ln(r + z)
+            T_yy = −Σ μ·atan2(x·z, y·r)      T_xz = Σ μ·ln(r + y)
+            T_zz = −Σ μ·atan2(x·y, z·r)      T_yz = Σ μ·ln(r + x)
+
+        Anti-singularidad idéntica a _nagy_prism_safe (gravimetría): eps a escala
+        de la dimensión mínima del vóxel, arctan2 (evita 0/0) y log seguro.
+
+        En campo lejano T_ij → V·(3·d_i·d_j − r²·δ_ij)/r⁵, de modo que
+        f̂ᵀTf̂ → V·(3cos²θ − 1)/r³ y D·f̂ᵀTf̂ → C·(3cos²θ − 1)/r³: recupera
+        EXACTAMENTE el dipolo (mismo signo, misma escala). Esta convergencia es la
+        prueba de consistencia que valida los signos del tensor.
+
+        Convención de ejes idéntica al resto del motor: x=Norte, y=profundidad
+        (+ abajo), z=Este. Las potencias del tensor son simétricas en el signo de
+        r̂, igual que el dipolo.
+        """
+        dx_vec = np.asarray(dx_vec, dtype=np.float64)
+        dy_vec = np.asarray(dy_vec, dtype=np.float64)
+        dz_vec = np.asarray(dz_vec, dtype=np.float64)
+        fx, fy, fz = float(f_hat[0]), float(f_hat[1]), float(f_hat[2])
+
+        Txx = np.zeros_like(dx_vec)
+        Tyy = np.zeros_like(dx_vec)
+        Tzz = np.zeros_like(dx_vec)
+        Txy = np.zeros_like(dx_vec)
+        Txz = np.zeros_like(dx_vec)
+        Tyz = np.zeros_like(dx_vec)
+
+        eps = 1e-10 * min(float(dx), float(dy), float(dz))
+
+        for i, sign_x in enumerate((-1.0, 1.0)):
+            x = dx_vec + sign_x * (dx / 2.0)
+            for j, sign_y in enumerate((-1.0, 1.0)):
+                y = dy_vec + sign_y * (dy / 2.0)
+                for k, sign_z in enumerate((-1.0, 1.0)):
+                    z = dz_vec + sign_z * (dz / 2.0)
+                    # La suma por esquinas con μ=(−1)^(i+j+k) y estas formas del
+                    # kernel produce −T (el tensor con signo opuesto). Reabsorbemos
+                    # el signo global aquí para que T_ij sea la 2ª derivada real de
+                    # ∫(1/r)dV y converja al dipolo (verificado en el test far-field).
+                    sign = -((-1.0) ** (i + j + k))
+
+                    r = np.sqrt(x * x + y * y + z * z + eps)
+                    Txx += sign * (-np.arctan2(y * z, x * r + eps))
+                    Tyy += sign * (-np.arctan2(x * z, y * r + eps))
+                    Tzz += sign * (-np.arctan2(x * y, z * r + eps))
+                    Txy += sign * np.log(np.maximum(r + z, eps))
+                    Txz += sign * np.log(np.maximum(r + y, eps))
+                    Tyz += sign * np.log(np.maximum(r + x, eps))
+
+        proj = (
+            fx * fx * Txx + fy * fy * Tyy + fz * fz * Tzz
+            + 2.0 * (fx * fy * Txy + fx * fz * Txz + fy * fz * Tyz)
+        )
+        return D * proj
 
     def _build_sparse_kernel(self, x_c_act, y_c_act, z_c_act, sensor_coords):
         """
@@ -192,7 +276,8 @@ class MagnetometryForward:
         geom_key = (
             self.dx, self.dy, self.dz, self.cutoff_radius,
             float(self.f_hat[0]), float(self.f_hat[1]), float(self.f_hat[2]),
-            self.field_intensity_nt, x_c_act.shape, sensor_coords.shape,
+            self.field_intensity_nt, self.near_field_mode,
+            x_c_act.shape, sensor_coords.shape,
         )
         if (
             self._kernel_cache_mat is not None
@@ -224,11 +309,21 @@ class MagnetometryForward:
 
         t_q0 = time.perf_counter()
         cutoff_lists = tree.query_ball_point(sensor_coords, r=self.cutoff_radius)
+        # FASE 1.1: en modo prisma, lista de vecinos en CAMPO CERCANO (r ≤ 4·a_eq).
+        # Esas celdas usan el prisma exacto; el resto del cutoff sigue siendo dipolo.
+        _use_prism = self.near_field_mode == "prism"
+        if _use_prism:
+            a_eq = np.sqrt(self.dx ** 2 + self.dy ** 2 + self.dz ** 2)
+            near_threshold = min(4.0 * a_eq, self.cutoff_radius)
+            near_lists = tree.query_ball_point(sensor_coords, r=near_threshold)
         t_q1 = time.perf_counter()
 
         _x, _y, _z = x_c_act, y_c_act, z_c_act
         _fx, _fy, _fz = float(self.f_hat[0]), float(self.f_hat[1]), float(self.f_hat[2])
         _C = self.C
+        _D = self.D
+        _dx, _dy, _dz = self.dx, self.dy, self.dz
+        _prism = self._magnetic_prism_kernel
 
         def _sensor_row_for_fhat(i, fx, fy, fz):
             """Triplets (rows, cols, data) para el sensor i con f_hat=(fx,fy,fz)."""
@@ -259,10 +354,51 @@ class MagnetometryForward:
         def _sensor_row(i):
             return _sensor_row_for_fhat(i, _fx, _fy, _fz)
 
+        def _sensor_row_prism(i):
+            """FASE 1.1: campo cercano = prisma exacto, campo lejano = dipolo."""
+            sx, sy, sz = sensor_coords[i]
+            cutoff_idx = np.asarray(cutoff_lists[i], dtype=np.int32)
+            near_idx = np.asarray(near_lists[i], dtype=np.int32)
+            if len(cutoff_idx) == 0:
+                return (
+                    np.empty(0, dtype=np.int32),
+                    np.empty(0, dtype=np.int32),
+                    np.empty(0, dtype=np.float64),
+                )
+            far_idx = np.setdiff1d(cutoff_idx, near_idx, assume_unique=True)
+
+            r_parts, c_parts, d_parts = [], [], []
+            if len(far_idx) > 0:
+                dxv = _x[far_idx] - sx
+                dyv = _y[far_idx] - sy
+                dzv = _z[far_idx] - sz
+                r2 = dxv * dxv + dyv * dyv + dzv * dzv + eps
+                fdot = _fx * dxv + _fy * dyv + _fz * dzv
+                r5 = r2 ** 2.5
+                r_parts.append(np.full(len(far_idx), i, dtype=np.int32))
+                c_parts.append(far_idx)
+                d_parts.append(_C * (3.0 * fdot * fdot - r2) / r5)
+            if len(near_idx) > 0:
+                dxv = _x[near_idx] - sx
+                dyv = _y[near_idx] - sy
+                dzv = _z[near_idx] - sz
+                r_parts.append(np.full(len(near_idx), i, dtype=np.int32))
+                c_parts.append(near_idx)
+                d_parts.append(
+                    _prism(dxv, dyv, dzv, _dx, _dy, _dz, (_fx, _fy, _fz), _D)
+                )
+            return (
+                np.concatenate(r_parts),
+                np.concatenate(c_parts),
+                np.concatenate(d_parts).astype(np.float64),
+            )
+
+        _row_fn = _sensor_row_prism if _use_prism else _sensor_row
+
         t_k0 = time.perf_counter()
         rows_chunks, cols_chunks, data_chunks = [], [], []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(_sensor_row, i) for i in range(n_obs)]
+            futures = [executor.submit(_row_fn, i) for i in range(n_obs)]
             for fut in futures:
                 r, c, d = fut.result()
                 rows_chunks.append(r)

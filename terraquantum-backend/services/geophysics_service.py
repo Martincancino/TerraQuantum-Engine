@@ -1290,6 +1290,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         inclination_deg=params.inclination_deg,
         declination_deg=params.declination_deg,
         field_intensity_nt=params.field_intensity_nt,
+        near_field_mode=getattr(params, "magnetic_near_field", "dipole"),
     )
     # Inversor sobre la malla COMPLETA (core + padding) — el Laplaciano no-uniforme
     # y la smallness diferencial de padding operan en esta grilla; los resultados se
