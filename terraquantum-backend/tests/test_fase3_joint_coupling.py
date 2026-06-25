@@ -214,6 +214,46 @@ def test_fixed_gradient_dirs_raw_vs_unit():
     assert np.allclose(np.abs(gx_unit[interior]), 1.0, atol=1e-6), "dirección unitaria ~1"
 
 
+@pytest.mark.benchmark
+def test_joint_padding_runs_and_reduces_to_core(test_project_id, test_run_id):
+    """Fase 3.3: joint_padding corre sobre malla extendida y reduce al core.
+
+    El bloque 3D de salida debe contener SOLO celdas core (nx*ny*nz), el report debe
+    declarar padding.active=True con n_total>n_core, y los índices de voxel deben caer
+    dentro del rango core.
+    """
+    nx, ny, nz = 8, 6, 8
+    p = _build_joint_params(test_project_id, test_run_id, offset=False,
+                            joint_padding=True, joint_n_pad=3, joint_pad_factor=1.3)
+    r = run_joint_inversion(p)
+    mesh = r["report"]["mesh"]
+    pad = mesh["padding"]
+    assert pad["active"] is True
+    assert pad["n_total_cells"] > pad["n_core_cells"]
+    assert pad["n_core_cells"] == nx * ny * nz
+    assert mesh["n_active"] == nx * ny * nz
+    # Todos los voxels de salida deben estar en el rango core.
+    for v in r["voxels"]:
+        assert 0 <= v["ix"] < nx and 0 <= v["iy"] < ny and 0 <= v["iz"] < nz
+        assert np.isfinite(v["density_t_m3"]) and np.isfinite(v["susceptibility_si"])
+    assert np.isfinite(r["misfit_error_percent"])
+    assert len(r["voxels"]) > 0
+
+
+@pytest.mark.benchmark
+def test_joint_padding_with_pgi_coupling(test_project_id, test_run_id):
+    """Fase 3.3 + 3.1: padding y PGI dinámico co-existen sin explotar."""
+    p = _build_joint_params(test_project_id, test_run_id, offset=True,
+                            coupling_mode="pgi+cross", joint_pgi_alpha=0.1,
+                            joint_padding=True, joint_n_pad=3)
+    r = run_joint_inversion(p)
+    assert r["report"]["mesh"]["padding"]["active"] is True
+    assert r["report"]["coupling"]["use_pgi"] is True
+    assert r["report"]["coupling"]["pgi_disabled_reason"] is None
+    assert np.isfinite(r["report"]["final"]["E_norm"])
+    assert len(r["voxels"]) > 0
+
+
 @pytest.mark.unit
 def test_invalid_coupling_mode_rejected(test_project_id, test_run_id):
     """Un joint_coupling_mode inválido es rechazado por el schema (pydantic)."""

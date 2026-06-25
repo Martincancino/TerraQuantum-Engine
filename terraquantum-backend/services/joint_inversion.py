@@ -179,6 +179,73 @@ def _e_norm_cellwise(m_rho, m_chi, Dx, Dy, Dz):
 _GMM_SPD_FLOOR = 1e-9
 
 
+def _build_joint_padded_grid(nx, ny, nz, dx, n_pad=5, pad_factor=1.3):
+    """Malla compartida con padding para el joint, padded en ±X, ±Z y +Y (profundidad).
+
+    A diferencia de build_padded_tensor_grid (que padea simétricamente las 6 caras), aquí
+    NO se padea la cara -Y (arriba de la superficie de observación): en campos potenciales
+    no hay tierra sobre el survey, y esas celdas las enmascararía el solver como aire,
+    rompiendo la co-localización malla-completa que exigen los operadores de gradiente y
+    el kernel forward compartidos. Padding lateral (±X, ±Z) y hacia abajo (+Y) = la BC
+    física correcta. Los centros del core se alinean a (k+0.5)·dx como build_voxel_grid.
+
+    Devuelve el mismo contrato que build_padded_tensor_grid (claves x_c/y_c/z_c, hx/hy/hz,
+    nx_total/ny_total/nz_total, ix_core/iy_core/iz_core, x_c_core/..., is_core).
+    """
+    nx, ny, nz = int(nx), int(ny), int(nz)
+    dx = float(dx)
+    n_pad = int(n_pad)
+    pad_factor = float(pad_factor)
+    if n_pad < 1:
+        raise ValueError("n_pad debe ser >= 1.")
+    if pad_factor < 1.0:
+        raise ValueError("pad_factor debe ser >= 1.0.")
+
+    _pad_out = np.array([dx * (pad_factor ** i) for i in range(n_pad)], dtype=np.float64)
+
+    def _sym(n_core):  # left_pad (decreciente hacia el core) + core + right_pad
+        return np.concatenate([_pad_out[::-1], np.full(n_core, dx), _pad_out])
+
+    hx = _sym(nx)
+    hz = _sym(nz)
+    hy = np.concatenate([np.full(ny, dx), _pad_out])   # +Y (abajo) solamente
+
+    nx_total, ny_total, nz_total = len(hx), len(hy), len(hz)
+
+    def _centers(h):
+        edges = np.concatenate([[0.0], np.cumsum(h)])
+        return 0.5 * (edges[:-1] + edges[1:])
+
+    xc1, yc1, zc1 = _centers(hx), _centers(hy), _centers(hz)
+    # Alinear primer centro CORE con dx/2. En X/Z el core arranca en n_pad; en Y en 0.
+    xc1 = xc1 + (dx / 2.0 - xc1[n_pad])
+    zc1 = zc1 + (dx / 2.0 - zc1[n_pad])
+    yc1 = yc1 + (dx / 2.0 - yc1[0])
+
+    gx, gy, gz = np.mgrid[0:nx_total, 0:ny_total, 0:nz_total]
+    ix_f = gx.flatten(order="F").astype(np.int32)
+    iy_f = gy.flatten(order="F").astype(np.int32)
+    iz_f = gz.flatten(order="F").astype(np.int32)
+
+    is_core = (
+        (ix_f >= n_pad) & (ix_f < n_pad + nx) &
+        (iy_f < ny) &
+        (iz_f >= n_pad) & (iz_f < n_pad + nz)
+    )
+    return {
+        "x_c": xc1[ix_f], "y_c": yc1[iy_f], "z_c": zc1[iz_f],
+        "hx": hx, "hy": hy, "hz": hz,
+        "nx_total": nx_total, "ny_total": ny_total, "nz_total": nz_total,
+        "ix_core": ix_f[is_core] - n_pad,
+        "iy_core": iy_f[is_core],
+        "iz_core": iz_f[is_core] - n_pad,
+        "x_c_core": xc1[ix_f][is_core],
+        "y_c_core": yc1[iy_f][is_core],
+        "z_c_core": zc1[iz_f][is_core],
+        "is_core": is_core,
+    }
+
+
 def _fit_joint_gmm_2d(rho_abs, chi, n_classes):
     """Bootstrap de la mixtura 2D (ρ, χ) desde los modelos warm-up independientes.
 
@@ -448,28 +515,52 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     if params.cutoff_radius < params.block_size:
         raise HTTPException(status_code=422, detail="cutoff_radius no puede ser menor que block_size.")
 
-    # ── Malla core común a ambas físicas ──────────────────────────────────────
-    # NOTA DE ALCANCE (padding): a diferencia de los paths gravimétrico y magnético
-    # AISLADOS de producción (que usan build_tensor_mesh_with_padding como BC física),
-    # la inversión CONJUNTA opera sobre la malla CORE pelada para AMBAS físicas. El
-    # acoplamiento cross-gradient exige celdas co-localizadas en una malla compartida
-    # y operadores de gradiente (build_gradient_operators) definidos sobre esas mismas
-    # dimensiones; extender el padding aquí obliga a ampliar de forma consistente la
-    # malla compartida, los operadores de gradiente y el bloque cross-gradient en las
-    # dos físicas a la vez (cambio arquitectónico, no un cableado local). Por eso NO
-    # es una regresión específica del magnético: el gravimétrico conjunto TAMPOCO lleva
-    # padding por el mismo motivo de diseño. El padding en joint queda DIFERIDO; el
-    # artefacto de borde se mitiga hoy en los motores aislados (grav/mag de producción).
+    # ── Malla compartida a ambas físicas (core, o core+padding en Fase 3.3) ──
+    # FASE 3.3: opt-in joint_padding extiende la malla con padding geométrico (BC física
+    # de campos potenciales), COMPARTIDO por ambas físicas. Los operadores de gradiente,
+    # el kernel forward, los bloques de acoplamiento y el Laplaciano se definen sobre la
+    # malla extendida (no-uniforme vía hx/hy/hz); las celdas de padding se anclan al fondo
+    # con padding_kappa. Al final se REDUCE al core (is_core) para el bloque 3D de salida.
+    # Default False = malla core pelada (histórico byte-idéntico): _hx/_hy/_hz=None en el
+    # solver, espaciado escalar dx en los operadores de gradiente, sin padding_mask.
     nx, ny, nz, dx = params.nx, params.ny, params.nz, params.block_size
-    ix, iy, iz, x_c, y_c, z_c = build_voxel_grid(params)
-    nC = nx * ny * nz
+    _pad_on = bool(getattr(params, "joint_padding", False))
+    _padding_kappa = float(getattr(params, "joint_padding_kappa", 1e5))
+    if _pad_on:
+        _n_pad = int(getattr(params, "joint_n_pad", 5))
+        _pad_factor = float(getattr(params, "joint_pad_factor", 1.3))
+        # Padding ±X, ±Z y +Y (NO -Y/aire) → co-localización malla-completa preservada.
+        _mesh = _build_joint_padded_grid(nx, ny, nz, float(dx), n_pad=_n_pad, pad_factor=_pad_factor)
+        nx_w, ny_w, nz_w = _mesh["nx_total"], _mesh["ny_total"], _mesh["nz_total"]
+        x_c, y_c, z_c = _mesh["x_c"], _mesh["y_c"], _mesh["z_c"]
+        _hx, _hy, _hz = _mesh["hx"], _mesh["hy"], _mesh["hz"]
+        is_core = np.asarray(_mesh["is_core"], dtype=bool)
+        _padding_mask = ~is_core
+        _grad_hx, _grad_hy, _grad_hz = _hx, _hy, _hz       # gradiente no-uniforme
+        _solve_hx, _solve_hy, _solve_hz = _hx, _hy, _hz    # Laplaciano no-uniforme
+        ix_out, iy_out, iz_out = _mesh["ix_core"], _mesh["iy_core"], _mesh["iz_core"]
+    else:
+        nx_w, ny_w, nz_w = nx, ny, nz
+        ix, iy, iz, x_c, y_c, z_c = build_voxel_grid(params)
+        is_core = np.ones(nx * ny * nz, dtype=bool)
+        _padding_mask = None
+        _grad_hx, _grad_hy, _grad_hz = dx, dx, dx          # uniforme (byte-idéntico)
+        _solve_hx, _solve_hy, _solve_hz = None, None, None
+        ix_out, iy_out, iz_out = ix, iy, iz
+    nC = nx_w * ny_w * nz_w
+    nC_core = int(np.sum(is_core))
+    if nC > 400_000:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Malla conjunta con padding demasiado grande (nC={nC}>400000). Reduce nx/ny/nz o joint_n_pad.",
+        )
 
     boreholes_g, boreholes_m = _extract_boreholes(params)
 
     # Operadores de primera derivada co-localizados (geophysics_math, 9C-1).
-    Dx, Dy, Dz = build_gradient_operators(nx, ny, nz, dx, dx, dx)
+    Dx, Dy, Dz = build_gradient_operators(nx_w, ny_w, nz_w, _grad_hx, _grad_hy, _grad_hz)
 
-    # Motores forward / inversos sobre la malla core.
+    # Motores forward / inversos sobre la malla (core o core+padding).
     grav_fwd = GravimetryForward(dx, dx, dx, cutoff_radius=params.cutoff_radius)
     mag_fwd = MagnetometryForward(
         dx, dx, dx,
@@ -479,8 +570,8 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         field_intensity_nt=params.field_intensity_nt,
     )
     _base_density = float(getattr(params, "base_density", 2.6))
-    grav_inv = GravimetryInversion(nx, ny, nz, dx, base_density=_base_density)
-    mag_inv = MagnetometryInversion(nx, ny, nz, dx)
+    grav_inv = GravimetryInversion(nx_w, ny_w, nz_w, dx, base_density=_base_density)
+    mag_inv = MagnetometryInversion(nx_w, ny_w, nz_w, dx)
     base_rho = grav_inv.base_density
 
     lam_g = params.lambda_mag if params.lambda_mag > 0 else 1e-5
@@ -494,6 +585,8 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             topography_elevations=None,
             sensor_coords=sensor_coords, x_c=x_c, z_c=z_c,
             forward_model=grav_fwd,
+            hx=_solve_hx, hy=_solve_hy, hz=_solve_hz,
+            padding_mask=_padding_mask, padding_kappa=_padding_kappa,
             density_min=params.density_min, density_max=params.density_max,
             boreholes=boreholes_g,
             m_ref=m_ref_contrast,
@@ -512,6 +605,8 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             topography_elevations=None,
             sensor_coords=sensor_coords, x_c=x_c, z_c=z_c,
             forward_model=mag_fwd,
+            hx=_solve_hx, hy=_solve_hy, hz=_solve_hz,
+            padding_mask=_padding_mask, padding_kappa=_padding_kappa,
             susc_min=params.susc_min, susc_max=params.susc_max,
             boreholes=boreholes_m,
             m_ref=m_ref,
@@ -609,8 +704,9 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     _pgi_disabled_reason = None
     if _use_pgi and _pgi_alpha > 0.0:
         try:
+            # Bootstrap sobre celdas CORE (excluye el padding ~background → no sesga el GMM).
             _gmm_means, _gmm_covs, _gmm_weights = _fit_joint_gmm_2d(
-                m_rho, m_chi, _pgi_n_classes
+                m_rho[is_core], m_chi[is_core], _pgi_n_classes
             )
             _prior_means = _gmm_means.copy()
             _prior_covs = _gmm_covs.copy()
@@ -769,6 +865,18 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     n_iter_done = history[-1]["iter"]
     _update("running", 0.92, "building_payload", "Construyendo bloque 3D conjunto (ρ + χ)...")
 
+    # ── FASE 3.3: reducir al CORE para la salida (descarta celdas de padding) ─
+    # El solver y el acoplamiento operaron sobre la malla extendida; el bloque 3D, el
+    # clustering y los centroides se calculan SOLO sobre el core (is_core). En el path
+    # histórico (sin padding) is_core es todo True → no-op byte-idéntico.
+    if _pad_on:
+        m_rho = m_rho[is_core]
+        m_chi = m_chi[is_core]
+        x_c = x_c[is_core]
+        y_c = y_c[is_core]
+        z_c = z_c[is_core]
+    ix, iy, iz = ix_out, iy_out, iz_out
+
     # ── Empaquetado: densidad y susceptibilidad en la MISMA malla activa ─────
     rho_contrast = m_rho - base_rho
     abs_contrast = np.abs(rho_contrast)
@@ -843,8 +951,19 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         "method": "joint_inversion_cross_gradient_phase9c2",
         "engine": "Alternating Gauss-Newton + exponential continuation (Gallardo–Meju cross-gradient)",
         "is_joint_inversion": True,
-        "mesh": {"nx": nx, "ny": ny, "nz": nz, "block_size": dx, "n_active": int(nC),
-                 "common_core_grid": True},
+        "mesh": {"nx": nx, "ny": ny, "nz": nz, "block_size": dx, "n_active": int(nC_core),
+                 "common_core_grid": True,
+                 "padding": {
+                     "active": bool(_pad_on),
+                     "n_pad": int(getattr(params, "joint_n_pad", 5)) if _pad_on else 0,
+                     "pad_factor": float(getattr(params, "joint_pad_factor", 1.3)) if _pad_on else None,
+                     "padding_kappa": _padding_kappa if _pad_on else None,
+                     "n_total_cells": int(nC),
+                     "n_core_cells": int(nC_core),
+                     "note": ("Fase 3.3: malla compartida con padding (BC física) para ambas "
+                              "físicas; reducida al core para el bloque 3D." if _pad_on
+                              else "Malla core pelada (sin padding, histórico)."),
+                 }},
         "field": {
             "inclination_deg": params.inclination_deg,
             "declination_deg": params.declination_deg,

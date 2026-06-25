@@ -568,6 +568,37 @@ class GeophysicsInvertInput(BaseModel):
             "Fase 3.1."
         ),
     )
+    # ── FASE 3.3: Padding (condición de frontera física) en inversión conjunta ──
+    # Históricamente el joint corría sobre la malla CORE pelada (a diferencia de los
+    # paths grav/mag AISLADOS de producción, que sí extienden la malla con padding como
+    # BC de campos potenciales). Sin padding, una fuente en el borde del survey satura
+    # las celdas del core (artefacto de borde, medido en Raglan). Aquí se construye una
+    # malla COMPARTIDA con padding para AMBAS físicas, con operadores de gradiente y
+    # bloques de acoplamiento definidos sobre esa malla extendida; al final se reduce al
+    # core para el bloque 3D de salida. Default False = comportamiento histórico (core).
+    joint_padding: bool = Field(
+        False,
+        description=(
+            "Si True, corre la inversión conjunta sobre una malla COMPARTIDA con padding "
+            "geométrico (BC física de campos potenciales) y reduce al core para la salida. "
+            "False (default) = malla core pelada (histórico, byte-idéntico). Fase 3.3."
+        ),
+    )
+    joint_n_pad: int = Field(
+        5, ge=1, le=20,
+        description="Número de capas de padding por cara (malla conjunta). Solo si joint_padding. Fase 3.3.",
+    )
+    joint_pad_factor: float = Field(
+        1.3, ge=1.0, le=3.0,
+        description="Factor de crecimiento geométrico de las celdas de padding. Solo si joint_padding. Fase 3.3.",
+    )
+    joint_padding_kappa: float = Field(
+        1e5, gt=0.0, le=1e9,
+        description=(
+            "Penalización smallness diferencial de las celdas de padding (ancla al fondo). "
+            "Solo si joint_padding. Fase 3.3."
+        ),
+    )
     # ── HITO 5 (B-05): Topografía activa ────────────────────────────────────────
     # Elevación MASL de cada sensor de gravedad (m s.n.m.), paralelo a `observations`.
     # Si se provee con la misma longitud que observations, el solver activa la máscara
