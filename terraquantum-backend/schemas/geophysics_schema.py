@@ -519,6 +519,52 @@ class GeophysicsInvertInput(BaseModel):
             "conservado para rollback."
         ),
     )
+    # ── FASE 3.1: Modo de acoplamiento conjunto (PGI dinámico 2D ρ-χ) ────────────
+    # Generaliza el acoplamiento de la inversión conjunta más allá del cross-gradient
+    # estructural. El PGI conjunto dinámico (Astic & Oldenburg 2021) acopla las dos
+    # físicas por PETROFÍSICA: una mixtura Gaussiana 2D en el plano (ρ, χ) cuyas clases
+    # tienen centroides correlacionados (p.ej. magnetita = alta densidad Y alta susc).
+    # Cada iteración tira de ρ y χ hacia el centroide de su clase conjunta → acopla
+    # valores, no solo bordes. Reutiliza los kernels NIW 2D de la Fase 2.2 vía el hook
+    # extra_reg_blocks (smallness petrofísica). Default = cross_gradient (histórico).
+    joint_coupling_mode: Literal["cross_gradient", "pgi_dynamic", "pgi+cross"] = Field(
+        "cross_gradient",
+        description=(
+            "Acoplamiento de la inversión conjunta (Fase 3.1). "
+            "'cross_gradient' (default, histórico): Gallardo–Meju estructural (acopla bordes). "
+            "'pgi_dynamic': PGI conjunto dinámico (GMM 2D ρ-χ, Astic & Oldenburg 2021) — "
+            "acopla por petrofísica (valores correlacionados), NO solo estructura. "
+            "'pgi+cross': ambos combinados."
+        ),
+    )
+    joint_pgi_alpha: float = Field(
+        0.1, ge=0.0, le=100.0,
+        description=(
+            "Peso del término PGI conjunto (smallness ρ/χ → centroide de su clase 2D). "
+            "Mayor = más adherencia a la mixtura petrofísica. Solo aplica si "
+            "joint_coupling_mode incluye PGI. Fase 3.1."
+        ),
+    )
+    joint_pgi_n_classes: int = Field(
+        3, ge=2, le=10,
+        description="Número de clases del GMM 2D ρ-χ (joint PGI). Fase 3.1.",
+    )
+    joint_pgi_dynamic: bool = Field(
+        True,
+        description=(
+            "Si True (default), re-estima el GMM 2D cada iteración (EM MAP con prior NIW) "
+            "regularizado hacia la mixtura bootstrap del warm-up. False = GMM 2D fijo. "
+            "Solo aplica si joint_coupling_mode incluye PGI. Fase 3.1."
+        ),
+    )
+    joint_pgi_prior_strength: float = Field(
+        10.0, gt=0.0, le=1e6,
+        description=(
+            "Confianza del prior NIW (κ0=ν0) del GMM 2D dinámico hacia la mixtura "
+            "bootstrap. Bajo = sigue el dato; alto ≈ estático. Solo si joint_pgi_dynamic. "
+            "Fase 3.1."
+        ),
+    )
     # ── HITO 5 (B-05): Topografía activa ────────────────────────────────────────
     # Elevación MASL de cada sensor de gravedad (m s.n.m.), paralelo a `observations`.
     # Si se provee con la misma longitud que observations, el solver activa la máscara

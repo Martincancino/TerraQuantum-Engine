@@ -53,6 +53,7 @@ from exploration.clustering import extract_geological_bodies
 from exploration.geophysics_math import build_gradient_operators
 from exploration.gravimetry import GravimetryForward, GravimetryInversion
 from exploration.magnetometry import MagnetometryForward, MagnetometryInversion
+from exploration.pgi_engine import gmm_responsibilities_2d, niw_map_update_2d
 from schemas.geophysics_schema import GeophysicsInvertInput
 
 _log = get_logger(__name__)
@@ -145,6 +146,68 @@ def _e_norm_cellwise(m_rho, m_chi, Dx, Dy, Dz):
     num = float(np.sum(cross_mag))
     den = float(np.sum(rho_mag * chi_mag))
     return num / (den + _RATIO_EPS)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FASE 3.1 — PGI CONJUNTO DINÁMICO (acoplamiento petrofísico, GMM 2D ρ-χ).
+# ─────────────────────────────────────────────────────────────────────────────
+# A diferencia del cross-gradient (que acopla solo la ESTRUCTURA: bordes en los
+# mismos lugares), el PGI conjunto acopla los VALORES: una mixtura Gaussiana 2D en
+# el plano (densidad, susceptibilidad) cuyas clases tienen centroides correlacionados
+# (p.ej. magnetita = alta ρ Y alta χ). En cada iteración, cada celda se asigna (MAP)
+# a su clase 2D y se la empuja con un término smallness hacia el centroide de esa
+# clase EN AMBAS físicas a la vez — así recuperar χ alto donde ρ es alto, y viceversa.
+# Es la formulación de Astic & Oldenburg 2021 (GMM dinámico conjunto). El bloque
+# smallness reutiliza el hook extra_reg_blocks: A_pgi = √α·I (espacio físico) con
+# RHS √α·m_ref → residual √α·(m_phys − m_ref) tras el escalado interno B·Wz_inv.
+_GMM_SPD_FLOOR = 1e-9
+
+
+def _fit_joint_gmm_2d(rho_abs, chi, n_classes):
+    """Bootstrap de la mixtura 2D (ρ, χ) desde los modelos warm-up independientes.
+
+    Estandariza cada eje (ρ ~ O(1) t/m³, χ ~ O(0.01) SI tienen escalas dispares) antes
+    de ajustar con sklearn, y vuelve a transformar medias/covarianzas al espacio físico.
+    El resultado es la mixtura PRIOR (conocimiento data-driven del warm-up) hacia la que
+    el refit NIW dinámico regulariza. Devuelve (means (K,2), covs (K,2,2), weights (K,)).
+    """
+    from sklearn.mixture import GaussianMixture  # noqa: PLC0415
+
+    X = np.column_stack([
+        np.asarray(rho_abs, dtype=np.float64),
+        np.asarray(chi, dtype=np.float64),
+    ])
+    mu = X.mean(axis=0)
+    sd = X.std(axis=0)
+    sd = np.where(sd > 1e-12, sd, 1.0)
+    Xs = (X - mu) / sd
+    gm = GaussianMixture(
+        n_components=int(n_classes),
+        covariance_type="full",
+        init_params="k-means++",
+        n_init=3,
+        reg_covar=1e-6,
+        random_state=42,
+    )
+    gm.fit(Xs)
+    D = np.diag(sd)
+    means = gm.means_ * sd + mu                                  # (K, 2)
+    covs = np.einsum("ij,kjl,lm->kim", D, gm.covariances_, D)    # (K, 2, 2)
+    # Blindaje SPD tras el back-transform (simetriza + piso diagonal).
+    for k in range(covs.shape[0]):
+        covs[k] = 0.5 * (covs[k] + covs[k].T) + _GMM_SPD_FLOOR * np.eye(2)
+    return means, covs, np.asarray(gm.weights_, dtype=np.float64)
+
+
+def _joint_pgi_class_means(rho_abs, chi, means, covs, weights):
+    """Centroide de clase 2D (MAP) por celda. Devuelve (rho_ref_abs (n,), chi_ref (n,))."""
+    X = np.column_stack([
+        np.asarray(rho_abs, dtype=np.float64),
+        np.asarray(chi, dtype=np.float64),
+    ])
+    resp = gmm_responsibilities_2d(X, means, covs, weights)     # (K, n)
+    cls = np.argmax(resp, axis=0)                               # (n,)
+    return means[cls, 0], means[cls, 1]
 
 
 def _obs_mask_from_kernel(k):
@@ -407,7 +470,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     lam_g = params.lambda_mag if params.lambda_mag > 0 else 1e-5
     lam_m = params.lambda_mag if params.lambda_mag > 0 else 1e-4
 
-    def _solve_gravity(extra_blocks, m_ref_contrast, kernel_cache=None):
+    def _solve_gravity(extra_blocks, m_ref_contrast, kernel_cache=None, extra_rhs=None):
         meta = {}
         rho_full, score, misfit, sens = grav_inv.solve_inversion_lsqr(
             g_observed, kernel_cache, y_c,
@@ -419,13 +482,13 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             boreholes=boreholes_g,
             m_ref=m_ref_contrast,
             extra_reg_blocks=extra_blocks,
-            extra_reg_rhs=None,
+            extra_reg_rhs=extra_rhs,
             prune_observable_domain=_do_prune,  # Joint v1.1: R-05 compatible vía dimensión reducida
             solver_meta=meta,
         )
         return np.nan_to_num(np.asarray(rho_full, dtype=np.float64), nan=base_rho), score, misfit, meta
 
-    def _solve_magnetic(extra_blocks, m_ref, kernel_cache=None):
+    def _solve_magnetic(extra_blocks, m_ref, kernel_cache=None, extra_rhs=None):
         meta = {}
         chi_full, score, misfit, sens = mag_inv.solve_magnetic_inversion_lsqr(
             d_observed=mag, override_kernel=kernel_cache, y_c=y_c,
@@ -437,7 +500,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             boreholes=boreholes_m,
             m_ref=m_ref,
             extra_reg_blocks=extra_blocks,
-            extra_reg_rhs=None,
+            extra_reg_rhs=extra_rhs,
             solver_meta=meta,
         )
         return np.nan_to_num(np.asarray(chi_full, dtype=np.float64), nan=0.0), score, misfit, meta
@@ -510,10 +573,49 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     _log.info(f"[FASE 9C-2] k=0 (warm-up) | E_norm={E_norm:.6f} (cellwise) | "
           f"E_l2={E_l2:.6f} | misfit_g={misfit_g:.3f}% | misfit_m={misfit_m:.3f}%")
 
+    # ── FASE 3.1: setup del acoplamiento conjunto ────────────────────────────
+    # cross_gradient (default, histórico) | pgi_dynamic | pgi+cross.
+    _coupling_mode = getattr(params, "joint_coupling_mode", "cross_gradient")
+    _use_cross = _coupling_mode in ("cross_gradient", "pgi+cross")
+    _use_pgi = _coupling_mode in ("pgi_dynamic", "pgi+cross")
+    _pgi_alpha = float(getattr(params, "joint_pgi_alpha", 0.1))
+    _pgi_dynamic = bool(getattr(params, "joint_pgi_dynamic", True))
+    _pgi_n_classes = int(getattr(params, "joint_pgi_n_classes", 3))
+    _pgi_prior_strength = float(getattr(params, "joint_pgi_prior_strength", 10.0))
+    _sqrt_pgi_alpha = float(np.sqrt(max(_pgi_alpha, 0.0)))
+
+    # Bootstrap de la mixtura 2D ρ-χ desde el warm-up independiente. La mixtura prior
+    # es INMUTABLE (centro del refit NIW); means/covs/weights mutan en cada iteración.
+    _gmm_means = _gmm_covs = _gmm_weights = None
+    _prior_means = _prior_covs = _prior_weights = None
+    _pgi_disabled_reason = None
+    if _use_pgi and _pgi_alpha > 0.0:
+        try:
+            _gmm_means, _gmm_covs, _gmm_weights = _fit_joint_gmm_2d(
+                m_rho, m_chi, _pgi_n_classes
+            )
+            _prior_means = _gmm_means.copy()
+            _prior_covs = _gmm_covs.copy()
+            _prior_weights = _gmm_weights.copy()
+            _log.info(
+                f"[FASE 3.1 PGI] GMM 2D bootstrap (K={_pgi_n_classes}) | "
+                f"means_rho={np.round(_gmm_means[:, 0], 3).tolist()} | "
+                f"means_chi={np.round(_gmm_means[:, 1], 4).tolist()} | dynamic={_pgi_dynamic}"
+            )
+        except Exception as _gmm_exc:  # sklearn ausente / ajuste degenerado → degradar
+            _use_pgi = False
+            _pgi_disabled_reason = f"{type(_gmm_exc).__name__}: {_gmm_exc}"
+            _log.warning(f"[FASE 3.1 PGI] GMM 2D no disponible, PGI desactivado: {_pgi_disabled_reason}")
+    _log.info(
+        f"[FASE 3.1] coupling_mode={_coupling_mode} | use_cross={_use_cross} | "
+        f"use_pgi={_use_pgi} | pgi_alpha={_pgi_alpha} | pgi_prior_strength={_pgi_prior_strength}"
+    )
+
     # ── Bucle alternado con continuation exponencial ──────────────────────────
     stop_reason = "max_iter_reached"
     E_prev = E_norm
     max_block_nnz = 0
+    _pgi_mean_shift = None
     for k in range(1, int(params.joint_max_iter) + 1):
         progress = 0.10 + 0.80 * (k / max(int(params.joint_max_iter), 1))
         _update("running", progress, "joint_loop", f"Inversión conjunta — iteración {k}...")
@@ -532,9 +634,30 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             frac = (k - 1) / max(int(params.joint_max_iter) - 1, 1)
             lambda_cross = (1e-2) ** (1.0 - frac)
 
-        # Paso de gravedad: fija χ, penaliza ∇ρ × ĝ_χ.
+        # ── FASE 3.1: refit del GMM 2D + referencias PGI por clase (k≥2) ──────
+        # Una pasada NIW MAP por iteración (regularizada hacia el prior bootstrap)
+        # mueve las clases hacia el dato sin colapsar. La referencia de cada física
+        # = centroide 2D de la clase MAP de la celda → smallness petrofísica.
+        _pgi_on = _use_pgi and lambda_cross >= 0.0 and k >= 2
+        rho_ref_abs = chi_ref = None
+        if _pgi_on:
+            X_cur = np.column_stack([m_rho, m_chi])
+            if _pgi_dynamic:
+                resp = gmm_responsibilities_2d(X_cur, _gmm_means, _gmm_covs, _gmm_weights)
+                _gmm_means, _gmm_covs, _gmm_weights = niw_map_update_2d(
+                    X_cur, resp, _prior_means, _prior_covs, _prior_weights,
+                    prior_kappa=_pgi_prior_strength, prior_nu=_pgi_prior_strength,
+                )
+                _pgi_mean_shift = float(
+                    np.linalg.norm(_gmm_means - _prior_means)
+                    / max(np.linalg.norm(_prior_means), 1e-12)
+                )
+            rho_ref_abs, _ = _joint_pgi_class_means(m_rho, m_chi, _gmm_means, _gmm_covs, _gmm_weights)
+
+        # Paso de gravedad: fija χ, penaliza ∇ρ × ĝ_χ (cross) y/o ρ → centroide 2D (PGI).
         lambda_cross_eff_g = 0.0
-        if lambda_cross > 0.0:
+        grav_blocks, grav_rhs = [], []
+        if _use_cross and lambda_cross > 0.0:
             hx, hy, hz = _normalized_gradient(m_chi, Dx, Dy, Dz)
             B_chi = _build_cross_gradient_block(hx, hy, hz, Dx, Dy, Dz)
             max_block_nnz = max(max_block_nnz, B_chi.nnz)
@@ -542,23 +665,44 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             lambda_cross_eff_g = lambda_cross * cross_beta * G_norm / max(B_chi_norm, 1e-12)
             # Joint v1.1: recortar columnas al dominio observable → B.shape[1] = n_obs_g
             _B_chi_g = B_chi[:, _obs_mask_g] if _do_prune else B_chi
-            grav_blocks = [lambda_cross_eff_g * _B_chi_g]
-        else:
-            grav_blocks = None
-        m_rho_new, _gs, misfit_g, meta_g = _solve_gravity(grav_blocks, m_rho - base_rho, grav_fwd_kernel_cache)
+            grav_blocks.append(lambda_cross_eff_g * _B_chi_g)
+            grav_rhs.append(np.zeros(_B_chi_g.shape[0], dtype=np.float64))
+        if _pgi_on and rho_ref_abs is not None:
+            _ref_g = (rho_ref_abs - base_rho)
+            _ref_g = _ref_g[_obs_mask_g] if _do_prune else _ref_g
+            _n_g = _ref_g.shape[0]
+            grav_blocks.append(_sqrt_pgi_alpha * sp.eye(_n_g, format="csr", dtype=np.float64))
+            grav_rhs.append(_sqrt_pgi_alpha * _ref_g)
+        # Sin bloques → None (path histórico byte-idéntico, extra_reg_rhs ignorado).
+        _gb = grav_blocks or None
+        _grhs = grav_rhs if grav_blocks else None
+        m_rho_new, _gs, misfit_g, meta_g = _solve_gravity(
+            _gb, m_rho - base_rho, grav_fwd_kernel_cache, extra_rhs=_grhs
+        )
 
-        # Paso de magnetometría: fija ρ (actualizado), penaliza ∇χ × ĝ_ρ.
+        # Referencia PGI de χ recomputada con ρ ACTUALIZADO (esquema alternado).
+        if _pgi_on:
+            _, chi_ref = _joint_pgi_class_means(m_rho_new, m_chi, _gmm_means, _gmm_covs, _gmm_weights)
+
+        # Paso de magnetometría: fija ρ (actualizado), penaliza ∇χ × ĝ_ρ (cross) y/o χ → centroide 2D (PGI).
         lambda_cross_eff_m = 0.0
-        if lambda_cross > 0.0:
+        mag_blocks, mag_rhs = [], []
+        if _use_cross and lambda_cross > 0.0:
             hx, hy, hz = _normalized_gradient(m_rho_new, Dx, Dy, Dz)
             B_rho = _build_cross_gradient_block(hx, hy, hz, Dx, Dy, Dz)
             max_block_nnz = max(max_block_nnz, B_rho.nnz)
             B_rho_norm = float(np.sqrt(B_rho.power(2).sum()))
             lambda_cross_eff_m = lambda_cross * cross_beta * G_norm / max(B_rho_norm, 1e-12)
-            mag_blocks = [lambda_cross_eff_m * B_rho]
-        else:
-            mag_blocks = None
-        m_chi_new, _ms, misfit_m, meta_m = _solve_magnetic(mag_blocks, m_chi, mag_fwd_kernel_cache)
+            mag_blocks.append(lambda_cross_eff_m * B_rho)
+            mag_rhs.append(np.zeros(B_rho.shape[0], dtype=np.float64))
+        if _pgi_on and chi_ref is not None:
+            mag_blocks.append(_sqrt_pgi_alpha * sp.eye(nC, format="csr", dtype=np.float64))
+            mag_rhs.append(_sqrt_pgi_alpha * np.asarray(chi_ref, dtype=np.float64))
+        _mb = mag_blocks or None
+        _mrhs = mag_rhs if mag_blocks else None
+        m_chi_new, _ms, misfit_m, meta_m = _solve_magnetic(
+            _mb, m_chi, mag_fwd_kernel_cache, extra_rhs=_mrhs
+        )
 
         # Métricas de convergencia.
         delta_rho = _rel_change(m_rho_new, m_rho)
@@ -583,6 +727,8 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             "misfit_magnetic_percent": misfit_m,
             "cond_A_gravity": meta_g.get("acond"),
             "cond_A_magnetic": meta_m.get("acond"),
+            "pgi_active": bool(_pgi_on),
+            "pgi_mean_shift": round(float(_pgi_mean_shift), 6) if (_pgi_on and _pgi_mean_shift is not None) else None,
         })
         _log.info(f"[FASE 9C-2] k={k:>2} | lambda_eff_g={lambda_cross_eff_g:.4e} | "
               f"lambda_eff_m={lambda_cross_eff_m:.4e} | E_norm={E_curr:.6f} | "
@@ -699,6 +845,26 @@ def run_joint_inversion(params: GeophysicsInvertInput):
                 "metric": "E_norm cellwise (grid-independiente). E_norm_l2_global se "
                           "reporta solo como trazabilidad del plan (satura en ~1/sqrt(N)).",
             },
+        },
+        # ── FASE 3.1: acoplamiento conjunto (cross-gradient / PGI dinámico 2D) ──
+        "coupling": {
+            "mode": _coupling_mode,
+            "use_cross_gradient": bool(_use_cross),
+            "use_pgi": bool(_use_pgi),
+            "pgi_alpha": _pgi_alpha,
+            "pgi_dynamic": bool(_pgi_dynamic),
+            "pgi_n_classes": int(_pgi_n_classes) if _use_pgi else None,
+            "pgi_prior_strength": _pgi_prior_strength if _use_pgi else None,
+            "pgi_disabled_reason": _pgi_disabled_reason,
+            "pgi_gmm_means_rho_chi": (
+                np.round(_gmm_means, 5).tolist() if (_use_pgi and _gmm_means is not None) else None
+            ),
+            "note": (
+                "cross_gradient acopla ESTRUCTURA (bordes); pgi_dynamic acopla "
+                "PETROFÍSICA (centroide 2D ρ-χ por clase, smallness). El PGI NO "
+                "impone una relación ρ-χ fija: la mixtura se bootstrapea del warm-up "
+                "y se refina con prior NIW; no emite ley ni tonelaje."
+            ),
         },
         "convergence_history": history,
         "final": {
