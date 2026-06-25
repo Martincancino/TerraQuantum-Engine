@@ -900,6 +900,12 @@ class MagnetometryInversion:
         # "hard" = restricción EXACTA por eliminación de variables (celda anclada =
         #   susceptibilidad medida sin error; anchor_kappa/lap_relax se ignoran).
         anchor_mode: str = "soft",
+        # ── FASE 2.3: bounds de susceptibilidad por UNIDAD litológica ────────────
+        # lithology_bounds: array (n,6) [x_m, z_m, y_from_m, y_to_m, susc_min, susc_max]
+        # o None. Asigna a las celdas con litología conocida el BOX [susc_min, susc_max]
+        # de su unidad (sustituye el bound escalar global SOLO ahí); el solver con bounds
+        # lo impone satisfaciendo KKT por celda. Membership dura magnética.
+        lithology_bounds: Optional[np.ndarray] = None,
         # ── FASE 20B Tarea 5: Ajuste automático de kappa (port Fase 16) ───────
         # Si True y hay anclajes, escala anchor_kappa cuando cond(A) estimado > 1e12
         # (por ratio de normas-columna del sistema ensamblado, O(nnz), sin SVD).
@@ -1044,6 +1050,39 @@ class MagnetometryInversion:
             _anchor_active = _anchor_mask_full[active_cells]
             _anchor_value_active = _anchor_value_full[active_cells]
 
+        # ── FASE 2.3: mapear bounds de susceptibilidad por unidad litológica ──
+        _litho_lb_active = None
+        _litho_ub_active = None
+        if lithology_bounds is not None and len(lithology_bounds) > 0:
+            _lba = np.asarray(lithology_bounds, dtype=np.float64)
+            if _lba.ndim != 2 or _lba.shape[1] != 6:
+                raise ValueError(
+                    "lithology_bounds debe tener shape (n,6): "
+                    "[x_m, z_m, y_from_m, y_to_m, susc_min, susc_max]."
+                )
+            _litho_lb_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
+            _litho_ub_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
+            _tol_xz_l = self.dx / 2.0
+            for _bx, _bz, _yf, _yt, _pmin, _pmax in _lba:
+                if _yt < _yf:
+                    _yf, _yt = _yt, _yf
+                if _pmax < _pmin:
+                    _pmin, _pmax = _pmax, _pmin
+                _col = (np.abs(x_c_arr - _bx) <= _tol_xz_l) & (np.abs(z_c_arr - _bz) <= _tol_xz_l)
+                if not np.any(_col):
+                    continue
+                _seg = _col & (y_c >= _yf) & (y_c <= _yt)
+                if not np.any(_seg):
+                    _ymid = 0.5 * (_yf + _yt)
+                    _cidx = np.where(_col)[0]
+                    _near = int(_cidx[int(np.argmin(np.abs(y_c[_cidx] - _ymid)))])
+                    _seg = np.zeros(self.total_voxels, dtype=bool)
+                    _seg[_near] = True
+                _litho_lb_full[_seg] = float(_pmin)
+                _litho_ub_full[_seg] = float(_pmax)
+            _litho_lb_active = _litho_lb_full[active_cells]
+            _litho_ub_active = _litho_ub_full[active_cells]
+
         # ── Padding de malla (R-02 magnético) — máscara reducida a celdas activas ─
         _padding_active = None
         if padding_mask is not None:
@@ -1099,6 +1138,9 @@ class MagnetometryInversion:
             if _anchor_active is not None:
                 _anchor_active = _anchor_active[_obs_in_active]
                 _anchor_value_active = _anchor_value_active[_obs_in_active]
+            if _litho_lb_active is not None:
+                _litho_lb_active = _litho_lb_active[_obs_in_active]
+                _litho_ub_active = _litho_ub_active[_obs_in_active]
             if _padding_active is not None:
                 _padding_active = _padding_active[_obs_in_active]
             _n_active_sol = _n_obs_domain
@@ -1169,6 +1211,22 @@ class MagnetometryInversion:
         # Los bounds físicos [susc_min, susc_max] se transforman al espacio m_tilde.
         _lb_tilde_m = float(susc_min) / np.maximum(wz_inv_diag, 1e-12)
         _ub_tilde_m = float(susc_max) / np.maximum(wz_inv_diag, 1e-12)
+
+        # ── FASE 2.3: override de bounds por unidad litológica (membership dura) ─
+        # En celdas con litología conocida reemplaza el box escalar global por el
+        # box [susc_min, susc_max] de su unidad, transformado a m_tilde (susc =
+        # Wz_inv·m_tilde ⇒ m_tilde = (χ−base_susc)/diag(Wz_inv)). El solver con bounds
+        # lo impone satisfaciendo KKT por celda.
+        if _litho_lb_active is not None:
+            _ml = np.isfinite(_litho_lb_active)
+            if _ml.any():
+                _wz_l = np.maximum(wz_inv_diag[_ml], 1e-12)
+                _lb_tilde_m[_ml] = (_litho_lb_active[_ml] - self.base_susc) / _wz_l
+                _ub_tilde_m[_ml] = (_litho_ub_active[_ml] - self.base_susc) / _wz_l
+                logger.info(
+                    f"[MAG FASE 2.3] Bounds litológicos por unidad aplicados a "
+                    f"{int(_ml.sum()):,} celda(s) (membership dura, KKT)."
+                )
 
         # ── Bloque de datos:  W_d · G · W_z^{-1} ─────────────────────────────
         G_scaled = G_w @ Wz_inv
@@ -1586,6 +1644,9 @@ class MagnetometryInversion:
             solver_meta["n_anchored_voxels"] = int(np.sum(_anchor_active)) if _anchor_active is not None else 0
             solver_meta["anchor_mode"] = _anchor_mode if _has_anchors else None
             solver_meta["anchor_kappa"] = float(anchor_kappa) if (_has_anchors and not _hard_anchor) else None
+            solver_meta["n_lithology_bounded"] = (
+                int(np.sum(np.isfinite(_litho_lb_active))) if _litho_lb_active is not None else 0
+            )
             solver_meta["laplacian_relax_alpha"] = float(laplacian_relax_alpha) if _has_anchors else None
             # FASE 20B Tarea 5: bounds + auto_kappa
             solver_meta["cond_a_estimated"] = float(_cond_a_est) if _cond_a_est is not None else None

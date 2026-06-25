@@ -1378,6 +1378,15 @@ class GravimetryInversion:
         #   se elimina del sistema (contribución → RHS) y se reinyecta el valor del
         #   sondaje sin error. anchor_kappa y laplacian_relax_alpha se ignoran.
         anchor_mode: str = "soft",
+        # ── FASE 2.3: bounds petrofísicos por UNIDAD litológica (membership dura) ─
+        # lithology_bounds: array (n,6) [x_m, z_m, y_from_m, y_to_m, dens_min, dens_max]
+        # o None. Cada intervalo asigna a sus celdas el BOX [dens_min, dens_max] de su
+        # unidad geológica (de la litología del sondaje), sustituyendo el bound escalar
+        # global SOLO en esas celdas. El solver con bounds (TRF/FISTA proyectado) impone
+        # estas cajas satisfaciendo las condiciones KKT por unidad. Permite restringir
+        # celdas con litología CONOCIDA (aunque no tengan densidad puntual medida) al
+        # rango petrofísico de su unidad → membership dura sin anclar un valor único.
+        lithology_bounds: Optional[np.ndarray] = None,
         # ── OUT: dict mutable donde el solver escribe diagnósticos numéricos ──
         # Si no es None, escribe: acond, chi2_final, n_sat_lower, n_sat_upper.
         solver_meta: Optional[dict] = None,
@@ -1623,6 +1632,42 @@ class GravimetryInversion:
             _anchor_active          = _anchor_mask_full[active_cells]
             _anchor_contrast_active = _anchor_contrast_full[active_cells]
 
+        # ── FASE 2.3: mapear bounds litológicos por unidad a celdas ───────────
+        # Espeja el mapeo de boreholes (misma tolerancia de columna + segmento
+        # vertical + fallback al vóxel más cercano). NaN = celda sin restricción
+        # litológica (usa el bound escalar global).
+        _litho_lb_active = None
+        _litho_ub_active = None
+        if lithology_bounds is not None and len(lithology_bounds) > 0:
+            _lba = np.asarray(lithology_bounds, dtype=np.float64)
+            if _lba.ndim != 2 or _lba.shape[1] != 6:
+                raise ValueError(
+                    "lithology_bounds debe tener shape (n,6): "
+                    "[x_m, z_m, y_from_m, y_to_m, dens_min, dens_max]."
+                )
+            _litho_lb_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
+            _litho_ub_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
+            _tol_xz_l = self.dx / 2.0
+            for _bx, _bz, _yf, _yt, _pmin, _pmax in _lba:
+                if _yt < _yf:
+                    _yf, _yt = _yt, _yf
+                if _pmax < _pmin:
+                    _pmin, _pmax = _pmax, _pmin
+                _col = (np.abs(x_c_arr - _bx) <= _tol_xz_l) & (np.abs(z_c_arr - _bz) <= _tol_xz_l)
+                if not np.any(_col):
+                    continue
+                _seg = _col & (y_c >= _yf) & (y_c <= _yt)
+                if not np.any(_seg):
+                    _ymid = 0.5 * (_yf + _yt)
+                    _cidx = np.where(_col)[0]
+                    _near = int(_cidx[int(np.argmin(np.abs(y_c[_cidx] - _ymid)))])
+                    _seg = np.zeros(self.total_voxels, dtype=bool)
+                    _seg[_near] = True
+                _litho_lb_full[_seg] = float(_pmin)
+                _litho_ub_full[_seg] = float(_pmax)
+            _litho_lb_active = _litho_lb_full[active_cells]
+            _litho_ub_active = _litho_ub_full[active_cells]
+
         # ── Solver Sanity Check ───────────────────────────────────────────────
         if G_active.nnz == 0:
             raise ValueError(
@@ -1670,6 +1715,9 @@ class GravimetryInversion:
             if _anchor_active is not None:
                 _anchor_active          = _anchor_active[_obs_in_active]
                 _anchor_contrast_active = _anchor_contrast_active[_obs_in_active]
+            if _litho_lb_active is not None:
+                _litho_lb_active = _litho_lb_active[_obs_in_active]
+                _litho_ub_active = _litho_ub_active[_obs_in_active]
             _n_active_sol   = _n_obs_domain
         else:
             _n_dead_core_a  = 0
@@ -1784,6 +1832,23 @@ class GravimetryInversion:
         L_scaled  = L_scaled @ Ws
         _lb_tilde = _lb_tilde * _col_norms_wz   # bounds en espacio m_tilde post-Ws
         _ub_tilde = _ub_tilde * _col_norms_wz
+
+        # ── FASE 2.3: override de bounds por unidad litológica (membership dura) ─
+        # En las celdas con litología conocida, reemplaza el box escalar global por
+        # el box [dens_min, dens_max] de su unidad, transformado al espacio m_tilde
+        # con la MISMA cadena Wz_inv·Ws que el bound global. El solver con bounds
+        # (TRF/FISTA proyectado) lo impone satisfaciendo KKT por celda.
+        if _litho_lb_active is not None:
+            _ml = np.isfinite(_litho_lb_active)
+            if _ml.any():
+                _wz_l = np.maximum(wz_inv_diag[_ml], 1e-12)
+                _cn_l = _col_norms_wz[_ml]
+                _lb_tilde[_ml] = (_litho_lb_active[_ml] - self.base_density) / _wz_l * _cn_l
+                _ub_tilde[_ml] = (_litho_ub_active[_ml] - self.base_density) / _wz_l * _cn_l
+                logger.info(
+                    f"[FASE 2.3] Bounds litológicos por unidad aplicados a "
+                    f"{int(_ml.sum()):,} celda(s) (membership dura, KKT)."
+                )
         Wz_inv    = Wz_inv @ Ws                  # m = Wz_inv_combined @ m_tilde
 
         # ── Sistema augmentado ────────────────────────────────────────────────
@@ -2293,6 +2358,9 @@ class GravimetryInversion:
             solver_meta["anchor_mode"]          = _anchor_mode if _has_anchors else None
             solver_meta["anchor_kappa"]         = float(anchor_kappa) if (_has_anchors and not _hard_anchor) else None
             solver_meta["laplacian_relax_alpha"] = float(laplacian_relax_alpha) if _has_anchors else None
+            solver_meta["n_lithology_bounded"]  = (
+                int(np.sum(np.isfinite(_litho_lb_active))) if _litho_lb_active is not None else 0
+            )
             solver_meta["lambda_effective"]      = float(lambda_mag_eff)
             # FASE 16: diagnósticos de kappa adaptation
             solver_meta["cond_a_estimated"]     = float(cond_A_est) if cond_A_est is not None else None

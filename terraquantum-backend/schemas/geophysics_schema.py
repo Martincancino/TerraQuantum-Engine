@@ -18,6 +18,28 @@ class GmmComponent(BaseModel):
     )
 
 
+class LithologyBound(BaseModel):
+    """FASE 2.3 — Box petrofísico [min,max] de una unidad litológica.
+
+    Se empareja (case-insensitive) contra la `lithology` de los intervalos de
+    sondaje. Cada eje (density/susc) es opcional: None = sin restricción en esa
+    física. Restringe las celdas de esa unidad al box vía bounds KKT por celda.
+    """
+    name: str = Field(..., description="Nombre de la litología, p.ej. 'magnetite'. Match case-insensitive.")
+    density_min: Optional[float] = Field(default=None, ge=0.0, le=10.0, description="Densidad mínima (t/m³).")
+    density_max: Optional[float] = Field(default=None, ge=0.0, le=10.0, description="Densidad máxima (t/m³).")
+    susc_min: Optional[float] = Field(default=None, ge=0.0, le=100.0, description="Susceptibilidad mínima (SI).")
+    susc_max: Optional[float] = Field(default=None, ge=0.0, le=100.0, description="Susceptibilidad máxima (SI).")
+
+    @model_validator(mode="after")
+    def _validate_box(self):
+        if self.density_min is not None and self.density_max is not None and self.density_max < self.density_min:
+            raise ValueError(f"density_max < density_min en la litología {self.name}.")
+        if self.susc_min is not None and self.susc_max is not None and self.susc_max < self.susc_min:
+            raise ValueError(f"susc_max < susc_min en la litología {self.name}.")
+        return self
+
+
 class PgiParams(BaseModel):
     """Parámetros de la Inversión Guiada Petrológica — Fase 11 (Astic & Oldenburg 2019).
 
@@ -163,14 +185,21 @@ class BoreholeInterval(BaseModel):
         default=None, ge=0.0,
         description="Susceptibilidad magnética medida (SI, adimensional). Opcional: ancla la inversión magnética.",
     )
+    # FASE 2.3: litología del intervalo. Aunque NO haya densidad/susc puntual medida,
+    # conocer la unidad geológica permite restringir esas celdas al BOX petrofísico de
+    # la unidad (membership dura, bounds KKT) vía la tabla lithology_bounds del input.
+    lithology: Optional[str] = Field(
+        default=None,
+        description="Litología del intervalo (p.ej. 'granite', 'magnetite'). Habilita bounds por unidad (Fase 2.3).",
+    )
 
     @model_validator(mode="after")
     def _require_at_least_one_property(self):
-        """Evita intervalos vacíos: al menos density_t_m3 o susceptibility_si con dato."""
-        if self.density_t_m3 is None and self.susceptibility_si is None:
+        """Evita intervalos vacíos: al menos density_t_m3, susceptibility_si o lithology."""
+        if self.density_t_m3 is None and self.susceptibility_si is None and self.lithology is None:
             raise ValueError(
-                "Cada intervalo de sondaje debe declarar al menos una propiedad medida: "
-                "density_t_m3 (gravimetría) y/o susceptibility_si (magnetometría)."
+                "Cada intervalo de sondaje debe declarar al menos una propiedad: "
+                "density_t_m3 (gravimetría), susceptibility_si (magnetometría) o lithology (unidad)."
             )
         return self
 
@@ -239,6 +268,7 @@ class BoreholeSample(BaseModel):
             y_to_m=self.depth_to_m,
             density_t_m3=self.density_t_m3,
             susceptibility_si=self.susceptibility_si,
+            lithology=self.lithology,   # FASE 2.3: propaga la unidad geológica
         )
 
 
@@ -253,12 +283,15 @@ class BoreholeSurvey(BaseModel):
     def to_intervals(self) -> List["BoreholeInterval"]:
         """Convierte el survey a la lista de intervalos que consume la inversión.
 
-        Solo se incluyen muestras con al menos una propiedad física (density/susc);
-        las muestras puramente litológicas (sin densidad ni susc) no anclan el solver
-        pero sí pueden alimentar priors PGI por separado.
+        Incluye muestras con propiedad física (density/susc, anclan el solver) Y
+        muestras puramente litológicas (FASE 2.3): estas no anclan un valor pero,
+        vía la tabla lithology_bounds del input, restringen sus celdas al box
+        petrofísico de la unidad (membership dura). Se descartan solo las muestras
+        sin densidad, sin susc y sin litología (ya rechazadas por el validador).
         """
         return [h.to_interval() for h in self.holes
-                if h.density_t_m3 is not None or h.susceptibility_si is not None]
+                if (h.density_t_m3 is not None or h.susceptibility_si is not None
+                    or h.lithology is not None)]
 
 
 class GeophysicsInvertInput(BaseModel):
@@ -555,6 +588,26 @@ class GeophysicsInvertInput(BaseModel):
             "Modo de anclaje por sondaje. 'soft' (default) = penalización fuerte "
             "(anchor_kappa), error residual ~2%. 'hard' = restricción exacta por "
             "eliminación de variables (celda anclada = valor medido sin error)."
+        ),
+    )
+    # ── FASE 2.3: membership dura por litología (bounds KKT por unidad) ───────
+    # Si True, las celdas atravesadas por un intervalo de sondaje con litología
+    # conocida se restringen al BOX petrofísico [min,max] de su unidad (no a un
+    # valor único como el anclaje): el solver con bounds lo impone vía KKT. La
+    # tabla de bounds es LITHOLOGY_BOUNDS_DEFAULTS, sobreescribible con
+    # lithology_bounds. Útil incluso sin densidad/susc puntual (solo la unidad).
+    lithology_hard_constraint: bool = Field(
+        default=False,
+        description=(
+            "Si True, restringe las celdas con litología conocida al box petrofísico "
+            "de su unidad (membership dura, bounds KKT). False = sin restricción por unidad."
+        ),
+    )
+    lithology_bounds: Optional[List["LithologyBound"]] = Field(
+        default=None,
+        description=(
+            "Tabla litología→box [min,max] que sobreescribe/extiende los defaults. "
+            "Solo aplica si lithology_hard_constraint=True."
         ),
     )
     # auto_kappa: True → el solver ajusta kappas automáticamente si cond(A) > 1e12.

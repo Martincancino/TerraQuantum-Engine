@@ -1166,6 +1166,48 @@ def _run_checkerboard_qa_fast(
     }
 
 
+def _build_lithology_bounds_array(params, axis: str):
+    """FASE 2.3 — Arma el array (n,6) de bounds por unidad litológica para el solver.
+
+    Empareja la `lithology` de cada intervalo de sondaje (case-insensitive) contra la
+    tabla LITHOLOGY_BOUNDS_DEFAULTS extendida/sobreescrita por params.lithology_bounds.
+    axis ∈ {"density","susc"}. Devuelve np.ndarray (n,6) [x,z,yf,yt,min,max] o None.
+    Solo activo si params.lithology_hard_constraint es True.
+    """
+    if not bool(getattr(params, "lithology_hard_constraint", False)):
+        return None
+    _bh_list = getattr(params, "boreholes", None) or []
+    if not _bh_list:
+        return None
+
+    from exploration.pgi_engine import LITHOLOGY_BOUNDS_DEFAULTS
+
+    # Tabla efectiva: defaults + overrides del usuario (normalizada a minúsculas).
+    _table: dict[str, tuple] = {}
+    for _name, _b in LITHOLOGY_BOUNDS_DEFAULTS.items():
+        _table[_name.lower()] = _b.get(axis)
+    for _lb in (getattr(params, "lithology_bounds", None) or []):
+        if axis == "density":
+            _rng = (_lb.density_min, _lb.density_max)
+        else:
+            _rng = (_lb.susc_min, _lb.susc_max)
+        if _rng[0] is not None and _rng[1] is not None:
+            _table[str(_lb.name).lower()] = (float(_rng[0]), float(_rng[1]))
+
+    _rows = []
+    for _bh in _bh_list:
+        _lith = getattr(_bh, "lithology", None)
+        if not _lith:
+            continue
+        _rng = _table.get(str(_lith).lower())
+        if _rng is None or _rng[0] is None or _rng[1] is None:
+            continue
+        _rows.append([_bh.x_m, _bh.z_m, _bh.y_from_m, _bh.y_to_m, float(_rng[0]), float(_rng[1])])
+    if not _rows:
+        return None
+    return np.asarray(_rows, dtype=np.float64)
+
+
 def run_magnetic_inversion(params: GeophysicsInvertInput):
     """
     FASE 9A — Orquestación del motor magnético INDEPENDIENTE.
@@ -1348,6 +1390,15 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         if _rows:
             boreholes_arr = np.asarray(_rows, dtype=np.float64)
 
+    # FASE 2.3: bounds de susceptibilidad por unidad litológica (membership dura).
+    # Si self-demag está activo el solver trabaja en susc APARENTE → convertir el box
+    # (apparent_susceptibility es monótona, preserva el orden min/max).
+    _litho_bounds_m = _build_lithology_bounds_array(params, "susc")
+    if _litho_bounds_m is not None and _use_demag:
+        _litho_bounds_m = _litho_bounds_m.copy()
+        _litho_bounds_m[:, 4] = [apparent_susceptibility(v, _demag_N) for v in _litho_bounds_m[:, 4]]
+        _litho_bounds_m[:, 5] = [apparent_susceptibility(v, _demag_N) for v in _litho_bounds_m[:, 5]]
+
     # ── FASE 12: Remanencia — construir kernel total J_ind + Q·J_rem si aplica ──
     _rem = getattr(params, "remanence", None)
     _use_remanence = (
@@ -1448,6 +1499,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             padding_kappa=float(getattr(params, "padding_kappa", 1e5)),
             boreholes=boreholes_arr,
             anchor_mode=str(getattr(params, "anchor_mode", "soft")),      # FASE 2.1
+            lithology_bounds=_litho_bounds_m,                             # FASE 2.3
             detect_outliers=bool(getattr(params, "robust_sigma", True)),  # FASE 20B Tarea 4
             auto_kappa=bool(getattr(params, "auto_kappa", True)),         # FASE 20B Tarea 5
             regularization_norm=getattr(params, "regularization_norm", "L2"),  # FASE 20B Tarea 6
@@ -1860,6 +1912,9 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         if _bh_rows:
             boreholes_arr = np.asarray(_bh_rows, dtype=np.float64)
 
+    # FASE 2.3: bounds de densidad por unidad litológica (membership dura, KKT).
+    _litho_bounds_g = _build_lithology_bounds_array(params, "density")
+
     _update("running", 0.05, "loading_data", "Input validado. Construyendo grilla y sensores...")
 
     nx = params.nx
@@ -2184,6 +2239,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             boreholes=boreholes_arr,        # FASE 8: anclaje por sondajes (None si no hay)
             anchor_kappa=_anchor_kappa,     # FASE 16: configurable desde schema
             anchor_mode=_anchor_mode,       # FASE 2.1: soft (histórico) / hard (exacto)
+            lithology_bounds=_litho_bounds_g,  # FASE 2.3: bounds por unidad litológica
             auto_kappa=_auto_kappa,         # FASE 16: ajuste automático si cond>1e12
             noise_floor=_noise_floor_solver, # Fase 2: sigma calibrado por gravímetro
             noise_pct=_noise_pct_solver,
@@ -2372,6 +2428,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
                     boreholes=boreholes_arr,
                     anchor_kappa=_anchor_kappa,
                     anchor_mode=_anchor_mode,   # FASE 2.1
+                    lithology_bounds=_litho_bounds_g,   # FASE 2.3
                     auto_kappa=_auto_kappa,
                     noise_floor=_noise_floor_solver,
                     noise_pct=_noise_pct_solver,
@@ -2848,6 +2905,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             density_max=params.density_max,
             boreholes=boreholes_arr,       # FASE 8: anclar igual que pass-1 → doi_raw coherente
             anchor_mode=_anchor_mode,      # FASE 2.1: mismo modo que pass-1
+            lithology_bounds=_litho_bounds_g,  # FASE 2.3: mismo box que pass-1
             noise_floor=_noise_floor_solver,
             noise_pct=_noise_pct_solver,
         )

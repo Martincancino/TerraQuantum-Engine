@@ -42,6 +42,31 @@ DEPOSIT_GMM_DEFAULTS: dict[str, list[dict]] = {
 }
 
 
+# ── FASE 2.3: tabla de bounds petrofísicos por UNIDAD litológica ────────────
+# Box [min, max] por litología para la restricción de membership dura (bounds KKT
+# por unidad). density en t/m³, susc en SI. Rangos de referencia (Telford et al.
+# 1990; Clark 1997; Hunt et al. 1995). El servicio empareja la litología del
+# sondaje (case-insensitive) contra esta tabla; el usuario puede sobreescribir vía
+# `lithology_bounds` en el input. None en un eje = sin restricción en esa física.
+LITHOLOGY_BOUNDS_DEFAULTS: dict[str, dict] = {
+    "granite":   {"density": (2.52, 2.75), "susc": (0.0, 0.02)},
+    "granodiorite": {"density": (2.65, 2.80), "susc": (0.0, 0.03)},
+    "diorite":   {"density": (2.72, 2.99), "susc": (0.0, 0.10)},
+    "gabbro":    {"density": (2.85, 3.12), "susc": (0.001, 0.10)},
+    "basalt":    {"density": (2.70, 3.20), "susc": (0.001, 0.10)},
+    "andesite":  {"density": (2.40, 2.80), "susc": (0.0, 0.05)},
+    "sandstone": {"density": (2.20, 2.70), "susc": (0.0, 0.005)},
+    "limestone": {"density": (2.30, 2.80), "susc": (0.0, 0.001)},
+    "shale":     {"density": (2.06, 2.67), "susc": (0.0, 0.005)},
+    "schist":    {"density": (2.39, 2.90), "susc": (0.0, 0.03)},
+    "magnetite": {"density": (4.90, 5.20), "susc": (0.5, 5.0)},
+    "hematite":  {"density": (4.90, 5.30), "susc": (0.0, 0.05)},
+    "pyrite":    {"density": (4.90, 5.20), "susc": (0.0, 0.005)},
+    "chromite":  {"density": (4.30, 4.80), "susc": (0.0, 0.10)},
+    "kimberlite": {"density": (2.30, 2.90), "susc": (0.0, 0.05)},
+}
+
+
 class PGIEngine:
     """Motor PGI con prior de Mixtura Gaussiana.
 

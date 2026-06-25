@@ -235,10 +235,14 @@ def test_borehole_missing_density():
     assert survey.holes[1].density_t_m3 is None
     assert survey.holes[1].lithology == "diorite"
 
-    # to_intervals() excluye la muestra puramente litológica (no ancla la inversión).
+    # FASE 2.3: to_intervals() ahora INCLUYE la muestra puramente litológica: no ancla
+    # un valor, pero su litología habilita los bounds por unidad (membership dura).
     intervals = survey.to_intervals()
-    assert len(intervals) == 1
+    assert len(intervals) == 2
     assert intervals[0].density_t_m3 == 2.85
+    # El intervalo litología-only carga la unidad pero sin densidad/susc puntual.
+    _litho_only = [iv for iv in intervals if iv.density_t_m3 is None]
+    assert len(_litho_only) == 1 and _litho_only[0].lithology == "diorite"
 
     # La detección de conflictos también ignora intervalos sin densidad.
     x_c, y_c, z_c = _grid_centers()
