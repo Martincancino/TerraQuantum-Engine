@@ -85,6 +85,22 @@ def _normalized_gradient(m, Dx, Dy, Dz):
     return gx / denom, gy / denom, gz / denom
 
 
+def _fixed_gradient_dirs(m, Dx, Dy, Dz, kind):
+    """Componentes del gradiente del modelo FIJO que entran al bloque estructural.
+
+    kind='cross_gradient' → dirección UNITARIA ĝ (Gallardo–Meju): escala-invariante,
+        cada borde pesa igual sin importar la magnitud del contraste.
+    kind='gramian' → gradiente CRUDO ∇m (Gramian de Zhdanov): el acoplamiento queda
+        ponderado por la magnitud del gradiente del modelo fijo, de modo que el
+        producto cruzado ‖∇m_ρ × ∇m_χ‖ enfatiza el alineamiento donde el contraste
+        fijo es FUERTE (bordes nítidos) y lo relaja donde es plano. Sparse, mismo
+        patrón que el cross-gradient — distinto solo en la normalización.
+    """
+    if kind == "gramian":
+        return Dx @ m, Dy @ m, Dz @ m
+    return _normalized_gradient(m, Dx, Dy, Dz)
+
+
 def _build_cross_gradient_block(hat_x, hat_y, hat_z, Dx, Dy, Dz):
     """Matriz rala B (3·nC, nC) tal que  B @ m = ∇m × ĝ  (producto cruz por celda).
 
@@ -573,10 +589,12 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     _log.info(f"[FASE 9C-2] k=0 (warm-up) | E_norm={E_norm:.6f} (cellwise) | "
           f"E_l2={E_l2:.6f} | misfit_g={misfit_g:.3f}% | misfit_m={misfit_m:.3f}%")
 
-    # ── FASE 3.1: setup del acoplamiento conjunto ────────────────────────────
-    # cross_gradient (default, histórico) | pgi_dynamic | pgi+cross.
+    # ── FASE 3.1/3.2: setup del acoplamiento conjunto ────────────────────────
+    # cross_gradient (default) | gramian | pgi_dynamic | pgi+cross.
     _coupling_mode = getattr(params, "joint_coupling_mode", "cross_gradient")
-    _use_cross = _coupling_mode in ("cross_gradient", "pgi+cross")
+    # Bloque estructural sparse (cross-gradient unitario o Gramian de Zhdanov crudo).
+    _use_struct = _coupling_mode in ("cross_gradient", "gramian", "pgi+cross")
+    _struct_kind = "gramian" if _coupling_mode == "gramian" else "cross_gradient"
     _use_pgi = _coupling_mode in ("pgi_dynamic", "pgi+cross")
     _pgi_alpha = float(getattr(params, "joint_pgi_alpha", 0.1))
     _pgi_dynamic = bool(getattr(params, "joint_pgi_dynamic", True))
@@ -607,8 +625,9 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             _pgi_disabled_reason = f"{type(_gmm_exc).__name__}: {_gmm_exc}"
             _log.warning(f"[FASE 3.1 PGI] GMM 2D no disponible, PGI desactivado: {_pgi_disabled_reason}")
     _log.info(
-        f"[FASE 3.1] coupling_mode={_coupling_mode} | use_cross={_use_cross} | "
-        f"use_pgi={_use_pgi} | pgi_alpha={_pgi_alpha} | pgi_prior_strength={_pgi_prior_strength}"
+        f"[FASE 3] coupling_mode={_coupling_mode} | use_struct={_use_struct} "
+        f"(kind={_struct_kind}) | use_pgi={_use_pgi} | pgi_alpha={_pgi_alpha} | "
+        f"pgi_prior_strength={_pgi_prior_strength}"
     )
 
     # ── Bucle alternado con continuation exponencial ──────────────────────────
@@ -654,11 +673,11 @@ def run_joint_inversion(params: GeophysicsInvertInput):
                 )
             rho_ref_abs, _ = _joint_pgi_class_means(m_rho, m_chi, _gmm_means, _gmm_covs, _gmm_weights)
 
-        # Paso de gravedad: fija χ, penaliza ∇ρ × ĝ_χ (cross) y/o ρ → centroide 2D (PGI).
+        # Paso de gravedad: fija χ, penaliza ∇ρ × ∇χ (estructural) y/o ρ → centroide 2D (PGI).
         lambda_cross_eff_g = 0.0
         grav_blocks, grav_rhs = [], []
-        if _use_cross and lambda_cross > 0.0:
-            hx, hy, hz = _normalized_gradient(m_chi, Dx, Dy, Dz)
+        if _use_struct and lambda_cross > 0.0:
+            hx, hy, hz = _fixed_gradient_dirs(m_chi, Dx, Dy, Dz, _struct_kind)
             B_chi = _build_cross_gradient_block(hx, hy, hz, Dx, Dy, Dz)
             max_block_nnz = max(max_block_nnz, B_chi.nnz)
             B_chi_norm = float(np.sqrt(B_chi.power(2).sum()))
@@ -684,11 +703,11 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         if _pgi_on:
             _, chi_ref = _joint_pgi_class_means(m_rho_new, m_chi, _gmm_means, _gmm_covs, _gmm_weights)
 
-        # Paso de magnetometría: fija ρ (actualizado), penaliza ∇χ × ĝ_ρ (cross) y/o χ → centroide 2D (PGI).
+        # Paso de magnetometría: fija ρ (actualizado), penaliza ∇χ × ∇ρ (estructural) y/o χ → centroide 2D (PGI).
         lambda_cross_eff_m = 0.0
         mag_blocks, mag_rhs = [], []
-        if _use_cross and lambda_cross > 0.0:
-            hx, hy, hz = _normalized_gradient(m_rho_new, Dx, Dy, Dz)
+        if _use_struct and lambda_cross > 0.0:
+            hx, hy, hz = _fixed_gradient_dirs(m_rho_new, Dx, Dy, Dz, _struct_kind)
             B_rho = _build_cross_gradient_block(hx, hy, hz, Dx, Dy, Dz)
             max_block_nnz = max(max_block_nnz, B_rho.nnz)
             B_rho_norm = float(np.sqrt(B_rho.power(2).sum()))
@@ -849,7 +868,10 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         # ── FASE 3.1: acoplamiento conjunto (cross-gradient / PGI dinámico 2D) ──
         "coupling": {
             "mode": _coupling_mode,
-            "use_cross_gradient": bool(_use_cross),
+            "use_structural": bool(_use_struct),
+            "structural_kind": _struct_kind if _use_struct else None,
+            "use_cross_gradient": bool(_use_struct and _struct_kind == "cross_gradient"),
+            "use_gramian": bool(_use_struct and _struct_kind == "gramian"),
             "use_pgi": bool(_use_pgi),
             "pgi_alpha": _pgi_alpha,
             "pgi_dynamic": bool(_pgi_dynamic),
@@ -860,10 +882,11 @@ def run_joint_inversion(params: GeophysicsInvertInput):
                 np.round(_gmm_means, 5).tolist() if (_use_pgi and _gmm_means is not None) else None
             ),
             "note": (
-                "cross_gradient acopla ESTRUCTURA (bordes); pgi_dynamic acopla "
-                "PETROFÍSICA (centroide 2D ρ-χ por clase, smallness). El PGI NO "
-                "impone una relación ρ-χ fija: la mixtura se bootstrapea del warm-up "
-                "y se refina con prior NIW; no emite ley ni tonelaje."
+                "cross_gradient acopla ESTRUCTURA con dirección unitaria (escala-invariante); "
+                "gramian (Zhdanov) usa el gradiente CRUDO del modelo fijo → pondera por la "
+                "magnitud del contraste. pgi_dynamic acopla PETROFÍSICA (centroide 2D ρ-χ por "
+                "clase, smallness). El PGI NO impone una relación ρ-χ fija: la mixtura se "
+                "bootstrapea del warm-up y se refina con prior NIW; no emite ley ni tonelaje."
             ),
         },
         "convergence_history": history,

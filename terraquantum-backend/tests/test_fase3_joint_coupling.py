@@ -169,6 +169,51 @@ def test_pgi_does_not_blow_up_misfit(test_project_id, test_run_id):
     )
 
 
+@pytest.mark.benchmark
+def test_gramian_runs_and_differs_from_cross(test_project_id, test_run_id):
+    """'gramian' (Zhdanov, gradiente crudo) corre, reporta use_gramian y NO es idéntico
+    al cross-gradient (dirección unitaria) — distinta normalización → distinto resultado."""
+    p_cross = _build_joint_params(test_project_id, test_run_id, offset=True)
+    r_cross = run_joint_inversion(p_cross)
+
+    p_gram = _build_joint_params(test_project_id, test_run_id, coupling_mode="gramian", offset=True)
+    r_gram = run_joint_inversion(p_gram)
+
+    cpl = r_gram["report"]["coupling"]
+    assert cpl["mode"] == "gramian"
+    assert cpl["use_gramian"] is True
+    assert cpl["use_cross_gradient"] is False
+    assert cpl["structural_kind"] == "gramian"
+    assert cpl["use_pgi"] is False
+    # El Gramian (gradiente crudo) debe producir un modelo DISTINTO al cross-gradient unitario.
+    a, b = _density_field(r_gram), _density_field(r_cross)
+    assert not (a.shape == b.shape and np.array_equal(a, b)), (
+        "gramian debería diferir del cross-gradient (normalización distinta)."
+    )
+    # Finito y acotado.
+    assert np.isfinite(r_gram["report"]["final"]["E_norm"])
+    assert np.isfinite(r_gram["misfit_error_percent"])
+    for v in r_gram["voxels"]:
+        assert np.isfinite(v["density_t_m3"]) and np.isfinite(v["susceptibility_si"])
+
+
+@pytest.mark.unit
+def test_fixed_gradient_dirs_raw_vs_unit():
+    """El helper devuelve gradiente CRUDO para gramian y UNITARIO para cross-gradient."""
+    from services.joint_inversion import _fixed_gradient_dirs
+    from exploration.geophysics_math import build_gradient_operators
+    nx = ny = nz = 5
+    Dx, Dy, Dz = build_gradient_operators(nx, ny, nz, 1.0, 1.0, 1.0)
+    # Rampa lineal en X con pendiente grande → gradiente crudo ~grande; unitario ~1.
+    ix = np.mgrid[0:nx, 0:ny, 0:nz][0].flatten(order="F").astype(float)
+    m = 10.0 * ix
+    gx_raw, _, _ = _fixed_gradient_dirs(m, Dx, Dy, Dz, "gramian")
+    gx_unit, _, _ = _fixed_gradient_dirs(m, Dx, Dy, Dz, "cross_gradient")
+    interior = np.abs(gx_raw) > 1e-9
+    assert np.nanmax(np.abs(gx_raw)) > 5.0, "gradiente crudo debe reflejar la pendiente real"
+    assert np.allclose(np.abs(gx_unit[interior]), 1.0, atol=1e-6), "dirección unitaria ~1"
+
+
 @pytest.mark.unit
 def test_invalid_coupling_mode_rejected(test_project_id, test_run_id):
     """Un joint_coupling_mode inválido es rechazado por el schema (pydantic)."""

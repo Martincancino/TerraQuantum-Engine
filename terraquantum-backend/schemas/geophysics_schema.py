@@ -527,14 +527,17 @@ class GeophysicsInvertInput(BaseModel):
     # Cada iteración tira de ρ y χ hacia el centroide de su clase conjunta → acopla
     # valores, no solo bordes. Reutiliza los kernels NIW 2D de la Fase 2.2 vía el hook
     # extra_reg_blocks (smallness petrofísica). Default = cross_gradient (histórico).
-    joint_coupling_mode: Literal["cross_gradient", "pgi_dynamic", "pgi+cross"] = Field(
+    joint_coupling_mode: Literal["cross_gradient", "gramian", "pgi_dynamic", "pgi+cross"] = Field(
         "cross_gradient",
         description=(
-            "Acoplamiento de la inversión conjunta (Fase 3.1). "
-            "'cross_gradient' (default, histórico): Gallardo–Meju estructural (acopla bordes). "
+            "Acoplamiento de la inversión conjunta (Fase 3). "
+            "'cross_gradient' (default, histórico): Gallardo–Meju estructural con dirección "
+            "unitaria ĝ (acopla bordes, escala-invariante por celda). "
+            "'gramian': Gramian de Zhdanov en gradientes (‖∇m_ρ × ∇m_χ‖ con gradiente CRUDO, "
+            "pondera el acoplamiento por la magnitud del contraste fijo). "
             "'pgi_dynamic': PGI conjunto dinámico (GMM 2D ρ-χ, Astic & Oldenburg 2021) — "
             "acopla por petrofísica (valores correlacionados), NO solo estructura. "
-            "'pgi+cross': ambos combinados."
+            "'pgi+cross': cross-gradient + PGI combinados."
         ),
     )
     joint_pgi_alpha: float = Field(
