@@ -15,6 +15,7 @@ import SidebarSection from "../workspace/SidebarSection";
 import Panel from "../workspace/Panel";
 import BoxClipControls from "../viewport/BoxClipControls";
 import AnalyticsPanel from "../analytics/AnalyticsPanel";
+import VolumeRenderControls from "../viewport/VolumeRenderControls";
 
 import { GravityObservation } from "../../lib/terraquantum/geophysicsSurvey";
 import {
@@ -815,6 +816,10 @@ export default function Exploration3DView() {
 
               <Panel title="Calidad de Inversión">
                 <InversionQualityBadge />
+              </Panel>
+
+              <Panel title="Render Volumétrico" subtitle="Fase 6 — raymarch (visual)">
+                <VolumeRenderControls />
               </Panel>
 
               <AnalyticsPanel />

@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useEffect,
   useState,
+  useCallback,
   type RefObject,
 } from "react";
 import { useThree, useFrame } from "@react-three/fiber";
@@ -26,6 +27,10 @@ import { updateInstancedBuffers } from "../lib/terraQuantumGeology";
 import { fmtNum, fmtSci, asRecord, safeNumber, clamp01, readFiniteRecordNumber } from "./datos/helpers";
 import { motion } from "framer-motion";
 import MagnetizationVectors from "./MagnetizationVectors";
+import VolumeRaymarchLayer from "../lib/render/VolumeRaymarchLayer";
+import type { VolumeCell } from "../lib/render/buildVolumeTexture";
+import { probeGpuCapabilities } from "../lib/render/gpuCapabilities";
+import SubsurfaceAOEffect from "../lib/render/SubsurfaceAOEffect";
 
 // Tipos mínimos locales para las celdas del modelo 3D
 interface SceneCell {
@@ -556,6 +561,8 @@ function MineralComplex({
     setIsWorkerProcessing,
   } = useAppStore();
   const percentileStats = useAppStore((s) => s.percentileStats);
+  // ── Fase 6: render volumétrico raymarch (opt-in) ──────────────────────────────
+  const volumeRenderMode = useAppStore((s) => s.volumeRenderMode);
   // ── Fase 12: selectores granulares para evitar cascading renders ───────────────
   const viewMode = useAppStore((s) => s.viewMode);
   const jointThreshold = useAppStore((s) => s.jointThreshold);
@@ -996,6 +1003,47 @@ function MineralComplex({
   ]);
   // ────────────────────────────────────────────────────────────────────────────
 
+  // ── Fase 6: capacidad GPU + accessores para el raymarch volumétrico ──────────
+  // El probe corre una vez; mientras tanto el layer queda capable=false (oculto).
+  // No necesita backend: lee las MISMAS celdas que el InstancedMesh.
+  const [volumeGate, setVolumeGate] = useState<{ capable: boolean; maxDim: number }>(
+    { capable: false, maxDim: 256 }
+  );
+  useEffect(() => {
+    let alive = true;
+    probeGpuCapabilities()
+      .then((r) => {
+        if (!alive) return;
+        // El layer usa textura UNORM8 (siempre filtrable lineal en WebGL2), así
+        // que solo exige soporte de textura 3D, no el gate float de slice 1.
+        const maxDim = r.webgl2.max3dTextureSize || 256;
+        setVolumeGate({
+          capable: r.backend !== "none" && maxDim > 0,
+          maxDim,
+        });
+      })
+      .catch(() => {
+        /* sin WebGPU/WebGL2 utilizable → layer permanece oculto */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Accessores memoizados (deps del useMemo del layer): lattice en grilla regular
+  // (sin warp de elevación) → alinea con los vóxeles cuando elevación está OFF.
+  const volGetX = useCallback((c: VolumeCell) => getCellNumber(c as SceneCell, ["x", "cx"], 0), []);
+  const volGetY = useCallback((c: VolumeCell) => getCellNumber(c as SceneCell, ["y", "cy"], 0), []);
+  const volGetZ = useCallback((c: VolumeCell) => getCellNumber(c as SceneCell, ["z", "cz"], 0), []);
+  const volGetValue = useCallback(
+    (c: VolumeCell) => getVoxelVisualValue(c as SceneCell, visualLayer),
+    [visualLayer]
+  );
+  const volIsActive = useCallback((c: VolumeCell) => {
+    const a = (c as SceneCell).is_active;
+    return a === undefined || a === null ? true : Boolean(a);
+  }, []);
+
   if (!model || count === 0) return null;
 
   // LOD material: meshPhysicalMaterial (clearcoat+transmission) para modelos ligeros (≤5k),
@@ -1008,6 +1056,7 @@ function MineralComplex({
   const cellRef = model.cellSize || 10;
 
   return (
+    <>
     <instancedMesh
       ref={meshRef}
       args={[undefined, undefined, count] as unknown as [THREE.BufferGeometry, THREE.Material, number]}
@@ -1069,6 +1118,26 @@ function MineralComplex({
         />
       )}
     </instancedMesh>
+    {/* El raymarch usa un retículo REGULAR; el modo elevación deforma la Y por
+        vóxel (getVisualVoxelY) → un lattice regular NO puede alinear. Se oculta
+        en modo elevación para no renderizar desalineado (no es un bug: es el
+        límite del stand-in WebGL2). */}
+    {volumeRenderMode !== "off" && model.cells && !elevationVisualState.enabled ? (
+      <VolumeRaymarchLayer
+        cells={model.cells as VolumeCell[]}
+        getX={volGetX}
+        getY={volGetY}
+        getZ={volGetZ}
+        getValue={volGetValue}
+        isActive={volIsActive}
+        capable={volumeGate.capable}
+        maxTextureDim={volumeGate.maxDim}
+        visible
+        mode={volumeRenderMode === "isosurface" ? "isosurface" : "fog"}
+        opacity={voxelOpacity}
+      />
+    ) : null}
+    </>
   );
 }
 
@@ -1541,6 +1610,8 @@ export default function Scene3D() {
 
   const hasElevationData = useAppStore((s) => s.hasElevationData);
   const blockModelElevationRange = useAppStore((s) => s.blockModelElevationRange);
+  // Fase 6 slice 5 — oclusión ambiental screen-space (opt-in, default off)
+  const subsurfaceAoEnabled = useAppStore((s) => s.subsurfaceAoEnabled);
 
   const elevationVisualState = useMemo((): ElevationVisualState => {
     if (!hasElevationData || !blockModelElevationRange) {
@@ -1815,6 +1886,7 @@ export default function Scene3D() {
 
   return (
     <>
+      <SubsurfaceAOEffect enabled={subsurfaceAoEnabled} />
       <ambientLight intensity={0.35} />
       <hemisphereLight args={["#aebfd0", "#0a0d12", 0.4]} />
       <pointLight position={[100, 200, 100]} intensity={1.5} castShadow />

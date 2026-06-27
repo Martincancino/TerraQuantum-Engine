@@ -3360,6 +3360,39 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             "note": "No calculada (compute_uncertainty=False o no disponible en esta corrida).",
         }
 
+    # ── FASE 5.2: Volumen volumétrico co-registrado (opt-in, non-fatal) ────────
+    # Lee el block model gravimétrico ya escrito en disco y, si en el mismo run dir
+    # existe el parquet magnético (joint), co-registra ambas físicas en un volumen
+    # esparso (.npz siempre; .vdb si pyopenvdb está instalado). Aditivo: OFF (default)
+    # = sin export. No ejecuta física nueva — solo lee parquets persistidos.
+    # El SVDAG categórico (5.3) deriva del MISMO volumen co-registrado, así que basta
+    # con que CUALQUIERA de los dos flags esté ON para construir el volumen una vez.
+    _coregistered_volume_info = None
+    _want_vol = getattr(params, "export_coregistered_volume", False)
+    _want_svdag = getattr(params, "export_categorical_svdag", False)
+    if _want_vol or _want_svdag:
+        try:
+            from services.volumetric_service import export_coregistered_volume
+            _run_dir_vol = block_model_ref.path.parent
+            _mag_pq_vol = _run_dir_vol / RUN_MAGNETIC_BLOCK_MODEL_FILENAME
+            _coregistered_volume_info = export_coregistered_volume(
+                output_dir=str(_run_dir_vol),
+                run_prefix="coregistered_volume",
+                gravity_path=str(block_model_ref.path),
+                magnetic_path=str(_mag_pq_vol) if _mag_pq_vol.exists() else None,
+                write_vdb=_want_vol,
+                write_svdag=_want_svdag,
+            )
+            _log.info(
+                "coregistered_volume_written",
+                npz=_coregistered_volume_info.get("npz_path"),
+                vdb=_coregistered_volume_info.get("vdb_path"),
+                channels=_coregistered_volume_info.get("channels"),
+                svdag=(_coregistered_volume_info.get("svdag") or {}).get("npz_path"),
+            )
+        except Exception as _vol_exc:
+            _log.warning("coregistered_volume_nonfatal", error=str(_vol_exc))
+
     # ── Decisión final R-03 (basada en saturación real medida) ──────────────
     _r03_decision = r03_saturation.get("r03_decision", "R03_NOT_REQUIRED") if r03_saturation else "R03_NOT_REQUIRED"
 
@@ -3444,6 +3477,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         "r06_padding_saturation_audit": r06_padding_saturation_audit,
         # ── Fase 10: Zarr out-of-core storage ─────────────────────────────────
         "zarr_storage": _zarr_info,
+        # ── FASE 5.2: volumen volumétrico co-registrado (None si no se pidió) ───
+        "coregistered_volume": _coregistered_volume_info,
         # ── FASE 10: VTK export ────────────────────────────────────────────────
         "vtk_export": {
             "vtr_path": vtr_export_path,

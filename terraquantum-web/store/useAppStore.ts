@@ -107,6 +107,10 @@ export type VisualLayer =
 
 export type SliceAxis = "x" | "y" | "z" | "none";
 
+// ── Fase 6: Render volumétrico (raymarch opt-in) ─────────────────────────────
+/** "off" = renderer instanciado clásico; "fog"/"isosurface" = raymarch WebGL2. */
+export type VolumeRenderMode = "off" | "fog" | "isosurface";
+
 // ── Fase 12: Render Multi-Física ─────────────────────────────────────────────
 /** Modo de visualización de la capa física activa en el InstancedMesh. */
 export type ViewMode = 'density' | 'susceptibility' | 'joint';
@@ -198,6 +202,12 @@ export interface AppState {
   // 3b. UI 3D VISOR AVANZADO (Fase 7.1)
   visualLayer: VisualLayer;
   setVisualLayer: (layer: VisualLayer) => void;
+  // Fase 6 — render volumétrico raymarch (opt-in, default "off")
+  volumeRenderMode: VolumeRenderMode;
+  setVolumeRenderMode: (mode: VolumeRenderMode) => void;
+  // Fase 6 slice 5 — oclusión ambiental screen-space (stand-in de RTAO, opt-in)
+  subsurfaceAoEnabled: boolean;
+  setSubsurfaceAoEnabled: (val: boolean) => void;
   minTargetScore: number;
   setMinTargetScore: (val: number) => void;
   minAnomalyIntensity: number;
@@ -487,6 +497,10 @@ export const useAppStore = create<AppState>((set) => ({
   // 3b. UI 3D VISOR AVANZADO (Fase 7.1)
   visualLayer: "modeled_density",
   setVisualLayer: (layer) => set({ visualLayer: layer }),
+  volumeRenderMode: "off",
+  setVolumeRenderMode: (mode) => set({ volumeRenderMode: mode }),
+  subsurfaceAoEnabled: false,
+  setSubsurfaceAoEnabled: (val) => set({ subsurfaceAoEnabled: val }),
   minTargetScore: 0.15,
   setMinTargetScore: (val) => set({ minTargetScore: val }),
   minAnomalyIntensity: 0,

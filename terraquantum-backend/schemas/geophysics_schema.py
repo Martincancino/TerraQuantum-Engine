@@ -728,6 +728,29 @@ class GeophysicsInvertInput(BaseModel):
             "Only active in adaptive sentinel path (no explicit noise_floor/gravimeter_type)."
         ),
     )
+    # ── FASE 5.2 (God-Tier): Export de volumen volumétrico co-registrado ────────
+    # Cuando True, tras escribir el block model la inversión emite un volumen ESPARSO
+    # co-registrado (.npz siempre; .vdb si pyopenvdb está instalado) que une densidad,
+    # susceptibilidad, incertidumbre y score sobre un solo retículo ix/iy/iz. Si en el
+    # run dir ya existe el parquet magnético (joint), se co-registran ambas físicas.
+    # Non-fatal y aditivo: OFF (default) = comportamiento histórico byte-idéntico.
+    export_coregistered_volume: bool = Field(
+        False,
+        description="Exportar volumen volumétrico co-registrado (.npz + .vdb opcional) "
+                    "tras la inversión. Une densidad/susc/incertidumbre/score sobre un "
+                    "retículo compartido. OFF (default) = sin export.",
+    )
+    # ── FASE 5.3 (God-Tier): Export del modelo categórico comprimido (SVDAG) ────
+    # Cuando True, deriva del volumen co-registrado un modelo CATEGÓRICO (binning de
+    # cuantiles de la densidad) y lo comprime en un Sparse Voxel DAG (.npz). Implica
+    # construir el volumen co-registrado aunque export_coregistered_volume sea False.
+    # Non-fatal y aditivo: OFF (default) = comportamiento histórico byte-idéntico.
+    export_categorical_svdag: bool = Field(
+        False,
+        description="Exportar modelo categórico comprimido (Sparse Voxel DAG, .npz) "
+                    "derivado del volumen co-registrado por binning de densidad. "
+                    "OFF (default) = sin export.",
+    )
 
     @model_validator(mode="after")
     def _validate_grid_bounds(self):

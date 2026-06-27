@@ -4,11 +4,11 @@
     "type": "split",
     "children": [
       {
-        "id": "10d05ddbae3c0c3e",
+        "id": "4d3b3bb6b86adf74",
         "type": "tabs",
         "children": [
           {
-            "id": "a3b628829c26f706",
+            "id": "0283cbea8939ed37",
             "type": "leaf",
             "state": {
               "type": "graph",
@@ -176,6 +176,9 @@
       "bases:Crear nueva base": false
     }
   },
-  "active": "a3b628829c26f706",
-  "lastOpenFiles": []
+  "active": "0283cbea8939ed37",
+  "lastOpenFiles": [
+    "terraquantum-web/node_modules/eslint-plugin-import/README.md",
+    "terraquantum-web/node_modules/next/dist/docs/01-app/02-guides/migrating/app-router-migration.md"
+  ]
 }
