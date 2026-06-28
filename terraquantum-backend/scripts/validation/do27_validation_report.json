@@ -96,74 +96,74 @@
       "misfit_percent": 0.072
     },
     "magnetic_only": {
-      "horizontal_error_m": 74.8,
-      "centroid_depth_error_m": 73.1,
-      "recovered_centroid_depth_m": 120.4,
+      "horizontal_error_m": 73.8,
+      "centroid_depth_error_m": 77.3,
+      "recovered_centroid_depth_m": 116.2,
       "true_centroid_depth_m": 193.5,
       "recovered_top_depth_m": 75.0,
       "true_top_depth_m": 51.1,
       "top_depth_error_m": 23.9,
-      "n_strong": 42,
-      "recovered_easting": 557309.8,
-      "recovered_northing": 7133703.3,
-      "recovered_elevation": 335.7,
+      "n_strong": 40,
+      "recovered_easting": 557304.4,
+      "recovered_northing": 7133701.7,
+      "recovered_elevation": 339.9,
       "true_centroid_utm": [
         557314.9,
         7133628.6
       ],
-      "misfit_percent": 1.003
+      "misfit_percent": 0.983
     },
     "joint_gravity": {
-      "horizontal_error_m": 74.6,
-      "centroid_depth_error_m": 108.5,
-      "recovered_centroid_depth_m": 91.2,
+      "horizontal_error_m": 74.4,
+      "centroid_depth_error_m": 115.3,
+      "recovered_centroid_depth_m": 84.5,
       "true_centroid_depth_m": 199.7,
       "recovered_top_depth_m": 75.0,
       "true_top_depth_m": 51.1,
       "top_depth_error_m": 23.9,
-      "n_strong": 26,
-      "recovered_easting": 557337.5,
-      "recovered_northing": 7133572.5,
-      "recovered_elevation": 364.9,
+      "n_strong": 23,
+      "recovered_easting": 557336.7,
+      "recovered_northing": 7133569.2,
+      "recovered_elevation": 371.6,
       "true_centroid_utm": [
         557264.1,
         7133585.5
       ],
-      "misfit_percent": 0.078
+      "misfit_percent": 0.076
     },
     "joint_magnetic": {
-      "horizontal_error_m": 89.6,
-      "centroid_depth_error_m": 55.0,
-      "recovered_centroid_depth_m": 138.5,
+      "horizontal_error_m": 61.6,
+      "centroid_depth_error_m": 93.8,
+      "recovered_centroid_depth_m": 99.7,
       "true_centroid_depth_m": 193.5,
       "recovered_top_depth_m": 75.0,
       "true_top_depth_m": 51.1,
       "top_depth_error_m": 23.9,
-      "n_strong": 42,
-      "recovered_easting": 557302.5,
-      "recovered_northing": 7133717.3,
-      "recovered_elevation": 317.6,
+      "n_strong": 33,
+      "recovered_easting": 557278.4,
+      "recovered_northing": 7133678.2,
+      "recovered_elevation": 356.4,
       "true_centroid_utm": [
         557314.9,
         7133628.6
       ],
-      "misfit_percent": 1.627
+      "misfit_percent": 2.679
     },
     "joint_history": [
       {
         "iter": 0,
         "misfit_g": 0.072,
-        "misfit_m": 1.407
+        "misfit_m": 1.451
       },
       {
         "iter": 1,
         "misfit_g": 0.062,
-        "misfit_m": 3.132
+        "misfit_m": 0.974
       },
       {
         "iter": 2,
-        "misfit_g": 0.078,
-        "misfit_m": 1.627
+        "misfit_g": 0.076,
+        "misfit_m": 2.679
       }
     ]
   },
@@ -174,12 +174,12 @@
   "verdict": {
     "targeting_tol_m": 100.0,
     "gravity_only_horiz_m": 53.7,
-    "magnetic_only_horiz_m": 74.8,
-    "joint_grav_horiz_m": 74.6,
-    "joint_mag_horiz_m": 89.6,
+    "magnetic_only_horiz_m": 73.8,
+    "joint_grav_horiz_m": 74.4,
+    "joint_mag_horiz_m": 61.6,
     "gravity_targeting_pass": true,
     "magnetic_targeting_pass": true
   },
-  "elapsed_s": 1559.1,
-  "table_markdown": "| Inversión | err horiz | err prof centroide | err prof techo | misfit |\n|-----------|-----------|--------------------|----------------|--------|\n| Gravimetría sola | 53.7m | 32.8m | 23.9m | 0.072% |\n| Magnetometría sola | 74.8m | 73.1m | 23.9m | 1.003% |\n| Joint — gravedad | 74.6m | 108.5m | 23.9m | 0.078% |\n| Joint — magnetismo | 89.6m | 55.0m | 23.9m | 1.627% |"
+  "elapsed_s": 1324.5,
+  "table_markdown": "| Inversión | err horiz | err prof centroide | err prof techo | misfit |\n|-----------|-----------|--------------------|----------------|--------|\n| Gravimetría sola | 53.7m | 32.8m | 23.9m | 0.072% |\n| Magnetometría sola | 73.8m | 77.3m | 23.9m | 0.983% |\n| Joint — gravedad | 74.4m | 115.3m | 23.9m | 0.076% |\n| Joint — magnetismo | 61.6m | 93.8m | 23.9m | 2.679% |"
 }
