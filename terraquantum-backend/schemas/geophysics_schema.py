@@ -294,6 +294,70 @@ class BoreholeSurvey(BaseModel):
                     or h.lithology is not None)]
 
 
+# ── FASE 7 (God-Tier): Geología implícita → prior petrofísico por celda ───────
+class StructuralOrientation(BaseModel):
+    """FASE 7 — medida estructural (buzamiento/dirección de buzamiento) que ancla el
+    GRADIENTE del campo implícito φ (polo del plano). Marco local: x,z horizontales,
+    y = profundidad (+ hacia abajo). Mismo convenio que BoreholeInterval."""
+    x_m: float = Field(..., description="Coordenada local X de la medida (m).")
+    z_m: float = Field(..., description="Coordenada local Z de la medida (m).")
+    y_m: float = Field(..., description="Profundidad de la medida (m, + hacia abajo).")
+    dip_deg: float = Field(..., ge=0.0, le=90.0, description="Buzamiento desde la horizontal (°).")
+    azimuth_deg: float = Field(
+        ..., ge=0.0, le=360.0,
+        description="Dirección de buzamiento (azimut en el plano x–z desde +x hacia +z, °).",
+    )
+
+
+class ImplicitGeologyParams(BaseModel):
+    """FASE 7.2 (God-Tier) — Prior geológico implícito desde sondajes.
+
+    Construye un campo escalar implícito φ (HRBF Hermite, Macedo 2011) a partir de
+    los contactos litológicos de los sondajes (+ orientaciones estructurales
+    opcionales) y lo convierte en un MODELO DE REFERENCIA petrofísico por celda
+    (m_ref, Li & Oldenburg 1999) que sesga la inversión hacia la geología conocida
+    DONDE EL DATO ES AMBIGUO (el dato sigue dominando donde restringe). Es el lado
+    "geología → geofísica" del bucle (Giraud GJI 2024).
+
+    Requiere sondajes con litología (boreholes[].lithology). Solo gravimetría por
+    ahora; el motor magnético ignora este campo (paridad = sub-slice futuro).
+    None / enabled=False → comportamiento histórico byte-idéntico.
+    """
+    enabled: bool = Field(default=True, description="Activa el prior geológico implícito.")
+    target_lithologies: List[str] = Field(
+        ..., min_length=1,
+        description="Litologías consideradas 'unidad objetivo' (φ≥0). Match case-insensitive.",
+    )
+    target_density_t_m3: float = Field(
+        ..., gt=0.0, le=10.0,
+        description="Densidad de referencia de la unidad objetivo (t/m³).",
+    )
+    host_density_t_m3: Optional[float] = Field(
+        default=None, gt=0.0, le=10.0,
+        description="Densidad de referencia de la roca caja (t/m³). None → base_density del input.",
+    )
+    target_std_t_m3: float = Field(
+        default=0.3, gt=0.0, le=5.0,
+        description="Incertidumbre del prior en la unidad objetivo (t/m³, informativa).",
+    )
+    host_std_t_m3: float = Field(
+        default=0.5, gt=0.0, le=5.0,
+        description="Incertidumbre del prior en la caja (t/m³, informativa).",
+    )
+    softness: float = Field(
+        default=0.0, ge=0.0, le=10.0,
+        description="Suavidad del contacto: 0 = escalón duro; >0 = transición sigmoide φ/softness.",
+    )
+    smoothing: float = Field(
+        default=1e-6, ge=0.0, le=1.0,
+        description="Regularización ridge del interpolante HRBF (estabiliza el sistema denso).",
+    )
+    orientations: Optional[List[StructuralOrientation]] = Field(
+        default=None,
+        description="Medidas estructurales que anclan el gradiente de φ (opcional).",
+    )
+
+
 class GeophysicsInvertInput(BaseModel):
     project_id: Optional[str] = None
     run_id: Optional[str] = None
@@ -707,6 +771,15 @@ class GeophysicsInvertInput(BaseModel):
     pgi_params: Optional[PgiParams] = Field(
         default=None,
         description="Parámetros PGI (GMM + α + iteraciones). None = inversión estándar sin guía petrológica.",
+    )
+    # ── FASE 7.2 (God-Tier): Prior geológico implícito (φ HRBF → m_ref) ──────────
+    # Cuando se provee y enabled=True, se construye un campo implícito φ desde los
+    # contactos litológicos de los sondajes y se inyecta como modelo de referencia
+    # petrofísico por celda (m_ref). Sesga la inversión hacia la geología donde el
+    # dato es ambiguo. Solo gravimetría por ahora. None → comportamiento histórico.
+    implicit_geology: Optional[ImplicitGeologyParams] = Field(
+        default=None,
+        description="Prior geológico implícito (FASE 7.2). None = inversión sin guía geológica.",
     )
     # ── FASE 12: Remanencia Magnética (J = J_ind + J_rem) ────────────────────────
     # Activada cuando magnetic_nt está presente Y remanence.enabled=True.

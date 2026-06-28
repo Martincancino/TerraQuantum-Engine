@@ -1166,6 +1166,96 @@ def _run_checkerboard_qa_fast(
     }
 
 
+def _build_implicit_geology_reference(params, x_c_full, y_c_full, z_c_full, base_density):
+    """FASE 7.2 (God-Tier) — Modelo de referencia (contraste, grilla completa) desde φ.
+
+    Construye el campo implícito φ (HRBF) desde los contactos litológicos de los
+    sondajes, lo evalúa en los centros de la grilla de inversión y lo convierte en
+    un m_ref petrofísico por celda (Li & Oldenburg 1999). El m_ref vive en espacio
+    de CONTRASTE (densidad − base_density), igual que el resto del solver.
+
+    Devuelve (m_ref_contrast_full | None, meta | None). None si implicit_geology no
+    está activado → la inversión queda byte-idéntica. Levanta HTTPException 422 si se
+    activa pero NO hay sondajes con litología (input incoherente: no se inventa
+    geología desde la nada).
+    """
+    geo = getattr(params, "implicit_geology", None)
+    if geo is None or not bool(getattr(geo, "enabled", False)):
+        return None, None
+
+    _bh_list = getattr(params, "boreholes", None) or []
+    _lith_intervals = [b for b in _bh_list if getattr(b, "lithology", None)]
+    if not _lith_intervals:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "implicit_geology está activado pero ningún sondaje declara litología "
+                "(boreholes[].lithology). El prior geológico implícito requiere contactos "
+                "litológicos de sondaje; no se infiere geología sin dato."
+            ),
+        )
+
+    from exploration.implicit_modeling import (
+        ImplicitGeologicalModel,
+        OrientationDatum,
+        build_spatial_prior_from_implicit,
+    )
+
+    orientations = None
+    if geo.orientations:
+        orientations = [
+            OrientationDatum.from_dip_azimuth(o.x_m, o.y_m, o.z_m, o.dip_deg, o.azimuth_deg)
+            for o in geo.orientations
+        ]
+
+    try:
+        model = ImplicitGeologicalModel.from_boreholes(
+            intervals=_lith_intervals,
+            target_lithologies=geo.target_lithologies,
+            orientations=orientations,
+            smoothing=float(geo.smoothing),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"implicit_geology: {exc}")
+
+    pts = np.column_stack([
+        np.asarray(x_c_full, dtype=np.float64),
+        np.asarray(y_c_full, dtype=np.float64),
+        np.asarray(z_c_full, dtype=np.float64),
+    ])
+    phi = model.field.evaluate(pts)
+
+    host_mean = (
+        float(base_density) if geo.host_density_t_m3 is None
+        else float(geo.host_density_t_m3)
+    )
+    prior = build_spatial_prior_from_implicit(
+        phi,
+        target_mean=float(geo.target_density_t_m3),
+        host_mean=host_mean,
+        target_std=float(geo.target_std_t_m3),
+        host_std=float(geo.host_std_t_m3),
+        softness=float(geo.softness),
+    )
+    # m_ref del solver vive en CONTRASTE (densidad − base_density).
+    m_ref_contrast = (prior.mean - float(base_density)).astype(np.float64)
+
+    meta = {
+        "enabled": True,
+        "binding": "m_ref (Li & Oldenburg reference model)",
+        "target_lithologies": list(model.target_lithologies),
+        "n_value_points": int(model.n_value_points),
+        "n_contact_points": int(model.n_contact_points),
+        "n_orientations": int(model.n_orientations),
+        "n_target_cells": int(np.count_nonzero(prior.class_label)),
+        "n_total_cells": int(phi.size),
+        "target_density_t_m3": float(geo.target_density_t_m3),
+        "host_density_t_m3": float(host_mean),
+        "softness": float(geo.softness),
+    }
+    return m_ref_contrast, meta
+
+
 def _build_lithology_bounds_array(params, axis: str):
     """FASE 2.3 — Arma el array (n,6) de bounds por unidad litológica para el solver.
 
@@ -2085,6 +2175,22 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     _anchor_mode  = str(getattr(params, "anchor_mode", "soft"))   # FASE 2.1
     _auto_kappa   = bool(getattr(params, "auto_kappa", True))
 
+    # ── FASE 7.2 (God-Tier): prior geológico implícito (φ HRBF → m_ref) ───────
+    # Si implicit_geology está activado, φ se construye desde los contactos
+    # litológicos de los sondajes y se inyecta como modelo de referencia por celda
+    # (contraste). _geo_m_ref=None → m_ref histórico (sin sesgo geológico).
+    _geo_m_ref, _geo_meta = _build_implicit_geology_reference(
+        params, x_c_full, y_c_full, z_c_full, _base_density
+    )
+    if _geo_meta is not None:
+        _log.info(
+            "implicit_geology_reference",
+            n_target_cells=_geo_meta["n_target_cells"],
+            n_total_cells=_geo_meta["n_total_cells"],
+            n_contact_points=_geo_meta["n_contact_points"],
+            n_orientations=_geo_meta["n_orientations"],
+        )
+
     # ── HITO 5 (B-05): Topografía activa desde sensor_elevations_masl ──────────
     # Se calcula ANTES del lambda scan para que todos los solvers (lambda, UQ, DOI)
     # usen la misma máscara de aire topográfica. Datum = sensor más alto (y=0).
@@ -2228,6 +2334,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             run_id=run_id,
             forward_model=forward,          # F0.2: KDTree directo sobre active_cells
             sensor_coords=sensor_coords,
+            m_ref=_geo_m_ref,               # FASE 7.2: prior geológico implícito (None = sin sesgo)
             x_c=x_c_full,
             z_c=z_c_full,
             topography_elevations=_topography_elevations_padded,  # HITO 5: activo si MASL provisto
@@ -2418,6 +2525,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
                     topography_elevations=_topography_elevations_padded,
                     forward_model=forward,
                     sensor_coords=sensor_coords,
+                    m_ref=_geo_m_ref,           # FASE 7.2: mismo prior geológico que pass-1
                     x_c=x_c_full,
                     z_c=z_c_full,
                     hx=hx, hy=hy, hz=hz,
@@ -2872,16 +2980,20 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             _log.warning("posterior_uncertainty_nonfatal", error=str(_uq_exc))
 
     # ── DOI: doble inversión con modelos de referencia (Li & Oldenburg 1999) ──
-    # Inversión 1 (m_ref1 = 0) es IDÉNTICA a la corrida principal de arriba:
-    # solve_inversion_lsqr con m_ref=None ≡ m_ref=zeros (RHS de regularización = 0).
-    # Por eso m1 = est_density principal y solo se ejecuta UNA inversión extra,
-    # con m_ref2 = 0.1 constante sobre la grilla completa (Core + Padding).
+    # Inversión 1 (m_ref1) es IDÉNTICA a la corrida principal de arriba (mismo m_ref):
+    # por eso m1 = est_density principal y solo se ejecuta UNA inversión extra, con
+    # m_ref2 = m_ref1 + 0.1 (desplazamiento constante sobre la grilla completa).
     # La diferencia m1 - m2 cancela la densidad base (ambas llevan +base_density),
     # de modo que doi_raw mide directamente la sensibilidad del contraste recuperado
-    # frente al desplazamiento del modelo de referencia.
+    # frente al desplazamiento del modelo de referencia. FASE 7.2: sin prior geológico
+    # m_ref1 = 0 (histórico byte-idéntico); con prior, m_ref1 = m_ref geológico para
+    # que la pass-1 (m1) y la pass-2 (m2) compartan la misma línea base.
     n_padded = int(est_density_full.shape[0])
-    m_ref1   = np.zeros(n_padded, dtype=float)        # referencia nula
-    m_ref2   = np.full(n_padded, 0.1, dtype=float)    # referencia 0.1 t/m³
+    m_ref1   = (
+        np.zeros(n_padded, dtype=float) if _geo_m_ref is None
+        else np.asarray(_geo_m_ref, dtype=float).copy()
+    )
+    m_ref2   = m_ref1 + 0.1                            # referencia desplazada +0.1 t/m³
 
     doi_raw = np.full(est_density.shape[0], np.nan, dtype=float)   # fallback de esquema estable
     try:
@@ -3448,6 +3560,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         "chi2_final":             _solver_meta.get("chi2_final"),
         "cond_A":                 _solver_meta.get("acond"),
         "lambda_scan_chi2":       _lambda_scan_meta if _lambda_scan_meta else None,
+        # ── FASE 7.2: prior geológico implícito (φ HRBF → m_ref) ─────────────
+        "implicit_geology":       _geo_meta,
         # ── FASE 20: Validación de sondajes (anclaje vs modelo recuperado) ────
         "borehole_validation":    _solver_meta.get("borehole_validation"),
         "borehole_conflicts":     _solver_meta.get("borehole_conflicts"),
