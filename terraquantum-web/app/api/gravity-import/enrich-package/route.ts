@@ -5,8 +5,10 @@ import https from "node:https";
 // BFF: proxya el ENRIQUECIMIENTO del paquete CSV al backend (/enrich-package) y
 // devuelve el JSON {package_text, enrichment_summary, plan, warnings, needs_context}.
 // Toda la física (DEM/correcciones/IGRF/coords/σ) vive en el backend; aquí solo se
-// reenvía el multipart (file + magnetic_file? + config_json + boreholes_json) y los
-// query params (data_type, strict, allow_g_raw, enable_dem).
+// reenvía el multipart (file + magnetic_file? + config_json + boreholes_json +
+// column_map_json + helmert_control_points_json) y los query params (data_type,
+// strict, allow_g_raw, enable_dem). El bucle sobre formData.entries() reenvía
+// CUALQUIER campo, así que los nuevos campos no requieren cambios aquí.
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_TERRAQUANTUM_BACKEND_URL ||

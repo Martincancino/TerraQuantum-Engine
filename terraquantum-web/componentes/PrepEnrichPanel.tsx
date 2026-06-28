@@ -9,6 +9,7 @@ import {
   type ColumnMappingPlan,
   type EnrichmentStep,
   type EnrichmentSummary,
+  type HelmertGeoref,
 } from "../lib/terraquantum/frontendApi";
 
 /**
@@ -41,6 +42,48 @@ const STATUS_META: Record<
   not_derivable: { label: "No derivable", classes: "border-rose-800 bg-rose-950/40 text-rose-300" },
 };
 
+// FASE 19 (Caso B) — fila editable de punto de control (todo string en la UI).
+type ControlPointRow = {
+  localX: string;
+  localY: string;
+  realE: string;
+  realN: string;
+};
+
+/** Filas completas y numéricas (las parciales/vacías se descartan). */
+function validControlPoints(
+  rows: ControlPointRow[]
+): { local_x: number; local_z: number; real_e: number; real_n: number }[] {
+  const out: { local_x: number; local_z: number; real_e: number; real_n: number }[] = [];
+  for (const r of rows) {
+    const lx = Number(r.localX);
+    const lz = Number(r.localY);
+    const e = Number(r.realE);
+    const n = Number(r.realN);
+    if (
+      r.localX.trim() !== "" &&
+      r.localY.trim() !== "" &&
+      r.realE.trim() !== "" &&
+      r.realN.trim() !== "" &&
+      Number.isFinite(lx) &&
+      Number.isFinite(lz) &&
+      Number.isFinite(e) &&
+      Number.isFinite(n)
+    ) {
+      out.push({ local_x: lx, local_z: lz, real_e: e, real_n: n });
+    }
+  }
+  return out;
+}
+
+/** Serializa los puntos a helmert_control_points_json (null si <2 válidos o desactivado). */
+function buildHelmertJson(enabled: boolean, rows: ControlPointRow[]): string | null {
+  if (!enabled) return null;
+  const pts = validControlPoints(rows);
+  if (pts.length < 2) return null;
+  return JSON.stringify({ points: pts });
+}
+
 type Props = {
   /** Intervalos de sondaje confirmados (se anexan al paquete como anclaje). */
   boreholes?: unknown[];
@@ -55,6 +98,15 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
   const [utmZone, setUtmZone] = useState("");
   const [gravimeterType, setGravimeterType] = useState("unknown");
   const [surveyDate, setSurveyDate] = useState("");
+
+  // FASE 19 (Caso B) — Puntos de control Helmert. SOLO para coords LOCALES: el
+  // usuario activa la sección y declara ≥2 pares (x,y local ↔ E,N real). El front
+  // NO calcula nada: solo recolecta los puntos; la transformada la resuelve el backend.
+  const [useHelmert, setUseHelmert] = useState(false);
+  const [ctrlPoints, setCtrlPoints] = useState<ControlPointRow[]>([
+    { localX: "", localY: "", realE: "", realN: "" },
+    { localX: "", localY: "", realE: "", realN: "" },
+  ]);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -128,6 +180,7 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         config,
         boreholes: boreholes ?? null,
         columnMap: Object.keys(map).length > 0 ? map : null,
+        helmertControlPointsJson: buildHelmertJson(useHelmert, ctrlPoints),
       });
       if (!res.ok) {
         setError(res.error);
@@ -284,6 +337,14 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         </div>
       </div>
 
+      {/* FASE 19 (Caso B) — Puntos de control Helmert (solo coords locales) */}
+      <HelmertControlSection
+        enabled={useHelmert}
+        rows={ctrlPoints}
+        onToggle={setUseHelmert}
+        onChange={setCtrlPoints}
+      />
+
       {/* Combo detectado (PILAR 2) */}
       {comboLabel && (
         <div className="rounded-lg border border-sky-900/60 bg-sky-950/20 px-4 py-2 text-[11px] font-mono text-sky-300">
@@ -338,6 +399,121 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         />
       )}
     </div>
+  );
+}
+
+// ── FASE 19 (Caso B) — Sección de puntos de control Helmert ──────────────────
+function HelmertControlSection({
+  enabled,
+  rows,
+  onToggle,
+  onChange,
+}: {
+  enabled: boolean;
+  rows: ControlPointRow[];
+  onToggle: (v: boolean) => void;
+  onChange: (rows: ControlPointRow[]) => void;
+}) {
+  const nValid = validControlPoints(rows).length;
+
+  function setCell(idx: number, key: keyof ControlPointRow, value: string) {
+    const next = rows.map((r, i) => (i === idx ? { ...r, [key]: value } : r));
+    onChange(next);
+  }
+  function addRow() {
+    onChange([...rows, { localX: "", localY: "", realE: "", realN: "" }]);
+  }
+  function removeRow(idx: number) {
+    if (rows.length <= 2) return; // mínimo 2 para resolver Helmert
+    onChange(rows.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4">
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => onToggle(e.target.checked)}
+          className="accent-[#C2D8C4]"
+        />
+        <span className="text-[10px] uppercase tracking-widest text-neutral-400">
+          Georreferenciar coordenadas locales · opcional
+        </span>
+      </label>
+      <p className="mt-2 text-[11px] font-mono text-neutral-600 leading-5">
+        Solo si tu CSV usa coordenadas LOCALES (metros). Declara ≥2 puntos de control
+        (x,y local ↔ Este,Norte real, en UTM). El backend resuelve la transformada de
+        similitud (Helmert) y georreferencia las estaciones. Si tus coordenadas ya son
+        lat/lon o UTM, deja esto desactivado.
+      </p>
+
+      {enabled && (
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] gap-2 text-[9px] uppercase tracking-wider text-neutral-500">
+            <span>X local</span>
+            <span>Y local</span>
+            <span>Este (E)</span>
+            <span>Norte (N)</span>
+            <span />
+          </div>
+          {rows.map((r, idx) => (
+            <div key={idx} className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] gap-2 items-center">
+              <CoordInput value={r.localX} onChange={(v) => setCell(idx, "localX", v)} placeholder="0" />
+              <CoordInput value={r.localY} onChange={(v) => setCell(idx, "localY", v)} placeholder="0" />
+              <CoordInput value={r.realE} onChange={(v) => setCell(idx, "realE", v)} placeholder="500000" />
+              <CoordInput value={r.realN} onChange={(v) => setCell(idx, "realN", v)} placeholder="7000000" />
+              <button
+                type="button"
+                onClick={() => removeRow(idx)}
+                disabled={rows.length <= 2}
+                className="text-neutral-500 hover:text-rose-400 disabled:opacity-30 disabled:cursor-not-allowed text-xs px-2"
+                title="Quitar punto"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          <div className="flex items-center justify-between mt-1">
+            <button
+              type="button"
+              onClick={addRow}
+              className="text-[10px] uppercase tracking-widest text-[#C2D8C4] hover:text-white"
+            >
+              + Añadir punto
+            </button>
+            <span
+              className={`text-[10px] font-mono ${
+                nValid >= 2 ? "text-emerald-400" : "text-amber-400"
+              }`}
+            >
+              {nValid} punto{nValid === 1 ? "" : "s"} válido{nValid === 1 ? "" : "s"}
+              {nValid < 2 ? " (se necesitan ≥2)" : ""}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CoordInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <input
+      type="number"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full bg-black/60 border border-neutral-700 rounded px-2 py-1.5 text-xs text-neutral-200 placeholder:text-neutral-600"
+    />
   );
 }
 
@@ -444,6 +620,9 @@ function ResultCard({
           derivable queda fuera y marcado.
         </p>
       </div>
+
+      {/* FASE 19 (Caso B) — resultado de la georef Helmert (si se aportaron puntos) */}
+      {summary.helmert_georef && <HelmertResult georef={summary.helmert_georef} />}
 
       {summary.needs_context.length > 0 && (
         <div className="rounded-lg border border-amber-800 bg-amber-950/30 p-3">
@@ -670,6 +849,46 @@ function RoleSelect({
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+// ── FASE 19 (Caso B) — tarjeta de resultado Helmert dentro de «Qué calculé» ──
+function HelmertResult({ georef }: { georef: HelmertGeoref }) {
+  if (georef.skipped) {
+    return (
+      <div className="rounded-lg border border-neutral-700 bg-neutral-900/40 p-3">
+        <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-1">
+          Georef Helmert
+        </div>
+        <p className="text-[11px] font-mono text-neutral-400 leading-5">
+          No aplicada: {georef.reason}
+        </p>
+      </div>
+    );
+  }
+  const rms = georef.transform?.residual_rms_m;
+  const rmsLabel = typeof rms === "number" ? `${rms.toFixed(2)} m` : "—";
+  return (
+    <div className="rounded-lg border border-emerald-800 bg-emerald-950/30 p-3">
+      <div className="text-[10px] uppercase tracking-widest text-emerald-400 mb-1">
+        Georef Helmert aplicada
+      </div>
+      <div className="flex flex-wrap gap-x-6 gap-y-1 text-[11px] font-mono text-emerald-200/90 leading-5">
+        <span>
+          Confianza: <span className="font-bold">{georef.confidence}</span>
+        </span>
+        <span>
+          Residual RMS: <span className="font-bold">{rmsLabel}</span>
+        </span>
+        <span>Estaciones georreferenciadas: {georef.n_stations}</span>
+      </div>
+      {georef.georeferenced_center && (
+        <p className="mt-1 text-[10px] font-mono text-neutral-500">
+          Centro (E,N): {georef.georeferenced_center.e.toFixed(1)},{" "}
+          {georef.georeferenced_center.n.toFixed(1)}
+        </p>
+      )}
     </div>
   );
 }

@@ -1416,12 +1416,30 @@ export type EnrichmentStep = {
   n_stations: number;
 };
 
+// FASE 19 (Caso B) — resultado de la georef Helmert que el backend adjunta al
+// summary cuando el usuario aporta ≥2 puntos de control sobre coords LOCALES. Toda
+// la matemática (similitud + residual) vive en el backend; el front solo lo muestra.
+export type HelmertGeoref =
+  | {
+      skipped?: false;
+      version: string;
+      confidence: string;
+      n_stations: number;
+      transform: { residual_rms_m?: number | null; scale?: number; rotation_deg?: number };
+      georeferenced_center?: { e: number; n: number } | null;
+      georeferenced_extent?: { e_m: number; n_m: number } | null;
+      warnings?: string[];
+    }
+  | { skipped: true; reason: string };
+
 export type EnrichmentSummary = {
   version: string;
   steps: EnrichmentStep[];
   needs_context: string[];
   columns_added: string[];
   nothing_fabricated: boolean;
+  // Presente solo si se enviaron puntos de control Helmert (opcional).
+  helmert_georef?: HelmertGeoref;
 };
 
 // PILAR 1 (KEYSTONE) — plan de MAPEO MANUAL de columnas devuelto por el backend.
@@ -1485,6 +1503,9 @@ export async function enrichPackage(opts: {
   boreholes?: unknown[] | null;
   // PILAR 1 — mapeo manual de columnas (rol → columna real del CSV primario).
   columnMap?: Record<string, string> | null;
+  // FASE 19 (Caso B) — puntos de control Helmert (georef de coords LOCALES). El
+  // backend resuelve la transformada; aquí solo se recolectan los puntos.
+  helmertControlPointsJson?: string | null;
 }): Promise<EnrichPackageResult> {
   const gravityFile = opts.gravityFile ?? null;
   const magneticFile = opts.magneticFile ?? null;
@@ -1506,6 +1527,9 @@ export async function enrichPackage(opts: {
   }
   if (opts.columnMap && Object.keys(opts.columnMap).length > 0) {
     fd.append("column_map_json", JSON.stringify(opts.columnMap));
+  }
+  if (opts.helmertControlPointsJson) {
+    fd.append("helmert_control_points_json", opts.helmertControlPointsJson);
   }
   const qs = new URLSearchParams({
     data_type: dataType,
