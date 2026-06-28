@@ -1166,6 +1166,7 @@ async def enrich_package_endpoint(
     config_json: Optional[str] = Form(None),
     boreholes_json: Optional[str] = Form(None),
     column_map_json: Optional[str] = Form(None),
+    magnetic_column_map_json: Optional[str] = Form(None),
 ):
     """Preparación con ENRIQUECIMIENTO: deriva con física real lo que falte y emite
     un paquete TQPKG completo (descargable) + un resumen de qué calculó/agregó.
@@ -1272,6 +1273,24 @@ async def enrich_package_endpoint(
                     detail="column_map debe ser un objeto {rol: columna}.",
                 )
 
+        # TAREA C — mapeo manual del 2.º archivo (magnético), independiente del
+        # column_map del primario (que aplica SOLO al gravity_file). Sin esta clave
+        # el magnético sigue cayendo en auto-detección (comportamiento histórico).
+        magnetic_column_map: Optional[dict] = None
+        if magnetic_column_map_json:
+            try:
+                magnetic_column_map = json.loads(magnetic_column_map_json) or None
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"magnetic_column_map_json inválido: {exc}",
+                )
+            if magnetic_column_map is not None and not isinstance(magnetic_column_map, dict):
+                raise HTTPException(
+                    status_code=422,
+                    detail="magnetic_column_map debe ser un objeto {rol: columna}.",
+                )
+
         # Si la auto-detección no resuelve los roles requeridos y el usuario NO aportó
         # mapeo → responder needs_mapping (200, sin paquete) para mostrar el MAPEO.
         _primary_headers = read_csv_headers(tmp_primary)
@@ -1316,6 +1335,7 @@ async def enrich_package_endpoint(
                 f.write(await magnetic_file.read())
             mag_res = import_gravity_csv_v1(
                 tmp_mag, strict=False, allow_g_raw=True, data_kind="magnetic",
+                column_map=magnetic_column_map,
             )
             if mag_res.status != "ok":
                 raise HTTPException(
