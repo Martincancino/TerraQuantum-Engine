@@ -295,6 +295,402 @@ def hutchinson_diag_inv(
     return np.clip(diag_est, a_min=0.0, a_max=None)
 
 
+def null_space_shuttle_directions(
+    G,
+    n_shuttles: int = 8,
+    mu: float = 1e-3,
+    smooth_op=None,
+    cg_maxiter: int = 300,
+    cg_rtol: float = 1e-6,
+    seed: int = 0,
+) -> tuple:
+    """
+    FASE 8.1 (peldaño 1 de la escalera de UQ) — "null-space shuttle".
+
+    Genera direcciones de perturbación δ que viven (aprox.) en el ESPACIO NULO DE
+    DATOS del operador directo escalado G: G·δ ≈ 0. Cada δ deja el misfit de datos
+    esencialmente invariante → sumarla a la solución produce un MODELO ALTERNATIVO
+    igualmente consistente con el dato. El abanico de alternativas cuantifica la
+    NO-UNICIDAD del problema inverso, que es una cara de la incertidumbre que la
+    σ posterior lineal de Hutchinson (covarianza alrededor de UN óptimo) NO ve.
+
+    Método (Deal & Nolet 1996; Fichtner & Zunino, GJI 2018):
+
+        δ = s − G⁺(G s),     G⁺ = (GᵀG + μ²I)⁻¹ Gᵀ   (pseudoinversa regularizada)
+
+    donde s es una dirección aleatoria. G⁺(G s) es la COMPONENTE de s que el dato
+    RESUELVE; al restarla, δ es justo la parte que el dato no restringe. Con μ→0,
+    δ → proyección exacta sobre null(G); μ pequeño la estabiliza numéricamente.
+    `smooth_op` (un LinearOperator, p.ej. (I+γ LᵀL)⁻¹) suaviza s ANTES de proyectar
+    para que las alternativas sean geológicamente plausibles (campos correlacionados)
+    y no ruido blanco — el shuttle "viaja" por modelos lisos, no por sal y pimienta.
+
+    Cada A^{-1}-vez se resuelve matrix-free por CG (GᵀG+μ²I es SPD), sin formar nada
+    denso: escala a problemas grandes igual que el estimador de Hutchinson.
+
+    ALCANCE HONESTO: es un muestreo de la no-unicidad LINEAL alrededor de la solución
+    (direcciones que el operador linealizado no ve), no un posterior bayesiano. No
+    captura no-linealidad fuerte, error de modelo ni el prior completo; los peldaños
+    superiores de la escalera (SVGD recocido, HMC/difusión) son R&D pendiente.
+
+    Parameters
+    ----------
+    G          : operador directo escalado (n_data × n), sparse o LinearOperator.
+    n_shuttles : número de direcciones de espacio nulo a generar.
+    mu         : regularización de la pseudoinversa (estabiliza el CG; 0 prohibido).
+    smooth_op  : LinearOperator opcional (n×n) aplicado a s para correlacionarla.
+    cg_maxiter : tope de iteraciones del CG por shuttle.
+    cg_rtol    : tolerancia relativa del CG.
+    seed       : semilla RNG (reproducibilidad determinística).
+
+    Returns
+    -------
+    directions   : (n_shuttles, n) — direcciones de espacio nulo, norma unitaria.
+    preserved    : (n_shuttles,)  — ratio ‖G δ‖ / ‖G s‖ por shuttle. Idealmente ≈ 0:
+                   cuanto MENOR, mejor preserva el ajuste de datos la alternativa
+                   (diagnóstico de honestidad; se reporta, no se esconde).
+    null_fraction: (n_shuttles,)  — ‖δ_cruda‖ / ‖s‖ ANTES de normalizar: cuánta de la
+                   dirección aleatoria sobrevive a la proyección, i.e. cuánto espacio
+                   nulo HAY. ≈0 ⇒ el dato lo resuelve todo (sin shuttle real); O(1) ⇒
+                   gran no-unicidad. Distingue "núcleo grande" de "núcleo nulo", algo
+                   que `preserved` (que es ≈0 en ambos casos) no puede.
+    """
+    from scipy.sparse.linalg import aslinearoperator, cg, LinearOperator
+
+    if mu <= 0:
+        raise ValueError("mu debe ser > 0: regulariza la pseudoinversa (GᵀG+μ²I SPD).")
+
+    Glin = aslinearoperator(G)
+    n_data, n = Glin.shape
+    mu2 = float(mu) ** 2
+
+    # Operador de información H = GᵀG + μ²I (SPD) como matvec, sin materializar.
+    def _H_matvec(v):
+        return Glin.rmatvec(Glin.matvec(v)) + mu2 * v
+
+    H = LinearOperator((n, n), matvec=_H_matvec)
+    # Preacondicionador de Jacobi barato: H_jj ≈ ‖G col j‖² + μ². Para sparse lo
+    # calculamos exacto; si no, caemos a identidad (CG sigue convergiendo).
+    try:
+        col_sq = np.asarray(G.power(2).sum(axis=0)).ravel()
+        diag_H = np.maximum(col_sq + mu2, 1e-30)
+        M = LinearOperator((n, n), matvec=lambda v: v / diag_H)
+    except AttributeError:
+        M = None
+
+    rng = np.random.default_rng(seed)
+    directions = np.empty((int(n_shuttles), n), dtype=np.float64)
+    preserved = np.empty(int(n_shuttles), dtype=np.float64)
+    null_fraction = np.empty(int(n_shuttles), dtype=np.float64)
+
+    for k in range(int(n_shuttles)):
+        s = rng.standard_normal(n)
+        if smooth_op is not None:
+            s = smooth_op.matvec(s)
+        s_norm = np.linalg.norm(s)
+        if s_norm < 1e-300:
+            directions[k] = 0.0
+            preserved[k] = 0.0
+            null_fraction[k] = 0.0
+            continue
+        s = s / s_norm   # ‖s‖ = 1
+
+        # Componente resuelta por el dato: resolved = (GᵀG+μ²I)⁻¹ Gᵀ (G s).
+        rhs = Glin.rmatvec(Glin.matvec(s))
+        resolved, _info = cg(H, rhs, rtol=cg_rtol, atol=0.0, maxiter=cg_maxiter, M=M)
+        delta = s - resolved   # parte que el dato NO ve ⇒ G·delta ≈ 0
+
+        gs = Glin.matvec(s)
+        gd = Glin.matvec(delta)
+        gs_norm = float(np.linalg.norm(gs))
+        preserved[k] = float(np.linalg.norm(gd)) / gs_norm if gs_norm > 0 else 0.0
+
+        d_norm = float(np.linalg.norm(delta))   # ‖s‖=1 ⇒ esto ES la fracción de núcleo
+        null_fraction[k] = d_norm
+        directions[k] = delta / d_norm if d_norm > 1e-300 else delta
+
+    return directions, preserved, null_fraction
+
+
+def woodbury_low_rank_update(
+    A,
+    m0,
+    U,
+    d_new,
+    cg_maxiter: int = 500,
+    cg_rtol: float = 1e-8,
+) -> tuple:
+    """
+    FASE 8.2 (Live Update local) — actualización de rango-k de Sherman–Morrison–Woodbury.
+
+    El modelo actual m0 resuelve el sistema de información regularizado A·m0 = b0 del
+    dato recogido HASTA AHORA (A = G̃ᵀG̃ + λ_s²·L̃ᵀL̃ + λ²·I en el espacio escalado;
+    b0 = G̃ᵀd̃). Cuando llegan k OBSERVACIONES NUEVAS — un sondaje, una línea de vuelo o
+    una corrección de dato — su aporte son k filas nuevas Ũ (k×n, forward escalado) con
+    objetivos d_new (k,). El sistema aumentado es:
+
+        A1 = A + ŨᵀŨ ,     b1 = b0 + Ũᵀ d_new
+
+    y su solución NO requiere re-resolver desde cero ni rearmar A: por la identidad de
+    Woodbury, con W = A⁻¹ Ũᵀ (k resoluciones CG contra la MISMA A, ya precondicionada) y
+    la matriz de CAPACITANCIA C = I_k + Ũ W (k×k, densa y diminuta),
+
+        m1 = m_b − W C⁻¹ (Ũ m_b) ,     m_b = m0 + W d_new .
+
+    NO hace falta b0 explícito: b1 = A·m0 + Ũᵀ d_new se reconstruye de m0. El costo es k
+    resoluciones contra A (BC global "congelado": A, su regularización y el depth
+    weighting NO cambian), frente a re-correr todo el pipeline de inversión acotada.
+
+    ALCANCE HONESTO: es la actualización EXACTA de la solución de MÍNIMOS CUADRADOS
+    LINEAL regularizada con A/operadores congelados. NO honra cotas (no-negatividad,
+    box): el llamador puede recortar a [min,max] DESPUÉS, lo que reintroduce un residuo
+    pequeño; NO recomputa el column scaling Ws ni el σ adaptivo (un re-solve completo
+    daría una solución también válida pero distinta). Propiedad clave (no-op): si d_new
+    ya coincide con la predicción actual Ũ·m0, entonces m1 = m0 EXACTAMENTE.
+
+    Parameters
+    ----------
+    A          : matriz de información (n×n) SPD, sparse o LinearOperator (la MISMA de
+                 estimate_posterior_std / del solver, en el espacio escalado).
+    m0         : (n,) solución actual A⁻¹b0 en el espacio escalado.
+    U          : (k, n) filas nuevas del forward ESCALADO (Wd_new·G_new·Ws).
+    d_new      : (k,) dato nuevo ESCALADO (d_new_obs / sigma_new).
+    cg_maxiter : tope de iteraciones CG por fila nueva.
+    cg_rtol    : tolerancia relativa del CG (estricta: la exactitud del update depende).
+
+    Returns
+    -------
+    m1   : (n,) modelo actualizado, MISMO espacio que m0.
+    info : dict con 'capacitance_cond' (cond de C), 'update_norm' (‖m1−m0‖), 'n_new' (k).
+    """
+    from scipy.sparse.linalg import aslinearoperator, cg, LinearOperator
+
+    m0 = np.asarray(m0, dtype=np.float64).ravel()
+    n = m0.shape[0]
+    U = np.atleast_2d(np.asarray(U, dtype=np.float64))
+    if U.shape[1] != n:
+        raise ValueError(f"U debe ser (k, n={n}); tiene {U.shape}.")
+    d_new = np.atleast_1d(np.asarray(d_new, dtype=np.float64)).ravel()
+    k = U.shape[0]
+    if d_new.shape[0] != k:
+        raise ValueError(f"d_new debe tener k={k} elementos; tiene {d_new.shape[0]}.")
+    if k == 0:
+        return m0.copy(), {"capacitance_cond": 1.0, "update_norm": 0.0, "n_new": 0}
+
+    Alin = aslinearoperator(A)
+    # Preacondicionador de Jacobi (diag de A) si está disponible.
+    try:
+        diagA = np.maximum(np.abs(A.diagonal()), 1e-30)
+        M = LinearOperator((n, n), matvec=lambda v: v / diagA)
+    except AttributeError:
+        M = None
+
+    def _solve(rhs):
+        x, _info = cg(Alin, rhs, rtol=cg_rtol, atol=0.0, maxiter=cg_maxiter, M=M)
+        return x
+
+    # W = A⁻¹ Ũᵀ  (n×k): una resolución CG por fila nueva (matrix-free).
+    W = np.empty((n, k), dtype=np.float64)
+    for i in range(k):
+        W[:, i] = _solve(U[i])
+    C = np.eye(k) + U @ W                  # capacitancia (k×k)
+    m_b = m0 + W @ d_new
+    z = np.linalg.solve(C, U @ m_b)        # C⁻¹ (Ũ m_b)
+    m1 = m_b - W @ z
+
+    info = {
+        "capacitance_cond": float(np.linalg.cond(C)),
+        "update_norm": float(np.linalg.norm(m1 - m0)),
+        "n_new": int(k),
+    }
+    return m1, info
+
+
+def rank_drill_targets(
+    model,
+    x,
+    y,
+    z,
+    posterior_std=None,
+    threshold=None,
+    min_exceedance_prob: float = 0.5,
+    exclusion_radius=None,
+    top_n: int = 10,
+    sense: str = "positive",
+    rank_by: str = "expected_exceedance",
+    lcb_k: float = 1.0,
+) -> list:
+    """
+    FASE 8.3 (targeting probabilístico automático) — ranking 3D de BLANCOS PERFORABLES.
+
+    Convierte un modelo invertido + su σ POSTERIOR por vóxel (de estimate_posterior_std
+    Hutchinson o del ensemble null-space de 8.1) en una LISTA RANKEADA de objetivos de
+    perforación discretos, cada uno con su probabilidad estadística de ser anómalo. Es
+    MOTOR-AGNÓSTICO: sirve para densidad (t/m³) o susceptibilidad (SI); el llamador pasa
+    el modelo y la σ en sus unidades físicas.
+
+    Para cada vóxel j, bajo el posterior lineal-gaussiano m_j ~ N(model_j, σ_j²), con
+    diff = ±(model_j − τ) (signo según `sense`; "negative" = cuerpos de BAJO contraste
+    como kimberlita/sal) y d = diff/σ_j:
+      - exceedance_prob       = Φ(d)                         (prob. de superar el umbral)
+      - expected_exceedance   = σ_j·φ(d) + diff·Φ(d) = E[max(±(m−τ), 0)]  (forma cerrada;
+        "contraste anómalo esperado sobre el umbral", análogo al expected-improvement de
+        optimización bayesiana — premia magnitud Y upside exploratorio)
+      - lower_confidence_bound= diff − lcb_k·σ_j             (score PESIMISTA: penaliza la
+        incertidumbre; un pico fuerte pero mal resuelto cae)
+
+    `rank_by` elige la métrica de orden (default expected_exceedance). Luego aplica
+    SUPRESIÓN DE NO-MÁXIMOS 3D: candidatos con exceedance_prob ≥ min_exceedance_prob,
+    ordenados por el score, seleccionados codiciosamente excluyendo todo candidato a
+    < exclusion_radius (m) de un blanco ya elegido → blancos ESPACIALMENTE DISTINTOS (no
+    50 celdas del mismo cuerpo), hasta top_n.
+
+    ALCANCE HONESTO: las probabilidades son del posterior LINEAL alrededor de la solución
+    regularizada (misma caveat que Hutchinson/ensemble): NO capturan no-unicidad no-lineal
+    ni error de modelo. Es un ranking DEFENDIBLE de TARGETING/ESTRUCTURA ("dónde perforar"),
+    NO una probabilidad de mena/ley. Si no se pasa posterior_std se estima una σ
+    homoscedástica del MAD del modelo (degradado; pasar la σ real es muy preferible).
+
+    Returns
+    -------
+    list[dict] ordenada por rank (1 = mejor). Cada dict: rank, x, y, z, depth (=y),
+    model_value, posterior_std, exceedance_prob, expected_exceedance,
+    lower_confidence_bound, score (el de rank_by), model_value_band [m−σ, m+σ],
+    threshold, sense.
+    """
+    from scipy.special import ndtr   # Φ, función de distribución normal estándar
+
+    valid_rank = ("expected_exceedance", "exceedance_prob", "lower_confidence_bound")
+    if rank_by not in valid_rank:
+        raise ValueError(f"rank_by debe ser uno de {valid_rank}.")
+    if sense not in ("positive", "negative"):
+        raise ValueError("sense debe ser 'positive' o 'negative'.")
+
+    model = np.asarray(model, dtype=np.float64).ravel()
+    x = np.asarray(x, dtype=np.float64).ravel()
+    y = np.asarray(y, dtype=np.float64).ravel()
+    z = np.asarray(z, dtype=np.float64).ravel()
+    n = model.shape[0]
+    if not (x.shape[0] == y.shape[0] == z.shape[0] == n):
+        raise ValueError("model, x, y, z deben tener el mismo largo.")
+
+    finite = np.isfinite(model) & np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
+    if not finite.any() or top_n <= 0:
+        return []
+
+    # ── σ por vóxel (real preferida; si falta, homoscedástica del MAD) ────────
+    if posterior_std is not None:
+        sigma = np.asarray(posterior_std, dtype=np.float64).ravel()
+        if sigma.shape[0] != n:
+            raise ValueError("posterior_std debe tener el mismo largo que model.")
+    else:
+        med0 = np.median(model[finite])
+        mad0 = 1.4826 * np.median(np.abs(model[finite] - med0))
+        sigma = np.full(n, max(mad0, 1e-12), dtype=np.float64)
+
+    # ── Umbral robusto si no se da (mediana ± 2·spread según el sentido) ──────
+    # spread = MAD robusto; si el modelo es disperso (muchos ceros → MAD≈0) cae a la
+    # desviación estándar para no fijar el umbral EN el fondo (que dejaría todo el
+    # fondo en exceedance_prob=0.5 y lo volvería candidato espurio).
+    mvals = model[finite]
+    med = np.median(mvals)
+    mad = 1.4826 * np.median(np.abs(mvals - med))
+    spread = mad if mad > 1e-12 else float(np.std(mvals))
+    if threshold is None:
+        threshold = (med + 2.0 * spread) if sense == "positive" else (med - 2.0 * spread)
+    threshold = float(threshold)
+
+    # ── Scores probabilísticos por vóxel ─────────────────────────────────────
+    sgn = 1.0 if sense == "positive" else -1.0
+    diff = sgn * (model - threshold)
+    sig_safe = np.where((sigma > 0) & np.isfinite(sigma), sigma, np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        d = diff / sig_safe
+    Phi = ndtr(d)
+    phi = np.exp(-0.5 * d * d) / np.sqrt(2.0 * np.pi)
+    exceed_prob = Phi
+    expected_exceed = sig_safe * phi + diff * Phi
+    # σ=0 / NaN ⇒ posterior degenerado: probabilidad de paso y expected = max(diff,0).
+    degenerate = ~np.isfinite(d)
+    exceed_prob = np.where(degenerate, (diff > 0).astype(np.float64), exceed_prob)
+    expected_exceed = np.where(degenerate, np.maximum(diff, 0.0), expected_exceed)
+    sig_pen = np.where(np.isfinite(sig_safe), sig_safe, 0.0)
+    lcb = diff - float(lcb_k) * sig_pen
+
+    # Fuera de celdas finitas: probabilidad 0 (no candidatas).
+    exceed_prob = np.where(finite, exceed_prob, 0.0)
+
+    score_map = {
+        "expected_exceedance": expected_exceed,
+        "exceedance_prob": exceed_prob,
+        "lower_confidence_bound": lcb,
+    }
+    score = score_map[rank_by]
+
+    # ── Radio de exclusión automático = 2.5 × paso de malla ──────────────────
+    if exclusion_radius is None:
+        def _pitch_axis(c):
+            u = np.unique(np.round(c, 6))
+            if u.size < 2:
+                return np.inf
+            dd = np.diff(u)
+            dd = dd[dd > 0]
+            return float(dd.min()) if dd.size else np.inf
+        pitch = min(_pitch_axis(x[finite]), _pitch_axis(y[finite]), _pitch_axis(z[finite]))
+        if not np.isfinite(pitch):
+            pitch = 1.0
+        exclusion_radius = 2.5 * pitch
+    exclusion_radius = float(exclusion_radius)
+
+    # ── Candidatos + supresión de no-máximos 3D codiciosa ────────────────────
+    cand = np.where(finite & (exceed_prob >= float(min_exceedance_prob)))[0]
+    if cand.size == 0:
+        return []
+    order = cand[np.argsort(-score[cand], kind="stable")]
+
+    chosen = []
+    chosen_xyz = []
+    r2 = exclusion_radius ** 2
+    for idx in order:
+        if len(chosen) >= top_n:
+            break
+        px, py, pz = x[idx], y[idx], z[idx]
+        if all((px - cx) ** 2 + (py - cy) ** 2 + (pz - cz) ** 2 >= r2
+               for (cx, cy, cz) in chosen_xyz):
+            chosen.append(int(idx))
+            chosen_xyz.append((px, py, pz))
+
+    targets = []
+    for rank, idx in enumerate(chosen, start=1):
+        s = float(sigma[idx]) if np.isfinite(sigma[idx]) else None
+        targets.append({
+            "rank": rank,
+            "x": float(x[idx]),
+            "y": float(y[idx]),
+            "z": float(z[idx]),
+            "depth": float(y[idx]),
+            "model_value": float(model[idx]),
+            "posterior_std": s,
+            "exceedance_prob": float(exceed_prob[idx]),
+            "expected_exceedance": float(expected_exceed[idx]),
+            "lower_confidence_bound": float(lcb[idx]),
+            "score": float(score[idx]),
+            "model_value_band": [
+                float(model[idx] - sigma[idx]) if s is not None else None,
+                float(model[idx] + sigma[idx]) if s is not None else None,
+            ],
+            "threshold": threshold,
+            "sense": sense,
+        })
+
+    logger.info(
+        f"[Targeting probabilístico] sense={sense} | rank_by={rank_by} | "
+        f"umbral={threshold:.4g} | candidatos={cand.size} | blancos={len(targets)} | "
+        f"r_excl={exclusion_radius:.4g} m"
+    )
+    return targets
+
+
 class GravimetryForward:
     """
     FORWARD MODEL:
@@ -2504,6 +2900,562 @@ class GravimetryInversion:
             f"sigma_p95={float(np.percentile(std_active, 95)):.4g} t/m3"
         )
         return posterior_std_full
+
+    def null_space_shuttle_ensemble(
+        self,
+        m0,
+        g_observed,
+        y_c,
+        forward_model,
+        sensor_coords,
+        x_c,
+        z_c,
+        lambda_mag=1e-5,
+        alpha_spatial=1.0,
+        topography_elevations=None,
+        noise_floor=0.02,
+        noise_pct=0.02,
+        hx=None, hy=None, hz=None,
+        n_shuttles: int = 12,
+        shuttle_scale: float = 0.5,
+        smooth_strength: float = 5.0,
+        density_min=None,
+        density_max=None,
+        mu: float = 1e-3,
+        cg_maxiter: int = 300,
+        cg_rtol: float = 1e-6,
+        seed: int = 0,
+    ):
+        """
+        FASE 8.1 (peldaño 1) — Ensemble de modelos por "null-space shuttle".
+
+        Toma la solución invertida `m0` (densidad por vóxel, t/m³) y genera
+        `n_shuttles` MODELOS ALTERNATIVOS que ajustan el dato esencialmente igual de
+        bien, perturbándola a lo largo de direcciones del espacio nulo de datos del
+        operador directo escalado (mismos Wd/Ws/L que solve_inversion_lsqr y que
+        estimate_posterior_std). El abanico mide la NO-UNICIDAD: dónde el dato fija
+        la densidad (modelos coinciden, σ_ens baja) y dónde no (modelos divergen,
+        σ_ens alta) — complementa la σ posterior lineal de Hutchinson.
+
+        Las direcciones se generan en el espacio ESCALADO (m̃ = Ws⁻¹·m) y se devuelven
+        a unidades físicas multiplicando por Ws (col scaling), igual que la σ posterior.
+        Se suavizan con (I + smooth_strength·LᵀL) para que las alternativas sean lisas
+        (campos correlacionados, plausibles), no ruido blanco. La amplitud de cada
+        shuttle se fija a `shuttle_scale · (escala robusta de m0)` y, si se dan, los
+        modelos se recortan a [density_min, density_max] (el clip puede reintroducir un
+        residuo de dato pequeño; por eso se reporta data_fit_preserved SIN clip).
+
+        Método de SOLO LECTURA: no altera la solución ni el estado del solver.
+
+        Returns
+        -------
+        dict con:
+          ensemble        : (n_shuttles, total_voxels) — modelos alternativos (aire=NaN).
+          ensemble_std    : (total_voxels,) — σ del ensemble por vóxel (aire=NaN).
+          ensemble_mean   : (total_voxels,) — media del ensemble por vóxel (aire=NaN).
+          data_fit_preserved : float — ratio medio ‖Gδ‖/‖Gs‖ (↓ mejor; honestidad).
+          n_shuttles      : int.
+        """
+        m0 = np.asarray(m0, dtype=np.float64)
+        g_observed = np.asarray(g_observed, dtype=np.float64)
+        y_c = np.asarray(y_c, dtype=np.float64)
+
+        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
+            raise ValueError(
+                "null_space_shuttle_ensemble requiere forward_model, sensor_coords, x_c, z_c."
+            )
+        if m0.shape[0] != self.total_voxels:
+            raise ValueError(
+                f"m0 debe tener total_voxels={self.total_voxels} elementos, tiene {m0.shape[0]}."
+            )
+
+        # ── Máscara de celdas activas (idéntica a estimate_posterior_std) ─────
+        if topography_elevations is None:
+            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
+        else:
+            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
+        voxel_top = y_c - (self.dy / 2.0)
+        active_cells = voxel_top >= topo_depth
+        n_active = int(np.sum(active_cells))
+        if n_active == 0:
+            raise ValueError("[UQ shuttle] No hay celdas activas bajo la topografía dada.")
+
+        n_sensors = len(g_observed)
+        y_c_active = y_c[active_cells]
+        x_c_arr = np.asarray(x_c, dtype=np.float64)
+        z_c_arr = np.asarray(z_c, dtype=np.float64)
+
+        G_active = forward_model._build_sparse_kernel(
+            x_c_arr[active_cells], y_c_active, z_c_arr[active_cells],
+            np.asarray(sensor_coords, dtype=np.float64),
+        )
+
+        # ── Wd + column scaling Ws (igual que el solver / la σ posterior) ─────
+        if noise_floor == 0.02 and noise_pct == 0.02:
+            sigma, _ = _sigma_adaptive(g_observed, detect_outliers=False)
+        else:
+            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
+        Wd = sp.diags(1.0 / sigma)
+        G_w = Wd @ G_active
+        col_norms = np.sqrt(G_w.power(2).sum(axis=0)).A1
+        col_norms = np.maximum(col_norms, 1e-12)
+        ws_diag = 1.0 / col_norms
+        Ws = sp.diags(ws_diag)
+        G_scaled = (G_w @ Ws).tocsr()
+
+        # ── Operador de suavizado (I + γ LᵀL) reducido a activas y escalado ───
+        from scipy.sparse.linalg import cg as _cg, LinearOperator as _LO
+        smooth_op = None
+        if smooth_strength and smooth_strength > 0:
+            L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
+            L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+            L_scaled = (L_active @ Ws).tocsr()
+            LtL = (L_scaled.T @ L_scaled).tocsr()
+            S = (sp.identity(n_active, format="csr") + float(smooth_strength) * LtL).tocsr()
+            diag_S = np.maximum(S.diagonal(), 1e-30)
+            M_s = _LO((n_active, n_active), matvec=lambda v: v / diag_S)
+
+            def _smooth(v):
+                x, _ = _cg(S, v, rtol=1e-6, atol=0.0, maxiter=cg_maxiter, M=M_s)
+                return x
+
+            smooth_op = _LO((n_active, n_active), matvec=_smooth)
+
+        # ── Direcciones de espacio nulo (matrix-free, reproducibles) ──────────
+        directions, preserved, null_fraction = null_space_shuttle_directions(
+            G_scaled, n_shuttles=n_shuttles, mu=mu, smooth_op=smooth_op,
+            cg_maxiter=cg_maxiter, cg_rtol=cg_rtol, seed=seed,
+        )
+
+        # ── Amplitud física por shuttle y construcción de alternativas ────────
+        m0_active = m0[active_cells]
+        # Escala robusta de la solución: MAD→σ, con piso por si el modelo es ~plano.
+        med = np.median(m0_active)
+        robust = 1.4826 * np.median(np.abs(m0_active - med))
+        amp_ref = max(robust, 1e-6)
+        amp = float(shuttle_scale) * amp_ref
+
+        ensemble = np.full((int(n_shuttles), self.total_voxels), np.nan, dtype=np.float64)
+        for k in range(int(n_shuttles)):
+            # direction está en espacio escalado (m̃); a físico vía Ws.
+            d_phys = ws_diag * directions[k]
+            peak = np.max(np.abs(d_phys))
+            if peak > 1e-300:
+                d_phys = d_phys * (amp / peak)
+            member = m0_active + d_phys
+            if density_min is not None:
+                member = np.maximum(member, float(density_min))
+            if density_max is not None:
+                member = np.minimum(member, float(density_max))
+            ensemble[k, active_cells] = member
+
+        ens_active = ensemble[:, active_cells]
+        std_active = np.std(ens_active, axis=0)
+        mean_active = np.mean(ens_active, axis=0)
+
+        ensemble_std = np.full(self.total_voxels, np.nan, dtype=np.float64)
+        ensemble_mean = np.full(self.total_voxels, np.nan, dtype=np.float64)
+        ensemble_std[active_cells] = std_active
+        ensemble_mean[active_cells] = mean_active
+
+        preserved_mean = float(np.mean(preserved))
+        null_fraction_mean = float(np.mean(null_fraction))
+        logger.info(
+            f"[UQ null-space shuttle] n={n_shuttles} | "
+            f"sigma_ens_med={float(np.median(std_active)):.4g} t/m3 | "
+            f"sigma_ens_p95={float(np.percentile(std_active, 95)):.4g} t/m3 | "
+            f"data_fit_preserved={preserved_mean:.3g} (‖Gδ‖/‖Gs‖, ↓ mejor) | "
+            f"null_fraction={null_fraction_mean:.3g} (núcleo presente; ↑ más no-unicidad)"
+        )
+        return {
+            "ensemble": ensemble,
+            "ensemble_std": ensemble_std,
+            "ensemble_mean": ensemble_mean,
+            "data_fit_preserved": preserved_mean,
+            "null_fraction": null_fraction_mean,
+            "n_shuttles": int(n_shuttles),
+        }
+
+    def live_update_add_data(
+        self,
+        m0,
+        g_observed,
+        y_c,
+        forward_model,
+        sensor_coords,
+        x_c,
+        z_c,
+        new_sensor_coords,
+        new_g_observed,
+        lambda_mag=1e-5,
+        alpha_spatial=1.0,
+        topography_elevations=None,
+        noise_floor=0.02,
+        noise_pct=0.02,
+        hx=None, hy=None, hz=None,
+        density_min=None,
+        density_max=None,
+        cg_maxiter: int = 500,
+        cg_rtol: float = 1e-8,
+    ):
+        """
+        FASE 8.2 (Live Update local) — incorpora k OBSERVACIONES NUEVAS a una solución ya
+        invertida `m0` SIN re-correr el pipeline completo, vía actualización de Woodbury
+        rango-k (helper woodbury_low_rank_update). Pensado para el flujo interactivo:
+        llega un sondaje/línea de vuelo o se corrige un dato → el modelo se refresca con
+        una corrección LOCAL barata, con el "BC global congelado" (la matriz de
+        información A, su regularización, el depth weighting y el column scaling Ws se
+        reconstruyen IDÉNTICOS a estimate_posterior_std / al solver y NO se recomputan).
+
+        La A frozen y el Ws salen del dato EXISTENTE (g_observed). Las filas nuevas se
+        ponderan con σ paramétrico (floor+pct) del dato nuevo y se llevan al mismo
+        espacio escalado m̃ = Ws⁻¹·m. Tras el update se vuelve a unidades físicas y, si se
+        dan, se recorta a [density_min, density_max] (el clip reintroduce un residuo
+        pequeño; por eso se reportan los misfits SIN clip del dato nuevo).
+
+        ALCANCE HONESTO: actualización EXACTA de la solución de mínimos cuadrados LINEAL
+        regularizada con operadores congelados; NO es un re-solve acotado desde cero (que
+        recomputaría Ws/σ y daría otra solución también válida), NO re-localiza por
+        sub-octree (eso es trabajo futuro de 8.2), NO honra cotas salvo por el clip final.
+        Método de SOLO LECTURA sobre el estado del solver; devuelve un modelo nuevo.
+
+        Returns
+        -------
+        dict con:
+          model            : (total_voxels,) — densidad actualizada (aire = como en m0).
+          update_norm      : float — ‖m1−m0‖ en el espacio escalado (tamaño de la corrección).
+          capacitance_cond : float — número de condición de la capacitancia (salud del update).
+          new_data_misfit_before / _after : float — ‖G_new·m − d_new‖/‖d_new‖ ANTES/DESPUÉS
+                             (debe BAJAR: el modelo se acerca al dato nuevo).
+          n_new            : int — número de observaciones nuevas incorporadas.
+        """
+        m0 = np.asarray(m0, dtype=np.float64)
+        g_observed = np.asarray(g_observed, dtype=np.float64)
+        y_c = np.asarray(y_c, dtype=np.float64)
+        new_sensor_coords = np.atleast_2d(np.asarray(new_sensor_coords, dtype=np.float64))
+        new_g_observed = np.atleast_1d(np.asarray(new_g_observed, dtype=np.float64)).ravel()
+
+        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
+            raise ValueError(
+                "live_update_add_data requiere forward_model, sensor_coords, x_c, z_c."
+            )
+        if m0.shape[0] != self.total_voxels:
+            raise ValueError(
+                f"m0 debe tener total_voxels={self.total_voxels} elementos, tiene {m0.shape[0]}."
+            )
+        if lambda_mag <= 0:
+            raise ValueError("lambda_mag debe ser > 0 (garantiza A SPD).")
+        k = new_sensor_coords.shape[0]
+        if new_g_observed.shape[0] != k:
+            raise ValueError(
+                f"new_g_observed debe tener {k} elementos (uno por sensor nuevo), "
+                f"tiene {new_g_observed.shape[0]}."
+            )
+
+        # ── Máscara de celdas activas (idéntica a estimate_posterior_std) ─────
+        if topography_elevations is None:
+            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
+        else:
+            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
+        voxel_top = y_c - (self.dy / 2.0)
+        active_cells = voxel_top >= topo_depth
+        n_active = int(np.sum(active_cells))
+        if n_active == 0:
+            raise ValueError("[Live update] No hay celdas activas bajo la topografía dada.")
+
+        n_sensors = len(g_observed)
+        y_c_active = y_c[active_cells]
+        x_c_arr = np.asarray(x_c, dtype=np.float64)[active_cells]
+        z_c_arr = np.asarray(z_c, dtype=np.float64)[active_cells]
+
+        # ── A congelada (Wd, Ws, L_scaled, λ_spatial) IDÉNTICA a la σ posterior ─
+        G_active = forward_model._build_sparse_kernel(
+            x_c_arr, y_c_active, z_c_arr, np.asarray(sensor_coords, dtype=np.float64),
+        )
+        if noise_floor == 0.02 and noise_pct == 0.02:
+            sigma, _ = _sigma_adaptive(g_observed, detect_outliers=False)
+        else:
+            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
+        Wd = sp.diags(1.0 / sigma)
+        G_w = Wd @ G_active
+        col_norms = np.maximum(np.sqrt(G_w.power(2).sum(axis=0)).A1, 1e-12)
+        ws_diag = 1.0 / col_norms
+        Ws = sp.diags(ws_diag)
+        G_scaled = (G_w @ Ws).tocsr()
+
+        L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
+        L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+        z0 = self.dy / 2.0
+        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
+        w_reg = 1.0 / ((true_depth + z0) ** 2.0)
+        w_reg = w_reg / np.mean(w_reg)
+        L_scaled = ((sp.diags(w_reg) @ L_active) @ Ws).tocsr()
+
+        lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
+        A = (
+            (G_scaled.T @ G_scaled)
+            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
+            + (float(lambda_mag) ** 2) * sp.identity(n_active, format="csr", dtype=np.float64)
+        ).tocsr()
+
+        # ── m0 físico → m̃0 escalado (m = Ws·m̃ ⇒ m̃ = m / ws_diag) ───────────
+        m0_active = m0[active_cells]
+        m_tilde0 = m0_active / ws_diag
+
+        # ── Filas nuevas Ũ = Wd_new·G_new·Ws y dato nuevo escalado ────────────
+        G_new = forward_model._build_sparse_kernel(
+            x_c_arr, y_c_active, z_c_arr, new_sensor_coords,
+        )                                                  # (k, n_active), física
+        sigma_new = _sigma_parametric(new_g_observed, noise_floor, noise_pct)
+        U_scaled = ((sp.diags(1.0 / sigma_new) @ G_new) @ Ws).toarray()   # (k, n_active)
+        d_tilde_new = new_g_observed / sigma_new
+
+        # ── Misfit en el dato nuevo ANTES (kernel físico sin escalar) ─────────
+        G_new_phys = G_new.tocsr()
+        d_norm = max(float(np.linalg.norm(new_g_observed)), 1e-30)
+        pred_before = G_new_phys @ m0_active
+        misfit_before = float(np.linalg.norm(pred_before - new_g_observed)) / d_norm
+
+        # ── Update de Woodbury rango-k (k resoluciones CG contra A congelada) ─
+        m_tilde1, info = woodbury_low_rank_update(
+            A, m_tilde0, U_scaled, d_tilde_new,
+            cg_maxiter=cg_maxiter, cg_rtol=cg_rtol,
+        )
+
+        m1_active = ws_diag * m_tilde1
+        if density_min is not None:
+            m1_active = np.maximum(m1_active, float(density_min))
+        if density_max is not None:
+            m1_active = np.minimum(m1_active, float(density_max))
+
+        pred_after = G_new_phys @ m1_active
+        misfit_after = float(np.linalg.norm(pred_after - new_g_observed)) / d_norm
+
+        model_full = np.array(m0, dtype=np.float64, copy=True)
+        model_full[active_cells] = m1_active
+
+        logger.info(
+            f"[Live update Woodbury] n_new={k} | "
+            f"update_norm={info['update_norm']:.4g} | cap_cond={info['capacitance_cond']:.3g} | "
+            f"misfit dato nuevo {misfit_before:.3g} → {misfit_after:.3g} (↓ mejor)"
+        )
+        return {
+            "model": model_full,
+            "update_norm": info["update_norm"],
+            "capacitance_cond": info["capacitance_cond"],
+            "new_data_misfit_before": misfit_before,
+            "new_data_misfit_after": misfit_after,
+            "n_new": int(k),
+        }
+
+    def live_update_suboctree(
+        self,
+        m0,
+        g_observed,
+        y_c,
+        forward_model,
+        sensor_coords,
+        x_c,
+        z_c,
+        region_center=None,
+        region_radius=None,
+        region_mask=None,
+        new_sensor_coords=None,
+        new_g_observed=None,
+        lambda_mag=1e-5,
+        alpha_spatial=1.0,
+        anchor_strength=1.0,
+        topography_elevations=None,
+        noise_floor=0.02,
+        noise_pct=0.02,
+        hx=None, hy=None, hz=None,
+        density_min=None,
+        density_max=None,
+        cg_maxiter: int = 500,
+        cg_rtol: float = 1e-8,
+    ):
+        """
+        FASE 8.2c (Live Update local — RE-SOLVE POR SUB-OCTREE) — refina SOLO una
+        sub-región local del modelo (las celdas cerca de un dato/sondaje nuevo) con el
+        resto del modelo CONGELADO como condición de frontera, en vez de actualizar todo
+        el volumen. Complementa el update global de Woodbury (live_update_add_data): la
+        corrección de sub-octree es la versión ESPACIALMENTE LOCALIZADA — geológicamente
+        sensata (un sondaje informa sobre todo su vecindad) y barata cuando |S| ≪ n.
+
+        Sea S el conjunto de celdas activas de la sub-región (por `region_mask`, o por
+        `region_center`+`region_radius`). El fondo S^c queda fijo en m0; su respuesta
+        d_bg = G_{S^c}·m0_{S^c} se RESTA del dato (existente + nuevo), y se re-resuelve un
+        problema inverso PEQUEÑO solo en S contra el residuo d_res = d − d_bg:
+
+            min_S ‖Wd(G_S m_S − d_res)‖² + λ_s²‖L̃_S m_S‖² + λ_anchor²‖m̃_S − m̃0_S‖²
+
+        en el espacio escalado (mismos Wd/Ws/L/depth-weighting que el solver). El ancla
+        λ_anchor (anchor_strength) sujeta las celdas de S a su valor previo donde el dato
+        no manda (evita que la sub-región derive). Se resuelve por CG sobre la normal SPD.
+
+        ALCANCE HONESTO: re-solve LINEAL (un paso Tikhonov/Gauss-Newton) con fondo
+        congelado — el fondo NO se reajusta (aproximación: ignora que celdas fuera de S
+        podrían también moverse); NO recomputa Ws/σ globales; honra cotas solo por el clip
+        final. Método de SOLO LECTURA; devuelve un modelo nuevo. Las celdas FUERA de S
+        quedan BYTE-IDÉNTICAS a m0 (propiedad clave del sub-octree).
+
+        Returns
+        -------
+        dict con:
+          model              : (total_voxels,) — densidad actualizada (S refinado, resto = m0).
+          region_size        : int — nº de celdas activas en S.
+          region_misfit_before / _after : float — ‖Wd(G·m − d)‖/‖Wd·d‖ del dato (exist.+nuevo)
+                               ANTES/DESPUÉS (debe bajar; mide la ganancia local).
+          update_norm        : float — ‖m_S_new − m0_S‖ (tamaño de la corrección local).
+        """
+        m0 = np.asarray(m0, dtype=np.float64)
+        g_observed = np.asarray(g_observed, dtype=np.float64)
+        y_c = np.asarray(y_c, dtype=np.float64)
+
+        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
+            raise ValueError(
+                "live_update_suboctree requiere forward_model, sensor_coords, x_c, z_c."
+            )
+        if m0.shape[0] != self.total_voxels:
+            raise ValueError(
+                f"m0 debe tener total_voxels={self.total_voxels} elementos, tiene {m0.shape[0]}."
+            )
+        if lambda_mag <= 0:
+            raise ValueError("lambda_mag debe ser > 0 (garantiza A SPD).")
+        if region_mask is None and (region_center is None or region_radius is None):
+            raise ValueError(
+                "Define la sub-región: 'region_mask' (bool) o 'region_center'+'region_radius'."
+            )
+
+        # ── Máscara de celdas activas (idéntica a estimate_posterior_std) ─────
+        if topography_elevations is None:
+            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
+        else:
+            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
+        voxel_top = y_c - (self.dy / 2.0)
+        active_cells = voxel_top >= topo_depth
+        n_active = int(np.sum(active_cells))
+        if n_active == 0:
+            raise ValueError("[Sub-octree] No hay celdas activas bajo la topografía dada.")
+
+        x_arr = np.asarray(x_c, dtype=np.float64)
+        z_arr = np.asarray(z_c, dtype=np.float64)
+        x_a = x_arr[active_cells]
+        y_a = y_c[active_cells]
+        z_a = z_arr[active_cells]
+
+        # ── Sub-región S (en índices LOCALES dentro de las activas) ───────────
+        if region_mask is not None:
+            region_mask = np.asarray(region_mask, dtype=bool).ravel()
+            if region_mask.shape[0] != self.total_voxels:
+                raise ValueError("region_mask debe tener total_voxels elementos.")
+            in_S_full = region_mask & active_cells
+            S_local = in_S_full[active_cells]
+        else:
+            cx, cy, cz = (float(region_center[0]), float(region_center[1]),
+                          float(region_center[2]))
+            r2 = float(region_radius) ** 2
+            S_local = ((x_a - cx) ** 2 + (y_a - cy) ** 2 + (z_a - cz) ** 2) <= r2
+        n_S = int(np.sum(S_local))
+        if n_S == 0:
+            raise ValueError("[Sub-octree] La sub-región no contiene celdas activas.")
+
+        # ── Dato combinado (existente + nuevo) y geometría de sensores ────────
+        sensors = np.asarray(sensor_coords, dtype=np.float64)
+        data = g_observed
+        if new_sensor_coords is not None and new_g_observed is not None:
+            new_sensor_coords = np.atleast_2d(np.asarray(new_sensor_coords, dtype=np.float64))
+            new_g_observed = np.atleast_1d(np.asarray(new_g_observed, dtype=np.float64)).ravel()
+            if new_g_observed.shape[0] != new_sensor_coords.shape[0]:
+                raise ValueError("new_g_observed debe tener un valor por sensor nuevo.")
+            sensors = np.vstack([sensors, new_sensor_coords])
+            data = np.concatenate([g_observed, new_g_observed])
+
+        # ── Kernel sobre TODAS las activas, columnas S vs fondo ───────────────
+        G_all = forward_model._build_sparse_kernel(x_a, y_a, z_a, sensors).tocsc()
+        G_S = G_all[:, S_local].tocsr()
+        m0_active = m0[active_cells]
+        bg_local = ~S_local
+        d_bg = G_all[:, bg_local] @ m0_active[bg_local]      # respuesta del fondo congelado
+        d_res = data - d_bg
+
+        # ── Wd + column scaling Ws (frozen, local a S) ────────────────────────
+        if noise_floor == 0.02 and noise_pct == 0.02:
+            sigma, _ = _sigma_adaptive(data, detect_outliers=False)
+        else:
+            sigma = _sigma_parametric(data, noise_floor, noise_pct)
+        Wd = sp.diags(1.0 / sigma)
+        G_Sw = Wd @ G_S
+        col_norms = np.maximum(np.sqrt(G_Sw.power(2).sum(axis=0)).A1, 1e-12)
+        ws_diag = 1.0 / col_norms
+        Ws = sp.diags(ws_diag)
+        G_scaled = (G_Sw @ Ws).tocsr()
+
+        # ── Laplaciano restringido a S + depth weighting, escalado ────────────
+        L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
+        L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+        L_S = L_active[S_local, :][:, S_local]
+        z0 = self.dy / 2.0
+        true_depth = np.clip(y_a[S_local] - topo_depth[active_cells][S_local],
+                             a_min=1.0, a_max=None)
+        w_reg = 1.0 / ((true_depth + z0) ** 2.0)
+        w_reg = w_reg / np.mean(w_reg)
+        L_scaled = ((sp.diags(w_reg) @ L_S) @ Ws).tocsr()
+
+        lambda_spatial = float(alpha_spatial) * (len(data) / n_S)
+        lambda_anchor = float(anchor_strength) * float(lambda_mag) ** 0.5 + float(lambda_mag)
+
+        # ── Normal SPD pequeña en S + término de ancla hacia m0_S ─────────────
+        m_tilde0_S = m0_active[S_local] / ws_diag        # prior en espacio escalado
+        A_S = (
+            (G_scaled.T @ G_scaled)
+            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
+            + (lambda_anchor ** 2) * sp.identity(n_S, format="csr", dtype=np.float64)
+        ).tocsr()
+        b_S = (
+            G_scaled.T @ (Wd @ d_res)
+            + (lambda_anchor ** 2) * m_tilde0_S
+        )
+
+        from scipy.sparse.linalg import cg as _cg, LinearOperator as _LO
+        diagA = np.maximum(A_S.diagonal(), 1e-30)
+        M = _LO((n_S, n_S), matvec=lambda v: v / diagA)
+        m_tilde1_S, _info = _cg(A_S, b_S, rtol=cg_rtol, atol=0.0, maxiter=cg_maxiter, M=M)
+
+        m1_S = ws_diag * m_tilde1_S
+        if density_min is not None:
+            m1_S = np.maximum(m1_S, float(density_min))
+        if density_max is not None:
+            m1_S = np.minimum(m1_S, float(density_max))
+
+        # ── Misfit ponderado del dato (exist.+nuevo) antes/después ────────────
+        Wd_data_norm = max(float(np.linalg.norm(Wd @ data)), 1e-30)
+        pred_before = G_all @ m0_active
+        misfit_before = float(np.linalg.norm(Wd @ (pred_before - data))) / Wd_data_norm
+        m1_active = m0_active.copy()
+        m1_active[S_local] = m1_S
+        pred_after = G_all @ m1_active
+        misfit_after = float(np.linalg.norm(Wd @ (pred_after - data))) / Wd_data_norm
+
+        model_full = np.array(m0, dtype=np.float64, copy=True)
+        # Solo S cambia; el resto queda BYTE-IDÉNTICO a m0 (incluidas celdas de aire).
+        full_S = np.zeros(self.total_voxels, dtype=bool)
+        full_S[np.where(active_cells)[0][S_local]] = True
+        model_full[full_S] = m1_S
+
+        update_norm = float(np.linalg.norm(m1_S - m0_active[S_local]))
+        logger.info(
+            f"[Live update sub-octree] |S|={n_S}/{n_active} activas | "
+            f"update_norm={update_norm:.4g} | "
+            f"misfit dato {misfit_before:.3g} → {misfit_after:.3g} (↓ mejor)"
+        )
+        return {
+            "model": model_full,
+            "region_size": n_S,
+            "region_misfit_before": misfit_before,
+            "region_misfit_after": misfit_after,
+            "update_norm": update_norm,
+        }
 
 
 def compute_jacobian_dask(

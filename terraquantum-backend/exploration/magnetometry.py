@@ -1818,6 +1818,594 @@ class MagnetometryInversion:
         )
         return posterior_std_full
 
+    def null_space_shuttle_ensemble(
+        self,
+        m0,
+        d_observed,
+        y_c,
+        forward_model,
+        sensor_coords,
+        x_c,
+        z_c,
+        lambda_mag=1e-4,
+        alpha_spatial=1.0,
+        topography_elevations=None,
+        noise_floor=0.02,
+        noise_pct=0.02,
+        depth_beta: float = 1.5,
+        hx=None, hy=None, hz=None,
+        override_kernel=None,
+        n_shuttles: int = 12,
+        shuttle_scale: float = 0.5,
+        smooth_strength: float = 5.0,
+        susceptibility_min=None,
+        susceptibility_max=None,
+        mu: float = 1e-3,
+        cg_maxiter: int = 300,
+        cg_rtol: float = 1e-6,
+        seed: int = 0,
+    ):
+        """
+        FASE 8.1b (peldaño 1 de la escalera de UQ — PARIDAD MAGNÉTICA) — Ensemble de
+        modelos de SUSCEPTIBILIDAD por "null-space shuttle". Espejo exacto de
+        gravimetry.null_space_shuttle_ensemble adaptado al scaling del motor magnético.
+
+        Toma la solución invertida `m0` (susceptibilidad por vóxel, SI) y genera
+        `n_shuttles` MODELOS ALTERNATIVOS que ajustan el dato TMI esencialmente igual de
+        bien, perturbándola a lo largo de direcciones del espacio nulo de datos del
+        operador directo escalado (mismos Wd/Wz_inv/L que solve_magnetic_inversion_lsqr
+        y que estimate_posterior_std). El abanico mide la NO-UNICIDAD: dónde el dato fija
+        la susceptibilidad (modelos coinciden, σ_ens baja) y dónde no (modelos divergen,
+        σ_ens alta) — complementa la σ posterior lineal de Hutchinson, que es la
+        covarianza alrededor de UN óptimo y NO ve esta cara de la incertidumbre.
+
+        DIFERENCIA CLAVE con gravedad: el motor magnético NO tiene column scaling Ws;
+        su cambio de variable es Li & Oldenburg m̃ = Wz·m (depth weighting), idéntico al
+        solver y a estimate_posterior_std. Las direcciones se generan en el espacio
+        escalado m̃ y se devuelven a unidades físicas multiplicando por Wz_inv = diag de
+        (depth+z0)^{+β/2} (no por Ws). Se suavizan con (I + smooth_strength·L̃ᵀL̃) para
+        que las alternativas sean lisas (campos correlacionados, plausibles), no ruido
+        blanco. La amplitud de cada shuttle se fija a `shuttle_scale·(escala robusta de
+        m0)` y, si se dan, los modelos se recortan a [susceptibility_min,
+        susceptibility_max] (el clip puede reintroducir un residuo de dato pequeño; por
+        eso se reporta data_fit_preserved SIN clip).
+
+        ALCANCE HONESTO (idéntico a gravedad): muestreo de la no-unicidad LINEAL
+        alrededor de la solución regularizada; NO es un posterior bayesiano, no captura
+        no-linealidad fuerte, error de modelo/topografía ni el prior completo. Los
+        peldaños superiores (SVGD recocido, HMC/difusión) son R&D pendiente.
+
+        Método de SOLO LECTURA: no altera la solución ni el estado del solver.
+
+        Returns
+        -------
+        dict con:
+          ensemble        : (n_shuttles, total_voxels) — modelos alternativos (aire=NaN).
+          ensemble_std    : (total_voxels,) — σ del ensemble por vóxel (aire=NaN).
+          ensemble_mean   : (total_voxels,) — media del ensemble por vóxel (aire=NaN).
+          data_fit_preserved : float — ratio medio ‖Gδ‖/‖Gs‖ (↓ mejor; honestidad).
+          null_fraction   : float — fracción media de núcleo (↑ más no-unicidad).
+          n_shuttles      : int.
+        """
+        # Helper genérico de álgebra lineal (no física): reutilizado, no copiado.
+        from exploration.gravimetry import null_space_shuttle_directions
+        from scipy.sparse.linalg import cg as _cg, LinearOperator as _LO
+
+        m0 = np.asarray(m0, dtype=np.float64)
+        d_observed = np.asarray(d_observed, dtype=np.float64)
+        y_c = np.asarray(y_c, dtype=np.float64)
+
+        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
+            raise ValueError(
+                "null_space_shuttle_ensemble requiere forward_model, sensor_coords, x_c, z_c."
+            )
+        if m0.shape[0] != self.total_voxels:
+            raise ValueError(
+                f"m0 debe tener total_voxels={self.total_voxels} elementos, tiene {m0.shape[0]}."
+            )
+
+        # ── Máscara de celdas activas (idéntica a solve_magnetic_inversion_lsqr) ──
+        if topography_elevations is None:
+            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
+        else:
+            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
+        voxel_top = y_c - (self.dy / 2.0)
+        active_cells = voxel_top >= topo_depth
+        n_active = int(np.sum(active_cells))
+        if n_active == 0:
+            raise ValueError("[UQ MAG shuttle] No hay celdas activas bajo la topografía dada.")
+
+        n_sensors = len(d_observed)
+        y_c_active = y_c[active_cells]
+        x_c_arr = np.asarray(x_c, dtype=np.float64)
+        z_c_arr = np.asarray(z_c, dtype=np.float64)
+
+        if override_kernel is not None:
+            G_active = override_kernel
+            if G_active.shape != (n_sensors, n_active):
+                raise ValueError(
+                    f"override_kernel shape {G_active.shape} no coincide con "
+                    f"(n_obs={n_sensors}, n_active={n_active})."
+                )
+        else:
+            G_active = forward_model._build_sparse_kernel(
+                x_c_arr[active_cells], y_c_active, z_c_arr[active_cells],
+                np.asarray(sensor_coords, dtype=np.float64),
+            )
+
+        # ── Data weighting Wd (sigma adaptivo, igual que el solver / σ posterior) ──
+        if noise_floor == 0.02 and noise_pct == 0.02:
+            sigma, _ = _sigma_adaptive(d_observed, detect_outliers=False)
+        else:
+            sigma = sigma_parametric(d_observed, noise_floor, noise_pct)
+        Wd = sp.diags(1.0 / sigma)
+        G_w = Wd @ G_active
+
+        # ── Cambio de variable Li & Oldenburg: Wz_inv = diag((depth+z0)^{+β/2}) ──
+        # (idéntico al solver y a estimate_posterior_std: NO hay column scaling Ws
+        # en el motor magnético; el "scaling" ES el depth weighting).
+        z0 = 0.5 * self.dy
+        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
+        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
+        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
+        Wz_inv = sp.diags(wz_inv_diag)
+        G_scaled = (G_w @ Wz_inv).tocsr()
+
+        # ── Operador de suavizado (I + γ L̃ᵀL̃) reducido a activas y escalado ───
+        smooth_op = None
+        if smooth_strength and smooth_strength > 0:
+            L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
+            L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+            L_scaled = (L_active @ Wz_inv).tocsr()
+            LtL = (L_scaled.T @ L_scaled).tocsr()
+            S = (sp.identity(n_active, format="csr") + float(smooth_strength) * LtL).tocsr()
+            diag_S = np.maximum(S.diagonal(), 1e-30)
+            M_s = _LO((n_active, n_active), matvec=lambda v: v / diag_S)
+
+            def _smooth(v):
+                x, _ = _cg(S, v, rtol=1e-6, atol=0.0, maxiter=cg_maxiter, M=M_s)
+                return x
+
+            smooth_op = _LO((n_active, n_active), matvec=_smooth)
+
+        # ── Direcciones de espacio nulo (matrix-free, reproducibles) ──────────
+        directions, preserved, null_fraction = null_space_shuttle_directions(
+            G_scaled, n_shuttles=n_shuttles, mu=mu, smooth_op=smooth_op,
+            cg_maxiter=cg_maxiter, cg_rtol=cg_rtol, seed=seed,
+        )
+
+        # ── Amplitud física por shuttle y construcción de alternativas ────────
+        m0_active = m0[active_cells]
+        # Escala robusta de la solución: MAD→σ, con piso por si el modelo es ~plano.
+        med = np.median(m0_active)
+        robust = 1.4826 * np.median(np.abs(m0_active - med))
+        amp_ref = max(robust, 1e-6)
+        amp = float(shuttle_scale) * amp_ref
+
+        ensemble = np.full((int(n_shuttles), self.total_voxels), np.nan, dtype=np.float64)
+        for k in range(int(n_shuttles)):
+            # direction está en espacio escalado (m̃ = Wz·m); a físico vía Wz_inv.
+            d_phys = wz_inv_diag * directions[k]
+            peak = np.max(np.abs(d_phys))
+            if peak > 1e-300:
+                d_phys = d_phys * (amp / peak)
+            member = m0_active + d_phys
+            if susceptibility_min is not None:
+                member = np.maximum(member, float(susceptibility_min))
+            if susceptibility_max is not None:
+                member = np.minimum(member, float(susceptibility_max))
+            ensemble[k, active_cells] = member
+
+        ens_active = ensemble[:, active_cells]
+        std_active = np.std(ens_active, axis=0)
+        mean_active = np.mean(ens_active, axis=0)
+
+        ensemble_std = np.full(self.total_voxels, np.nan, dtype=np.float64)
+        ensemble_mean = np.full(self.total_voxels, np.nan, dtype=np.float64)
+        ensemble_std[active_cells] = std_active
+        ensemble_mean[active_cells] = mean_active
+
+        preserved_mean = float(np.mean(preserved))
+        null_fraction_mean = float(np.mean(null_fraction))
+        logger.info(
+            f"[UQ MAG null-space shuttle] n={n_shuttles} | "
+            f"sigma_ens_med={float(np.median(std_active)):.4g} SI | "
+            f"sigma_ens_p95={float(np.percentile(std_active, 95)):.4g} SI | "
+            f"data_fit_preserved={preserved_mean:.3g} (‖Gδ‖/‖Gs‖, ↓ mejor) | "
+            f"null_fraction={null_fraction_mean:.3g} (núcleo presente; ↑ más no-unicidad)"
+        )
+        return {
+            "ensemble": ensemble,
+            "ensemble_std": ensemble_std,
+            "ensemble_mean": ensemble_mean,
+            "data_fit_preserved": preserved_mean,
+            "null_fraction": null_fraction_mean,
+            "n_shuttles": int(n_shuttles),
+        }
+
+    def live_update_add_data(
+        self,
+        m0,
+        d_observed,
+        y_c,
+        forward_model,
+        sensor_coords,
+        x_c,
+        z_c,
+        new_sensor_coords,
+        new_d_observed,
+        lambda_mag=1e-4,
+        alpha_spatial=1.0,
+        topography_elevations=None,
+        noise_floor=0.02,
+        noise_pct=0.02,
+        depth_beta: float = 1.5,
+        hx=None, hy=None, hz=None,
+        override_kernel=None,
+        susceptibility_min=None,
+        susceptibility_max=None,
+        cg_maxiter: int = 500,
+        cg_rtol: float = 1e-8,
+    ):
+        """
+        FASE 8.2b (Live Update local — PARIDAD MAGNÉTICA) — incorpora k OBSERVACIONES
+        TMI NUEVAS a una solución de susceptibilidad ya invertida `m0` SIN re-correr el
+        pipeline, vía actualización de Woodbury rango-k (helper genérico
+        woodbury_low_rank_update, REUSADO por import). Espejo exacto de
+        gravimetry.live_update_add_data adaptado al scaling del motor magnético.
+
+        DIFERENCIA CLAVE con gravedad: el motor magnético NO tiene column scaling Ws; su
+        cambio de variable es Li & Oldenburg m̃ = Wz·m (depth weighting, β=1.5), idéntico
+        al solver y a estimate_posterior_std. La A congelada
+        (A = G̃ᵀG̃ + λ_s²·L̃ᵀL̃ + λ_mag²·I con G̃ = Wd·G·Wz_inv, L̃ = L·Wz_inv) y el Wz_inv
+        salen del dato EXISTENTE; las filas nuevas se ponderan con σ paramétrico del dato
+        nuevo y se llevan al mismo espacio escalado. Tras el update se vuelve a SI y, si
+        se dan, se recorta a [susceptibility_min, susceptibility_max].
+
+        ALCANCE HONESTO (idéntico a gravedad): actualización EXACTA de la solución de
+        mínimos cuadrados LINEAL regularizada con operadores congelados; NO es un re-solve
+        acotado desde cero (que recomputaría σ y daría otra solución también válida), NO
+        re-localiza por sub-octree, NO honra cotas salvo el clip final. Método de SOLO
+        LECTURA sobre el estado del solver; devuelve un modelo nuevo. Propiedad no-op: si
+        el dato nuevo ya coincide con la predicción actual, el modelo no cambia.
+
+        Returns
+        -------
+        dict con:
+          model            : (total_voxels,) — susceptibilidad actualizada (aire = como en m0).
+          update_norm      : float — ‖m1−m0‖ en el espacio escalado.
+          capacitance_cond : float — número de condición de la capacitancia (salud del update).
+          new_data_misfit_before / _after : float — ‖G_new·m − d_new‖/‖d_new‖ ANTES/DESPUÉS.
+          n_new            : int — número de observaciones nuevas incorporadas.
+        """
+        from exploration.gravimetry import woodbury_low_rank_update
+
+        m0 = np.asarray(m0, dtype=np.float64)
+        d_observed = np.asarray(d_observed, dtype=np.float64)
+        y_c = np.asarray(y_c, dtype=np.float64)
+        new_sensor_coords = np.atleast_2d(np.asarray(new_sensor_coords, dtype=np.float64))
+        new_d_observed = np.atleast_1d(np.asarray(new_d_observed, dtype=np.float64)).ravel()
+
+        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
+            raise ValueError(
+                "live_update_add_data requiere forward_model, sensor_coords, x_c, z_c."
+            )
+        if m0.shape[0] != self.total_voxels:
+            raise ValueError(
+                f"m0 debe tener total_voxels={self.total_voxels} elementos, tiene {m0.shape[0]}."
+            )
+        if lambda_mag <= 0:
+            raise ValueError("lambda_mag debe ser > 0 (garantiza A SPD).")
+        k = new_sensor_coords.shape[0]
+        if new_d_observed.shape[0] != k:
+            raise ValueError(
+                f"new_d_observed debe tener {k} elementos (uno por sensor nuevo), "
+                f"tiene {new_d_observed.shape[0]}."
+            )
+
+        # ── Máscara de celdas activas (idéntica a estimate_posterior_std) ─────
+        if topography_elevations is None:
+            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
+        else:
+            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
+        voxel_top = y_c - (self.dy / 2.0)
+        active_cells = voxel_top >= topo_depth
+        n_active = int(np.sum(active_cells))
+        if n_active == 0:
+            raise ValueError("[Live update MAG] No hay celdas activas bajo la topografía dada.")
+
+        n_sensors = len(d_observed)
+        y_c_active = y_c[active_cells]
+        x_c_arr = np.asarray(x_c, dtype=np.float64)[active_cells]
+        z_c_arr = np.asarray(z_c, dtype=np.float64)[active_cells]
+
+        # ── A congelada (Wd, Wz_inv, L_scaled, λ_spatial) IDÉNTICA a la σ posterior ─
+        if override_kernel is not None:
+            G_active = override_kernel
+            if G_active.shape != (n_sensors, n_active):
+                raise ValueError(
+                    f"override_kernel shape {G_active.shape} no coincide con "
+                    f"(n_obs={n_sensors}, n_active={n_active})."
+                )
+        else:
+            G_active = forward_model._build_sparse_kernel(
+                x_c_arr, y_c_active, z_c_arr, np.asarray(sensor_coords, dtype=np.float64),
+            )
+        if noise_floor == 0.02 and noise_pct == 0.02:
+            sigma, _ = _sigma_adaptive(d_observed, detect_outliers=False)
+        else:
+            sigma = sigma_parametric(d_observed, noise_floor, noise_pct)
+        Wd = sp.diags(1.0 / sigma)
+        G_w = Wd @ G_active
+
+        z0 = 0.5 * self.dy
+        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
+        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
+        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
+        Wz_inv = sp.diags(wz_inv_diag)
+        G_scaled = (G_w @ Wz_inv).tocsr()
+
+        L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
+        L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+        L_scaled = (L_active @ Wz_inv).tocsr()
+
+        lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
+        A = (
+            (G_scaled.T @ G_scaled)
+            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
+            + (float(lambda_mag) ** 2) * sp.identity(n_active, format="csr", dtype=np.float64)
+        ).tocsr()
+
+        # ── m0 físico → m̃0 escalado (m = Wz_inv·m̃ ⇒ m̃ = m / wz_inv_diag) ────
+        m0_active = m0[active_cells]
+        m_tilde0 = m0_active / wz_inv_diag
+
+        # ── Filas nuevas Ũ = Wd_new·G_new·Wz_inv y dato nuevo escalado ────────
+        G_new = forward_model._build_sparse_kernel(
+            x_c_arr, y_c_active, z_c_arr, new_sensor_coords,
+        )                                                  # (k, n_active), física
+        sigma_new = sigma_parametric(new_d_observed, noise_floor, noise_pct)
+        U_scaled = ((sp.diags(1.0 / sigma_new) @ G_new) @ Wz_inv).toarray()   # (k, n_active)
+        d_tilde_new = new_d_observed / sigma_new
+
+        # ── Misfit en el dato nuevo ANTES (kernel físico sin escalar) ─────────
+        G_new_phys = G_new.tocsr()
+        d_norm = max(float(np.linalg.norm(new_d_observed)), 1e-30)
+        pred_before = G_new_phys @ m0_active
+        misfit_before = float(np.linalg.norm(pred_before - new_d_observed)) / d_norm
+
+        # ── Update de Woodbury rango-k (k resoluciones CG contra A congelada) ─
+        m_tilde1, info = woodbury_low_rank_update(
+            A, m_tilde0, U_scaled, d_tilde_new,
+            cg_maxiter=cg_maxiter, cg_rtol=cg_rtol,
+        )
+
+        m1_active = wz_inv_diag * m_tilde1
+        if susceptibility_min is not None:
+            m1_active = np.maximum(m1_active, float(susceptibility_min))
+        if susceptibility_max is not None:
+            m1_active = np.minimum(m1_active, float(susceptibility_max))
+
+        pred_after = G_new_phys @ m1_active
+        misfit_after = float(np.linalg.norm(pred_after - new_d_observed)) / d_norm
+
+        model_full = np.array(m0, dtype=np.float64, copy=True)
+        model_full[active_cells] = m1_active
+
+        logger.info(
+            f"[Live update MAG Woodbury] n_new={k} | "
+            f"update_norm={info['update_norm']:.4g} | cap_cond={info['capacitance_cond']:.3g} | "
+            f"misfit dato nuevo {misfit_before:.3g} → {misfit_after:.3g} (↓ mejor)"
+        )
+        return {
+            "model": model_full,
+            "update_norm": info["update_norm"],
+            "capacitance_cond": info["capacitance_cond"],
+            "new_data_misfit_before": misfit_before,
+            "new_data_misfit_after": misfit_after,
+            "n_new": int(k),
+        }
+
+    def live_update_suboctree(
+        self,
+        m0,
+        d_observed,
+        y_c,
+        forward_model,
+        sensor_coords,
+        x_c,
+        z_c,
+        region_center=None,
+        region_radius=None,
+        region_mask=None,
+        new_sensor_coords=None,
+        new_d_observed=None,
+        lambda_mag=1e-4,
+        alpha_spatial=1.0,
+        anchor_strength=1.0,
+        topography_elevations=None,
+        noise_floor=0.02,
+        noise_pct=0.02,
+        depth_beta: float = 1.5,
+        hx=None, hy=None, hz=None,
+        susceptibility_min=None,
+        susceptibility_max=None,
+        cg_maxiter: int = 500,
+        cg_rtol: float = 1e-8,
+    ):
+        """
+        FASE 8.2d (Live Update local — RE-SOLVE POR SUB-OCTREE, PARIDAD MAGNÉTICA) —
+        refina SOLO una sub-región local del modelo de susceptibilidad con el resto del
+        modelo CONGELADO. Espejo de gravimetry.live_update_suboctree adaptado al scaling
+        del motor magnético (Wz_inv depth weighting Li & Oldenburg β=1.5 en vez de column
+        scaling Ws; unidades SI; bounds de susceptibilidad).
+
+        Sea S la sub-región (por `region_mask` o `region_center`+`region_radius`). El fondo
+        S^c queda fijo en m0; su respuesta d_bg = G_{S^c}·m0_{S^c} se RESTA del dato TMI
+        (existente + nuevo) y se re-resuelve un problema inverso PEQUEÑO solo en S contra
+        el residuo:
+
+            min_S ‖Wd(G_S m_S − d_res)‖² + λ_s²‖L̃_S m_S‖² + λ_anchor²‖m̃_S − m̃0_S‖²
+
+        en el espacio escalado m̃ = Wz·m. El ancla λ_anchor sujeta S a su valor previo
+        donde el dato no manda. Se resuelve por CG sobre la normal SPD.
+
+        ALCANCE HONESTO (idéntico a gravedad): re-solve LINEAL de un paso con fondo
+        congelado (el fondo NO se reajusta — aproximación), NO recomputa σ global, honra
+        cotas solo por el clip final. Método de SOLO LECTURA; las celdas FUERA de S quedan
+        BYTE-IDÉNTICAS a m0 (propiedad clave del sub-octree).
+
+        Returns
+        -------
+        dict con: model (total_voxels), region_size, region_misfit_before/_after,
+        update_norm. (Espejo del de gravimetría.)
+        """
+        from scipy.sparse.linalg import cg as _cg, LinearOperator as _LO
+
+        m0 = np.asarray(m0, dtype=np.float64)
+        d_observed = np.asarray(d_observed, dtype=np.float64)
+        y_c = np.asarray(y_c, dtype=np.float64)
+
+        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
+            raise ValueError(
+                "live_update_suboctree requiere forward_model, sensor_coords, x_c, z_c."
+            )
+        if m0.shape[0] != self.total_voxels:
+            raise ValueError(
+                f"m0 debe tener total_voxels={self.total_voxels} elementos, tiene {m0.shape[0]}."
+            )
+        if lambda_mag <= 0:
+            raise ValueError("lambda_mag debe ser > 0 (garantiza A SPD).")
+        if region_mask is None and (region_center is None or region_radius is None):
+            raise ValueError(
+                "Define la sub-región: 'region_mask' (bool) o 'region_center'+'region_radius'."
+            )
+
+        # ── Máscara de celdas activas ─────────────────────────────────────────
+        if topography_elevations is None:
+            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
+        else:
+            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
+        voxel_top = y_c - (self.dy / 2.0)
+        active_cells = voxel_top >= topo_depth
+        n_active = int(np.sum(active_cells))
+        if n_active == 0:
+            raise ValueError("[Sub-octree MAG] No hay celdas activas bajo la topografía dada.")
+
+        x_arr = np.asarray(x_c, dtype=np.float64)
+        z_arr = np.asarray(z_c, dtype=np.float64)
+        x_a = x_arr[active_cells]
+        y_a = y_c[active_cells]
+        z_a = z_arr[active_cells]
+
+        # ── Sub-región S (índices LOCALES dentro de las activas) ──────────────
+        if region_mask is not None:
+            region_mask = np.asarray(region_mask, dtype=bool).ravel()
+            if region_mask.shape[0] != self.total_voxels:
+                raise ValueError("region_mask debe tener total_voxels elementos.")
+            S_local = (region_mask & active_cells)[active_cells]
+        else:
+            cx, cy, cz = (float(region_center[0]), float(region_center[1]),
+                          float(region_center[2]))
+            r2 = float(region_radius) ** 2
+            S_local = ((x_a - cx) ** 2 + (y_a - cy) ** 2 + (z_a - cz) ** 2) <= r2
+        n_S = int(np.sum(S_local))
+        if n_S == 0:
+            raise ValueError("[Sub-octree MAG] La sub-región no contiene celdas activas.")
+
+        # ── Dato combinado (existente + nuevo) ────────────────────────────────
+        sensors = np.asarray(sensor_coords, dtype=np.float64)
+        data = d_observed
+        if new_sensor_coords is not None and new_d_observed is not None:
+            new_sensor_coords = np.atleast_2d(np.asarray(new_sensor_coords, dtype=np.float64))
+            new_d_observed = np.atleast_1d(np.asarray(new_d_observed, dtype=np.float64)).ravel()
+            if new_d_observed.shape[0] != new_sensor_coords.shape[0]:
+                raise ValueError("new_d_observed debe tener un valor por sensor nuevo.")
+            sensors = np.vstack([sensors, new_sensor_coords])
+            data = np.concatenate([d_observed, new_d_observed])
+
+        # ── Kernel sobre TODAS las activas, columnas S vs fondo ───────────────
+        G_all = forward_model._build_sparse_kernel(x_a, y_a, z_a, sensors).tocsc()
+        G_S = G_all[:, S_local].tocsr()
+        m0_active = m0[active_cells]
+        bg_local = ~S_local
+        d_bg = G_all[:, bg_local] @ m0_active[bg_local]
+        d_res = data - d_bg
+
+        # ── Wd (frozen) ───────────────────────────────────────────────────────
+        if noise_floor == 0.02 and noise_pct == 0.02:
+            sigma, _ = _sigma_adaptive(data, detect_outliers=False)
+        else:
+            sigma = sigma_parametric(data, noise_floor, noise_pct)
+        Wd = sp.diags(1.0 / sigma)
+        G_Sw = Wd @ G_S
+
+        # ── Cambio de variable Li & Oldenburg local a S (Wz_inv, NO Ws) ───────
+        z0 = 0.5 * self.dy
+        true_depth = np.clip(y_a[S_local] - topo_depth[active_cells][S_local],
+                             a_min=1.0, a_max=None)
+        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
+        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
+        Wz_inv = sp.diags(wz_inv_diag)
+        G_scaled = (G_Sw @ Wz_inv).tocsr()
+
+        # ── Laplaciano restringido a S y escalado: L̃_S = L_S·Wz_inv ──────────
+        L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
+        L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+        L_S = L_active[S_local, :][:, S_local]
+        L_scaled = (L_S @ Wz_inv).tocsr()
+
+        lambda_spatial = float(alpha_spatial) * (len(data) / n_S)
+        lambda_anchor = float(anchor_strength) * float(lambda_mag) ** 0.5 + float(lambda_mag)
+
+        m_tilde0_S = m0_active[S_local] / wz_inv_diag
+        A_S = (
+            (G_scaled.T @ G_scaled)
+            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
+            + (lambda_anchor ** 2) * sp.identity(n_S, format="csr", dtype=np.float64)
+        ).tocsr()
+        b_S = (
+            G_scaled.T @ (Wd @ d_res)
+            + (lambda_anchor ** 2) * m_tilde0_S
+        )
+
+        diagA = np.maximum(A_S.diagonal(), 1e-30)
+        M = _LO((n_S, n_S), matvec=lambda v: v / diagA)
+        m_tilde1_S, _info = _cg(A_S, b_S, rtol=cg_rtol, atol=0.0, maxiter=cg_maxiter, M=M)
+
+        m1_S = wz_inv_diag * m_tilde1_S
+        if susceptibility_min is not None:
+            m1_S = np.maximum(m1_S, float(susceptibility_min))
+        if susceptibility_max is not None:
+            m1_S = np.minimum(m1_S, float(susceptibility_max))
+
+        Wd_data_norm = max(float(np.linalg.norm(Wd @ data)), 1e-30)
+        pred_before = G_all @ m0_active
+        misfit_before = float(np.linalg.norm(Wd @ (pred_before - data))) / Wd_data_norm
+        m1_active = m0_active.copy()
+        m1_active[S_local] = m1_S
+        pred_after = G_all @ m1_active
+        misfit_after = float(np.linalg.norm(Wd @ (pred_after - data))) / Wd_data_norm
+
+        model_full = np.array(m0, dtype=np.float64, copy=True)
+        full_S = np.zeros(self.total_voxels, dtype=bool)
+        full_S[np.where(active_cells)[0][S_local]] = True
+        model_full[full_S] = m1_S
+
+        update_norm = float(np.linalg.norm(m1_S - m0_active[S_local]))
+        logger.info(
+            f"[Live update MAG sub-octree] |S|={n_S}/{n_active} activas | "
+            f"update_norm={update_norm:.4g} | "
+            f"misfit dato {misfit_before:.3g} → {misfit_after:.3g} (↓ mejor)"
+        )
+        return {
+            "model": model_full,
+            "region_size": n_S,
+            "region_misfit_before": misfit_before,
+            "region_misfit_after": misfit_after,
+            "update_norm": update_norm,
+        }
+
     def solve_mvi_inversion_lsqr(
         self,
         d_observed,                     # anomalía TMI observada (nT), una por sensor
