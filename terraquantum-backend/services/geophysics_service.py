@@ -3023,6 +3023,54 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         except Exception as _dt_exc:
             _log.warning("drill_targets_nonfatal", error=str(_dt_exc))
 
+    # ── FASE 8.1: ensemble null-space (mapa de no-unicidad, opt-in non-fatal) ─
+    # Abanico de modelos data-consistentes por proyección al espacio nulo; su σ por
+    # vóxel mide la NO-UNICIDAD (dónde el dato NO fija la densidad), complementando la
+    # σ posterior de Hutchinson (covarianza alrededor de UN óptimo). Mismos operadores
+    # que el solve principal; sobre el modelo padded, reducido a core.
+    ensemble_uncertainty_summary = None
+    if getattr(params, "compute_ensemble_uncertainty", False):
+        try:
+            _ens = inversor_padded.null_space_shuttle_ensemble(
+                est_density_full, g_observed, y_c_full, forward, sensor_coords,
+                x_c_full, z_c_full,
+                lambda_mag=_lambda_mag,
+                alpha_spatial=params.alpha_spatial,
+                topography_elevations=_topography_elevations_padded,
+                hx=hx, hy=hy, hz=hz,
+                n_shuttles=int(getattr(params, "ensemble_n_shuttles", 12)),
+                density_min=params.density_min,
+                density_max=params.density_max,
+            )
+            _ens_std_core = np.asarray(_ens["ensemble_std"], dtype=float)[is_core]
+            _ens_fin = _ens_std_core[np.isfinite(_ens_std_core)]
+            ensemble_uncertainty_summary = {
+                "computed": True,
+                "unit": "t/m3",
+                "n_shuttles": int(_ens.get("n_shuttles", 0)),
+                "p50": round(float(np.percentile(_ens_fin, 50)), 6) if _ens_fin.size else None,
+                "p95": round(float(np.percentile(_ens_fin, 95)), 6) if _ens_fin.size else None,
+                "max": round(float(np.max(_ens_fin)), 6) if _ens_fin.size else None,
+                "n_voxels": int(_ens_fin.size),
+                "null_fraction": round(float(_ens.get("null_fraction", 0.0)), 6),
+                "data_fit_preserved": round(float(_ens.get("data_fit_preserved", 0.0)), 6),
+                "method": "null_space_shuttle_ensemble_linear",
+                "note": (
+                    "σ del ENSEMBLE por vóxel (no-unicidad): abanico de modelos que ajustan "
+                    "el dato igual de bien, perturbados por el espacio nulo de datos. Spread "
+                    "alto = la densidad ahí NO está restringida por el dato (típico en "
+                    "profundidad). Complementa la σ posterior de Hutchinson; ambas son "
+                    "LINEALES alrededor de la solución. null_fraction alto = más no-unicidad."
+                ),
+            }
+            _log.info(
+                "ensemble_uncertainty_done",
+                n=int(_ens.get("n_shuttles", 0)),
+                null_fraction=round(float(_ens.get("null_fraction", 0.0)), 4),
+            )
+        except Exception as _ens_exc:
+            _log.warning("ensemble_uncertainty_nonfatal", error=str(_ens_exc))
+
     # ── DOI: doble inversión con modelos de referencia (Li & Oldenburg 1999) ──
     # Inversión 1 (m_ref1) es IDÉNTICA a la corrida principal de arriba (mismo m_ref):
     # por eso m1 = est_density principal y solo se ejecuta UNA inversión extra, con
@@ -3567,6 +3615,12 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             "computed": False,
             "method": "probabilistic_targeting_linear_gaussian_posterior_nms3d",
             "note": "No calculado (compute_drill_targets=False o no disponible).",
+        },
+        # ── FASE 8.1: ensemble null-space (no-unicidad; null si flag OFF) ─────
+        "ensembleUncertainty": ensemble_uncertainty_summary or {
+            "computed": False,
+            "method": "null_space_shuttle_ensemble_linear",
+            "note": "No calculado (compute_ensemble_uncertainty=False o no disponible).",
         },
         "anomalyPath": str(anomaly_ref.path),
         "legacyBlockModelPath": str(DEFAULT_BLOCK_MODEL_PATH),

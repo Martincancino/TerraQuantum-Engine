@@ -424,6 +424,18 @@ class GeophysicsInvertInput(BaseModel):
         pattern="^(expected_exceedance|exceedance_prob|lower_confidence_bound)$",
         description="FASE 8.3: métrica de orden del ranking de blancos.",
     )
+    # ── FASE 8.1 (God-Tier): ensemble null-space (mapa de no-unicidad) ─────────
+    # Genera un abanico de modelos data-consistentes por proyección al espacio nulo;
+    # su σ por vóxel mide la NO-UNICIDAD (complementa la σ posterior de Hutchinson).
+    # OFF por defecto (byte-idéntico). Costo extra (n_shuttles resoluciones CG).
+    compute_ensemble_uncertainty: bool = Field(
+        False,
+        description="FASE 8.1: ensemble null-space (σ de no-unicidad por vóxel). OFF por defecto.",
+    )
+    ensemble_n_shuttles: int = Field(
+        12, ge=2, le=64,
+        description="FASE 8.1: nº de direcciones de espacio nulo del ensemble.",
+    )
     # Bound petrofísico explícito sobre la densidad recuperada (t/m³).
     # H-A0 Bug 3: density_max subido a 5.5 para cubrir magnetita (5.0-5.2),
     # cromita (4.5-4.8) y pirita masiva (4.5-5.0).
