@@ -2979,6 +2979,50 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         except Exception as _uq_exc:
             _log.warning("posterior_uncertainty_nonfatal", error=str(_uq_exc))
 
+    # ── FASE 8.3: targeting probabilístico automático (opt-in, non-fatal) ─────
+    # Rankea blancos perforables desde el modelo invertido (core) + σ posterior por
+    # vóxel. Reusa la σ de Hutchinson si compute_uncertainty la calculó; si no, la
+    # función cae a una σ homoscedástica del MAD (degradado pero defendible). No
+    # ejecuta física nueva — es post-proceso estadístico sobre est_density/x_c/y_c/z_c.
+    drill_targets_report = None
+    if getattr(params, "compute_drill_targets", False):
+        try:
+            from exploration.gravimetry import rank_drill_targets
+            _ps_for_targets = posterior_std if np.isfinite(posterior_std).any() else None
+            _sense = getattr(params, "drill_targets_sense", "positive")
+            _rank_by = getattr(params, "drill_targets_rank_by", "expected_exceedance")
+            _targets = rank_drill_targets(
+                est_density, x_c, y_c, z_c,
+                posterior_std=_ps_for_targets,
+                top_n=int(getattr(params, "drill_targets_top_n", 10)),
+                sense=_sense,
+                rank_by=_rank_by,
+            )
+            drill_targets_report = {
+                "computed": True,
+                "n_targets": len(_targets),
+                "sense": _sense,
+                "rank_by": _rank_by,
+                "used_posterior_std": _ps_for_targets is not None,
+                "unit": "t/m3",
+                "method": "probabilistic_targeting_linear_gaussian_posterior_nms3d",
+                "note": (
+                    "Ranking de TARGETING/ESTRUCTURA (dónde perforar): prob. de "
+                    "exceedencia y exceedencia esperada bajo el posterior LINEAL por vóxel + "
+                    "supresión de no-máximos 3D. NO es probabilidad de mena/ley. La "
+                    "incertidumbre proviene de la σ de Hutchinson (compute_uncertainty=True); "
+                    "sin ella se usa una σ homoscedástica del MAD (degradado)."
+                ),
+                "targets": _targets,
+            }
+            _log.info(
+                "drill_targets_done",
+                n=len(_targets),
+                used_sigma=bool(_ps_for_targets is not None),
+            )
+        except Exception as _dt_exc:
+            _log.warning("drill_targets_nonfatal", error=str(_dt_exc))
+
     # ── DOI: doble inversión con modelos de referencia (Li & Oldenburg 1999) ──
     # Inversión 1 (m_ref1) es IDÉNTICA a la corrida principal de arriba (mismo m_ref):
     # por eso m1 = est_density principal y solo se ejecuta UNA inversión extra, con
@@ -3518,6 +3562,12 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         ),
         "doiDiagnostics": doi_summary,
         "uncertaintyPosterior": posterior_uncertainty_summary,
+        # ── FASE 8.3: targeting probabilístico (null si compute_drill_targets=False) ─
+        "drillTargets": drill_targets_report or {
+            "computed": False,
+            "method": "probabilistic_targeting_linear_gaussian_posterior_nms3d",
+            "note": "No calculado (compute_drill_targets=False o no disponible).",
+        },
         "anomalyPath": str(anomaly_ref.path),
         "legacyBlockModelPath": str(DEFAULT_BLOCK_MODEL_PATH),
         "observationQuality": qaqc_report,

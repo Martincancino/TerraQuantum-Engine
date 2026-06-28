@@ -400,6 +400,30 @@ class GeophysicsInvertInput(BaseModel):
         False,
         description="Calcular σ posterior por vóxel (Hutchinson). Costo extra; OFF por defecto",
     )
+    # ── FASE 8.3 (God-Tier): targeting probabilístico automático ──────────────
+    # Ranking 3D de blancos perforables desde el modelo invertido + σ posterior.
+    # OFF por defecto (byte-idéntico). Aprovecha la σ de compute_uncertainty si está;
+    # si no, cae a una σ homoscedástica del MAD (degradado pero defendible).
+    compute_drill_targets: bool = Field(
+        False,
+        description="FASE 8.3: rankear blancos perforables (prob. de exceedencia + supresión "
+                    "de no-máximos 3D) desde el modelo + σ posterior. OFF por defecto.",
+    )
+    drill_targets_top_n: int = Field(
+        10, ge=1, le=200,
+        description="FASE 8.3: nº máximo de blancos perforables a devolver.",
+    )
+    drill_targets_sense: str = Field(
+        "positive",
+        pattern="^(positive|negative)$",
+        description="FASE 8.3: 'positive' = cuerpos de ALTO contraste (densidad/susc); "
+                    "'negative' = bajo contraste (kimberlita/sal/cavidad).",
+    )
+    drill_targets_rank_by: str = Field(
+        "expected_exceedance",
+        pattern="^(expected_exceedance|exceedance_prob|lower_confidence_bound)$",
+        description="FASE 8.3: métrica de orden del ranking de blancos.",
+    )
     # Bound petrofísico explícito sobre la densidad recuperada (t/m³).
     # H-A0 Bug 3: density_max subido a 5.5 para cubrir magnetita (5.0-5.2),
     # cromita (4.5-4.8) y pirita masiva (4.5-5.0).
