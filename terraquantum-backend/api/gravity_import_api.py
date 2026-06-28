@@ -1167,6 +1167,7 @@ async def enrich_package_endpoint(
     boreholes_json: Optional[str] = Form(None),
     column_map_json: Optional[str] = Form(None),
     magnetic_column_map_json: Optional[str] = Form(None),
+    helmert_control_points_json: Optional[str] = Form(None),
 ):
     """Preparación con ENRIQUECIMIENTO: deriva con física real lo que falte y emite
     un paquete TQPKG completo (descargable) + un resumen de qué calculó/agregó.
@@ -1410,6 +1411,54 @@ async def enrich_package_endpoint(
         )
         out_name = f"{Path(file.filename).stem}_package.tqpkg.csv"
         summary = enrichment.summary()
+
+        # ── FASE 19 (Caso B): Georef Helmert en el ENRIQUECIMIENTO ────────────
+        # Cierra la asimetría con /invert: un usuario con coords LOCALES que entra
+        # por «Generar CSV completo» (→/enrich-package) también obtiene georef si
+        # aporta ≥2 puntos de control. Reusa el MISMO helper/schema que /invert (no
+        # se duplica la matemática). Sin el param → summary byte-idéntico a hoy.
+        if helmert_control_points_json:
+            from schemas.gravity_import_schema import HelmertControlPointsInput
+            from services.gravity_import_service import (
+                georeference_stations_with_helmert,
+            )
+
+            # <2 puntos / JSON malo → 422 claro (vía ValidationError del schema),
+            # igual que /invert. NO se silencia: el usuario pidió georef.
+            try:
+                _hc_input = HelmertControlPointsInput(**json.loads(helmert_control_points_json))
+            except (ValidationError, ValueError, json.JSONDecodeError) as _hexc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "HELMERT_INPUT_INVALID",
+                        "message": (
+                            "helmert_control_points_json inválido (se requieren ≥2 "
+                            f"puntos de control local↔real): {_hexc}"
+                        ),
+                    },
+                )
+
+            _cs_detected = (
+                getattr(primary.coordinate_transform, "input_coordinate_system", None)
+                if primary.coordinate_transform else None
+            )
+            _cs_local = (_cs_detected or "").lower() in ("local_meters", "local", "unknown")
+            if _cs_local:
+                _station_xz = [
+                    (float(o.x_m), float(o.z_m)) for o in (primary.observations or [])
+                ]
+                _helmert_georef = georeference_stations_with_helmert(_hc_input, _station_xz)
+                summary["helmert_georef"] = _helmert_georef
+            else:
+                summary["helmert_georef"] = {
+                    "skipped": True,
+                    "reason": (
+                        f"Coordenadas del CSV no son locales (detectado: "
+                        f"{_cs_detected}); Helmert no aplica."
+                    ),
+                }
+
         return JSONResponse(
             content=sanitize_nan({
                 "filename": out_name,
