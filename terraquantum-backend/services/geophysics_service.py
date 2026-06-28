@@ -3968,3 +3968,115 @@ def run_geophysics_sensitivity_sweep(
         "recommendation": recommendation,
         "warnings": warnings_list
     }
+
+
+def run_geophysics_live_update(req) -> dict:
+    """
+    FASE 8.2 — Live Update local (Woodbury rank-k / sub-octree), STATELESS sobre malla
+    CORE. Incorpora un dato/sondaje nuevo a una solución YA invertida sin re-correr el
+    pipeline: reconstruye el forward y la malla CORE desde req.params (que ya incluyen
+    las observations existentes), y aplica la actualización LINEAL local del motor
+    (gravimetry.live_update_add_data / live_update_suboctree) sobre req.prior_model.
+
+    Diseño stateless: el cliente reenvía los params originales + el modelo previo (core,
+    el que devolvió la inversión) + el dato nuevo / la sub-región. El servidor NO guarda
+    estado. La actualización opera en la malla CORE (sin padding) — es una corrección
+    local, no el solve global; honesto y suficiente para el bucle interactivo.
+
+    ALCANCE HONESTO: actualización de la solución de mínimos cuadrados LINEAL con
+    operadores congelados (mismos Wd/Ws/depth-weighting que la σ posterior); NO es un
+    re-solve acotado desde cero (que recomputaría Ws/σ). Devuelve el modelo actualizado
+    (core) + diagnósticos del update.
+    """
+    params = req.params
+    nx, ny, nz = int(params.nx), int(params.ny), int(params.nz)
+    dx = float(params.block_size)
+    base_density = float(getattr(params, "base_density", 2.6))
+    total_core = nx * ny * nz
+
+    prior = np.asarray(req.prior_model, dtype=np.float64)
+    if prior.shape[0] != total_core:
+        raise HTTPException(
+            status_code=422,
+            detail=f"prior_model debe tener nx*ny*nz={total_core} elementos, tiene {prior.shape[0]}.",
+        )
+    # Air/NaN del modelo previo → tratadas como fondo (base_density) para el update local.
+    prior = np.nan_to_num(prior, nan=base_density)
+
+    # ── Malla CORE + forward + dato existente (mismos helpers que la inversión) ─
+    mesh = build_tensor_mesh_with_padding(params)
+    x_c = mesh["x_c_core"]
+    y_c = mesh["y_c_core"]
+    z_c = mesh["z_c_core"]
+    sensor_coords, g_observed = build_sensor_arrays(params)
+    forward = GravimetryForward(dx, dx, dx, cutoff_radius=params.cutoff_radius)
+    inversor = GravimetryInversion(nx, ny, nz, dx, base_density=base_density)
+
+    lambda_mag = max(float(getattr(params, "lambda_mag", 1e-3) or 1e-3), 1e-9)
+    alpha_spatial = float(getattr(params, "alpha_spatial", 1.0))
+    density_min = getattr(params, "density_min", None)
+    density_max = getattr(params, "density_max", None)
+
+    _new_sensors = None
+    _new_g = None
+    if req.new_observations:
+        _new_sensors = np.array(
+            [[o.x_m, o.y_m, o.z_m] for o in req.new_observations], dtype=float
+        )
+        _new_g = np.array([o.g for o in req.new_observations], dtype=float)
+
+    if req.mode == "woodbury":
+        if _new_sensors is None or _new_sensors.shape[0] == 0:
+            raise HTTPException(
+                status_code=422,
+                detail="mode='woodbury' requiere al menos una observación en new_observations.",
+            )
+        out = inversor.live_update_add_data(
+            prior, g_observed, y_c, forward, sensor_coords, x_c, z_c,
+            new_sensor_coords=_new_sensors, new_g_observed=_new_g,
+            lambda_mag=lambda_mag, alpha_spatial=alpha_spatial,
+            density_min=density_min, density_max=density_max,
+        )
+        _model = np.nan_to_num(out["model"], nan=base_density)
+        _log.info("live_update_woodbury_done", n_new=out["n_new"],
+                  update_norm=round(float(out["update_norm"]), 6))
+        return {
+            "mode": "woodbury",
+            "model": _model.tolist(),
+            "n_voxels": int(_model.shape[0]),
+            "update_norm": float(out["update_norm"]),
+            "capacitance_cond": float(out["capacitance_cond"]),
+            "new_data_misfit_before": float(out["new_data_misfit_before"]),
+            "new_data_misfit_after": float(out["new_data_misfit_after"]),
+            "n_new": int(out["n_new"]),
+            "note": "Update Woodbury rango-k (lineal, A congelada) en malla core.",
+        }
+
+    # mode == "suboctree"
+    if req.region_center is None or req.region_radius is None:
+        raise HTTPException(
+            status_code=422,
+            detail="mode='suboctree' requiere region_center [x,y,z] y region_radius.",
+        )
+    out = inversor.live_update_suboctree(
+        prior, g_observed, y_c, forward, sensor_coords, x_c, z_c,
+        region_center=[float(c) for c in req.region_center],
+        region_radius=float(req.region_radius),
+        new_sensor_coords=_new_sensors, new_g_observed=_new_g,
+        lambda_mag=lambda_mag, alpha_spatial=alpha_spatial,
+        anchor_strength=float(req.anchor_strength),
+        density_min=density_min, density_max=density_max,
+    )
+    _model = np.nan_to_num(out["model"], nan=base_density)
+    _log.info("live_update_suboctree_done", region_size=out["region_size"],
+              update_norm=round(float(out["update_norm"]), 6))
+    return {
+        "mode": "suboctree",
+        "model": _model.tolist(),
+        "n_voxels": int(_model.shape[0]),
+        "update_norm": float(out["update_norm"]),
+        "region_size": int(out["region_size"]),
+        "region_misfit_before": float(out["region_misfit_before"]),
+        "region_misfit_after": float(out["region_misfit_after"]),
+        "note": "Re-solve local sub-octree (fondo congelado) en malla core.",
+    }

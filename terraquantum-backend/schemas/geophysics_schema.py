@@ -1012,3 +1012,61 @@ class GeophysicsInvertResponse(BaseModel):
     best_target: Optional[Dict[str, Any]] = None
     report: Dict[str, Any] = Field(default_factory=dict)
     misfit_error_percent: Optional[float] = None
+
+
+# ── FASE 8.2 (God-Tier): Live Update local (Woodbury / sub-octree) ───────────
+# Endpoint STATELESS sobre malla CORE: el cliente envía los params de la inversión
+# original (que ya incluyen las observations existentes), el modelo previo (core, el
+# que devolvió la inversión) y el dato/sondaje nuevo (o la sub-región). El servidor
+# reconstruye el forward/mesh core y aplica la actualización LINEAL local sin re-correr
+# el pipeline. No mantiene estado servidor.
+class LiveUpdateObservation(BaseModel):
+    x_m: float = Field(..., description="Coordenada local X del sensor nuevo (m).")
+    y_m: float = Field(..., description="Altura/profundidad del sensor nuevo (m).")
+    z_m: float = Field(..., description="Coordenada local Z del sensor nuevo (m).")
+    g: float = Field(..., description="Valor observado nuevo (anomalía, m/s² SI).")
+
+
+class GeophysicsLiveUpdateRequest(BaseModel):
+    params: GeophysicsInvertInput = Field(
+        ..., description="Params de la inversión original (incluyen las observations existentes).",
+    )
+    prior_model: List[float] = Field(
+        ..., description="Modelo previo en malla CORE (densidad, longitud nx*ny*nz).",
+    )
+    mode: str = Field(
+        "woodbury",
+        pattern="^(woodbury|suboctree)$",
+        description="'woodbury' = update global rango-k (dato nuevo); 'suboctree' = "
+                    "re-solve local de una sub-región con el fondo congelado.",
+    )
+    new_observations: Optional[List[LiveUpdateObservation]] = Field(
+        default=None,
+        description="Observaciones nuevas. Obligatorio en 'woodbury'; opcional en 'suboctree'.",
+    )
+    region_center: Optional[List[float]] = Field(
+        default=None, description="[x,y,z] centro de la sub-región (modo 'suboctree').",
+    )
+    region_radius: Optional[float] = Field(
+        default=None, gt=0.0, description="Radio de la sub-región en m (modo 'suboctree').",
+    )
+    anchor_strength: float = Field(
+        1.0, ge=0.0, description="Fuerza del ancla al modelo previo en 'suboctree'.",
+    )
+
+
+class GeophysicsLiveUpdateResponse(BaseModel):
+    mode: str
+    model: List[float] = Field(default_factory=list, description="Modelo actualizado (core).")
+    n_voxels: int
+    update_norm: float
+    # Woodbury
+    capacitance_cond: Optional[float] = None
+    new_data_misfit_before: Optional[float] = None
+    new_data_misfit_after: Optional[float] = None
+    n_new: Optional[int] = None
+    # Sub-octree
+    region_size: Optional[int] = None
+    region_misfit_before: Optional[float] = None
+    region_misfit_after: Optional[float] = None
+    note: str = ""

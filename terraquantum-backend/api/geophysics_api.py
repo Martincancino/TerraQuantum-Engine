@@ -18,13 +18,22 @@ from core.block_model_store import (
     update_run_status,
     RUN_VTK_FILENAME,
 )
-from schemas.geophysics_schema import GeophysicsInvertInput, GeophysicsInvertInputV2
+from schemas.geophysics_schema import (
+    GeophysicsInvertInput,
+    GeophysicsInvertInputV2,
+    GeophysicsLiveUpdateRequest,
+    GeophysicsLiveUpdateResponse,
+)
 from schemas.response_schema import (
     GeophysicsInversionStartResponse,
     GeophysicsStatusResponse,
     MisfitResponse,
 )
-from services.geophysics_service import run_geophysics_inversion, run_geophysics_sensitivity_sweep
+from services.geophysics_service import (
+    run_geophysics_inversion,
+    run_geophysics_sensitivity_sweep,
+    run_geophysics_live_update,
+)
 
 router = APIRouter()
 _log = get_logger(__name__)
@@ -145,6 +154,27 @@ def sensitivity_sweep_geophysics(request: GeophysicsSensitivitySweepRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Error en sweep de sensibilidad geofísica: {str(exc)}",
+        )
+
+
+# ── FASE 8.2: Live Update local (Woodbury / sub-octree), stateless malla core ──
+@router.post("/geophysics-live-update", response_model=GeophysicsLiveUpdateResponse)
+def live_update_geophysics(request: GeophysicsLiveUpdateRequest):
+    _log.info("request_received", endpoint="/geophysics-live-update", mode=request.mode)
+
+    try:
+        return run_geophysics_live_update(request)
+
+    except HTTPException:
+        raise
+
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error en live update geofísico: {str(exc)}",
         )
 
 
