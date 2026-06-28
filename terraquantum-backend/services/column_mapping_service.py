@@ -40,7 +40,32 @@ ROLE_STATION_ID = "station_id"
 # Claves literales especiales que `column_map` puede llevar además de role→columna:
 #   "unit"               → unidad literal (ej. "mGal") cuando no hay columna de unidad
 #   "coordinate_system"  → "latlon" | "utm" | "local" (fuerza el tipo de coordenada)
-LITERAL_KEYS = ("unit", "coordinate_system")
+#   "elevation_unit"     → "m" | "ft" (unidad de la columna de elevación; default "m")
+LITERAL_KEYS = ("unit", "coordinate_system", "elevation_unit")
+
+# Factor de conversión de la unidad de elevación declarada → metros. La elevación
+# (ROLE_ELEVATION) se asume en METROS salvo que el `column_map` declare lo contrario;
+# una columna en pies leída como metros mete un error de ~3.28× en la superficie de
+# malla y en la corrección de Bouguer. Aliases tolerantes (normalize_token) → factor.
+_FEET_TO_M = 0.3048
+_ELEVATION_UNIT_TO_METERS: Dict[str, float] = {
+    "ft": _FEET_TO_M, "feet": _FEET_TO_M, "foot": _FEET_TO_M,
+    "pies": _FEET_TO_M, "pie": _FEET_TO_M,
+    "m": 1.0, "meter": 1.0, "meters": 1.0, "metro": 1.0, "metros": 1.0,
+    "masl": 1.0, "msnm": 1.0,
+}
+
+
+def resolve_elevation_unit_factor(value: Optional[str]) -> float:
+    """Factor para convertir la unidad de elevación declarada → metros.
+
+    Tolerante a alias ("ft"/"feet"/"pies" → 0.3048; "m"/"meter"/"metros" → 1.0) vía
+    normalize_token. GUARDRAIL: None / vacío / desconocido → 1.0 (asume metros), por lo
+    que el comportamiento histórico es byte-idéntico cuando la clave no se declara.
+    """
+    if not value:
+        return 1.0
+    return _ELEVATION_UNIT_TO_METERS.get(normalize_token(value), 1.0)
 
 ROLE_LABELS: Dict[str, str] = {
     ROLE_X: "Coordenada X (este / longitud)",

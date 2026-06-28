@@ -26,6 +26,7 @@ from services.csv_analysis_service import (
 from services.grid_calculator_service import compute_auto_grid
 from services.column_mapping_service import (
     normalize_token as _norm,
+    resolve_elevation_unit_factor as _resolve_elev_unit_factor,
     resolve_mapped_column as _resolve_mapped,
 )
 from scipy.spatial import cKDTree as _cKDTree
@@ -603,7 +604,8 @@ def import_gravity_csv_v1(
 ) -> GravityImportResult:
     # PILAR 1 — `column_map` (opcional) re-etiqueta columnas crudas a roles
     # (x, y, elevation, depth, gravity_value, gravity_type, magnetic_value, sigma,
-    # station_id) + literales `unit`/`coordinate_system`. Sobre-escribe la
+    # station_id) + literales `unit`/`coordinate_system`/`elevation_unit`. La
+    # elevación se convierte a metros vía `elevation_unit` (m/ft). Sobre-escribe la
     # auto-detección. column_map=None → comportamiento histórico idéntico.
     # data_kind="magnetic" (Fase 9A): parsea una columna TMI (nT) en lugar de
     # gravedad, reusando coordenadas/UTM/elevación. El valor TMI se guarda en el
@@ -650,6 +652,10 @@ def import_gravity_csv_v1(
         _cmap = column_map or {}
         _forced_unit = (str(_cmap.get("unit") or "").strip()) or None
         _gtype_col = _resolve_mapped(_cmap.get("gravity_type"), headers) or "gravity_type"
+        # TAREA B — unidad de la columna de elevación (m/ft). Default 1.0 (metros) →
+        # byte-idéntico al histórico cuando no se declara. Si es "ft"/"pies", la
+        # elevación cruda se convierte a metros en el punto de ingestión (abajo).
+        _elev_unit_factor = _resolve_elev_unit_factor(_cmap.get("elevation_unit"))
 
         # Fase 19 Tarea 1 — auto-detección del tipo de dato desde las columnas.
         # Informativo (no altera el ruteo, que sigue gobernado por data_kind):
@@ -938,7 +944,7 @@ def import_gravity_csv_v1(
                 if _elev_col_any:
                     _ev = row.get(_elev_col_any, "").strip()
                     try:
-                        _st_elev = float(_ev) if _ev else float("nan")
+                        _st_elev = float(_ev) * _elev_unit_factor if _ev else float("nan")
                     except (ValueError, TypeError):
                         _st_elev = float("nan")
                 station_elev_list.append(_st_elev)
@@ -959,7 +965,10 @@ def import_gravity_csv_v1(
                     if _elev_col:
                         _raw_elev_str = row.get(_elev_col, "").strip()
                         try:
-                            _raw_elev = float(_raw_elev_str) if _raw_elev_str else float("nan")
+                            _raw_elev = (
+                                float(_raw_elev_str) * _elev_unit_factor
+                                if _raw_elev_str else float("nan")
+                            )
                         except (ValueError, TypeError):
                             _raw_elev = float("nan")
                     else:
