@@ -760,7 +760,28 @@ def import_gravity_csv_v1(
         # PILAR 1 — mapeo manual: literales y overrides de columnas por rol.
         _cmap = column_map or {}
         _forced_unit = (str(_cmap.get("unit") or "").strip()) or None
-        _gtype_col = _resolve_mapped(_cmap.get("gravity_type"), headers) or "gravity_type"
+        # BUG doble-Bouguer — `gravity_type` en column_map puede ser:
+        #   (a) un VALOR LITERAL del catálogo (p.ej. "bouguer_anomaly") → declara que
+        #       el dato YA viene reducido; puebla meta.gravity_type SIN inventar una
+        #       columna, para que el enriquecimiento NO lo re-reduzca (doble Bouguer); o
+        #   (b) el NOMBRE de una columna con el tipo por fila (histórico).
+        # Se distingue por pertenencia al catálogo ALLOWED_GRAVITY_TYPES. GUARDRAIL:
+        # sin la clave → byte-idéntico (no fuerza nada, columna por defecto "gravity_type").
+        _gtype_raw = (str(_cmap.get("gravity_type") or "").strip()) or None
+        _forced_gravity_type: "str | None" = None
+        _gtype_col = "gravity_type"
+        if _gtype_raw and not _is_magnetic:
+            if _gtype_raw in ALLOWED_GRAVITY_TYPES:
+                _forced_gravity_type = _gtype_raw          # literal declarado
+            else:
+                _mapped_gtype = _resolve_mapped(_gtype_raw, headers)
+                if _mapped_gtype:
+                    _gtype_col = _mapped_gtype              # override de columna (histórico)
+                else:
+                    errors_list.append(
+                        f"gravity_type='{_gtype_raw}' no es un tipo válido ni una columna "
+                        f"del archivo. Tipos válidos: {', '.join(sorted(ALLOWED_GRAVITY_TYPES))}."
+                    )
         # TAREA B — unidad de la columna de elevación (m/ft). Default 1.0 (metros) →
         # byte-idéntico al histórico cuando no se declara. Si es "ft"/"pies", la
         # elevación cruda se convierte a metros en el punto de ingestión (abajo).
@@ -961,6 +982,10 @@ def import_gravity_csv_v1(
                     if first_gravity_type is None:
                         first_gravity_type = "magnetic_only"
                     g_type = ""
+                elif _forced_gravity_type:
+                    # Literal declarado en column_map: el dato YA viene reducido; se usa
+                    # tal cual sin exigir columna por fila (evita el doble Bouguer).
+                    g_type = _forced_gravity_type
                 else:
                     g_type = row.get(_gtype_col, "").strip()
                     if strict and not g_type:

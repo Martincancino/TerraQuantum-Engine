@@ -41,7 +41,23 @@ ROLE_STATION_ID = "station_id"
 #   "unit"               → unidad literal (ej. "mGal") cuando no hay columna de unidad
 #   "coordinate_system"  → "latlon" | "utm" | "local" (fuerza el tipo de coordenada)
 #   "elevation_unit"     → "m" | "ft" (unidad de la columna de elevación; default "m")
+#   "gravity_type"       → tipo literal (ej. "bouguer_anomaly") cuando el dato YA viene
+#                          reducido y no hay columna de tipo (evita el doble Bouguer).
+#                          OJO: gravity_type es DUAL — si el valor es un nombre de
+#                          columna del archivo, se trata como override de columna (rol),
+#                          no como literal. Se distingue por el catálogo de tipos.
 LITERAL_KEYS = ("unit", "coordinate_system", "elevation_unit")
+
+
+def _is_gravity_type_literal(value: Optional[str]) -> bool:
+    """True si `value` es un VALOR del catálogo de tipos (literal), no una columna.
+
+    Import lazy del catálogo para evitar el ciclo con gravity_import_service.
+    """
+    if not value:
+        return False
+    from services.gravity_import_service import ALLOWED_GRAVITY_TYPES
+    return str(value).strip() in ALLOWED_GRAVITY_TYPES
 
 # Factor de conversión de la unidad de elevación declarada → metros. La elevación
 # (ROLE_ELEVATION) se asume en METROS salvo que el `column_map` declare lo contrario;
@@ -191,6 +207,10 @@ def build_column_mapping_plan(
             continue
         if not requested:
             continue
+        # gravity_type es dual: si el valor es un tipo del catálogo, es un LITERAL
+        # (se reporta en `literals`), no un override de columna.
+        if role == ROLE_GRAVITY_TYPE and _is_gravity_type_literal(requested):
+            continue
         real = resolve_mapped_column(requested, headers)
         if real is None:
             invalid[role] = requested
@@ -204,6 +224,8 @@ def build_column_mapping_plan(
     needs_mapping = bool(missing)
 
     literals = {k: cm[k] for k in LITERAL_KEYS if cm.get(k)}
+    if _is_gravity_type_literal(cm.get(ROLE_GRAVITY_TYPE)):
+        literals[ROLE_GRAVITY_TYPE] = cm[ROLE_GRAVITY_TYPE]
 
     return {
         "data_kind": data_kind,
