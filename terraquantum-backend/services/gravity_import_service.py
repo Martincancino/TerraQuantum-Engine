@@ -1,5 +1,6 @@
 import csv
 import math
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -541,6 +542,99 @@ def _is_skippable_row_error(msg: str) -> bool:
     return any(m in msg for m in _SKIPPABLE_ROW_MARKERS)
 
 
+class AmbiguousDelimiterError(ValueError):
+    """No se puede determinar delimitador/decimal del CSV con confianza.
+
+    INVARIANTE (BUG decimal-coma): la ingesta entrega dato LIMPIO o un ERROR CLARO,
+    jamás un número silenciosamente equivocado con sello "Calidad GOOD". Se lanza,
+    p.ej., con separador de miles (1,234,567) o comas de texto mezcladas dentro de
+    un CSV ';'-delimitado, donde adivinar produciría basura.
+    """
+
+
+_AMBIGUOUS_DELIM_MSG = (
+    "Detecté ';' como delimitador pero las comas están mezcladas (no son todas "
+    "decimales): no puedo decidir el formato sin adivinar y produciría valores "
+    "equivocados. Re-exporta el CSV con punto decimal, o declara el formato "
+    "(delimitador ';' + decimal ',')."
+)
+
+
+def _sample_nonempty_lines(path: "str | Path", encoding: str, limit: int = 20) -> list[str]:
+    """Primeras `limit` líneas no vacías (sin salto), para sniff de formato."""
+    out: list[str] = []
+    try:
+        with open(path, encoding=encoding, errors="replace") as fh:
+            for line in fh:
+                if line.strip():
+                    out.append(line.rstrip("\r\n"))
+                    if len(out) >= limit:
+                        break
+    except Exception:
+        return []
+    return out
+
+
+def _detect_semicolon_decimal_comma(lines: list[str]) -> str:
+    """Refina la rama [,;]: ¿es ';'-delim con coma decimal (Excel-ES)?
+
+    Devuelve:
+      - "historic": comportamiento byte-idéntico (coma-delim inglés, o ';'-delim
+        punto-decimal, o ';' inconsistente → no es claramente delimitador).
+      - "semicolon_comma_decimal": usar sep=';' decimal=',' (caso LdM crudo).
+      - "ambiguous": lanzar error claro (miles 1,234,567 / comas de texto).
+
+    SOLO se invoca cuando _choose_read_sep ya resolvió r"[,;]" (nunca tab/pipe), así
+    que la matriz de delimitadores del blindaje Fase 4 queda byte-idéntica.
+    """
+    if not lines:
+        return "historic"
+    semic_counts = [l.count(";") for l in lines]
+    if sum(semic_counts) == 0:
+        return "historic"  # sin ';' → coma-delim inglés (camino histórico)
+    positive = [c for c in semic_counts if c > 0]
+    # Consistencia por MODA (tolerante a filas ragged / preámbulo): un delimitador
+    # real aparece el mismo nº de veces en la mayoría (≥80%) de las líneas.
+    semic_mode = max(set(positive), key=positive.count)
+    if sum(1 for c in semic_counts if c == semic_mode) < 0.8 * len(lines):
+        return "historic"  # ';' inconsistente → no es claramente delimitador
+    if sum(l.count(",") for l in lines) == 0:
+        return "historic"  # ';'-delim punto-decimal (p.ej. matriz Fase 4)
+    # ';' consistente + comas presentes → ¿las comas son TODAS decimales?
+    total_comma = 0
+    decimal_comma = 0
+    for line in lines:
+        for field in line.split(";"):
+            ncomma = field.count(",")
+            if ncomma == 0:
+                continue
+            total_comma += ncomma
+            if ncomma >= 2:
+                return "ambiguous"  # separador de miles (1,234,567): no adivinar
+            # Coma decimal = coma seguida de dígito, entre dígitos o al inicio del
+            # número (tolera europeo sin cero inicial y con signo: ",05" / "-,1396").
+            if re.search(r"(?:^|[\d\s+\-]),\d", field):
+                decimal_comma += 1
+    if total_comma > 0 and decimal_comma == total_comma:
+        return "semicolon_comma_decimal"
+    return "ambiguous"  # comas de texto mezcladas, etc. → error claro
+
+
+def _resolve_sep_decimal(path: "str | Path", encoding: str) -> "tuple[str, str]":
+    """Resuelve (sep, decimal) para pandas. Lanza AmbiguousDelimiterError si no es
+    decidible. Para tab/pipe y para los caminos históricos de [,;] devuelve decimal
+    "." (== default de pandas → byte-idéntico)."""
+    sep = _choose_read_sep(path, encoding)
+    if sep != r"[,;]":
+        return sep, "."
+    verdict = _detect_semicolon_decimal_comma(_sample_nonempty_lines(path, encoding))
+    if verdict == "semicolon_comma_decimal":
+        return ";", ","
+    if verdict == "ambiguous":
+        raise AmbiguousDelimiterError(_AMBIGUOUS_DELIM_MSG)
+    return sep, "."
+
+
 def _choose_read_sep(path: "str | Path", encoding: str) -> str:
     """Sniff del delimitador desde la primera línea no vacía: , ; tab |.
 
@@ -579,19 +673,31 @@ def _read_csv_dataframe(path: "str | Path", nrows: "int | None" = None):
     warns: list[str] = []
     encoding = "utf-8-sig"
     try:
-        sep = _choose_read_sep(path, encoding)
+        sep, decimal = _resolve_sep_decimal(path, encoding)
         df = pd.read_csv(
             path, sep=sep, engine="python", encoding=encoding,
-            on_bad_lines="skip", nrows=nrows,
+            on_bad_lines="skip", nrows=nrows, decimal=decimal,
         )
     except UnicodeDecodeError:
         encoding = "latin-1"
         warns.append("El archivo no es UTF-8; se leyó como latin-1.")
-        sep = _choose_read_sep(path, encoding)
+        sep, decimal = _resolve_sep_decimal(path, encoding)
         df = pd.read_csv(
             path, sep=sep, engine="python", encoding=encoding,
-            on_bad_lines="skip", nrows=nrows,
+            on_bad_lines="skip", nrows=nrows, decimal=decimal,
         )
+
+    # DEFENSA EN PROFUNDIDAD (BUG decimal-coma): si el CSV colapsó a UNA sola columna
+    # pese a que las líneas crudas tenían delimitadores, la estructura está rota — no
+    # sellar "Calidad GOOD" en silencio; dejar un aviso honesto. El fix principal es el
+    # parseo correcto de arriba; esto sólo cubre colapsos no anticipados.
+    if len(df.columns) <= 1:
+        sample = _sample_nonempty_lines(path, encoding, limit=5)
+        if any(any(d in s for d in (";", ",", "\t", "|")) for s in sample):
+            warns.append(
+                "El CSV se leyó como UNA sola columna pese a contener delimitadores; "
+                "la estructura puede estar colapsada (revisa delimitador y decimal)."
+            )
     return df, warns
 
 
@@ -627,6 +733,9 @@ def import_gravity_csv_v1(
             df, _read_warns = _read_csv_dataframe(path)
         except pd.errors.EmptyDataError:
             errors_list.append("El archivo CSV está vacío (sin columnas ni datos).")
+            return _build_error_result(path.name, errors_list, warnings_list)
+        except AmbiguousDelimiterError as exc:
+            errors_list.append(str(exc))
             return _build_error_result(path.name, errors_list, warnings_list)
         warnings_list.extend(_read_warns)
 
