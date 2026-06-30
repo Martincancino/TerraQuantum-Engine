@@ -68,6 +68,8 @@ interface WorkerOutput {
   visibleCount: number;
   highlightedCount: number;
   susceptibilityAvailable: boolean;
+  weakAnomaly: boolean;
+  peakContrast: number;
 }
 
 // ── Colormaps (copiados de terraQuantumGeology.ts — sin dependencias) ─────────
@@ -93,21 +95,19 @@ const TURBO_STOPS: ColorStop[] = [
   [1.000, [0.478, 0.027, 0.000]],
 ];
 
-// Espectral arcoíris (estándar Geosoft/Oasis montaj) — densidad por CONTRASTE.
-// Bajo = azul, fondo = verde, alto = rojo→magenta. SIN blanco. Debe coincidir
-// con terraQuantumGeology.ts::DENSITY_SPECTRAL_STOPS.
-const DENSITY_SPECTRAL_STOPS: ColorStop[] = [
-  [0.00, [0.000, 0.000, 0.549]],
-  [0.10, [0.000, 0.102, 1.000]],
-  [0.22, [0.000, 0.700, 1.000]],
-  [0.35, [0.000, 1.000, 0.800]],
-  [0.45, [0.102, 1.000, 0.200]],
-  [0.55, [0.700, 1.000, 0.000]],
-  [0.63, [1.000, 1.000, 0.000]],
-  [0.73, [1.000, 0.600, 0.000]],
-  [0.83, [1.000, 0.100, 0.000]],
-  [0.92, [1.000, 0.000, 0.700]],
-  [1.00, [1.000, 0.500, 0.900]],
+// Viridis (matplotlib) — densidad por CONTRASTE. Mapa SECUENCIAL perceptualmente
+// uniforme (déficit=púrpura, fondo=teal, exceso=amarillo). Debe coincidir con
+// terraQuantumGeology.ts::DENSITY_VIRIDIS_STOPS. Reemplaza al espectral Geosoft.
+const DENSITY_VIRIDIS_STOPS: ColorStop[] = [
+  [0.000, [0.267, 0.005, 0.329]],
+  [0.125, [0.283, 0.141, 0.458]],
+  [0.250, [0.254, 0.265, 0.530]],
+  [0.375, [0.207, 0.372, 0.553]],
+  [0.500, [0.164, 0.471, 0.558]],
+  [0.625, [0.128, 0.567, 0.551]],
+  [0.750, [0.135, 0.659, 0.518]],
+  [0.875, [0.478, 0.821, 0.318]],
+  [1.000, [0.993, 0.906, 0.144]],
 ];
 
 function sampleColormap(stops: ColorStop[], t: number): [number, number, number] {
@@ -251,6 +251,22 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
     densScale = Math.max((dynDensMax - dynDensMin) / 2, 0.05);
   }
 
+  // Piso de visibilidad relativo al PICO (espejo de terraQuantumGeology.ts):
+  // muestra el núcleo del cuerpo y oculta el halo. El pico siempre lo supera →
+  // nunca lienzo vacío; cuerpo débil (pico bajo) → piso base + flag weakAnomaly.
+  const ANOMALY_CONTRAST_VISIBLE = 0.18;
+  const ANOMALY_PEAK_FRACTION = 0.20;
+  const ANOMALY_WEAK_PEAK = 0.60;
+  let _maxContrastMag = 0;
+  for (let s = 0; s < densitySamples.length; s++) {
+    const m = densScale > 1e-9 ? Math.abs(densitySamples[s] - densBackground) / densScale : 0;
+    if (m > _maxContrastMag) _maxContrastMag = m;
+  }
+  const weakAnomaly = _maxContrastMag < ANOMALY_WEAK_PEAK;
+  const _effContrastFloor = weakAnomaly
+    ? ANOMALY_CONTRAST_VISIBLE
+    : Math.max(ANOMALY_CONTRAST_VISIBLE, ANOMALY_PEAK_FRACTION * _maxContrastMag);
+
   let visibleCount = 0, highlightedCount = 0, susceptibilityFoundCount = 0;
   const DOI_THRESHOLD = 0.05;
 
@@ -323,9 +339,8 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
     const visualScore = getCellVisualScore(cell);
 
     // Contraste simétrico vs. fondo: déficit y exceso de masa son ambos cuerpos
-    // reales. Debe coincidir con terraQuantumGeology.ts::ANOMALY_CONTRAST_VISIBLE.
+    // reales. ANOMALY_CONTRAST_VISIBLE / _effContrastFloor se definen fuera del loop.
     const _contrastMag = densScale > 1e-9 ? Math.abs(density - densBackground) / densScale : 0;
-    const ANOMALY_CONTRAST_VISIBLE = 0.18;
 
     // ── Score/density filters ─────────────────────────────────────────────────
     if (!p.isFullDataMode && !p.professionalScoreStats.isDegenerate && _contrastMag < ANOMALY_CONTRAST_VISIBLE) {
@@ -352,7 +367,7 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
       // visualScore es prospectividad (sesgada a denso). Un déficit de masa de
       // fuerte contraste es estructura real -> también visible (sin esto el modo
       // profesional nunca muestra azul). Debe coincidir con terraQuantumGeology.ts.
-      if (visualScore < p.professionalScoreStats.threshold && _contrastMag < ANOMALY_CONTRAST_VISIBLE) {
+      if (visualScore < p.professionalScoreStats.threshold && _contrastMag < _effContrastFloor) {
         writeMatrix(matricesF32, mb, 0, 0, 0, rx_visual, ry_visual, rz_visual);
         colorsF32[cb] = 0; colorsF32[cb + 1] = 0; colorsF32[cb + 2] = 0;
         continue;
@@ -366,9 +381,9 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
       } else if (p.professionalScoreStats.isDegenerate) {
         visible = density >= p.densityStats.visibleDensityFloor;
       } else {
-        // Visibilidad por contraste simétrico: emergen los cuerpos anómalos
-        // (déficit O exceso); el fondo neutro se oculta -> sin caja blanca.
-        visible = _contrastMag >= ANOMALY_CONTRAST_VISIBLE;
+        // Visibilidad por contraste relativo al PICO: emerge el núcleo del cuerpo
+        // y se oculta el halo de baja anomalía. El pico siempre supera el piso.
+        visible = _contrastMag >= _effContrastFloor;
       }
     } else if (p.isAnomalyDataMode) {
       visible = anomalyIntensity > 0;
@@ -419,7 +434,7 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
         // t<0.5=déficit (azul), t>0.5=exceso (rojo). Escala simétrica robusta.
         const _contrast = density - densBackground;
         const _u = clamp01(0.5 + 0.5 * (_contrast / densScale));
-        [_r, _g, _b] = sampleColormap(DENSITY_SPECTRAL_STOPS, _u);
+        [_r, _g, _b] = sampleColormap(DENSITY_VIRIDIS_STOPS, _u);
         const _alpha = 1 - 0.7 * _sigmaRatio;
         _r *= _alpha; _g *= _alpha; _b *= _alpha;
       }
@@ -439,6 +454,8 @@ function buildBuffers(p: WorkerInput): WorkerOutput {
     visibleCount,
     highlightedCount,
     susceptibilityAvailable: susceptibilityFoundCount > 0,
+    weakAnomaly,
+    peakContrast: _maxContrastMag,
   };
 }
 

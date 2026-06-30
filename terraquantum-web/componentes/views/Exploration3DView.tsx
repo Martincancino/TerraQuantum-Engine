@@ -779,15 +779,28 @@ export default function Exploration3DView() {
                     <div
                       className="h-2 w-full rounded-sm"
                       style={{
+                        // Viridis (perceptualmente uniforme) — coincide con
+                        // terraQuantumGeology.ts::DENSITY_VIRIDIS_STOPS.
                         background:
-                          "linear-gradient(to right, #00008c 0%, #001aff 10%, #00b3ff 22%, #00ffcc 35%, #1aff33 45%, #b3ff00 55%, #ffff00 63%, #ff9900 73%, #ff1a00 83%, #ff00b3 92%, #ff80e6 100%)",
+                          "linear-gradient(to right, rgb(68,1,84) 0%, rgb(72,36,117) 12.5%, rgb(65,68,135) 25%, rgb(53,95,141) 37.5%, rgb(42,120,142) 50%, rgb(33,145,140) 62.5%, rgb(34,168,132) 75%, rgb(122,209,81) 87.5%, rgb(253,231,37) 100%)",
                       }}
                     />
                     <div className="mt-1 flex justify-between text-[7px] font-mono text-white/45">
                       <span>Menos denso</span>
-                      <span>Roca normal</span>
+                      <span>Roca fondo</span>
                       <span>Más denso</span>
                     </div>
+                    {(() => {
+                      const dMin = (model as { densityMin?: number })?.densityMin;
+                      const dMax = (model as { densityMax?: number })?.densityMax;
+                      return Number.isFinite(dMin) && Number.isFinite(dMax) ? (
+                        <div className="mt-0.5 flex justify-between text-[7px] font-mono text-white/55">
+                          <span>{(dMin as number).toFixed(2)}</span>
+                          <span>t/m³</span>
+                          <span>{(dMax as number).toFixed(2)}</span>
+                        </div>
+                      ) : null;
+                    })()}
                     <p className="text-[7px] font-mono text-white/30 mt-1 leading-tight">
                       Contraste vs. fondo {formatLegendPercentile(layerPercentiles.p95)} t/m³ (P95)
                     </p>

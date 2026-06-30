@@ -145,6 +145,16 @@ const DENSITY_COUNTRY_ROCK_FALLBACK_T_M3 = 2.75;
 // masa y oculta el fondo neutro, revelando forma orgánica en vez de una caja llena.
 const ANOMALY_CONTRAST_VISIBLE = 0.18;
 
+// Piso de visibilidad RELATIVO AL PICO: solo emerge el núcleo del cuerpo (celdas
+// con contraste ≥ PEAK_FRACTION·pico), ocultando el "salt-and-pepper" de baja
+// anomalía. Robusto al sub-muestreo del visor (no usa vecindad espacial). El pico
+// está al 100% del máximo → SIEMPRE supera el piso → nunca se vacía el lienzo.
+const ANOMALY_PEAK_FRACTION = 0.20;
+// Si el pico de anomalía no supera este umbral (·escala robusta), el cuerpo es
+// legítimamente DÉBIL: no se eleva el piso (se conserva 0.18) y se marca weakAnomaly
+// para que la UI lo avise — el usuario nunca confunde "no corrió" con "corrió débil".
+const ANOMALY_WEAK_PEAK = 0.60;
+
 // Color neutro gris para vóxeles sin datos (e.g. susceptibilidad ausente en corrida gravity-only)
 const NEUTRAL_GRAY: [number, number, number] = [0.5, 0.5, 0.5];
 
@@ -177,22 +187,21 @@ const TURBO_STOPS: ColorStop[] = [
   [1.000, [0.478, 0.027, 0.000]],
 ];
 
-// Espectral arcoíris (estándar Geosoft/Oasis montaj) — densidad por CONTRASTE
-// respecto al fondo. Bajo (déficit de masa) = azul, fondo = verde, alto (exceso)
-// = rojo→magenta. SIN blanco: cada valor recibe un color saturado, como en la
-// leyenda clásica de geofísica. La normalización centra el fondo en el medio.
-const DENSITY_SPECTRAL_STOPS: ColorStop[] = [
-  [0.00, [0.000, 0.000, 0.549]],
-  [0.10, [0.000, 0.102, 1.000]],
-  [0.22, [0.000, 0.700, 1.000]],
-  [0.35, [0.000, 1.000, 0.800]],
-  [0.45, [0.102, 1.000, 0.200]],
-  [0.55, [0.700, 1.000, 0.000]],
-  [0.63, [1.000, 1.000, 0.000]],
-  [0.73, [1.000, 0.600, 0.000]],
-  [0.83, [1.000, 0.100, 0.000]],
-  [0.92, [1.000, 0.000, 0.700]],
-  [1.00, [1.000, 0.500, 0.900]],
+// Viridis (matplotlib) — densidad por CONTRASTE respecto al fondo. Mapa SECUENCIAL
+// PERCEPTUALMENTE UNIFORME: luminancia monótona, legible para daltónicos y sin los
+// saltos cromáticos del arcoíris (que exageraban gradientes inexistentes). Déficit
+// de masa = púrpura oscuro, fondo = teal, exceso (cuerpo denso) = amarillo brillante.
+// Reemplaza al espectral Geosoft (azul→…→magenta/rosa), no perceptual.
+const DENSITY_VIRIDIS_STOPS: ColorStop[] = [
+  [0.000, [0.267, 0.005, 0.329]],
+  [0.125, [0.283, 0.141, 0.458]],
+  [0.250, [0.254, 0.265, 0.530]],
+  [0.375, [0.207, 0.372, 0.553]],
+  [0.500, [0.164, 0.471, 0.558]],
+  [0.625, [0.128, 0.567, 0.551]],
+  [0.750, [0.135, 0.659, 0.518]],
+  [0.875, [0.478, 0.821, 0.318]],
+  [1.000, [0.993, 0.906, 0.144]],
 ];
 
 function sampleColormap(stops: ColorStop[], t: number): [number, number, number] {
@@ -357,7 +366,7 @@ export function updateInstancedBuffers({
   viewMode = 'density',
   jointThreshold = 0.6,
   doiThreshold = 0,
-}: UpdateInstancedBuffersParams): { visibleCount: number; highlightedCount: number; susceptibilityAvailable: boolean } {
+}: UpdateInstancedBuffersParams): { visibleCount: number; highlightedCount: number; susceptibilityAvailable: boolean; weakAnomaly: boolean; peakContrast: number } {
   const _r08_t0 = performance.now();
   const dummy = _dummy;
   let visibleCount = 0;
@@ -430,6 +439,17 @@ export function updateInstancedBuffers({
     densScale = Math.max((dynDensMax - dynDensMin) / 2, 0.05);
   }
 
+  // ── Piso de visibilidad relativo al PICO de anomalía (muestra el núcleo) ─────
+  let _maxContrastMag = 0;
+  for (let s = 0; s < densitySamples.length; s++) {
+    const m = densScale > 1e-9 ? Math.abs(densitySamples[s] - densBackground) / densScale : 0;
+    if (m > _maxContrastMag) _maxContrastMag = m;
+  }
+  const weakAnomaly = _maxContrastMag < ANOMALY_WEAK_PEAK;
+  const _effContrastFloor = weakAnomaly
+    ? ANOMALY_CONTRAST_VISIBLE
+    : Math.max(ANOMALY_CONTRAST_VISIBLE, ANOMALY_PEAK_FRACTION * _maxContrastMag);
+
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i] as SceneCell;
     const rawY = getCellNumber(cell, ["y", "cy"], 0);
@@ -497,7 +517,7 @@ export function updateInstancedBuffers({
       // déficit de masa de fuerte contraste es estructura geológica REAL y debe
       // verse: sin esto, el modo profesional nunca muestra azul (era la causa de
       // "no hay vóxeles azules" — el modo por defecto es profesional).
-      const passesContrast = _contrastMag >= ANOMALY_CONTRAST_VISIBLE;
+      const passesContrast = _contrastMag >= _effContrastFloor;
       if (config.scale === 0 && !passesContrast) { dummy.scale.set(0, 0, 0); dummy.position.set(rx_visual, ry_visual, rz_visual); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); continue; }
       visible = true;
       if (visualScore >= professionalScoreStats.threshold) highlightedCount++;
@@ -507,10 +527,10 @@ export function updateInstancedBuffers({
         const supportScore = densityStats.supportScores[i] ?? getExplorationSupportScore(cell, densityRatio);
         visible = isExplorationCellVisible(density, supportScore, densityStats, true);
       } else {
-        // Visibilidad por contraste simétrico: emergen los cuerpos anómalos
-        // (déficit O exceso); el fondo neutro se oculta. Resuelve "no hay azul",
-        // "todo blanco" y "caja con pocos vóxeles" de una vez.
-        visible = _contrastMag >= ANOMALY_CONTRAST_VISIBLE;
+        // Visibilidad por contraste simétrico relativo al PICO: emerge el NÚCLEO
+        // del cuerpo (déficit O exceso) y se oculta el halo de baja anomalía. El
+        // pico siempre supera el piso → nunca lienzo vacío (ver _effContrastFloor).
+        visible = _contrastMag >= _effContrastFloor;
       }
     } else if (isAnomalyDataMode) {
       visible = anomalyIntensity > 0;
@@ -580,7 +600,7 @@ export function updateInstancedBuffers({
         // aplastarse en una banda media casi uniforme (causa del "todo blanco").
         const _contrast = density - densBackground;
         const _u = clamp01(0.5 + 0.5 * (_contrast / densScale));
-        [_r, _g, _b] = sampleColormap(DENSITY_SPECTRAL_STOPS, _u);
+        [_r, _g, _b] = sampleColormap(DENSITY_VIRIDIS_STOPS, _u);
         const _alpha = 1 - 0.7 * _sigmaRatio;
         _r *= _alpha; _g *= _alpha; _b *= _alpha;
       }
@@ -603,5 +623,5 @@ export function updateInstancedBuffers({
     ` | total=${(_r08_gpu_end - _r08_t0).toFixed(1)}ms`
   );
   console.log("Vóxeles visibles tras filtro:", visibleCount);
-  return { visibleCount, highlightedCount, susceptibilityAvailable: susceptibilityFoundCount > 0 };
+  return { visibleCount, highlightedCount, susceptibilityAvailable: susceptibilityFoundCount > 0, weakAnomaly, peakContrast: _maxContrastMag };
 }

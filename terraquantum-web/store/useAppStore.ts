@@ -238,6 +238,11 @@ export interface AppState {
   setVisibleCellCount: (n: number) => void;
   highlightedCellCount: number;
   setHighlightedCellCount: (n: number) => void;
+  // Anomalía DÉBIL: el pico de contraste del modelo no supera el umbral robusto.
+  // El visor muestra igual el núcleo (top de celdas) pero la UI avisa para que el
+  // usuario no confunda "corrió y es débil" con "no corrió".
+  anomalyWeak: boolean;
+  setAnomalyWeak: (val: boolean) => void;
   susceptibilityDataAvailable: boolean;
   setSusceptibilityDataAvailable: (val: boolean) => void;
   // FASE 20C iter 2: overlay de flechas de magnetización (MVI). Independiente del
@@ -449,6 +454,7 @@ export const useAppStore = create<AppState>((set) => ({
             blockModelMode: null,
             visibleCellCount: 0,
             highlightedCellCount: 0,
+            anomalyWeak: false,
             hasElevationData: false,
             blockModelDemSource: null,
             blockModelGeorefConfidence: null,
@@ -536,6 +542,8 @@ export const useAppStore = create<AppState>((set) => ({
   setVisibleCellCount: (n) => set({ visibleCellCount: n }),
   highlightedCellCount: 0,
   setHighlightedCellCount: (n) => set({ highlightedCellCount: n }),
+  anomalyWeak: false,
+  setAnomalyWeak: (val) => set({ anomalyWeak: val }),
   susceptibilityDataAvailable: true,
   setSusceptibilityDataAvailable: (val) => set({ susceptibilityDataAvailable: val }),
   showMviVectors: false,

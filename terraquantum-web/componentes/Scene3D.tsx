@@ -558,6 +558,7 @@ function MineralComplex({
     setHighlightedCellCount, setSelectedVoxel,
     blockModelDataMode, visualProfessionalMode,
     setSusceptibilityDataAvailable,
+    setAnomalyWeak,
     setIsWorkerProcessing,
   } = useAppStore();
   const percentileStats = useAppStore((s) => s.percentileStats);
@@ -792,7 +793,7 @@ function MineralComplex({
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    const { visibleCount, highlightedCount, susceptibilityAvailable } = updateInstancedBuffers({
+    const { visibleCount, highlightedCount, susceptibilityAvailable, weakAnomaly } = updateInstancedBuffers({
       mesh,
       cells: model.cells,
       cellSize: model.cellSize || 10,
@@ -858,6 +859,8 @@ function MineralComplex({
     if (viewMode === 'susceptibility') {
       setSusceptibilityDataAvailable(susceptibilityAvailable);
     }
+    // Aviso de anomalía débil solo en vistas de densidad (no susceptibilidad/joint).
+    setAnomalyWeak(viewMode === 'density' && Boolean(weakAnomaly));
   }, [
     model,
     count,
@@ -882,6 +885,7 @@ function MineralComplex({
     setVisibleCellCount,
     setHighlightedCellCount,
     setSusceptibilityDataAvailable,
+    setAnomalyWeak,
     visualLayer,
     sigma95,
     // ── Fase 12 ──
@@ -946,6 +950,7 @@ function MineralComplex({
       visibleCount: number;
       highlightedCount: number;
       susceptibilityAvailable: boolean;
+      weakAnomaly: boolean;
     }>) => {
       if (!e.data || e.data.reqId !== reqId) return;
       worker.removeEventListener('message', handleMsg);
@@ -953,7 +958,7 @@ function MineralComplex({
       const m = meshRef.current;
       if (!m) return;
 
-      const { matricesF32, colorsF32, visibleCount: vc, highlightedCount: hc, susceptibilityAvailable: sa } = e.data;
+      const { matricesF32, colorsF32, visibleCount: vc, highlightedCount: hc, susceptibilityAvailable: sa, weakAnomaly: wa } = e.data;
 
       (m.instanceMatrix.array as Float32Array).set(matricesF32);
       m.instanceMatrix.needsUpdate = true;
@@ -985,6 +990,7 @@ function MineralComplex({
       if (viewMode === 'susceptibility') {
         setSusceptibilityDataAvailable(sa);
       }
+      setAnomalyWeak(viewMode === 'density' && Boolean(wa));
       // Geometría inyectada en GPU: apagar el overlay de procesamiento.
       setIsWorkerProcessing(false);
     };
@@ -998,6 +1004,7 @@ function MineralComplex({
     sliceAxis, slicePosition, sliceThickness, showOnlySlice,
     effectiveProfessionalMode, professionalScoreStats, elevationVisualState,
     setVisibleCellCount, setHighlightedCellCount, setSusceptibilityDataAvailable,
+    setAnomalyWeak,
     setIsWorkerProcessing,
     visualLayer, sigma95, viewMode, jointThreshold, doiThreshold,
   ]);
