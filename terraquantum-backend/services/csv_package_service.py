@@ -72,6 +72,13 @@ _CONFIG_DEFAULTS: dict = {
     "padding_kappa": 1e5,
     "anchor_kappa": 1e4,
     "auto_kappa": True,
+    # Norma de regularización del paquete. Default "L2": MEDIDO que con el auto-λ de
+    # Morozov la norma compacta dispersa el ruido en focos (peor concentración); compact
+    # solo ayuda a λ alto (no generaliza) y subajusta. "compact" queda disponible como
+    # opt-in para quien fije un λ alto. La limpieza visual del halo la hace el frontend.
+    "regularization_norm": "L2",
+    "compact_max_irls": 8,
+    "compact_eps": 0.05,
     "strict": True,
     "allow_g_raw": False,
     "utm_zone": None,

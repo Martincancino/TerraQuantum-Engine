@@ -1669,6 +1669,18 @@ async def load_package(
                 padding_kappa=float(cfg.get("padding_kappa", 1e5)),
                 anchor_kappa=float(cfg.get("anchor_kappa", 1e4)),
                 auto_kappa=bool(cfg.get("auto_kappa", True)),
+                # FASE 24B/render — norma de regularización (opt-in). MEDIDO (sintético
+                # v2, vía este flujo): con el auto-λ de Morozov (que baja λ para χ²≈1)
+                # la norma COMPACTA AFILA EL RUIDO en focos dispersos (conc. 38% vs 70%
+                # de L2). Compact solo entrega cuerpo nítido a λ alto (≈1.0 → conc 99%)
+                # PERO con χ²≈3.8 (subajuste) y ese λ NO generaliza (es escala-dependiente).
+                # Por eso el DEFAULT del paquete es "L2" (χ²≈1 escala-adaptivo + concentración
+                # sana); la limpieza visual del halo la hace el frontend (piso relativo al
+                # pico). Compact queda disponible (cfg["regularization_norm"]="compact") para
+                # quien fije un λ alto y acepte el subajuste. Ver tabla en el reporte.
+                regularization_norm=str(cfg.get("regularization_norm", "L2")),
+                compact_max_irls=int(cfg.get("compact_max_irls", 8)),
+                compact_eps=float(cfg.get("compact_eps", 0.05)),
             )
         except ValidationError as exc:
             raise HTTPException(
@@ -1771,6 +1783,12 @@ async def invert_gravity_csv(
     padding_kappa: float = Form(1e5),
     anchor_kappa: float = Form(1e4),
     auto_kappa: bool = Form(True),
+    # FASE 24B — Norma de regularización + knobs del IRLS minimum-support.
+    # /invert (flujo directo) conserva "L2" por default (puede correr a escala
+    # regional donde L2 es lo apropiado); el flujo de PAQUETE usa "compact".
+    regularization_norm: str = Form("L2"),
+    compact_max_irls: int = Form(8),
+    compact_eps: float = Form(0.05),
     # FASE 19 (Caso B) — Georef Helmert: ≥2 puntos de control local↔real (JSON).
     # Cuando el CSV es de coordenadas LOCALES, georeferencia las estaciones y valida
     # el anclaje (residual). Formato: {"points":[{"local_x","local_z","real_e","real_n",
@@ -2242,6 +2260,10 @@ async def invert_gravity_csv(
                 padding_kappa=padding_kappa,
                 anchor_kappa=anchor_kappa,
                 auto_kappa=auto_kappa,
+                # FASE 24B — Norma de regularización (default L2 en flujo directo).
+                regularization_norm=regularization_norm,
+                compact_max_irls=compact_max_irls,
+                compact_eps=compact_eps,
                 # compute_uncertainty queda OFF a propósito: a la λ que selecciona
                 # Morozov en surveys subdeterminados (LdM: 191 estaciones), la
                 # covarianza posterior está mal condicionada y σ explota (mediana

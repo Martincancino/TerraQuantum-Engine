@@ -469,6 +469,18 @@ class GeophysicsInvertInput(BaseModel):
         description="Norma de regularización: 'L2' (suave, default), 'compact' (minimum "
                     "support, cuerpos nítidos), 'mixed' (compact + bordes, experimental).",
     )
+    # Knobs del IRLS minimum-support (solo aplican a compact/mixed; ignorados en L2).
+    # Defaults = defaults del solver gravimétrico → byte-idéntico si no se fijan.
+    compact_max_irls: int = Field(
+        8, ge=1, le=20,
+        description="Nº de reponderaciones IRLS del minimum-support (compact/mixed). "
+                    "Más iteraciones → cuerpo más nítido a costa de tiempo. Default 8.",
+    )
+    compact_eps: float = Field(
+        0.05, gt=0.0, le=1.0,
+        description="Piso de foco del IRLS (t/m³) que estabiliza la reponderación "
+                    "compacta. Default 0.05 (= default del solver gravimétrico).",
+    )
     # ── FASE 24B Tarea 4: Topografía fraccionaria (cut-cell, anti-staircase) ────
     # OFF (default) = máscara de aire binaria. ON = celdas de borde ponderan por su
     # fracción de volumen rocoso bajo el DEM → elimina el efecto escalera en terreno

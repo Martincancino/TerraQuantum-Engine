@@ -58,6 +58,8 @@ def _run_lsqr_with_heartbeat(
     detect_outliers: bool = True,
     # ── FASE 24B Tarea 1: Norma de regularización (L2 / compact / mixed) ───────
     regularization_norm: str = "L2",
+    compact_max_irls: int = 8,    # nº de reponderaciones IRLS (compact/mixed)
+    compact_eps: float = 0.05,    # piso de foco del IRLS minimum-support
     # ── FASE 24B Tarea 4: Topografía fraccionaria (cut-cell) ───────────────────
     cut_cell_topography: bool = False,
 ):
@@ -113,6 +115,8 @@ def _run_lsqr_with_heartbeat(
             auto_kappa=auto_kappa,      # FASE 16: ajuste automático de kappas
             detect_outliers=detect_outliers,  # FASE 18: MAD robust sigma
             regularization_norm=regularization_norm,  # FASE 24B: L2/compact/mixed
+            compact_max_irls=compact_max_irls,         # FASE 24B: knobs del IRLS
+            compact_eps=compact_eps,
             cut_cell_topography=cut_cell_topography,   # FASE 24B: cut-cell anti-staircase
         )
     finally:

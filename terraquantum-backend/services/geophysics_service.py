@@ -607,26 +607,96 @@ def build_voxel_output(df_anomaly: pl.DataFrame, block_size: float, cutoff_densi
     return voxels
 
 
-def build_best_target(voxels, technical_summary: dict = None, uncertainty_diagnostics: dict = None):
-    if not voxels:
+def build_best_target(df_full, technical_summary: dict = None, uncertainty_diagnostics: dict = None,
+                      *, density_min=None, density_max=None, block_size=None,
+                      cutoff_density=None):
+    """Selecciona el blanco de perforación RESOLUBLE (B1 — null-space honesto).
+
+    ANTES elegía la celda de mayor (probabilidad × max(densidad−2.6, 0) × proxy), un
+    scoring sesgado a ALTA densidad: para un objetivo de BAJA densidad (p.ej. el reservorio
+    de Laguna del Maule) premiaba el cuerpo ESPURIO de alta densidad saturado al bound en
+    el PISO de malla — masa null-space NO constreñida por el dato — y le ponía sello HIGH.
+    Recomendaba perforar el lugar equivocado: la mentira más cara del reporte.
+
+    AHORA, sobre el CAMPO ACTIVO COMPLETO (df_full, no sólo las anomalías de alta densidad):
+      • excluye celdas bound-saturadas en el piso (densidad ≈ límite petrofísico Y
+        profundidad ≈ piso de malla) — son artefactos null-space, no blancos;
+      • puntúa por |densidad − fondo| (anomalía de CUALQUIER signo) → surfacea el cuerpo
+        dominante a profundidad RESOLUBLE, también de baja densidad;
+      • reporta con transparencia el artefacto degradado y JAMÁS lo presenta como HIGH.
+
+    GUARDRAIL: si no se pasan density_min/density_max/block_size, NO se detecta saturación
+    de piso (artifact_mask vacío) → comportamiento de selección por |anomalía| sin democión.
+    """
+    if df_full is None or len(df_full) == 0:
+        return None
+    active = df_full.filter(pl.col("density").is_not_null() & pl.col("density").is_finite())
+    if len(active) == 0:
         return None
 
-    # `or 0.0` en todas las claves: con topografía activa los vóxeles pueden
-    # traer probability/density = None (NaN sanitizado), no solo clave ausente.
-    best = max(
-        voxels,
-        key=lambda v: (
-            float(v.get("probability") or 0.0)
-            * max(float(v.get("density") or 2.6) - 2.6, 0.0)
-            * max(float(v.get("density_proxy_index") or 0.0), 0.01)
-        ),
-    )
+    def _arr(name):
+        return active[name].to_numpy() if name in active.columns else None
 
+    dens = active["density"].to_numpy().astype(float)
+    xs, ys, zs = _arr("x"), _arr("y"), _arr("z")
+    prob = _arr("probability")
+    prob = np.nan_to_num(prob.astype(float), nan=0.0) if prob is not None else np.zeros_like(dens)
+    grade = _arr("grade")
+    sens = _arr("sensitivity_proxy")
+    if sens is not None:
+        sens = np.clip(np.nan_to_num(sens.astype(float), nan=0.0), 0.0, None)
+
+    background = float(np.median(dens))                # fondo robusto del campo recuperado
+    anomaly = np.abs(dens - background)                # anomalía de cualquier signo
+    floor_depth = float(np.max(ys)) if ys is not None else None
+
+    # ── Detección de null-space: bound-saturado en el piso de malla ──────────────
+    artifact_mask = np.zeros(dens.shape, dtype=bool)
+    if (density_min is not None and density_max is not None and block_size is not None
+            and ys is not None and floor_depth is not None):
+        rng = max(float(density_max) - float(density_min), 1e-9)
+        tol = 0.02 * rng                               # 2% del rango = "saturado al bound"
+        band = 1.5 * float(block_size)                 # dentro de ~1 celda del piso
+        saturated = (dens >= float(density_max) - tol) | (dens <= float(density_min) + tol)
+        at_floor = ys >= (floor_depth - band)
+        artifact_mask = saturated & at_floor
+    n_artifact = int(artifact_mask.sum())
+
+    # Targeting ponderado por RESOLUBILIDAD del dato: recomendar perforar donde el dato
+    # MUESTRA anomalía Y la CONSTRIÑE (sensitivity_proxy / DOI). El artefacto profundo de
+    # null-space (masa apilada en el piso, sensibilidad ~0) queda down-rankeado frente al
+    # cuerpo somero data-constreñido — aunque su |anomalía| absoluta sea menor. Sin
+    # columna de sensibilidad → fallback a |anomalía| pura (comportamiento previo).
+    if sens is not None and np.any(sens > 0):
+        score = sens * anomaly
+    else:
+        score = anomaly
+    resolvable = ~artifact_mask
+    surfaced_is_artifact = False
+    if resolvable.any():
+        bi = int(np.argmax(np.where(resolvable, score, -np.inf)))
+    else:
+        # Degenerado: TODO el modelo satura en el piso → no hay blanco fiable.
+        bi = int(np.argmax(score))
+        surfaced_is_artifact = True
+
+    # Artefacto degradado (mayor anomalía entre los de piso) — transparencia, no silencio.
+    demoted = None
+    if n_artifact > 0:
+        ai = int(np.argmax(np.where(artifact_mask, anomaly, -np.inf)))
+        demoted = {
+            "x_m": float(xs[ai]), "y_m": float(ys[ai]), "z_m": float(zs[ai]),
+            "density": round(float(dens[ai]), 4), "depth_m": float(ys[ai]),
+            "reason": ("bound_saturated_floor: densidad ≈ límite petrofísico y profundidad ≈ "
+                       "piso de malla → masa null-space NO constreñida por el dato; no es un "
+                       "blanco de perforación."),
+        }
+
+    # ── Confianza: JAMÁS HIGH si el blanco surfaceado es un artefacto null-space. ─
     ts = technical_summary or {}
     ud = uncertainty_diagnostics or {}
     overall_level = str(ts.get("overall_level", "")).upper()
     uncertainty_level = str(ud.get("uncertainty_level", "")).upper()
-    
     if overall_level == "GOOD" or uncertainty_level == "LOW":
         confidence_level = "HIGH"
     elif overall_level == "MEDIUM" or uncertainty_level == "MEDIUM":
@@ -635,23 +705,387 @@ def build_best_target(voxels, technical_summary: dict = None, uncertainty_diagno
         confidence_level = "LOW"
     else:
         confidence_level = "UNKNOWN"
+    if surfaced_is_artifact:
+        confidence_level = "LOW"
+
+    g_val = (float(grade[bi]) if (grade is not None and grade[bi] is not None
+                                  and np.isfinite(grade[bi])) else None)
+    p_val = float(prob[bi])
+    d_val = float(dens[bi])
+    das = None
+    if cutoff_density is not None:
+        das = min(1.0, max(0.0, d_val - float(cutoff_density)) / max(float(cutoff_density), 1e-9))
+    is_resolvable = (None if (floor_depth is None or block_size is None)
+                     else bool(float(ys[bi]) < floor_depth - 1.5 * float(block_size)))
 
     return {
-        "x_m": best["x_m"],
-        "y_m": best["y_m"],
-        "z_m": best["z_m"],
-        "density": best["density"],
-        "density_proxy_index": best.get("density_proxy_index"),
+        "x_m": float(xs[bi]),
+        "y_m": float(ys[bi]),
+        "z_m": float(zs[bi]),
+        "density": d_val,
+        "density_proxy_index": g_val,
+        "grade": g_val,
         "is_demo_grade": True,
         "provenance": _GRADE_PROVENANCE,
-        "probability": best["probability"],
-        "anomaly_intensity": best.get("anomaly_intensity"),
-        "target_score": best.get("target_score"),
-        "relative_target_score": best.get("relative_target_score", best.get("probability", 0.0)),
-        "modeled_density_index": best.get("modeled_density_index"),
-        "density_anomaly_score": best.get("density_anomaly_score"),
+        "probability": p_val,
+        "anomaly_intensity": g_val,
+        "target_score": p_val,
+        "relative_target_score": p_val,
+        "modeled_density_index": d_val,
+        "density_anomaly_score": das,
         "confidence_level": confidence_level,
+        # ── B1: transparencia null-space ───────────────────────────────────────
+        "anomaly_magnitude": round(float(anomaly[bi]), 4),
+        "anomaly_background_density": round(background, 4),
+        "depth_m": float(ys[bi]),
+        "is_resolvable_depth": is_resolvable,
+        "is_null_space_artifact": bool(surfaced_is_artifact),
+        "n_floor_saturated_cells": n_artifact,
+        "floor_saturated_demoted": demoted,
+        "selection_note": (
+            "Blanco RESOLUBLE = (sensibilidad × |densidad−fondo|) máx excluyendo celdas "
+            "bound-saturadas en el piso de malla (null-space). "
+            + (f"{n_artifact} celda(s) de piso degradada(s) como artefacto." if n_artifact
+               else "Sin artefacto de piso detectado.")
+            + (" ADVERTENCIA: todo el modelo satura en el piso; el blanco mostrado es "
+               "null-space, NO fiable." if surfaced_is_artifact else "")
+        ),
     }
+
+
+# ── B3: veredicto de calidad RECONCILIADO (un solo veredicto honesto) ──────────
+_VERDICT_ORD = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+_ORD_VERDICT = {1: "LOW", 2: "MEDIUM", 3: "HIGH"}
+
+
+def _priority_to_level(pc: str):
+    pc = str(pc or "").upper()
+    if "HIGH" in pc:
+        return "HIGH"
+    if "MEDIUM" in pc:
+        return "MEDIUM"
+    if pc:  # LOW_RELATIVE_PRIORITY, UNCLASSIFIED, TOTALLY_UNKNOWN_PRIORITY, NONE…
+        return "LOW"
+    return None
+
+
+def _reliability_to_level(mrl: str):
+    mrl = str(mrl or "").upper()
+    if "HIGH" in mrl:
+        return "HIGH"
+    if "MEDIUM" in mrl:
+        return "MEDIUM"
+    if "LOW" in mrl or "UNCLASSIFIED" in mrl:
+        return "LOW"
+    return None
+
+
+def build_reconciled_verdict(report_payload: dict) -> dict:
+    """B3 — UN SOLO veredicto honesto: el eslabón MÁS DÉBIL (worst-of) de las señales de
+    calidad que hoy conviven contradictorias en el reporte (confianza de survey,
+    confiabilidad del modelo, prioridad de targeting, gate físico de padding/regional r06,
+    y si el blanco recuperado es null-space).
+
+    NO inventa métrica nueva: reconcilia las que YA existen tomando la más conservadora.
+    Nunca deja sobrevivir un 'HIGH' junto a un REMEDIATION_REQUIRED / UNCLASSIFIED /
+    blanco null-space. Devuelve el veredicto; el caller capa (downgrade-only) los campos
+    individuales para que el payload sea internamente consistente.
+    """
+    components = {}
+    levels = []  # (nivel, etiqueta_de_la_señal)
+
+    survey_conf = str(report_payload.get("confidence_level", "")).upper()
+    components["survey_confidence"] = survey_conf or "UNKNOWN"
+    if survey_conf in _VERDICT_ORD:
+        levels.append((survey_conf, "survey_confidence"))
+
+    mrl = str(report_payload.get("model_reliability_level", "")).upper()
+    components["model_reliability"] = mrl or "UNKNOWN"
+    rl = _reliability_to_level(mrl)
+    if rl:
+        levels.append((rl, "model_reliability"))
+
+    pc = str(report_payload.get("priority_class", "")).upper()
+    components["priority_class"] = pc or "UNKNOWN"
+    pl_ = _priority_to_level(pc)
+    if pl_:
+        levels.append((pl_, "priority_class"))
+
+    r06 = report_payload.get("r06_padding_saturation_audit") or {}
+    gate = str(r06.get("phase_gate_recommendation", "")).upper()
+    components["r06_padding_gate"] = gate or "NOT_RUN"
+    if r06:
+        # Severidad FÍSICA del padding saturado: fracción de la masa / del forward / del
+        # RMS que explica el padding pegado al bound. Se IGNORA delta_chi2_pct (driver del
+        # gate): compara el chi2 del solver contra un chi2 recalculado con σ distinto →
+        # dispara REMEDIATION falsa aunque mass/forward/rms ≈ 0 (medido en LdM/porphyry:
+        # delta_chi2≈80-95% con forward_frac≈0). El veredicto honesto usa lo físico.
+        def _f(k):
+            try:
+                return float(r06.get(k))
+            except (TypeError, ValueError):
+                return 0.0
+        phys = max(_f("forward_fraction_pad_saturated"),
+                   _f("mass_fraction_pad_saturated"),
+                   _f("delta_rms_pct") / 100.0)
+        components["r06_physical_severity"] = round(phys, 6)
+        if phys >= 0.10:
+            levels.append(("LOW", "r06_padding_physical"))
+        elif phys >= 0.01:
+            levels.append(("MEDIUM", "r06_padding_physical"))
+        # phys < 1% → padding físicamente irrelevante → sin contribución (no cap),
+        # aunque el gate diga REMEDIATION (falso por el delta_chi2 inconsistente).
+
+    bt = report_payload.get("best_target") or {}
+    bt_artifact = bool(bt.get("is_null_space_artifact"))
+    components["best_target_null_space"] = bt_artifact
+    if bt_artifact:
+        levels.append(("LOW", "best_target_null_space"))
+
+    if not levels:
+        overall = "UNKNOWN"
+        overall_ord = None
+        limiting = []
+    else:
+        overall_ord = min(_VERDICT_ORD[lv] for lv, _ in levels)
+        overall = _ORD_VERDICT[overall_ord]
+        limiting = [name for lv, name in levels if _VERDICT_ORD[lv] == overall_ord]
+
+    if overall == "HIGH":
+        headline = ("Modelo geofísicamente confiable a su escala: blanco resoluble y bien "
+                    "constreñido por el dato.")
+        action = "Usar como soporte técnico; integrar con geología antes de decisiones críticas."
+    elif overall == "MEDIUM":
+        headline = ("Modelo utilizable con CAUTELA; limitado por: " + ", ".join(limiting) +
+                    ". Tratar el blanco como indicio a corroborar.")
+        action = "Revisar cobertura/residuales/regional antes de comprometer perforación."
+    elif overall == "LOW":
+        headline = ("Modelo NO confiable como base ÚNICA; limitado por: " + ", ".join(limiting) +
+                    ". El blanco es un INDICIO, no un objetivo de perforación.")
+        action = ("No perforar sólo con este modelo: recolectar más dato / remover regional / "
+                  "revisar saturación de padding antes de decidir.")
+    else:
+        headline = "Veredicto de calidad indeterminado (señales insuficientes)."
+        action = "Revisar la calidad del survey y re-ejecutar."
+
+    return {
+        "level": overall,
+        "limiting_factors": limiting,
+        "components": components,
+        "headline": headline,
+        "recommended_action": action,
+        "method": "weakest_link_reconciliation",
+        "note": (
+            "Veredicto ÚNICO = el más conservador entre confianza de survey, confiabilidad "
+            "del modelo, prioridad de targeting, gate físico de padding/regional (r06) y "
+            "validez del blanco (null-space). Reconcilia señales que antes se reportaban por "
+            "separado y podían contradecirse (p.ej. GOOD/HIGH junto a UNCLASSIFIED/REMEDIATION)."
+        ),
+    }
+
+
+def _cap_confidence_str(current: str, overall_ord) -> str:
+    """Downgrade-only de un confidence_level (HIGH/MEDIUM/LOW) al techo del veredicto."""
+    if overall_ord is None:
+        return current
+    cur = str(current or "").upper()
+    if cur not in _VERDICT_ORD:
+        return current
+    if _VERDICT_ORD[cur] <= overall_ord:
+        return current
+    return _ORD_VERDICT[overall_ord]
+
+
+def _cap_reliability_str(current: str, overall_ord) -> str:
+    """Downgrade-only de model_reliability_level (…_RELIABILITY) al techo del veredicto."""
+    if overall_ord is None:
+        return current
+    cur_lv = _reliability_to_level(current)
+    if cur_lv is None or _VERDICT_ORD[cur_lv] <= overall_ord:
+        return current
+    return {1: "LOW_RELIABILITY", 2: "MEDIUM_RELIABILITY", 3: "HIGH_RELIABILITY"}[overall_ord]
+
+
+def apply_reconciled_verdict(report_payload: dict) -> dict:
+    """Calcula el veredicto reconciliado, lo adjunta como `overall_verdict` y CAPA
+    (downgrade-only) confidence_level / model_reliability_level / best_target.confidence_level
+    para que el payload no sostenga un 'HIGH' que el veredicto único contradice. NO toca
+    priority_class (concepto distinto y con tests propios). Idempotente y non-fatal."""
+    verdict = build_reconciled_verdict(report_payload)
+    report_payload["overall_verdict"] = verdict
+    overall_ord = _VERDICT_ORD.get(verdict["level"])
+    if overall_ord is not None:
+        report_payload["confidence_level"] = _cap_confidence_str(
+            report_payload.get("confidence_level"), overall_ord)
+        report_payload["model_reliability_level"] = _cap_reliability_str(
+            report_payload.get("model_reliability_level"), overall_ord)
+        bt = report_payload.get("best_target")
+        if isinstance(bt, dict) and bt.get("confidence_level") is not None:
+            bt["confidence_level"] = _cap_confidence_str(bt.get("confidence_level"), overall_ord)
+    return verdict
+
+
+def build_depth_resolution(df_full, observable_depth_max_m, best_target,
+                           block_size) -> dict:
+    """B2 — resolución de profundidad POR-EJE, derivada del MODELO recuperado (NO usa el
+    posterior σ Hutchinson, que sale 100% NaN en casos tipo LdM).
+
+    La gravimetría resuelve la posición HORIZONTAL (apretada) pero NO la PROFUNDIDAD: la
+    masa que cae bajo la profundidad observable es cola null-space (data-consistente pero no
+    constreñida). Este bloque MIDE esa cola y reporta una historia honesta por-eje, en vez
+    de ofrecer un número de profundidad global engañoso.
+
+    Pura y aditiva. df_full = block model recuperado (polars, columnas density,x,y,z).
+    observable_depth_max_m = min(cutoff, ny·block) (r05). best_target = salida de B1
+    (usa depth_m + is_resolvable_depth). Nunca crashea: df vacío → computed=False.
+    """
+    out = {
+        "computed": False,
+        "method": "model_derived_depth_resolution_no_posterior",
+        "note": ("Derivado del modelo recuperado (df_full), NO del posterior σ (Hutchinson "
+                 "sale NaN en casos tipo LdM). Cuantifica la cola null-space de profundidad."),
+    }
+    try:
+        if df_full is None or len(df_full) == 0:
+            out["reason"] = "df_full vacío"
+            return out
+        active = df_full.filter(pl.col("density").is_not_null() & pl.col("density").is_finite())
+        if len(active) == 0 or "y" not in active.columns:
+            out["reason"] = "sin celdas activas o sin columna y"
+            return out
+
+        dens = active["density"].to_numpy().astype(float)
+        xs = active["x"].to_numpy().astype(float) if "x" in active.columns else None
+        ys = active["y"].to_numpy().astype(float)
+        zs = active["z"].to_numpy().astype(float) if "z" in active.columns else None
+        sens = (np.clip(np.nan_to_num(active["sensitivity_proxy"].to_numpy().astype(float), nan=0.0), 0.0, None)
+                if "sensitivity_proxy" in active.columns else None)
+
+        background = float(np.median(dens))                 # MISMA def de fondo que B1
+        anomaly = np.abs(dens - background)
+        total_mass = float(anomaly.sum())
+        if total_mass <= 0.0:
+            out["reason"] = "campo plano (sin anomalía)"
+            return out
+
+        geometric_max = (float(observable_depth_max_m) if observable_depth_max_m is not None
+                         else float(np.max(ys)))
+
+        # ── Horizonte de RESOLUBILIDAD = profundidad de investigación (DOI) por SENSIBILIDAD,
+        #    NO el cutoff geométrico. MEDIDO: el cutoff (p.ej. 5022 m en LdM) es más profundo
+        #    que el propio artefacto null-space → daría deep_mass_fraction=0, contradiciendo
+        #    la cola real (~0.88). La sensibilidad cae con la profundidad (el dato deja de
+        #    restringir); el horizonte = capa más profunda con sens media ≥ 15% del pico. ──
+        horizon_method = "geometric_cutoff_fallback"
+        doi_horizon = geometric_max
+        if sens is not None and float(np.max(sens)) > 0.0:
+            # DOI half-max: capa más profunda cuya sensibilidad media ≥ 50% del PICO de capa.
+            # Es la "profundidad de investigación" donde la sensibilidad del dato cae a la
+            # mitad de su máximo — convención estándar y robusta (no un umbral arbitrario).
+            layers = np.unique(ys)
+            layer_mean = np.array([float(sens[ys == yy].mean()) for yy in layers])
+            peak = float(layer_mean.max())
+            if peak > 0.0:
+                ok = layers[layer_mean >= 0.5 * peak]
+                doi_horizon = float(ok.max()) if ok.size > 0 else float(layers.min())
+                horizon_method = "sensitivity_doi_half_max_layer"
+        # No puede ser más profundo que la observabilidad geométrica.
+        rdmax = float(min(doi_horizon, geometric_max))
+
+        # ── Cola null-space: fracción de la "masa" de anomalía bajo el horizonte resoluble ──
+        deep_mask = ys > rdmax
+        deep_mass_fraction = float(anomaly[deep_mask].sum()) / total_mass
+
+        # ── Localización horizontal del cuerpo RESOLUBLE (sobre umbral de anomalía) ──
+        horiz_metric_m = None
+        resolvable_mask = (ys <= rdmax) & (anomaly > 0)
+        if np.any(resolvable_mask) and xs is not None and zs is not None:
+            a_r = anomaly[resolvable_mask]
+            strong = a_r > 0.5 * float(a_r.max())
+            if not np.any(strong):
+                strong = a_r > 0
+            xr = xs[resolvable_mask][strong]
+            zr = zs[resolvable_mask][strong]
+            wr = a_r[strong]
+            wsum = float(wr.sum())
+            if wsum > 0:
+                xm = float(np.average(xr, weights=wr))
+                zm = float(np.average(zr, weights=wr))
+                std_x = float(np.sqrt(np.average((xr - xm) ** 2, weights=wr)))
+                std_z = float(np.sqrt(np.average((zr - zm) ** 2, weights=wr)))
+                horiz_metric_m = round(0.5 * (std_x + std_z), 1)  # semi-anchura característica
+
+        bs = float(block_size) if block_size else 0.0
+        # COMPACIDAD del cuerpo (descriptivo del ANCHO), NO calidad de resolución: la
+        # gravimetría SÍ determina el footprint en planta; el ancho es una propiedad
+        # GEOLÓGICA (LdM=sistema silícico ancho; DO-27=pipe compacto), no un límite de
+        # resolución. Por eso 'broad' ≠ 'malo' y NO degrada el veredicto ni el targeting.
+        if horiz_metric_m is None:
+            compactness = "unknown"
+        elif bs > 0 and horiz_metric_m <= 2.0 * bs:
+            compactness = "compact"
+        elif bs > 0 and horiz_metric_m <= 5.0 * bs:
+            compactness = "broad"
+        else:
+            compactness = "diffuse"
+        horizontal_determined = horiz_metric_m is not None
+
+        # Calidad vertical: dominada por la cola null-space si la mayoría de la masa cae profundo.
+        if deep_mass_fraction >= 0.66:
+            vert_quality = "null_space_dominated"
+        elif deep_mass_fraction >= 0.33:
+            vert_quality = "poor"
+        else:
+            vert_quality = "resolved"
+
+        bt = best_target or {}
+        resolvable_body_depth_m = (
+            bt.get("depth_m") if bt.get("is_resolvable_depth") else None)
+
+        pct = round(100.0 * deep_mass_fraction, 1)
+        statement = (
+            (f"Footprint horizontal DETERMINADO (~{horiz_metric_m} m de extensión, "
+             f"cuerpo {compactness})."
+             if horiz_metric_m is not None else "Footprint horizontal no estimable.")
+            + f" Profundidad NO resuelta bajo ~{round(rdmax,1)} m: {pct}% de la masa "
+              "recuperada vive en la cola null-space (no constreñida por el dato gravimétrico)."
+            + (f" Cuerpo resoluble a ~{round(resolvable_body_depth_m,1)} m." if resolvable_body_depth_m is not None else "")
+            + " La gravimetría resuelve DÓNDE en planta, no a qué profundidad."
+        )
+
+        out.update({
+            "computed": True,
+            "resolvable_depth_max_m": round(rdmax, 1),
+            "resolvable_depth_horizon_method": horizon_method,
+            "geometric_observable_depth_max_m": round(geometric_max, 1),
+            "resolvable_body_depth_m": (round(float(resolvable_body_depth_m), 1)
+                                        if resolvable_body_depth_m is not None else None),
+            "deep_mass_fraction": round(deep_mass_fraction, 3),
+            "horizontal_extent_m": horiz_metric_m,
+            "background_density_median": round(background, 4),
+            "per_axis": {
+                # Horizontal = FORTALEZA (lo que gravedad SÍ resuelve), sin 'quality/poor'.
+                "horizontal": {
+                    "determined": bool(horizontal_determined),
+                    "compactness": compactness,
+                    "extent_m": horiz_metric_m,
+                    "note": ("Gravimetría resuelve el footprint en planta; el ancho "
+                             "(compactness) es una propiedad geológica, NO un límite de "
+                             "resolución ni una falla de targeting."),
+                },
+                "vertical": {
+                    "quality": vert_quality,
+                    "deep_mass_fraction": round(deep_mass_fraction, 3),
+                    "reason": (f"deep_mass_fraction={round(deep_mass_fraction,3)}; "
+                               f"bajo {round(rdmax,1)} m el dato no restringe"),
+                },
+            },
+            "statement": statement,
+        })
+        return out
+    except Exception as exc:  # nunca rompe la inversión
+        out["reason"] = f"error: {exc}"
+        return out
 
 
 def build_geophysical_technical_summary(observation_quality: dict, fit_diagnostics: dict) -> dict:
@@ -2353,6 +2787,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             solver_meta=_meta_out,          # OUT: acond, chi2_final, sat_*
             detect_outliers=bool(getattr(params, "robust_sigma", True)),  # FASE 18
             regularization_norm=getattr(params, "regularization_norm", "L2"),  # FASE 24B
+            compact_max_irls=int(getattr(params, "compact_max_irls", 8)),     # FASE 24B knobs
+            compact_eps=float(getattr(params, "compact_eps", 0.05)),
             cut_cell_topography=bool(getattr(params, "cut_cell_topography", False)),  # FASE 24B T4
         )
 
@@ -2545,6 +2981,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
                     prune_observable_domain=False,
                     solver_meta=_pgi_meta,
                     regularization_norm=getattr(params, "regularization_norm", "L2"),  # FASE 24B
+                    compact_max_irls=int(getattr(params, "compact_max_irls", 8)),     # FASE 24B knobs
+                    compact_eps=float(getattr(params, "compact_eps", 0.05)),
                 )
             )
             _density_pgi_full = np.asarray(_density_pgi_full, dtype=np.float64)
@@ -3494,10 +3932,17 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     uncertainty_diagnostics = build_uncertainty_diagnostics(qaqc_report, fit_diagnostics, technical_summary)
     sensor_quality_flags = build_sensor_quality_flags(fit_diagnostics)
 
+    # B1 (null-space honesto): el blanco se elige sobre el CAMPO ACTIVO COMPLETO (df_full),
+    # no sólo las anomalías de alta densidad, para que el cuerpo de baja densidad a
+    # profundidad resoluble pueda surfacear y el artefacto bound-saturado del piso se degrade.
     best_target = build_best_target(
-        voxels,
+        df_full,
         technical_summary=technical_summary,
-        uncertainty_diagnostics=uncertainty_diagnostics
+        uncertainty_diagnostics=uncertainty_diagnostics,
+        density_min=getattr(params, "density_min", None),
+        density_max=getattr(params, "density_max", None),
+        block_size=dx,
+        cutoff_density=float(cutoff_density),
     )
 
     report = build_geophysics_report(
@@ -3600,6 +4045,11 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     # ── Decisión final R-03 (basada en saturación real medida) ──────────────
     _r03_decision = r03_saturation.get("r03_decision", "R03_NOT_REQUIRED") if r03_saturation else "R03_NOT_REQUIRED"
 
+    # ── B2: resolución de profundidad POR-EJE (aditivo; no usa el posterior σ NaN) ──
+    _observable_depth_max_m = round(min(params.cutoff_radius, params.ny * params.block_size), 1)
+    _depth_resolution = build_depth_resolution(
+        df_full, _observable_depth_max_m, best_target, dx)
+
     report_payload = {
         **report,
         **block_model_ref.metadata(),
@@ -3610,6 +4060,8 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         ),
         "doiDiagnostics": doi_summary,
         "uncertaintyPosterior": posterior_uncertainty_summary,
+        # ── B2: resolución de profundidad por-eje (cola null-space MEDIDA) ────
+        "depthResolution": _depth_resolution,
         # ── FASE 8.3: targeting probabilístico (null si compute_drill_targets=False) ─
         "drillTargets": drill_targets_report or {
             "computed": False,
@@ -3804,6 +4256,18 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         write_run_report_snapshot(params, report_payload)
     except Exception as exc:
         _log.warning("favorability_nonfatal", error=str(exc))
+
+    # B3: veredicto de calidad RECONCILIADO (eslabón más débil). VA EN SU PROPIO try,
+    # FUERA del bloque de favorabilidad: ese bloque falla a menudo (NaN de UQ), y el
+    # veredicto honesto debe emitirse SIEMPRE. Para entonces report_payload ya tiene
+    # confianza, confiabilidad, priority_class, r06 y best_target. Adjunta overall_verdict
+    # y capa (downgrade-only) los campos individuales para que el payload no sostenga un
+    # 'HIGH' contradicho por REMEDIATION/UNCLASSIFIED/blanco null-space.
+    try:
+        apply_reconciled_verdict(report_payload)
+        write_run_report_snapshot(params, report_payload)
+    except Exception as exc:
+        _log.warning("reconciled_verdict_nonfatal", error=str(exc))
 
     _log.info(
         "inversion_done",
