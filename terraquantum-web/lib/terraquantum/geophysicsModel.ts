@@ -41,10 +41,44 @@ export type BackendInvertResponse = {
     is_demo_grade: boolean;
     provenance: { grade_source: string; assay_supported: boolean; economically_validated: boolean };
     probability: number;
+    // B1 (null-space honesto): blanco resoluble + transparencia del artefacto de piso.
+    depth_m?: number;
+    is_resolvable_depth?: boolean | null;
+    confidence_level?: string;          // capado por el veredicto reconciliado (B3)
+    is_null_space_artifact?: boolean;
+    n_floor_saturated_cells?: number;
+    anomaly_magnitude?: number;
+    floor_saturated_demoted?: {
+      x_m: number; y_m: number; z_m: number; density: number; depth_m: number; reason: string;
+    } | null;
+    selection_note?: string;
   } | null;
   report: {
     status: string;
     priority_class?: string;
+    // B3 — veredicto único reconciliado (eslabón más débil).
+    overall_verdict?: {
+      level: string;
+      limiting_factors?: string[];
+      components?: Record<string, unknown>;
+      headline?: string;
+      recommended_action?: string;
+    };
+    // B2 — resolución de profundidad por-eje (cola null-space; sin posterior σ).
+    depthResolution?: {
+      computed: boolean;
+      resolvable_depth_max_m?: number;
+      resolvable_depth_horizon_method?: string;
+      geometric_observable_depth_max_m?: number;
+      resolvable_body_depth_m?: number | null;
+      deep_mass_fraction?: number;
+      horizontal_extent_m?: number | null;
+      per_axis?: {
+        horizontal?: { determined: boolean; compactness: string; extent_m: number | null };
+        vertical?: { quality: string; deep_mass_fraction: number };
+      };
+      statement?: string;
+    };
     preliminary_signal?: string;
     risk_level: string;
     min_density?: number;

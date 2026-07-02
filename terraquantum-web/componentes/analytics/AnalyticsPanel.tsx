@@ -11,6 +11,11 @@ import DoiConfidenceWidget from "./DoiConfidenceWidget";
 import { NoiseSnrWidget, UncertaintyPosteriorWidget } from "./NoiseUncertaintyWidgets";
 import LCurveWidget from "./LCurveWidget";
 import { SensorCoverageWidget, RecoveryWidget } from "./RecoveryCoverageWidgets";
+import {
+  OverallVerdictWidget,
+  BestTargetWidget,
+  DepthResolutionWidget,
+} from "./HonestReportWidgets";
 
 /** Entrada escalonada (Fase E — microinteracciones) preservando el gap del slot. */
 function FadePanel({ index, children }: { index: number; children: ReactNode }) {
@@ -56,43 +61,62 @@ export default function AnalyticsPanel() {
 
   return (
     <>
+      {/* ── Reporte honesto (B1+B3+B2): corona el panel, antes que los diagnósticos. ── */}
       <FadePanel index={0}>
+        <Panel title="Veredicto" subtitle="Un solo veredicto reconciliado (eslabón más débil)">
+          <OverallVerdictWidget report={report} />
+        </Panel>
+      </FadePanel>
+
+      <FadePanel index={1}>
+        <Panel title="Blanco recomendado" subtitle="Cuerpo resoluble + artefacto descartado">
+          <BestTargetWidget report={report} />
+        </Panel>
+      </FadePanel>
+
+      <FadePanel index={2}>
+        <Panel title="Resolución por-eje" subtitle="Footprint horizontal vs profundidad null-space">
+          <DepthResolutionWidget report={report} />
+        </Panel>
+      </FadePanel>
+
+      <FadePanel index={3}>
         <Panel title="Solver" subtitle="Convergencia y ajuste de la inversión">
           <SolverDiagnosticsWidget report={report} inputs={inputs} metrics={metrics} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={1}>
+      <FadePanel index={4}>
         <Panel title="DOI Confidence" subtitle="Profundidad de investigación (Li & Oldenburg)">
           <DoiConfidenceWidget report={report} cells={cells} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={2}>
+      <FadePanel index={5}>
         <Panel title="Ruido / SNR" subtitle="Calidad de señal observada">
           <NoiseSnrWidget report={report} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={3}>
+      <FadePanel index={6}>
         <Panel title="Incertidumbre posterior" subtitle="σ por vóxel (Hutchinson)">
           <UncertaintyPosteriorWidget report={report} cells={cells} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={4}>
+      <FadePanel index={7}>
         <Panel title="L-Curve" subtitle="Sensibilidad a la regularización λ">
           <LCurveWidget inputs={inputs} observations={observations} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={5}>
+      <FadePanel index={8}>
         <Panel title="Cobertura de sensores" subtitle="Planta X/Z del survey">
           <SensorCoverageWidget report={report} observations={observations} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={6}>
+      <FadePanel index={9}>
         <Panel title="Recuperación sintética" subtitle="Benchmark de resolución">
           <RecoveryWidget report={report} metrics={metrics} />
         </Panel>

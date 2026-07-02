@@ -43,7 +43,9 @@ def test_e2e_small_csv():
         x = (i % 5) * 1000.0  # Grid 5x4
         z = (i // 5) * 1000.0
         g = 0.001 + 0.0001 * i  # Valores realistas mGal
-        observations.append(GravityObservation(x_m=x, y_m=1000.0, z_m=z, g=g))
+        # Y = profundidad positiva hacia abajo; los sensores van EN LA SUPERFICIE
+        # (Y=0), sobre la malla. Y=1000 los metía dentro del dominio → ValueError.
+        observations.append(GravityObservation(x_m=x, y_m=0.0, z_m=z, g=g))
 
     payload = GeophysicsInvertInput(
         project_id="test_e2e_csv",
@@ -97,7 +99,7 @@ def test_e2e_small_csv():
         log.error(f"INVERSION FALLO: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError(f"Inversión falló: {type(e).__name__}: {e}") from e
 
     # Paso 3: Validar estructura de respuesta
     print("\n[3/4] Validando respuesta (pueden renderizar estos voxels?)...")
@@ -162,7 +164,6 @@ def test_e2e_small_csv():
 
     if passed == total:
         print("\n[PASS] PIPELINE FUNCIONAL: CSV -> Inversion -> Voxels -> 3D READY")
-        return True
     else:
         print(f"\n[FAIL] PIPELINE ROTO: {total - passed} problemas encontrados")
         print("\n  PROBLEMAS IDENTIFICADOS:")
@@ -176,9 +177,17 @@ def test_e2e_small_csv():
             print("    4. Densidades fuera de rango -> Colormap roto (todo rojo O todo azul)")
         if not checks["no_nan"]:
             print("    5. NaN/Inf en voxels -> Shader crash")
-        return False
+
+    failed = [name for name, ok in checks.items() if not ok]
+    assert passed == total, (
+        f"PIPELINE ROTO: {total - passed}/{total} checks fallaron: {failed}"
+    )
 
 
 if __name__ == "__main__":
-    success = test_e2e_small_csv()
-    sys.exit(0 if success else 1)
+    try:
+        test_e2e_small_csv()
+    except AssertionError as exc:
+        print(f"\n[FAIL] {exc}")
+        sys.exit(1)
+    sys.exit(0)
