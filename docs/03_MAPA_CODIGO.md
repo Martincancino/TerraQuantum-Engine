@@ -32,7 +32,7 @@ CSV usuario → PrepPanel/PreparacionView
 | gravity_import_api.py | **DORADO** (mixto) | 5 endpoints = corazón del flujo. Muertos parciales: wrapper FE `invertGravityCsv`+proxy sin llamador UI (endpoint v1 vive en tests de contrato); `/v2/invert-with-corrections` solo tests/docs (flujo de campo F25) |
 | block_model_api.py | **DORADO** (mixto) | arrow/json/zarr vivos E2E. `/v2/block-model-profile` (secciones A-A') 0 llamadores → **es la semilla de los cortes de F4/F5** |
 | borehole_api.py | **DORADO** (mixto) | parse-csv cableado E2E. `/lithology-properties` 0 llamadores → F4 (colorear sondajes) |
-| geophysics_api.py | **DORADO** (mixto) | ⭐ **HALLAZGO F3**: `/geophysics-invert` + `/geophysics-status` + `/v2/…/stream` (SSE) + `/geophysics-misfit` — ruta de inversión con polling/stream SIN Celery, proxies FE ya hechos. Muertos: `/geophysics-live-update` (Woodbury, 0 usos → F11), `/export/vtr` (redundante con bundle), `/v2/geophysics-invert` (solo tests) |
+| geophysics_api.py | **DORADO** (mixto) | ⭐ **HALLAZGO F3**: `/geophysics-invert` (BackgroundTasks, :232) + `/geophysics-status` + `/v2/…/stream` (SSE) + `/geophysics-misfit` — ruta asíncrona SIN Celery que el flujo DIRECTO ya usa (Exploration3DView importa runGeophysicsInvert+getGeophysicsStatus); el flujo de PAQUETE nunca la adoptó → F3 = replicar ese patrón en load-package. Muertos: `/geophysics-live-update` (Woodbury, 0 usos → F11), ~~`/export/vtr`~~ (podado), `/v2/geophysics-invert` (solo tests) |
 | async_api.py | **SIN_CABLEAR** | Celery/Redis punta a punta (worker, proxies, helpers TS con poll/cancel) y CERO llamadores UI. Bug: proxy DELETE llama con GET (route.ts:35). F3 decide: esta vía (requiere Redis) vs geophysics_api nativa (cero infra) |
 | gravity_corrections_api.py | **SECUNDARIO** (mixto) | `/apply` vivo (wizard opt-in en Preparación). ⭐ `/nettleton` EXISTE (servicio testeado) sin UI → F2B lo cablea (corrige al plan que lo daba por inexistente). `/terrain-dem` 0 usos → MUERTO (cubierto por /apply) |
 | export_api.py | **DORADO** (mixto) | `/export/bundle` = paso exports del camino. `/qa-diagnostics` 0 usos (datos llegan vía report) → **MUERTO confirmado** (arrastra export_service.get_run_qa_diagnostics:975) |
@@ -53,15 +53,17 @@ CSV usuario → PrepPanel/PreparacionView
 - **SIN_CABLEAR:** svdag_service (solo lo importa volumetric_service), volumetric_service (importado por geophysics_service — ejecución condicional a verificar en F4). Motor: shuttle F8.1, level-set F7, Woodbury live-update (endpoints/uso en F11).
 - **CASO ÚNICO — prod=0:** field_validation_service (solo tests/scripts, 5) → herramienta de la suite de validación → se queda como soporte de **F9**, no se borra.
 
-## 4. PODA — muertos confirmados (borrar en la 1ª tanda, cada uno = commit atómico)
+## 4. PODA — muertos confirmados ✅ EJECUTADA 2026-07-02
 
-| # | Qué | Dónde | Evidencia |
+| # | Qué | Evidencia | Estado |
 |---|---|---|---|
-| 1 | `get_qa_diagnostics` + `export_service.get_run_qa_diagnostics` | export_api.py:60 / export_service.py:975 | Grep repo completo: solo la definición; el panel consume los mismos datos vía report |
-| 2 | `compute_terrain_correction_dem` (POST /terrain-dem) | gravity_corrections_api.py | 0 llamadores; funcionalidad cubierta por /apply con apply_terrain=True |
-| 3 | `findDemoHighlightVoxel` (función + import) | geophysicsModel.ts:204 + Exploration3DView.tsx:26 | Import sin uso en el archivo; 0 usos repo-wide; física en TS marcada DEMO |
-| 4 | `GET /export/vtr/{p}/{r}` | geophysics_api.py:238 | 0 usos; el bundle ZIP ya entrega model.vtr |
-| 5 | Wrapper FE `invertGravityCsv` + proxy `app/api/gravity-import/invert/route.ts` | frontendApi.ts:1171 | Ningún componente los llama (el endpoint backend v1 SE QUEDA: cubierto por tests de contrato) |
+| 1 | `get_qa_diagnostics` + `export_service.get_run_qa_diagnostics` (además FABRICABA L-curve ilustrativa y checkerboard estimado) | Grep repo completo: solo la definición; el panel consume los mismos datos vía report | ✅ commit `096c2e4` |
+| 2 | `compute_terrain_correction_dem` (POST /terrain-dem) + modelos `TerrainCorrection*` | 0 llamadores; cubierto por /apply; helper `_compute_tc_opentopo` conservado (compartido) | ✅ `096c2e4` |
+| 3 | `GET /export/vtr/{p}/{r}` | 0 usos; el bundle ZIP ya entrega model.vtr | ✅ `096c2e4` |
+| 4 | `findDemoHighlightVoxel` (función + import) | Import sin uso; 0 usos repo-wide; física en TS marcada DEMO | ✅ `9c53d70` |
+| 5 | Wrapper FE `invertGravityCsv` + proxy `app/api/gravity-import/invert/route.ts` | Ningún componente los llama; tipos `GravityCsvInvert*` conservados (store/PrepPanel); endpoint backend v1 conservado (tests de contrato) | ✅ `9c53d70` |
+
+Verificación post-poda: compileall OK, 41 tests export+corrections PASS, `tsc --noEmit` limpio, eslint 0 errores en archivos tocados.
 
 ## 5. SIN_CABLEAR — decisiones por pieza (propuesta de destino)
 
@@ -84,11 +86,11 @@ CSV usuario → PrepPanel/PreparacionView
 4. `_BANNED_WORDS` duplicada (chat_api vs gemini_agent) — unificar en F6.
 5. Cobertura de tests HTTP inexistente en: borehole_api, chat_api, export_api, keys_api, favorability (endpoint) — F8 (schemathesis) lo cubrirá de golpe.
 
-## 7. Raíz del repo — destino de archivos sueltos (2ª tanda de poda)
+## 7. Raíz del repo — orden ✅ EJECUTADO 2026-07-02
 
-- `diag_*.py` (7) → `terraquantum-backend/scripts/diagnostics/`
-- `generar_*.py` (4) + CSVs de prueba (`LdM_*.csv`, `multi_*.csv`, `prueba_*.csv`) + `.tqpkg` → `terraquantum-backend/tests/fixtures/csv_reales/` (son el corpus de F2)
-- `00_INVESTIGACION_MERCADO.md` duplicado en raíz → queda solo `docs/00_INVESTIGACION_MERCADO.md`
+- `diag_*.py` (7) + `generar_*.py` (4) → `terraquantum-backend/scripts/diagnostics/` (sys.path corregidos).
+- CSVs de prueba (`LdM_*`, `multi_*`, `prueba_*`, `do27_*`, `laguna_*`) + `.tqpkg` (18 archivos) → `terraquantum-backend/tests/fixtures/csv_reales/` = **corpus de F2**. Referencias en scripts de validación actualizadas.
+- **Pendiente decisión (2ª tanda, no tocado sin permiso — regla de datos):** directorios de datasets externos en la raíz (`DO-27_Kimberlite/`, `Raglan_Magnetic/`, `simpeg_data_*/`, `simpeg_env/`, `simpeg_github/`, `benchmarks/`), scripts `descargar_*.py`/`inspeccionar_*.py`/`convertir_a_csv.py`, PNGs de perfiles. Propuesta: datasets → fuera del repo o `data/external/`; scripts → `scripts/diagnostics/`; `simpeg_env` (venv) → borrar del repo.
 
 ## 8. Línea base de CI (medida hoy)
 

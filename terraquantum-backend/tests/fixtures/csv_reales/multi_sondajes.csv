@@ -1,0 +1,9 @@
+hole_id,easting,northing,depth_from,depth_to,density,susceptibility,lithology
+DDH-01,562.5,562.5,0,40,2.7,0.001,andesita
+DDH-01,562.5,562.5,40,400,4.1,0.1,magnetita
+DDH-01,562.5,562.5,400,600,2.7,0.001,andesita
+DDH-02,462.5,662.5,0,40,2.7,0.001,andesita
+DDH-02,462.5,662.5,40,400,4.1,0.1,magnetita
+DDH-02,462.5,662.5,400,600,2.7,0.001,andesita
+DDH-03,200.0,200.0,0,600,2.67,0.0002,granito
+DDH-04,1000.0,1000.0,0,600,2.67,0.0002,granito
