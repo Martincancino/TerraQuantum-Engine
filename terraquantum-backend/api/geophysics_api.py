@@ -7,7 +7,7 @@ import numpy as np
 import polars as pl
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from core.rate_limit import limiter
 from core.logging import get_logger
@@ -16,7 +16,6 @@ from core.block_model_store import (
     get_run_dir,
     get_run_schedule_path,
     update_run_status,
-    RUN_VTK_FILENAME,
 )
 from schemas.geophysics_schema import (
     GeophysicsInvertInput,
@@ -232,45 +231,6 @@ async def invert_geophysics_v2(
     background_tasks.add_task(_run_inversion_bg, params, project_id, run_id)
 
     return {"status": "queued", "run_id": run_id, "project_id": project_id}
-
-
-# ── FASE 10: Descarga Industrial VTK (.vtr) ───────────────────────────────────
-@router.get("/export/vtr/{project_id}/{run_id}")
-async def export_vtr(project_id: str, run_id: str):
-    """
-    Descarga el archivo VTK Rectilinear Grid (.vtr) generado por la inversión
-    gravimétrica. Compatible con ParaView, Leapfrog Geo y VTKm.
-
-    - **project_id**: ID del proyecto (mismo usado en /geophysics-invert).
-    - **run_id**: ID del run específico cuyo modelo 3D se quiere exportar.
-
-    Retorna el archivo con `Content-Disposition: attachment` para descarga directa.
-    """
-    _log.info("request_received", endpoint="/export/vtr",
-              project_id=project_id, run_id=run_id)
-
-    try:
-        run_dir = get_run_dir(project_id, run_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-    vtr_path = run_dir / RUN_VTK_FILENAME
-
-    if not vtr_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"Archivo VTR no encontrado para project_id={project_id}, "
-                f"run_id={run_id}. "
-                "Asegúrate de que la inversión haya completado y pyevtk esté instalado."
-            ),
-        )
-
-    return FileResponse(
-        path=str(vtr_path),
-        media_type="application/octet-stream",
-        filename=f"model_{run_id}.vtr",
-    )
 
 
 # ── FASE 2: SSE Streaming Status ─────────────────────────────────────────────

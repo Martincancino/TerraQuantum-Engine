@@ -93,34 +93,3 @@ class ApplyCorrectionsResponse(BaseModel):
     ]
 
 
-# ---------------------------------------------------------------------------
-# H-B3: Terrain correction via OpenTopography (standalone)
-# ---------------------------------------------------------------------------
-
-class TerrainCorrectionRequest(BaseModel):
-    stations: List[dict]
-    dem_type: Literal["COP30", "SRTM30", "SRTM90", "ALOS", "NASADEM"] = "SRTM30"
-    terrain_radius_m: float = Field(
-        default=22000.0,
-        ge=1000.0,
-        le=200000.0,
-        description="Radio máximo de integración Hammer [m]. Zonas A-M = 22 km.",
-    )
-    reduction_density_gcc: float = Field(
-        default=2.67,
-        ge=1.5,
-        le=4.0,
-        description="Densidad de reducción Bouguer [g/cm³].",
-    )
-
-
-class TerrainCorrectionResponse(BaseModel):
-    tc_per_station: List[dict]
-    tc_min_mgal: float
-    tc_max_mgal: float
-    tc_mean_mgal: float
-    dem_source: str
-    dem_type: str
-    terrain_radius_m: float
-    reduction_density_gcc: float
-    n_dem_cells: int

@@ -28,8 +28,6 @@ from schemas.gravity_corrections_schema import (
     ApplyCorrectionsResponse,
     CorrectedStation,
     CorrectionReport,
-    TerrainCorrectionRequest,
-    TerrainCorrectionResponse,
 )
 from services.gravity_corrections_service import apply_all_corrections, nettleton_analysis
 
@@ -276,83 +274,6 @@ async def apply_gravity_corrections(
         corrected=corrected,
         report=report,
         output_gravity_type=meta["output_gravity_type"],
-    )
-
-
-# ---------------------------------------------------------------------------
-# POST /gravity-corrections/terrain-dem
-# ---------------------------------------------------------------------------
-
-@router.post("/terrain-dem", response_model=TerrainCorrectionResponse)
-async def compute_terrain_correction_dem(
-    req: TerrainCorrectionRequest,
-) -> TerrainCorrectionResponse:
-    """
-    Descarga DEM de OpenTopography y calcula la corrección de terreno (TC)
-    para cada estación, sin aplicar el resto de correcciones.
-
-    Útil para visualizar o auditar la TC de forma independiente antes de
-    aplicar el pipeline completo de reducción de Bouguer.
-
-    Requiere: OPENTOPO_API_KEY configurado en el entorno.
-    """
-    stations = req.stations
-    if not stations:
-        raise HTTPException(status_code=422, detail="Se requiere al menos 1 estación.")
-
-    try:
-        lats  = np.array([float(s["lat_deg"])  for s in stations])
-        lons  = np.array([float(s["lon_deg"])  for s in stations])
-        elevs = np.array([float(s["elev_m"])   for s in stations])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Error al extraer columnas: {exc}. Se requieren lat_deg, lon_deg, elev_m.",
-        ) from exc
-
-    if np.any(np.isnan(elevs)):
-        raise HTTPException(
-            status_code=422,
-            detail="Todas las estaciones deben tener elev_m para calcular TC.",
-        )
-
-    tc_per_station, source_info = await _compute_tc_opentopo(
-        lats=lats,
-        lons=lons,
-        elevs=elevs,
-        dem_type=req.dem_type,
-        terrain_radius_m=req.terrain_radius_m,
-        reduction_density_gcc=req.reduction_density_gcc,
-    )
-
-    per_station = [
-        {
-            "station_id": str(s.get("station_id", f"ST_{i:06d}")),
-            "lat_deg":    float(lats[i]),
-            "lon_deg":    float(lons[i]),
-            "elev_m":     float(elevs[i]),
-            "tc_mgal":    float(tc_per_station[i]),
-        }
-        for i, s in enumerate(stations)
-    ]
-
-    _log.info(
-        "[CORRECTIONS-API] terrain-dem: %d estaciones, TC min=%.4f max=%.4f mGal",
-        len(stations),
-        float(tc_per_station.min()),
-        float(tc_per_station.max()),
-    )
-
-    return TerrainCorrectionResponse(
-        tc_per_station=per_station,
-        tc_min_mgal=float(tc_per_station.min()),
-        tc_max_mgal=float(tc_per_station.max()),
-        tc_mean_mgal=float(tc_per_station.mean()),
-        dem_source=source_info.get("source", "?"),
-        dem_type=req.dem_type,
-        terrain_radius_m=req.terrain_radius_m,
-        reduction_density_gcc=req.reduction_density_gcc,
-        n_dem_cells=source_info.get("n_rows", 0) * source_info.get("n_cols", 0),
     )
 
 
