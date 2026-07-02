@@ -23,7 +23,6 @@ import {
   buildGridConfig,
   buildHeatmapFromBlockModel,
   buildReportForFrontend,
-  findDemoHighlightVoxel,
 } from "../../lib/terraquantum/geophysicsModel";
 import {
   getExplorationBlockModelForRunWithArrow,

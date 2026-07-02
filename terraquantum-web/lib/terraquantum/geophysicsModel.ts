@@ -1,4 +1,4 @@
-import { VoxelData, VoxelMineralModel } from "../terraQuantumGeology";
+import { VoxelMineralModel } from "../terraQuantumGeology";
 import { GravityObservation } from "./geophysicsSurvey";
 
 // DEMO ONLY — densidades de referencia para pórfidos cupríferos (norte de Chile).
@@ -199,22 +199,6 @@ export function buildGeophysicsPayload(args: {
     observations: args.observations,
   };
 }
-
-// DEMO ONLY — scoring visual en TypeScript. Usar backend.best_target como fuente primaria para decisiones de perforación.
-export function findDemoHighlightVoxel(model: VoxelMineralModel | null) {
-  if (!model || !model.cells || model.cells.length === 0) return null;
-
-  return model.cells.reduce<VoxelData>((best, cell) => {
-    const cellScore =
-      (numFrom(cell, "density", "rho") - DENSITY_HOST_ROCK_T_M3) * probabilityFrom(cell);
-
-    const bestScore =
-      (numFrom(best, "density", "rho") - DENSITY_HOST_ROCK_T_M3) * probabilityFrom(best);
-
-    return cellScore > bestScore ? cell : best;
-  }, model.cells[0]);
-}
-
 
 export function buildReportForFrontend(
   backend: BackendInvertResponse,
