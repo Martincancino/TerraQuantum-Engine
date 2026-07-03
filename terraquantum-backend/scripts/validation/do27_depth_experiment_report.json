@@ -1,0 +1,98 @@
+{
+  "dataset": "DO-27 Tli Kwi Cho (Astic & Oldenburg 2020) — experimento de profundidad",
+  "question": "¿Cuánto de la borrosidad en z es física irreducible vs default malo? A=default L2, B=compacto sano, C=compacto+1 ancla.",
+  "mesh": {
+    "nx": 12,
+    "ny": 10,
+    "nz": 12,
+    "block_size_m": 50.0,
+    "depth_extent_m": 500.0,
+    "n_sensors_used": 256
+  },
+  "true_centroid_depth_m": 199.7,
+  "true_top_depth_m": 51.1,
+  "synthetic_anchor": {
+    "local_xz_m": [
+      285.5,
+      264.1
+    ],
+    "interval_depth_m": [
+      51.1,
+      481.1
+    ],
+    "anchored_density_t_m3": 1.897,
+    "mean_density_contrast_t_m3": -0.703,
+    "true_centroid_depth_m": 199.7
+  },
+  "results": {
+    "A_default_L2": {
+      "horizontal_error_m": 53.9,
+      "centroid_depth_error_m": 32.9,
+      "recovered_centroid_depth_m": 166.9,
+      "true_centroid_depth_m": 199.7,
+      "recovered_top_depth_m": 75.0,
+      "true_top_depth_m": 51.1,
+      "top_depth_error_m": 23.9,
+      "n_strong": 103,
+      "recovered_easting": 557314.9,
+      "recovered_northing": 7133567.7,
+      "recovered_elevation": 289.2,
+      "true_centroid_utm": [
+        557264.1,
+        7133585.5
+      ],
+      "misfit_percent": 0.072,
+      "label": "Default (L2)",
+      "acond": NaN,
+      "n_anchored_voxels": 0
+    },
+    "B_compact_sane": {
+      "horizontal_error_m": 53.7,
+      "centroid_depth_error_m": 32.8,
+      "recovered_centroid_depth_m": 166.9,
+      "true_centroid_depth_m": 199.7,
+      "recovered_top_depth_m": 75.0,
+      "true_top_depth_m": 51.1,
+      "top_depth_error_m": 23.9,
+      "n_strong": 103,
+      "recovered_easting": 557314.8,
+      "recovered_northing": 7133567.7,
+      "recovered_elevation": 289.2,
+      "true_centroid_utm": [
+        557264.1,
+        7133585.5
+      ],
+      "misfit_percent": 0.072,
+      "label": "Compacto (sano)",
+      "acond": NaN,
+      "n_anchored_voxels": 0
+    },
+    "C_compact_anchor": {
+      "horizontal_error_m": 61.1,
+      "centroid_depth_error_m": 30.8,
+      "recovered_centroid_depth_m": 169.0,
+      "true_centroid_depth_m": 199.7,
+      "recovered_top_depth_m": 75.0,
+      "true_top_depth_m": 51.1,
+      "top_depth_error_m": 23.9,
+      "n_strong": 81,
+      "recovered_easting": 557322.6,
+      "recovered_northing": 7133568.0,
+      "recovered_elevation": 287.1,
+      "true_centroid_utm": [
+        557264.1,
+        7133585.5
+      ],
+      "misfit_percent": 0.072,
+      "label": "Compacto + 1 sondaje",
+      "acond": NaN,
+      "n_anchored_voxels": 9
+    }
+  },
+  "deltas": {
+    "fixable_default_A_to_B_m": 0.1,
+    "anchor_gain_B_to_C_m": 2.0
+  },
+  "elapsed_s": 37.6,
+  "table_markdown": "| Configuración | err prof centroide | err prof techo | err horiz | misfit |\n|---------------|--------------------|----------------|-----------|--------|\n| Default (L2) | 32.9m | 23.9m | 53.9m | 0.072% |\n| Compacto (sano) | 32.8m | 23.9m | 53.7m | 0.072% |\n| Compacto + 1 sondaje | 30.8m | 23.9m | 61.1m | 0.072% |"
+}

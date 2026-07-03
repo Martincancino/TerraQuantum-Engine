@@ -65,7 +65,7 @@ CSV usuario → PrepPanel/PreparacionView
 
 Verificación post-poda: compileall OK, 41 tests export+corrections PASS, `tsc --noEmit` limpio, eslint 0 errores en archivos tocados.
 
-## 5. SIN_CABLEAR — decisiones por pieza (propuesta de destino)
+## 5. SIN_CABLEAR — decisiones por pieza ✅ DESTINOS APROBADOS por Martín (2026-07-02)
 
 | Pieza | Propuesta | Fase |
 |---|---|---|
@@ -85,12 +85,13 @@ Verificación post-poda: compileall OK, 41 tests export+corrections PASS, `tsc -
 3. `TQ_AUTH_ENABLED=true` rompería la web UI actual (frontend no envía el header) — resolver en F7 (licencias/seguridad).
 4. `_BANNED_WORDS` duplicada (chat_api vs gemini_agent) — unificar en F6.
 5. Cobertura de tests HTTP inexistente en: borehole_api, chat_api, export_api, keys_api, favorability (endpoint) — F8 (schemathesis) lo cubrirá de golpe.
+6. eslint baseline (2026-07-02): **7 errores preexistentes** react-hooks — `GravityCorrectionWizard.tsx` (setState síncrono en effect :218 + 5× componentes creados durante render :386-390) y `ObsVsCalcPanel.tsx` (:266 setState en effect). Arreglar cuando F2B rehaga el wizard (es el mismo componente); mientras, la CI usa umbral de warnings, no de errores nuevos.
 
 ## 7. Raíz del repo — orden ✅ EJECUTADO 2026-07-02
 
 - `diag_*.py` (7) + `generar_*.py` (4) → `terraquantum-backend/scripts/diagnostics/` (sys.path corregidos).
 - CSVs de prueba (`LdM_*`, `multi_*`, `prueba_*`, `do27_*`, `laguna_*`) + `.tqpkg` (18 archivos) → `terraquantum-backend/tests/fixtures/csv_reales/` = **corpus de F2**. Referencias en scripts de validación actualizadas.
-- **Pendiente decisión (2ª tanda, no tocado sin permiso — regla de datos):** directorios de datasets externos en la raíz (`DO-27_Kimberlite/`, `Raglan_Magnetic/`, `simpeg_data_*/`, `simpeg_env/`, `simpeg_github/`, `benchmarks/`), scripts `descargar_*.py`/`inspeccionar_*.py`/`convertir_a_csv.py`, PNGs de perfiles. Propuesta: datasets → fuera del repo o `data/external/`; scripts → `scripts/diagnostics/`; `simpeg_env` (venv) → borrar del repo.
+- **2ª tanda ✅ EJECUTADA con aprobación de Martín (2026-07-02):** borrados `simpeg_env/` (venv recreable), `simpeg_github/` (clon), `simpeg_data_gravity3d/` y `simpeg_data_potential/` (vacíos), `TERRAQUANTUM_API_ROUTES.json` (dump generado sin referencias, obsoleto tras la poda). Movidos a `data/external/`: simpeg_data_joint_inversion, simpeg_data_mag, PNGs/PDF de visualización. Movidos a `scripts/diagnostics/`: convertir_a_csv, descargar_*, inspeccionar_*, visualizar_datasets (cwd-relativos: correr desde la raíz del repo). **SE QUEDAN en la raíz** (trackeados y referenciados por tests/validación — fixtures de F9): `DO-27_Kimberlite/` (113 MB), `Raglan_Magnetic/`, `benchmarks/`.
 
 ## 8. Línea base de CI (medida hoy)
 

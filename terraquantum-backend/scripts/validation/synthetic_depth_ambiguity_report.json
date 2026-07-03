@@ -1,0 +1,84 @@
+{
+  "case": "SINTÉTICO — ambigüedad de z en régimen LdM (cuerpo profundo + cobertura dispersa)",
+  "blindajes": {
+    "no_inverse_crime": "dato generado por gravedad analítica de esfera (forma cerrada, sin malla); inversión con kernel Nagy+masa-puntual sobre malla de 650 m + ruido 0.02 mGal.",
+    "disease_must_show": "unconstrained z-error debe ser ≥ 400 m; medido = 2675.0 m ⇒ DISEASE_PRESENT=True."
+  },
+  "prereg": {
+    "H1_disease": "unconstrained (L2 + malla 9100 m + bounds saturables) debe dar z-error > 400 m. Si no, caso inválido.",
+    "H2_guardrails": "compacto + malla capada a profundidad resoluble debe REDUCIR el z-error.",
+    "H3_anchor": "1 ancla dura en el cuerpo verdadero debe reducir el z-error residual.",
+    "no_tuning": "mismos datos/sensores/ruido en las 3 configs; sólo cambia la columna bajo test."
+  },
+  "disease_present": true,
+  "ground_truth": {
+    "body_xz_m": [
+      6000.0,
+      6000.0
+    ],
+    "centroid_depth_m": 3000.0,
+    "radius_m": 800.0,
+    "delta_rho_t_m3": 0.5,
+    "true_density_t_m3": 3.17
+  },
+  "survey": {
+    "n_stations": 196,
+    "extent_m": 12000.0,
+    "spacing_m": 923.1,
+    "peak_anomaly_mgal": 0.741,
+    "noise_mgal": 0.02
+  },
+  "config": {
+    "block_m": 650.0,
+    "nx": 20,
+    "nz": 20,
+    "ny_deep": 14,
+    "ny_cap": 8,
+    "density_bounds": [
+      2.67,
+      3.8
+    ],
+    "depth_beta": 2.0
+  },
+  "results": {
+    "A_unconstrained": {
+      "z_error_m": 2675.0,
+      "horizontal_error_m": 214.9,
+      "recovered_depth_m": 325.0,
+      "true_depth_m": 3000.0,
+      "n_strong": 15,
+      "floor_saturation_frac": 0.0,
+      "misfit_percent": 0.583,
+      "mesh_depth_m": 9100.0,
+      "n_sat_upper": 0
+    },
+    "B_guardrails": {
+      "z_error_m": 2675.0,
+      "horizontal_error_m": 161.7,
+      "recovered_depth_m": 325.0,
+      "true_depth_m": 3000.0,
+      "n_strong": 23,
+      "floor_saturation_frac": 0.0,
+      "misfit_percent": 0.577,
+      "mesh_depth_m": 5200.0
+    },
+    "C_anchor": {
+      "z_error_m": 75.0,
+      "horizontal_error_m": 247.5,
+      "recovered_depth_m": 2925.0,
+      "true_depth_m": 3000.0,
+      "n_strong": 3,
+      "floor_saturation_frac": 0.0,
+      "misfit_percent": 1.394,
+      "mesh_depth_m": 5200.0,
+      "n_anchored_voxels": 3
+    }
+  },
+  "deltas": {
+    "guardrails_gain_A_to_B_m": 0.0,
+    "anchor_gain_B_to_C_m": 2600.0,
+    "total_gain_A_to_C_m": 2600.0
+  },
+  "elapsed_s": 1027.4,
+  "table_markdown": "| Configuración | z-error | prof recuperada | err horiz | sat. piso | misfit |\n|---------------|---------|-----------------|-----------|-----------|--------|\n| unconstrained (auto naïf) | 2675.0m | 325.0m | 214.9m | 0.0 | 0.583% |\n| +guardrails (setup sano) | 2675.0m | 325.0m | 161.7m | 0.0 | 0.577% |\n| +1 ancla dura | 75.0m | 2925.0m | 247.5m | 0.0 | 1.394% |"
+}

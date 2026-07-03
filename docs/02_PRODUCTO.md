@@ -3,7 +3,7 @@
 | Campo | Valor |
 |---|---|
 | Fecha | 2026-07-02 |
-| Estado | BORRADOR — pendiente aprobación línea por línea de Martín (gate F0) |
+| Estado | ✅ APROBADO por Martín (2026-07-02) — gate F0 cerrado |
 | Fuentes | `docs/00_INVESTIGACION_MERCADO.md` + `docs/01_PLAN_MAESTRO.md` + límites físicos medidos |
 
 Este documento responde, para siempre y en una página por sección: **para quién es, qué hace, qué promete y qué NO es**. Toda decisión de desarrollo se contrasta contra esto.

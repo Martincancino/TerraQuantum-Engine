@@ -1,0 +1,44 @@
+{
+  "case": "PARTE 0 — centroide off-anchor (config C del sintético ambigüedad-z)",
+  "prereg": "El centroide de profundidad EXCLUYENDO las 3 celdas ancladas sigue SOMERO (~325 m, ≤ 975 m). Si se confirma, la 'cura' de la config C es tautológica: sólo las celdas ancladas tienen densidad profunda.",
+  "ground_truth": {
+    "centroid_depth_m": 3000.0,
+    "radius_m": 800.0,
+    "anchor_interval_m": [
+      2200.0,
+      3800.0
+    ],
+    "true_density_t_m3": 3.17
+  },
+  "config_C": {
+    "misfit_percent": 1.394,
+    "n_anchored_cells": 3,
+    "n_anchored_voxels_meta": 3,
+    "anchored_cell_depths_m": [
+      2275.0,
+      2925.0,
+      3575.0
+    ],
+    "anchored_cell_density_t_m3": [
+      3.17,
+      3.17,
+      3.17
+    ]
+  },
+  "with_anchor_centroid": {
+    "recovered_depth_m": 2925.0,
+    "z_error_m": 75.0,
+    "n_strong": 3
+  },
+  "OFF_ANCHOR_centroid": {
+    "recovered_depth_m": 325.0,
+    "n_strong_off": 16,
+    "max_contrast_off": 0.0353,
+    "peak_off_anchor_depth_m": 325.0,
+    "peak_off_anchor_contrast": 0.0353,
+    "shallow_threshold_m": 975.0,
+    "off_anchor_is_shallow": true
+  },
+  "verdict": "TAUTOLÓGICA CONFIRMADA — la gravedad no construyó profundidad off-anchor",
+  "elapsed_s": 306.2
+}

@@ -1,0 +1,150 @@
+{
+  "case": "TANDA A 1B — somero robusto vs smear",
+  "shallow_cutoff_m": 2500.0,
+  "base_density": 2.6,
+  "results": {
+    "auto_loose": {
+      "n_active": 830,
+      "density_min": 2.97,
+      "density_max": 5.5,
+      "background_median": 3.3875,
+      "total_low_mass": 105.8341,
+      "global_centroid_depth_m": 3645.6,
+      "global_centroid_x_m": 8194.5,
+      "global_centroid_z_m": 7388.5,
+      "global_n_strong": 281,
+      "shallow_centroid_depth_m": 1579.2,
+      "shallow_centroid_x_m": 10037.4,
+      "shallow_centroid_z_m": 9401.9,
+      "shallow_n_strong": 30,
+      "shallow_peak_depth_m": 780.0,
+      "shallow_peak_density": 2.9706,
+      "deep_low_mass_fraction": 0.892,
+      "chi_squared": 0.9193,
+      "lambda_selected": null,
+      "misfit_pct": 1.08,
+      "elapsed_s": 10.5,
+      "setting": {
+        "lambda_mag": 0.0,
+        "auto_lambda": true,
+        "dmin": 0.0,
+        "dmax": 5.5
+      }
+    },
+    "l0p1_loose": {
+      "n_active": 794,
+      "density_min": 2.9461,
+      "density_max": 5.5,
+      "background_median": 3.3259,
+      "total_low_mass": 91.3759,
+      "global_centroid_depth_m": 3623.7,
+      "global_centroid_x_m": 8649.4,
+      "global_centroid_z_m": 7182.2,
+      "global_n_strong": 261,
+      "shallow_centroid_depth_m": 1561.5,
+      "shallow_centroid_x_m": 10542.8,
+      "shallow_centroid_z_m": 10261.8,
+      "shallow_n_strong": 29,
+      "shallow_peak_depth_m": 2340.0,
+      "shallow_peak_density": 2.9496,
+      "deep_low_mass_fraction": 0.893,
+      "chi_squared": 3.3753,
+      "lambda_selected": 0.1,
+      "misfit_pct": 2.07,
+      "elapsed_s": 3.0,
+      "setting": {
+        "lambda_mag": 0.1,
+        "auto_lambda": false,
+        "dmin": 0.0,
+        "dmax": 5.5
+      }
+    },
+    "auto_phys": {
+      "n_active": 2272,
+      "density_min": 2.7562,
+      "density_max": 3.0,
+      "background_median": 2.9996,
+      "total_low_mass": 130.9857,
+      "global_centroid_depth_m": 2469.9,
+      "global_centroid_x_m": 7042.2,
+      "global_centroid_z_m": 7760.8,
+      "global_n_strong": 564,
+      "shallow_centroid_depth_m": 1819.2,
+      "shallow_centroid_x_m": 7184.3,
+      "shallow_centroid_z_m": 7203.1,
+      "shallow_n_strong": 308,
+      "shallow_peak_depth_m": 1820.0,
+      "shallow_peak_density": 2.7562,
+      "deep_low_mass_fraction": 0.465,
+      "chi_squared": 32.0167,
+      "lambda_selected": null,
+      "misfit_pct": 6.38,
+      "elapsed_s": 6.2,
+      "setting": {
+        "lambda_mag": 0.0,
+        "auto_lambda": true,
+        "dmin": 2.0,
+        "dmax": 3.0
+      }
+    },
+    "l0p1_phys": {
+      "n_active": 2074,
+      "density_min": 2.7445,
+      "density_max": 3.0,
+      "background_median": 2.9887,
+      "total_low_mass": 147.9428,
+      "global_centroid_depth_m": 2644.5,
+      "global_centroid_x_m": 7154.6,
+      "global_centroid_z_m": 7268.0,
+      "global_n_strong": 648,
+      "shallow_centroid_depth_m": 1822.7,
+      "shallow_centroid_x_m": 7378.5,
+      "shallow_centroid_z_m": 6709.0,
+      "shallow_n_strong": 301,
+      "shallow_peak_depth_m": 1820.0,
+      "shallow_peak_density": 2.7445,
+      "deep_low_mass_fraction": 0.532,
+      "chi_squared": 27.8589,
+      "lambda_selected": 0.1,
+      "misfit_pct": 5.95,
+      "elapsed_s": 3.7,
+      "setting": {
+        "lambda_mag": 0.1,
+        "auto_lambda": false,
+        "dmin": 2.0,
+        "dmax": 3.0
+      }
+    }
+  },
+  "robustness": {
+    "shallow_depth_range_m": [
+      1561.5,
+      1822.7
+    ],
+    "shallow_depth_spread_m": 261.2,
+    "shallow_xz_spread_m": [
+      3358.5,
+      3552.8
+    ],
+    "global_depth_by_setting_m": {
+      "auto_loose": 3645.6,
+      "l0p1_loose": 3623.7,
+      "auto_phys": 2469.9,
+      "l0p1_phys": 2644.5
+    },
+    "lambda_fixes_smear": null,
+    "lambda_effect_global_loose_auto_to_0p1": [
+      3645.6,
+      3623.7
+    ],
+    "lambda_effect_global_phys_auto_to_0p1": [
+      2469.9,
+      2644.5
+    ],
+    "shallow_stable": true,
+    "lambda_cured_global": false,
+    "verdict": "A — CUERPO SOMERO ROBUSTO: el motor está bien; el sink es null-space. Cierra la física → pivotear a REPORTE honesto (suprimir artefacto del piso, reportar a profundidad resoluble, incertidumbre por-eje)."
+  },
+  "elapsed_s": 23.3,
+  "table_markdown": "| Setting | λ | bounds | SOMERO prof (m) | SOMERO (x,z) | GLOBAL prof (m) | smear deep-frac | chi² |\n|---------|---|--------|-----------------|--------------|-----------------|-----------------|------|\n| auto_loose | auto | [0.0,5.5] | 1579.2 | (10037.4,9401.9) | 3645.6 | 0.892 | 0.9193 |\n| l0p1_loose | 0.1 | [0.0,5.5] | 1561.5 | (10542.8,10261.8) | 3623.7 | 0.893 | 3.3753 |\n| auto_phys | auto | [2.0,3.0] | 1819.2 | (7184.3,7203.1) | 2469.9 | 0.465 | 32.0167 |\n| l0p1_phys | 0.1 | [2.0,3.0] | 1822.7 | (7378.5,6709.0) | 2644.5 | 0.532 | 27.8589 |"
+}

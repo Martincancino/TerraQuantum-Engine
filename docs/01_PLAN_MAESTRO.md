@@ -13,7 +13,7 @@
 
 | # | Fase | Qué entrega | Estado |
 |---|------|-------------|--------|
-| **F0** | **Definición de producto y reglas** | `docs/02_PRODUCTO.md`: quién es el usuario, el camino dorado, qué significa "robusto". Las reglas de trabajo. | ⬜ |
+| **F0** | **Definición de producto y reglas** | `docs/02_PRODUCTO.md`: quién es el usuario, el camino dorado, qué significa "robusto". Las reglas de trabajo. | ✅ 2026-07-02 |
 | **F1** | **Mapa y limpieza del código** | Inventario ruta-por-ruta (dorado/secundario/muerto), borrado de lo muerto, raíz del repo limpia, CI mínima que corre en cada cambio. | ⬜ |
 | **F2** | **Ingesta blindada universal** | "Cualquier CSV entra": encoding/separador/decimales/preámbulos/columnas en español auto-mapeadas; cuando falta algo, PREGUNTA (nunca inventa, nunca crashea). Corpus de CSVs sucios reales + tests generativos. | ⬜ (~70% hecho) |
 | **F2B** | **El gabinete del consultor automatizado** | La preparación no solo LEE: TRABAJA. Todo el procesamiento que hoy el consultor hace a mano: drift+marea desde lecturas crudas, Nettleton, regional-residual; diurna, RTP, derivadas (tilt/señal analítica/1VD), continuación ascendente, deconvolución de Euler (profundidades!); desurvey + QA/QC de sondajes. | ⬜ (correcciones básicas hechas; el resto NO existe) |

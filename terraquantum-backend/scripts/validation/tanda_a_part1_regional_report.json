@@ -1,0 +1,97 @@
+{
+  "case": "TANDA A PARTE 1 — remoción regional off→on",
+  "ldm": {
+    "off": {
+      "n_active": 830,
+      "base_density_median": 3.3875,
+      "density_min": 2.97,
+      "density_max": 5.5,
+      "global_centroid_depth_m": 4866.2,
+      "n_strong_global": 168,
+      "low_density_centroid_depth_m": 3645.6,
+      "n_strong_low": 281,
+      "low_density_peak_depth_m": 2860.0,
+      "low_density_peak_value": 2.97,
+      "misfit_pct": 1.08,
+      "chi_squared": 0.9193,
+      "lambda_selected": null,
+      "elapsed_s": 27.7
+    },
+    "on": {
+      "n_active": 809,
+      "base_density_median": 3.3717,
+      "density_min": 2.9403,
+      "density_max": 5.5,
+      "global_centroid_depth_m": 4893.3,
+      "n_strong_global": 177,
+      "low_density_centroid_depth_m": 3806.4,
+      "n_strong_low": 268,
+      "low_density_peak_depth_m": 3900.0,
+      "low_density_peak_value": 2.9403,
+      "misfit_pct": 1.89,
+      "chi_squared": 1.1898,
+      "lambda_selected": null,
+      "elapsed_s": 25.4
+    }
+  },
+  "do27": {
+    "off": {
+      "horizontal_error_m": 53.7,
+      "centroid_depth_error_m": 32.8,
+      "top_depth_error_m": 23.9,
+      "misfit_percent": 0.072,
+      "n_strong": 103,
+      "regional_meta": null,
+      "elapsed_s": 52.8
+    },
+    "on": {
+      "horizontal_error_m": 130.8,
+      "centroid_depth_error_m": 129.2,
+      "top_depth_error_m": 23.9,
+      "misfit_percent": 14.958,
+      "n_strong": 140,
+      "regional_meta": {
+        "residual_std": 2.693744385231906e-06,
+        "regional_min": -1.4736441994485294e-05,
+        "regional_max": 7.635026363357839e-06
+      },
+      "elapsed_s": 540.0
+    },
+    "targeting_tol_m": 100.0
+  },
+  "raglan": {
+    "note": "remove_regional es GRAVITY-ONLY en producción (build_sensor_arrays); el path magnético NO lo toca. 'on' aquí es un ANÁLOGO de sensibilidad: poly-trend de grado 2 restado al TMI antes de invertir.",
+    "off": {
+      "horiz_err_interior_peak_vs_ref_m": 212.1,
+      "horiz_err_peak_vs_ref_peak_m": 1202.1,
+      "n_saturated_cells": 6,
+      "misfit_percent": 8.06,
+      "regional_span_nt": null,
+      "elapsed_s": 14.9
+    },
+    "on": {
+      "horiz_err_interior_peak_vs_ref_m": 212.1,
+      "horiz_err_peak_vs_ref_peak_m": 1202.1,
+      "n_saturated_cells": 4,
+      "misfit_percent": 12.625,
+      "regional_span_nt": [
+        -241.4,
+        508.6
+      ],
+      "elapsed_s": 11.9
+    },
+    "targeting_tol_m": 400.0
+  },
+  "ldm_verdict": {
+    "off_depth_m": 3645.6,
+    "on_depth_m": 3806.4,
+    "success_window_m": [
+      1500.0,
+      2500.0
+    ],
+    "cured": false,
+    "note": "NO cura dentro de la ventana — revisar hipótesis (no tunear)"
+  },
+  "elapsed_s": 674.8,
+  "table_markdown": "| Caso | Métrica | OFF (regional=False) | ON (regional=True) |\n|------|---------|----------------------|--------------------|\n| LdM (prod.) | prof. cuerpo baja densidad (m) | 3645.6 | 3806.4 |\n| LdM (prod.) | centroide global (m) | 4866.2 | 4893.3 |\n| LdM (prod.) | chi² / misfit% | 0.9193 / 1.08 | 1.1898 / 1.89 |\n| DO-27 (grav) | err horizontal targeting (m) | 53.7 | 130.8 |\n| DO-27 (grav) | misfit% | 0.072 | 14.958 |\n| Raglan (mag·análogo) | err interior-peak vs ref (m) | 212.1 | 212.1 |\n| Raglan (mag·análogo) | misfit% | 8.06 | 12.625 |"
+}

@@ -1,0 +1,91 @@
+{
+  "dataset": "DO-27 — experimento de profundidad EN MALLA PROFUNDA (régimen LdM con ground truth)",
+  "mesh": {
+    "nx": 12,
+    "ny": 40,
+    "nz": 12,
+    "block_size_m": 50.0,
+    "depth_extent_m": 2000.0,
+    "n_sensors_used": 256
+  },
+  "true_centroid_depth_m": 199.7,
+  "synthetic_anchor": {
+    "local_xz_m": [
+      285.5,
+      264.1
+    ],
+    "interval_depth_m": [
+      51.1,
+      481.1
+    ],
+    "anchored_density_t_m3": 1.897,
+    "mean_density_contrast_t_m3": -0.703,
+    "true_centroid_depth_m": 199.7
+  },
+  "results": {
+    "A_default_L2": {
+      "horizontal_error_m": 47.4,
+      "centroid_depth_error_m": 31.0,
+      "recovered_centroid_depth_m": 168.7,
+      "true_centroid_depth_m": 199.7,
+      "recovered_top_depth_m": 75.0,
+      "true_top_depth_m": 51.1,
+      "top_depth_error_m": 23.9,
+      "n_strong": 100,
+      "recovered_easting": 557310.0,
+      "recovered_northing": 7133573.5,
+      "recovered_elevation": 287.4,
+      "true_centroid_utm": [
+        557264.1,
+        7133585.5
+      ],
+      "misfit_percent": 0.051,
+      "label": "Default (L2) · malla profunda"
+    },
+    "B_compact_sane": {
+      "horizontal_error_m": 46.2,
+      "centroid_depth_error_m": 35.1,
+      "recovered_centroid_depth_m": 164.6,
+      "true_centroid_depth_m": 199.7,
+      "recovered_top_depth_m": 75.0,
+      "true_top_depth_m": 51.1,
+      "top_depth_error_m": 23.9,
+      "n_strong": 96,
+      "recovered_easting": 557308.3,
+      "recovered_northing": 7133572.1,
+      "recovered_elevation": 291.5,
+      "true_centroid_utm": [
+        557264.1,
+        7133585.5
+      ],
+      "misfit_percent": 0.051,
+      "label": "Compacto (sano) · malla profunda"
+    },
+    "C_compact_anchor": {
+      "horizontal_error_m": 51.2,
+      "centroid_depth_error_m": 36.2,
+      "recovered_centroid_depth_m": 163.5,
+      "true_centroid_depth_m": 199.7,
+      "recovered_top_depth_m": 75.0,
+      "true_top_depth_m": 51.1,
+      "top_depth_error_m": 23.9,
+      "n_strong": 94,
+      "recovered_easting": 557313.1,
+      "recovered_northing": 7133570.7,
+      "recovered_elevation": 292.6,
+      "true_centroid_utm": [
+        557264.1,
+        7133585.5
+      ],
+      "misfit_percent": 0.051,
+      "label": "Compacto + 1 sondaje · malla profunda"
+    }
+  },
+  "deltas": {
+    "fixable_default_A_to_B_m": -4.1,
+    "anchor_gain_B_to_C_m": -1.1,
+    "anchor_gain_A_to_C_m": -5.2
+  },
+  "elapsed_s": 809.5,
+  "table_markdown": "| Configuración | err prof centroide | prof recuperada | err horiz | misfit |\n|---------------|--------------------|-----------------|-----------|--------|\n| Default (L2) · malla profunda | 31.0m | 168.7m | 47.4m | 0.051% |\n| Compacto (sano) · malla profunda | 35.1m | 164.6m | 46.2m | 0.051% |\n| Compacto + 1 sondaje · malla profunda | 36.2m | 163.5m | 51.2m | 0.051% |"
+}

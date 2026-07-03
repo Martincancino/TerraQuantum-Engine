@@ -1,0 +1,84 @@
+{
+  "dataset": "DO-27 — profundidad vs COBERTURA (denso→disperso), B=compacto sin ancla, C=+1 ancla dura",
+  "true_centroid_depth_m": 199.7,
+  "mesh": {
+    "nx": 12,
+    "ny": 10,
+    "nz": 12,
+    "block_size_m": 50.0,
+    "depth_extent_m": 500.0
+  },
+  "synthetic_anchor": {
+    "local_xz_m": [
+      285.5,
+      264.1
+    ],
+    "interval_depth_m": [
+      51.1,
+      481.1
+    ],
+    "anchored_density_t_m3": 1.897,
+    "mean_density_contrast_t_m3": -0.703,
+    "true_centroid_depth_m": 199.7
+  },
+  "rows": [
+    {
+      "stride": 2,
+      "n_sensors": 256,
+      "depth_err_no_anchor_m": 32.8,
+      "depth_err_anchor_m": 30.8,
+      "anchor_gain_m": 2.0,
+      "horiz_no_anchor_m": 53.7,
+      "horiz_anchor_m": 61.1,
+      "recovered_depth_no_anchor_m": 166.9,
+      "recovered_depth_anchor_m": 169.0,
+      "misfit_no_anchor_pct": 0.072,
+      "misfit_anchor_pct": 0.072,
+      "n_anchored_voxels": 9
+    },
+    {
+      "stride": 4,
+      "n_sensors": 64,
+      "depth_err_no_anchor_m": 8.9,
+      "depth_err_anchor_m": 23.6,
+      "anchor_gain_m": -14.7,
+      "horiz_no_anchor_m": 49.2,
+      "horiz_anchor_m": 57.2,
+      "recovered_depth_no_anchor_m": 208.7,
+      "recovered_depth_anchor_m": 223.4,
+      "misfit_no_anchor_pct": 0.0,
+      "misfit_anchor_pct": 0.0,
+      "n_anchored_voxels": 9
+    },
+    {
+      "stride": 6,
+      "n_sensors": 36,
+      "depth_err_no_anchor_m": 4.5,
+      "depth_err_anchor_m": 3.8,
+      "anchor_gain_m": 0.7,
+      "horiz_no_anchor_m": 47.4,
+      "horiz_anchor_m": 63.2,
+      "recovered_depth_no_anchor_m": 195.3,
+      "recovered_depth_anchor_m": 196.0,
+      "misfit_no_anchor_pct": 0.0,
+      "misfit_anchor_pct": 0.0,
+      "n_anchored_voxels": 9
+    },
+    {
+      "stride": 8,
+      "n_sensors": 16,
+      "depth_err_no_anchor_m": 5.7,
+      "depth_err_anchor_m": 12.4,
+      "anchor_gain_m": -6.7,
+      "horiz_no_anchor_m": 59.4,
+      "horiz_anchor_m": 64.9,
+      "recovered_depth_no_anchor_m": 194.1,
+      "recovered_depth_anchor_m": 187.4,
+      "misfit_no_anchor_pct": 0.0,
+      "misfit_anchor_pct": 0.0,
+      "n_anchored_voxels": 9
+    }
+  ],
+  "elapsed_s": 42.2,
+  "table_markdown": "| Estaciones (stride) | z err SIN ancla | z err CON ancla | ganancia ancla | horiz sin→con |\n|---------------------|-----------------|-----------------|----------------|---------------|\n| 256 (s2) | 32.8m | 30.8m | 2.0m | 53.7m→61.1m |\n| 64 (s4) | 8.9m | 23.6m | -14.7m | 49.2m→57.2m |\n| 36 (s6) | 4.5m | 3.8m | 0.7m | 47.4m→63.2m |\n| 16 (s8) | 5.7m | 12.4m | -6.7m | 59.4m→64.9m |"
+}
