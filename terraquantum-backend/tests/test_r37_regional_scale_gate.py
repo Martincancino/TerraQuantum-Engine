@@ -37,25 +37,30 @@ def _csv_bytes(header: str, rows: list[str]) -> bytes:
     return content.encode()
 
 
+# Convención de columnas TQ: x = este, z = norte, y/elevation = elevación.
+# (Los fixtures históricos ponían el norte en `y` — el slot de ELEVACIÓN — y el
+# import moría antes por 'Missing required column: unit', enmascarándolo. Hoy la
+# unidad se infiere de g_mgal, así que la geometría debe ser la correcta.
+# Clases verificadas empíricamente contra auto_grid + classifier 2026-07-03.)
+
 def _local_survey_csv() -> bytes:
-    """Dataset pequeño: extent ≈ 2 km × 2 km → LOCAL_SURVEY."""
-    header = "x,y,z,g_mgal"
-    rows = [f"{i*200},{j*200},0,{-0.001 + i*0.0001 + j*0.00005}" for i in range(5) for j in range(5)]
+    """Extent 800 m × 800 m, grilla chica → LOCAL_SURVEY."""
+    header = "x,z,elevation,g_mgal"
+    rows = [f"{i*200},{j*200},0,{0.1 + i*0.01 + j*0.005}" for i in range(5) for j in range(5)]
     return _csv_bytes(header, rows)
 
 
 def _regional_csv() -> bytes:
-    """Dataset grande: extent ≈ 50 km × 30 km → REGIONAL_SCALE (grilla dentro de límites)."""
-    header = "x,y,z,g_mgal"
-    rows = [f"{i*5000},{j*5000},0,{-0.002 + i*0.00002 + j*0.00001}" for i in range(11) for j in range(7)]
+    """Extent 50 km × 30 km, grilla dentro de límites → REGIONAL_SCALE (medido: 23×8×14)."""
+    header = "x,z,elevation,g_mgal"
+    rows = [f"{i*5000},{j*5000},0,{0.2 + i*0.002 + j*0.001}" for i in range(11) for j in range(7)]
     return _csv_bytes(header, rows)
 
 
 def _too_large_csv() -> bytes:
-    """Dataset muy grande: fuerza nx/nz > 80 en auto_grid → TOO_LARGE_SINGLE_INVERSION."""
-    header = "x,y,z,g_mgal"
-    # extent ≈ 250 km × 200 km con pocas estaciones → auto_grid intentará nx>80
-    rows = [f"{i*25000},{j*20000},0,{-0.003 + i*0.00001}" for i in range(11) for j in range(11)]
+    """Extent 250 km × 200 km denso → nx>80 en auto_grid → TOO_LARGE_SINGLE_INVERSION (medido: 85×29×68)."""
+    header = "x,z,elevation,g_mgal"
+    rows = [f"{i*5000},{j*5000},0,{0.3 + i*0.001}" for i in range(51) for j in range(41)]
     return _csv_bytes(header, rows)
 
 
@@ -122,6 +127,11 @@ def _invert_form(csv_bytes: bytes, **extra) -> dict:
         alpha_spatial="1.0",
         strict="false",
         allow_g_raw="false",
+        # Los CSVs fixture usan coords locales x,y: reconocemos el riesgo espacial
+        # para que el gate BAJO PRUEBA sea REGIONAL_SCALE_PREFLIGHT. Antes esto lo
+        # enmascaraba el bug 'Missing required column: unit' (abortaba el import
+        # antes del gate espacial); hoy la unidad se infiere del header g_mgal.
+        acknowledge_spatial_risk="true",
     )
     defaults.update(extra)
     return defaults

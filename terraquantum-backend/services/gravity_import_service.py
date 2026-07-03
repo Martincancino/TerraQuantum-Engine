@@ -88,7 +88,9 @@ GRAVITY_COLUMN_PRIORITY = [
     "g_corrected",
     "complete_bouguer_anomaly",
     "bouguer_anomaly",
+    "bouguer_mgal",
     "free_air_anomaly",
+    "free_air_mgal",
     "cba",
     "faa",
     "gravity_mgal",
@@ -793,9 +795,20 @@ def import_gravity_csv_v1(
         _detected_data_type = DataTypeDetection(**detect_csv_data_type(headers))
 
         # Magnetometría: la columna `unit` es opcional (nT implícito). Gravedad: se
-        # exige columna `unit` salvo que el mapeo manual provea una unidad literal.
+        # exige columna `unit` salvo que el mapeo manual provea una unidad literal
+        # o que la unidad venga EMBEBIDA en el header de la columna de gravedad
+        # (p.ej. g_mgal, bouguer_mgal → mGal); en ese caso se infiere con warning,
+        # nunca en silencio. Cualquier otro caso sigue siendo error (no adivinar).
         if "unit" not in headers_lower and not _is_magnetic and not _forced_unit:
-            errors_list.append("Missing required column: unit")
+            _g_col_guess = choose_gravity_column(headers)
+            if _g_col_guess and "mgal" in _g_col_guess.strip().lower():
+                _forced_unit = "mGal"
+                warnings_list.append(
+                    f"Sin columna 'unit': unidad inferida mGal desde el header "
+                    f"'{_g_col_guess}' (unidad embebida en el nombre de la columna)."
+                )
+            else:
+                errors_list.append("Missing required column: unit")
 
         # R3.5-K — station_id is optional; auto-generate if column absent
         _sid_idx = next(
