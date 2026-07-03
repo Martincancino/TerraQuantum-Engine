@@ -14,7 +14,7 @@
 | # | Fase | Qué entrega | Estado |
 |---|------|-------------|--------|
 | **F0** | **Definición de producto y reglas** | `docs/02_PRODUCTO.md`: quién es el usuario, el camino dorado, qué significa "robusto". Las reglas de trabajo. | ✅ 2026-07-02 |
-| **F1** | **Mapa y limpieza del código** | Inventario ruta-por-ruta (dorado/secundario/muerto), borrado de lo muerto, raíz del repo limpia, CI mínima que corre en cada cambio. | ⬜ |
+| **F1** | **Mapa y limpieza del código** | Inventario ruta-por-ruta (dorado/secundario/muerto), borrado de lo muerto, raíz del repo limpia, CI mínima que corre en cada cambio. | ✅ 2026-07-03 (gate: mapa publicado, 5 muertos podados verificados, raíz limpia, check.ps1, suite 1700 tests verde tras fix del único fallo; 2ª pasada de símbolos intra-servicio continúa dentro de F2) |
 | **F2** | **Ingesta blindada universal** | "Cualquier CSV entra": encoding/separador/decimales/preámbulos/columnas en español auto-mapeadas; cuando falta algo, PREGUNTA (nunca inventa, nunca crashea). Corpus de CSVs sucios reales + tests generativos. | ⬜ (~70% hecho) |
 | **F2B** | **El gabinete del consultor automatizado** | La preparación no solo LEE: TRABAJA. Todo el procesamiento que hoy el consultor hace a mano: drift+marea desde lecturas crudas, Nettleton, regional-residual; diurna, RTP, derivadas (tilt/señal analítica/1VD), continuación ascendente, deconvolución de Euler (profundidades!); desurvey + QA/QC de sondajes. | ⬜ (correcciones básicas hechas; el resto NO existe) |
 | **F3** | **Flujo dorado asíncrono + base de datos** | Preparación → inversión → 3D sin timeouts: cola de trabajos con progreso en vivo, historial de proyectos/corridas en SQLite, botón cancelar, presupuesto de vóxeles con aviso previo. | ⬜ (ruta async ya existe, sin cablear) |
@@ -253,7 +253,7 @@ Formato de cada fase: **Objetivo → Investigación previa → Trabajo → Tests
 
 **Objetivo:** el diferenciador que nadie tiene en el nicho: un copiloto en español que explica LA corrida concreta, redacta borradores de secciones de informe, y jamás inventa un número.
 
-**Ya existe (F10 histórica, verificado):** `services/gemini_agent.py` — reporte de interpretación estructurado (Pydantic), system prompt con compliance (prohibido reserve/resource/grade/NPV — ¡mantener! es el escudo legal), validación con fallback; `api/chat_api.py`.
+**Ya existe (F10 histórica, verificado):** `services/gemini_agent.py` — reporte de interpretación estructurado (Pydantic), system prompt con compliance (prohibido reserve/resource/grade/NPV — ¡mantener! es el escudo legal), validación con fallback; `api/chat_api.py`. **OJO (medido en suite 2026-07-03):** ambos usan el SDK `google.generativeai` DEPRECADO (FutureWarning: soporte terminado) → F6 migra a `google.genai`.
 
 **Investigación previa (estado 2026, verificado):** Gemini 3.1 Pro = flagship razonamiento (contexto 1M tokens, ~US$12/1M output); Gemini 3.5 Flash (mayo 2026, US$1.50/M in, US$9/M out) para chat ágil; 3.1 Flash-Lite (US$0.25/M in) para operaciones baratas; context caching = pagar una vez el contexto grande y reusar con descuento — clave para anclar cada sesión de chat al mismo `report_payload`. Decisión de modelos: **chat = 3.5 Flash; borrador de informe = 3.1 Pro; clasificaciones menores = Flash-Lite**.
 
