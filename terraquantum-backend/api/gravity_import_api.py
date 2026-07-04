@@ -1754,6 +1754,30 @@ async def load_package(
                 status_code=422,
                 detail={"error": "GEOPHYSICS_INPUT_VALIDATION", "message": str(exc)},
             ) from exc
+        except Exception as exc:
+            # F2 nunca-crashea: el solver del flujo de PAQUETE (el caso largo
+            # joint) solo capturaba ValueError → cualquier RuntimeError/
+            # MemoryError/numpy era un 500 pelado. Mismo contrato que /invert.
+            import traceback as _tb
+
+            _detail = {
+                "error": "INVERSION_RUNTIME_ERROR",
+                "message": str(exc),
+                "type": type(exc).__name__,
+                "traceback": _tb.format_exc()[-2000:],
+            }
+            from core.errors import TerraquantumError as _TQError
+
+            if isinstance(exc, _TQError):
+                _detail.update(exc.to_dict())
+            try:
+                update_run_status(
+                    project_id=project_id, run_id=run_id, status="error",
+                    stage="solving", message=str(exc)[:300],
+                )
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail=_detail) from exc
 
         _inversion_dict = model_to_dict(inversion_result) if inversion_result else {}
         if isinstance(_inversion_dict, dict) and "voxels" in _inversion_dict:

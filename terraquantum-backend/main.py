@@ -99,6 +99,59 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+# ── F2 — Contrato "nunca crashea": PROHIBIDO el 500 pelado ────────────────────
+# Dos handlers globales:
+#   1. TerraquantumError sin capturar → 422/500 con el payload COMPLETO del
+#      catálogo ES (code/severity/user_message/suggested_action) — antes se
+#      degradaba a {"detail": "Internal Server Error"} perdiendo la acción.
+#   2. Exception sin capturar → 500 catalogado TQ_INTERNAL (mensaje y acción
+#      en español + tipo y traceback truncado para diagnóstico).
+# Los try/except específicos de cada endpoint siguen teniendo prioridad (más
+# contexto); esto es la RED de seguridad transversal.
+def _register_never_crash_handlers(fastapi_app: FastAPI) -> None:
+    import traceback as _tb
+
+    from fastapi import Request as _Request
+    from fastapi.responses import JSONResponse as _JSONResponse
+
+    from core.errors import TerraquantumError, get_spec
+
+    @fastapi_app.exception_handler(TerraquantumError)
+    async def _tq_error_handler(request: _Request, exc: TerraquantumError):
+        payload = exc.to_dict()
+        status = 500 if exc.code == "TQ_INTERNAL" else 422
+        return _JSONResponse(
+            status_code=status,
+            content={"detail": {"error": exc.code, "message": payload["user_message"], **payload}},
+        )
+
+    @fastapi_app.exception_handler(Exception)
+    async def _unhandled_error_handler(request: _Request, exc: Exception):
+        spec = get_spec("TQ_INTERNAL")
+        _startup_log.error(
+            "unhandled_exception path=%s type=%s error=%s",
+            str(request.url.path), type(exc).__name__, str(exc)[:500],
+        )
+        return _JSONResponse(
+            status_code=500,
+            content={
+                "detail": {
+                    "error": "TQ_INTERNAL",
+                    "code": "TQ_INTERNAL",
+                    "severity": spec.severity if spec else "error",
+                    "message": spec.user_message if spec else str(exc),
+                    "user_message": spec.user_message if spec else str(exc),
+                    "suggested_action": spec.suggested_action if spec else "",
+                    "type": type(exc).__name__,
+                    "traceback": _tb.format_exc()[-2000:],
+                }
+            },
+        )
+
+
+_register_never_crash_handlers(app)
+
 # ── Routers siempre activos (núcleo geofísico + datos) ───────────────────────
 app.include_router(async_router)
 app.include_router(keys_router)
