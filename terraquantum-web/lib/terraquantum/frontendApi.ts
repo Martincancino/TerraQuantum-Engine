@@ -1361,6 +1361,49 @@ export type ColumnRole =
   | "sigma"
   | "station_id";
 
+// F2 — SniffReport: detección física del CSV (encoding/separador/decimal/
+// preámbulo/filas rotas) CON EVIDENCIA. El backend detecta; aquí solo se muestra.
+export type SniffDetection = {
+  value: string;
+  confidence: "high" | "medium" | "low";
+  evidence: string;
+  discarded: { value: string; reason: string }[];
+};
+
+export type SniffReport = {
+  version: string;
+  filename: string;
+  encoding: SniffDetection;
+  separator: SniffDetection;
+  decimal: SniffDetection;
+  preamble_count: number;
+  preamble_lines: { line_number: number; text: string; reason: string }[];
+  header_line_number: number | null;
+  header_columns: string[];
+  broken_rows: {
+    line_number: number;
+    field_count: number;
+    expected_fields: number;
+    excerpt: string;
+  }[];
+  broken_row_count: number;
+  n_lines_sampled: number;
+  sample_truncated: boolean;
+  warnings: string[];
+};
+
+// F2.4 — pregunta ESTRUCTURADA de ingesta (dato no-derivable → se pregunta,
+// jamás se adivina). La respuesta viaja como literal de column_map.
+export type IngestQuestion = {
+  key: string;
+  target: string;
+  kind: "choice" | "text";
+  blocking: boolean;
+  question: string;
+  options: { value: string; label: string }[];
+  reason: string;
+};
+
 export type ColumnMappingPlan = {
   data_kind: string;
   raw_columns: string[];
@@ -1372,9 +1415,25 @@ export type ColumnMappingPlan = {
   optional_roles: string[];
   missing_required: string[];
   needs_mapping: boolean;
-  confidence: "high" | "low";
+  confidence: "high" | "medium" | "low";
   role_labels: Record<string, string>;
   literals: Record<string, string>;
+  // F2 — heurística por RANGO físico (2ª opinión sobre el mapeo por nombre).
+  range_checks?: Record<string, { column: string; verdict: string; note: string | null }>;
+  suspicions?: {
+    role: string;
+    column: string;
+    kind: string;
+    user_mapped: boolean;
+    message: string;
+    suggested_role: string | null;
+  }[];
+  role_confidence?: Record<string, "high" | "medium" | "low">;
+  suggestions?: Record<string, { column: string; confidence: string; reason: string }>;
+  needs_confirmation?: boolean;
+  // F2.4 — preguntas tipadas + literales inferidos del header con evidencia.
+  questions?: IngestQuestion[];
+  inferred_literals?: Record<string, { value: string; source_column: string; note: string }>;
 };
 
 export type EnrichPackageResult =
@@ -1389,9 +1448,22 @@ export type EnrichPackageResult =
       warnings: string[];
       needsContext: string[];
       nStations: number;
+      // F2 — sniff físico del CSV primario (evidencia de formato).
+      sniffReport?: SniffReport | null;
       error: null;
     }
-  | { ok: true; needsMapping: true; status: number; mappingPlan: ColumnMappingPlan }
+  | {
+      ok: true;
+      needsMapping: true;
+      status: number;
+      mappingPlan: ColumnMappingPlan;
+      // F2 — media confianza: el backend SUGIERE y PREGUNTA (sospechas de
+      // rango, preguntas blocking) en vez de generar en silencio.
+      needsConfirmation?: boolean;
+      sniffReport?: SniffReport | null;
+      sampleRows?: Record<string, string>[];
+      message?: string;
+    }
   | { ok: false; status: number; error: string };
 
 /**
@@ -1461,13 +1533,18 @@ export async function enrichPackage(opts: {
       return { ok: false, status: res.status, error: detail };
     }
     const data = await res.json();
-    // El backend pide MAPEO: faltan roles requeridos y no se envió column_map.
+    // El backend pide MAPEO o CONFIRMACIÓN: faltan roles, hay sospechas de
+    // rango o preguntas blocking sin responder (F2: preguntar, no adivinar).
     if (data?.needs_mapping) {
       return {
         ok: true,
         needsMapping: true,
         status: res.status,
         mappingPlan: data.column_mapping as ColumnMappingPlan,
+        needsConfirmation: Boolean(data.needs_confirmation),
+        sniffReport: (data.sniff_report as SniffReport) ?? null,
+        sampleRows: Array.isArray(data.sample_rows) ? data.sample_rows : [],
+        message: typeof data.message === "string" ? data.message : undefined,
       };
     }
     return {
@@ -1481,6 +1558,7 @@ export async function enrichPackage(opts: {
       warnings: Array.isArray(data.warnings) ? data.warnings : [],
       needsContext: Array.isArray(data.needs_context) ? data.needs_context : [],
       nStations: Number(data.n_stations ?? 0),
+      sniffReport: (data.sniff_report as SniffReport) ?? null,
       error: null,
     };
   } catch (error: unknown) {
@@ -1497,7 +1575,16 @@ export async function analyzeColumns(opts: {
   file: File;
   dataType?: "gravity" | "magnetic";
   columnMap?: Record<string, string> | null;
-}): Promise<{ ok: true; plan: ColumnMappingPlan } | { ok: false; error: string }> {
+}): Promise<
+  | {
+      ok: true;
+      plan: ColumnMappingPlan;
+      // F2 — sniff físico + preview de filas YA parseadas (evidencia).
+      sniffReport?: SniffReport | null;
+      sampleRows?: Record<string, string>[];
+    }
+  | { ok: false; error: string }
+> {
   const fd = new FormData();
   fd.append("file", opts.file);
   if (opts.columnMap && Object.keys(opts.columnMap).length > 0) {
@@ -1521,7 +1608,12 @@ export async function analyzeColumns(opts: {
       return { ok: false, error: detail };
     }
     const data = await res.json();
-    return { ok: true, plan: data.column_mapping as ColumnMappingPlan };
+    return {
+      ok: true,
+      plan: data.column_mapping as ColumnMappingPlan,
+      sniffReport: (data.sniff_report as SniffReport) ?? null,
+      sampleRows: Array.isArray(data.sample_rows) ? data.sample_rows : [],
+    };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Error de red";
     return { ok: false, error: message };

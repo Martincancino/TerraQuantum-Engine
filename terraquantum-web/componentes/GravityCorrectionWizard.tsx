@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   applyGravityCorrections,
   GravityCorrectionParams,
@@ -157,6 +157,46 @@ type Props = {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+// F2.5 (fix eslint react-hooks/static-components): ColSelect vive FUERA del
+// componente (definirlo durante el render recreaba el componente y reseteaba
+// su estado en cada render). Recibe todo por props.
+function ColSelect({
+  label,
+  field,
+  required,
+  colMap,
+  csvHeaders,
+  onSelect,
+}: {
+  label: string;
+  field: keyof ColMap;
+  required: boolean;
+  colMap: ColMap;
+  csvHeaders: string[];
+  onSelect: (field: keyof ColMap, value: string) => void;
+}) {
+  return (
+    <div>
+      <label className="block text-[9px] uppercase tracking-widest text-neutral-400 font-bold mb-1">
+        {label}
+        {required && <span className="text-red-400 ml-1">*</span>}
+      </label>
+      <select
+        value={colMap[field]}
+        onChange={(e) => onSelect(field, e.target.value)}
+        className="w-full bg-neutral-800 border border-neutral-600/40 rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-neutral-500"
+      >
+        <option value="">— Sin asignar —</option>
+        {csvHeaders.map((h) => (
+          <option key={h} value={h}>
+            {h}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 export default function GravityCorrectionWizard({ file, onComplete, onCancel }: Props) {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
@@ -181,7 +221,15 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
   const [previewLoading, setPreviewLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
-  const [validStationCount, setValidStationCount] = useState(0);
+  // F2.5 (fix eslint react-hooks/set-state-in-effect): el conteo de estaciones
+  // válidas es DERIVADO de rows+headers+mapa → useMemo, no estado + effect.
+  const validStationCount = useMemo(
+    () =>
+      csvHeaders.length > 0
+        ? buildStations(csvRows, csvHeaders, colMap).length
+        : 0,
+    [colMap, csvHeaders, csvRows]
+  );
 
   // ─── Parse CSV on mount ──────────────────────────────────────────────────────
 
@@ -204,22 +252,16 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
         id: detectColumn(headers, ID_ALIASES),
       };
       setColMap(detected);
-      // Pre-count valid stations with detected mapping
-      const stations = buildStations(rows, headers, detected);
-      setValidStationCount(stations.length);
     };
     reader.onerror = () => setParseError("Error al leer el archivo CSV.");
     reader.readAsText(file);
   }, [file]);
 
-  // Recount when colMap changes
-  useEffect(() => {
-    if (csvHeaders.length > 0) {
-      setValidStationCount(buildStations(csvRows, csvHeaders, colMap).length);
-    }
-  }, [colMap, csvHeaders, csvRows]);
-
   const canProceedStep1 = Boolean(colMap.lat && colMap.lon && colMap.g);
+
+  function handleColSelect(field: keyof ColMap, value: string) {
+    setColMap({ ...colMap, [field]: value });
+  }
 
   // ─── Step 3 → 4: preview first 5 ────────────────────────────────────────────
 
@@ -275,37 +317,6 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
     const correctedFile = new File([blob], `corrected_${file.name}`, { type: "text/csv" });
     onComplete(correctedFile, report);
   };
-
-  // ─── UI helpers ──────────────────────────────────────────────────────────────
-
-  const ColSelect = ({
-    label,
-    field,
-    required,
-  }: {
-    label: string;
-    field: keyof ColMap;
-    required: boolean;
-  }) => (
-    <div>
-      <label className="block text-[9px] uppercase tracking-widest text-neutral-400 font-bold mb-1">
-        {label}
-        {required && <span className="text-red-400 ml-1">*</span>}
-      </label>
-      <select
-        value={colMap[field]}
-        onChange={(e) => setColMap({ ...colMap, [field]: e.target.value })}
-        className="w-full bg-neutral-800 border border-neutral-600/40 rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-neutral-500"
-      >
-        <option value="">— Sin asignar —</option>
-        {csvHeaders.map((h) => (
-          <option key={h} value={h}>
-            {h}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
 
   // ─── Error state ─────────────────────────────────────────────────────────────
 
@@ -383,11 +394,11 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
           </p>
 
           <div className="grid grid-cols-2 gap-3">
-            <ColSelect label="Latitud (°)" field="lat" required={true} />
-            <ColSelect label="Longitud (°)" field="lon" required={true} />
-            <ColSelect label="Elevación (m)" field="elev" required={false} />
-            <ColSelect label="Gravedad observada" field="g" required={true} />
-            <ColSelect label="ID de estación" field="id" required={false} />
+            <ColSelect label="Latitud (°)" field="lat" required={true} colMap={colMap} csvHeaders={csvHeaders} onSelect={handleColSelect} />
+            <ColSelect label="Longitud (°)" field="lon" required={true} colMap={colMap} csvHeaders={csvHeaders} onSelect={handleColSelect} />
+            <ColSelect label="Elevación (m)" field="elev" required={false} colMap={colMap} csvHeaders={csvHeaders} onSelect={handleColSelect} />
+            <ColSelect label="Gravedad observada" field="g" required={true} colMap={colMap} csvHeaders={csvHeaders} onSelect={handleColSelect} />
+            <ColSelect label="ID de estación" field="id" required={false} colMap={colMap} csvHeaders={csvHeaders} onSelect={handleColSelect} />
           </div>
 
           {!colMap.elev && (params.apply_fac || params.apply_bouguer || params.apply_terrain) && (

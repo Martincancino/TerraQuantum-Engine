@@ -249,6 +249,10 @@ function SpatialResidualsMap({ stations }: { stations: MisfitStationData[] }) {
 
 type Tab = "scatter" | "histogram" | "spatial";
 
+// F2.5 (fix eslint react-hooks/set-state-in-effect): el reset síncrono
+// (loading/error/data) al cambiar de corrida se logra REMONTANDO el panel
+// interno vía `key` — el estado inicial ya es "cargando" y el efecto solo
+// hace setState asíncronos (dentro del .then del fetch).
 export default function ObsVsCalcPanel({
   projectId,
   runId,
@@ -256,26 +260,43 @@ export default function ObsVsCalcPanel({
   projectId: string;
   runId: string;
 }) {
-  const [data, setData] = useState<MisfitResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  if (!projectId || !runId) return null;
+  return <ObsVsCalcPanelInner key={`${projectId}/${runId}`} projectId={projectId} runId={runId} />;
+}
+
+type FetchState =
+  | { status: "loading" }
+  | { status: "error"; error: string }
+  | { status: "done"; data: MisfitResponse };
+
+function ObsVsCalcPanelInner({
+  projectId,
+  runId,
+}: {
+  projectId: string;
+  runId: string;
+}) {
+  const [state, setState] = useState<FetchState>({ status: "loading" });
   const [tab, setTab] = useState<Tab>("scatter");
 
   useEffect(() => {
-    if (!projectId || !runId) return;
-    setLoading(true);
-    setError(null);
-    setData(null);
-
+    let cancelled = false;
     getGeophysicsMisfit(projectId, runId).then(result => {
-      setLoading(false);
+      if (cancelled) return;
       if (!result.ok || !result.data) {
-        setError(result.error ?? "Error leyendo datos de ajuste.");
+        setState({ status: "error", error: result.error ?? "Error leyendo datos de ajuste." });
         return;
       }
-      setData(result.data);
+      setState({ status: "done", data: result.data });
     });
+    return () => {
+      cancelled = true;
+    };
   }, [projectId, runId]);
+
+  const loading = state.status === "loading";
+  const error = state.status === "error" ? state.error : null;
+  const data = state.status === "done" ? state.data : null;
 
   if (loading) {
     return (

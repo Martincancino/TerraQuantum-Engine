@@ -10,6 +10,8 @@ import {
   type EnrichmentStep,
   type EnrichmentSummary,
   type HelmertGeoref,
+  type IngestQuestion,
+  type SniffReport,
 } from "../lib/terraquantum/frontendApi";
 
 /**
@@ -114,6 +116,10 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
   // mapeo; `columnMap` (rol → columna) se persiste y se envía en cada generación.
   const [mappingPlan, setMappingPlan] = useState<ColumnMappingPlan | null>(null);
   const [columnMap, setColumnMap] = useState<Record<string, string>>({});
+  // F2 — SniffReport (detección física con evidencia) + preview de filas YA
+  // parseadas. El backend detecta; aquí solo se muestran para CONFIRMAR.
+  const [sniffReport, setSniffReport] = useState<SniffReport | null>(null);
+  const [sampleRows, setSampleRows] = useState<Record<string, string>[]>([]);
   const [result, setResult] = useState<
     | {
         filename: string;
@@ -186,16 +192,21 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         setError(res.error);
         return;
       }
-      // El backend pide MAPEO: mostrar el paso y prellenar con lo auto-detectado.
+      // El backend pide MAPEO o CONFIRMACIÓN (F2: sospechas de rango o
+      // preguntas blocking): mostrar el paso, el sniff y el preview parseado.
       if (res.needsMapping) {
         setMappingPlan(res.mappingPlan);
+        setSniffReport(res.sniffReport ?? null);
+        setSampleRows(res.sampleRows ?? []);
         setColumnMap((prev) => prefillMap(res.mappingPlan, { ...prev, ...map }));
         setError(
-          "No se reconocieron todas las columnas requeridas. Asigna los roles abajo y vuelve a generar."
+          res.message ??
+            "No se reconocieron todas las columnas requeridas. Asigna los roles abajo y vuelve a generar."
         );
         return;
       }
       setMappingPlan(null);
+      setSniffReport(res.sniffReport ?? null);
       setResult({
         filename: res.filename,
         packageText: res.packageText,
@@ -227,6 +238,8 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         return;
       }
       setMappingPlan(res.plan);
+      setSniffReport(res.sniffReport ?? null);
+      setSampleRows(res.sampleRows ?? []);
       setColumnMap((prev) => prefillMap(res.plan, prev));
     } finally {
       setLoading(false);
@@ -378,16 +391,35 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         </div>
       )}
 
+      {/* F2 — qué detectó el sniffer (encoding/sep/decimal/preámbulo) con
+          evidencia, para que el usuario CONFIRME antes de confiar en el parseo. */}
+      {sniffReport && <SniffReportCard report={sniffReport} />}
+
       {mappingPlan && (
-        <ColumnMappingStep
-          plan={mappingPlan}
-          columnMap={columnMap}
-          dataType={dataType}
-          loading={loading}
-          onChange={setColumnMap}
-          onApply={() => handleGenerate(columnMap)}
-          onCancel={() => setMappingPlan(null)}
-        />
+        <>
+          {(mappingPlan.suspicions?.length ?? 0) > 0 && (
+            <SuspicionsBanner suspicions={mappingPlan.suspicions ?? []} />
+          )}
+          {(mappingPlan.questions?.length ?? 0) > 0 && (
+            <QuestionsForm
+              questions={mappingPlan.questions ?? []}
+              columnMap={columnMap}
+              onChange={setColumnMap}
+            />
+          )}
+          {sampleRows.length > 0 && (
+            <SampleRowsTable rows={sampleRows} columns={mappingPlan.raw_columns} />
+          )}
+          <ColumnMappingStep
+            plan={mappingPlan}
+            columnMap={columnMap}
+            dataType={dataType}
+            loading={loading}
+            onChange={setColumnMap}
+            onApply={() => handleGenerate(columnMap)}
+            onCancel={() => setMappingPlan(null)}
+          />
+        </>
       )}
 
       {result && (
@@ -653,6 +685,205 @@ function ResultCard({
   );
 }
 
+// ── F2 — SniffReport: qué detectó el backend en la capa física del CSV ───────
+
+const SNIFF_CONFIDENCE_META: Record<string, { label: string; classes: string }> = {
+  high: { label: "alta", classes: "border-emerald-700 bg-emerald-950/40 text-emerald-300" },
+  medium: { label: "media", classes: "border-amber-700 bg-amber-950/40 text-amber-300" },
+  low: { label: "baja", classes: "border-rose-800 bg-rose-950/40 text-rose-300" },
+};
+
+const SEPARATOR_LABEL: Record<string, string> = {
+  ",": "coma (,)",
+  ";": "punto y coma (;)",
+  "\t": "tabulador",
+  "|": "barra (|)",
+};
+
+function SniffChip({ title, det }: { title: string; det: SniffReport["encoding"] }) {
+  const meta = SNIFF_CONFIDENCE_META[det.confidence] ?? SNIFF_CONFIDENCE_META.low;
+  const shown = SEPARATOR_LABEL[det.value] ?? det.value;
+  return (
+    <div className="rounded-lg border border-neutral-800 bg-black/40 p-3" title={det.evidence}>
+      <div className="text-[9px] uppercase tracking-widest text-neutral-500">{title}</div>
+      <div className="mt-1 flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-bold text-neutral-100 font-mono">{shown}</span>
+        <span
+          className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded border ${meta.classes}`}
+        >
+          {meta.label}
+        </span>
+      </div>
+      <p className="mt-1 text-[10px] font-mono text-neutral-600 leading-4">{det.evidence}</p>
+    </div>
+  );
+}
+
+function SniffReportCard({ report }: { report: SniffReport }) {
+  return (
+    <div className="rounded-xl border border-sky-900/60 bg-sky-950/10 p-4 flex flex-col gap-3">
+      <div className="text-[10px] uppercase tracking-widest text-sky-400">
+        Formato detectado · {report.filename} — ¿correcto?
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <SniffChip title="Codificación" det={report.encoding} />
+        <SniffChip title="Separador" det={report.separator} />
+        <SniffChip title="Decimal" det={report.decimal} />
+      </div>
+      {report.preamble_count > 0 && (
+        <div className="rounded-lg border border-neutral-800 bg-black/40 p-3">
+          <div className="text-[9px] uppercase tracking-widest text-neutral-500 mb-1">
+            {report.preamble_count} línea(s) de preámbulo omitidas antes del encabezado
+          </div>
+          <ul className="text-[10px] font-mono text-neutral-500 leading-4">
+            {report.preamble_lines.slice(0, 4).map((p) => (
+              <li key={p.line_number} className="truncate">
+                L{p.line_number}: «{p.text}»
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {report.broken_row_count > 0 && (
+        <div className="rounded-lg border border-amber-800 bg-amber-950/30 p-3">
+          <div className="text-[9px] uppercase tracking-widest text-amber-400 mb-1">
+            {report.broken_row_count} fila(s) con número de campos inconsistente
+          </div>
+          <ul className="text-[10px] font-mono text-amber-300/80 leading-4">
+            {report.broken_rows.slice(0, 4).map((b) => (
+              <li key={b.line_number} className="truncate">
+                L{b.line_number}: {b.field_count} campos (se esperaban {b.expected_fields}) — «{b.excerpt}»
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── F2 — Sospechas por RANGO físico (northing-en-y y compañía) ───────────────
+function SuspicionsBanner({
+  suspicions,
+}: {
+  suspicions: NonNullable<ColumnMappingPlan["suspicions"]>;
+}) {
+  return (
+    <div className="rounded-xl border border-amber-700 bg-amber-950/30 p-4 flex flex-col gap-2">
+      <div className="text-[10px] uppercase tracking-widest text-amber-400">
+        Posible problema en el mapeo automático — revisa antes de continuar
+      </div>
+      {suspicions.map((s, i) => (
+        <p key={i} className="text-[11px] font-mono text-amber-300/90 leading-5">
+          {s.message}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+// ── F2.4 — Preguntas estructuradas (dato no-derivable → se pregunta) ─────────
+function QuestionsForm({
+  questions,
+  columnMap,
+  onChange,
+}: {
+  questions: IngestQuestion[];
+  columnMap: Record<string, string>;
+  onChange: (m: Record<string, string>) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-amber-700 bg-amber-950/20 p-4 flex flex-col gap-4">
+      <div className="text-[10px] uppercase tracking-widest text-amber-400">
+        El archivo no lo declara — responde para continuar
+      </div>
+      {questions.map((q) => {
+        const setAnswer = (value: string) => {
+          const next = { ...columnMap };
+          if (value) next[q.key] = value;
+          else delete next[q.key];
+          onChange(next);
+        };
+        return (
+          <div key={q.key}>
+            <p className="text-xs font-semibold text-neutral-200 mb-1">
+              {q.question}
+              {q.blocking && <span className="text-amber-400 ml-1">*</span>}
+            </p>
+            {q.kind === "choice" && q.options.length > 0 ? (
+              <select
+                value={columnMap[q.key] ?? ""}
+                onChange={(e) => setAnswer(e.target.value)}
+                className="w-full bg-black/60 border border-neutral-700 rounded px-3 py-2 text-xs text-neutral-200"
+              >
+                <option value="">— selecciona —</option>
+                {q.options.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={columnMap[q.key] ?? ""}
+                onChange={(e) => setAnswer(e.target.value)}
+                className="w-full bg-black/60 border border-neutral-700 rounded px-3 py-2 text-xs text-neutral-200"
+              />
+            )}
+            <p className="mt-1 text-[10px] font-mono text-neutral-600 leading-4">{q.reason}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── F2 — Preview de las primeras filas YA parseadas (lo que ve el importador) ─
+function SampleRowsTable({
+  rows,
+  columns,
+}: {
+  rows: Record<string, string>[];
+  columns: string[];
+}) {
+  const cols = columns.slice(0, 8);
+  return (
+    <div className="rounded-xl border border-neutral-800 bg-black/40 p-3 overflow-x-auto">
+      <div className="text-[9px] uppercase tracking-widest text-neutral-500 mb-2">
+        Primeras filas ya parseadas (lo que el importador ve)
+      </div>
+      <table className="text-[10px] font-mono text-neutral-400 w-full">
+        <thead>
+          <tr>
+            {cols.map((c) => (
+              <th key={c} className="text-left pr-4 pb-1 text-neutral-300 whitespace-nowrap">
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 5).map((r, i) => (
+            <tr key={i} className="border-t border-neutral-900">
+              {cols.map((c) => (
+                <td key={c} className="pr-4 py-0.5 whitespace-nowrap">
+                  {r[c] ?? ""}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {columns.length > 8 && (
+        <p className="mt-1 text-[9px] font-mono text-neutral-600">
+          … {columns.length - 8} columna(s) más no mostradas.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── PILAR 1 — Paso de MAPEO MANUAL de columnas ───────────────────────────────
 
 /** Prefija el mapa con lo que el backend ya resolvió (las elecciones previas mandan). */
@@ -664,7 +895,7 @@ function prefillMap(
   for (const role of [...plan.required_roles, ...plan.optional_roles]) {
     if (!out[role] && plan.roles[role]) out[role] = plan.roles[role] as string;
   }
-  for (const k of ["unit", "coordinate_system"]) {
+  for (const k of ["unit", "coordinate_system", "gravity_type"]) {
     if (!out[k] && plan.literals[k]) out[k] = plan.literals[k];
   }
   return out;
