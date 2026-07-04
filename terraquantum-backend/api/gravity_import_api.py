@@ -633,6 +633,8 @@ async def preview_gravity_csv(
             "georef_preview": georef_preview,
             "spatial_readiness": model_to_dict(spatial_readiness_preview),
             "regional_scale_preflight": model_to_dict(regional_scale_preflight),
+            # F2 — sniff físico (encoding/sep/decimal/preámbulo) con evidencia.
+            "sniff_report": result.sniff_report,
             "warnings": result.warnings,
             "errors": result.errors
         })
@@ -1143,7 +1145,16 @@ async def analyze_columns_endpoint(
                 },
             )
         plan = build_column_mapping_plan(headers, data_kind=data_type, column_map=column_map)
-        return JSONResponse(content=sanitize_nan({"column_mapping": plan}))
+        # F2 — sniff físico con evidencia (encoding/sep/decimal/preámbulo/filas
+        # rotas): la UI lo muestra junto al plan de mapeo para que el usuario
+        # confirme lo detectado.
+        from services.csv_sniffer_service import sniff_csv
+
+        sniff = sniff_csv(tmp)
+        return JSONResponse(content=sanitize_nan({
+            "column_mapping": plan,
+            "sniff_report": sniff.to_dict(),
+        }))
     finally:
         if tmp.exists():
             try:
@@ -1299,10 +1310,15 @@ async def enrich_package_endpoint(
             _primary_headers, data_kind=data_type, column_map=column_map,
         )
         if _plan["needs_mapping"]:
+            from services.csv_sniffer_service import sniff_csv as _sniff_csv
+
             return JSONResponse(
                 content=sanitize_nan({
                     "needs_mapping": True,
                     "column_mapping": _plan,
+                    # F2 — el sniff acompaña al plan: la UI muestra qué formato
+                    # se detectó mientras el usuario asigna roles.
+                    "sniff_report": _sniff_csv(tmp_primary).to_dict(),
                     "message": (
                         "No se reconocieron automáticamente todas las columnas "
                         "requeridas. Asigne manualmente los roles e intente de nuevo."
@@ -1468,6 +1484,8 @@ async def enrich_package_endpoint(
                 "warnings": list(primary.warnings or []),
                 "needs_context": summary["needs_context"],
                 "n_stations": n_sensors,
+                # F2 — sniff físico del CSV primario (evidencia de formato).
+                "sniff_report": primary.sniff_report,
             })
         )
     finally:

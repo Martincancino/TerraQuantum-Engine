@@ -30,6 +30,13 @@ from services.column_mapping_service import (
     resolve_elevation_unit_factor as _resolve_elev_unit_factor,
     resolve_mapped_column as _resolve_mapped,
 )
+from services.csv_sniffer_service import (
+    AMBIGUOUS_DELIM_MSG as _AMBIGUOUS_DELIM_MSG,
+    AmbiguousDelimiterError,
+    SniffReport,
+    decimal_verdict_for_lines as _decimal_verdict_for_lines,
+    sniff_csv,
+)
 from scipy.spatial import cKDTree as _cKDTree
 
 _log = get_logger(__name__)
@@ -544,22 +551,9 @@ def _is_skippable_row_error(msg: str) -> bool:
     return any(m in msg for m in _SKIPPABLE_ROW_MARKERS)
 
 
-class AmbiguousDelimiterError(ValueError):
-    """No se puede determinar delimitador/decimal del CSV con confianza.
-
-    INVARIANTE (BUG decimal-coma): la ingesta entrega dato LIMPIO o un ERROR CLARO,
-    jamás un número silenciosamente equivocado con sello "Calidad GOOD". Se lanza,
-    p.ej., con separador de miles (1,234,567) o comas de texto mezcladas dentro de
-    un CSV ';'-delimitado, donde adivinar produciría basura.
-    """
-
-
-_AMBIGUOUS_DELIM_MSG = (
-    "Detecté ';' como delimitador pero las comas están mezcladas (no son todas "
-    "decimales): no puedo decidir el formato sin adivinar y produciría valores "
-    "equivocados. Re-exporta el CSV con punto decimal, o declara el formato "
-    "(delimitador ';' + decimal ',')."
-)
+# AmbiguousDelimiterError y _AMBIGUOUS_DELIM_MSG viven ahora en
+# services.csv_sniffer_service (F2 sniffer universal); se re-exportan arriba
+# para preservar el contrato histórico de imports (tests y llamadores).
 
 
 def _sample_nonempty_lines(path: "str | Path", encoding: str, limit: int = 20) -> list[str]:
@@ -603,23 +597,12 @@ def _detect_semicolon_decimal_comma(lines: list[str]) -> str:
     if sum(l.count(",") for l in lines) == 0:
         return "historic"  # ';'-delim punto-decimal (p.ej. matriz Fase 4)
     # ';' consistente + comas presentes → ¿las comas son TODAS decimales?
-    total_comma = 0
-    decimal_comma = 0
-    for line in lines:
-        for field in line.split(";"):
-            ncomma = field.count(",")
-            if ncomma == 0:
-                continue
-            total_comma += ncomma
-            if ncomma >= 2:
-                return "ambiguous"  # separador de miles (1,234,567): no adivinar
-            # Coma decimal = coma seguida de dígito, entre dígitos o al inicio del
-            # número (tolera europeo sin cero inicial y con signo: ",05" / "-,1396").
-            if re.search(r"(?:^|[\d\s+\-]),\d", field):
-                decimal_comma += 1
-    if total_comma > 0 and decimal_comma == total_comma:
+    # La lógica campo-a-campo se generalizó a csv_sniffer_service (F2); este
+    # wrapper preserva el contrato histórico de la rama [,;].
+    verdict = _decimal_verdict_for_lines(lines, ";")
+    if verdict == "comma":
         return "semicolon_comma_decimal"
-    return "ambiguous"  # comas de texto mezcladas, etc. → error claro
+    return "ambiguous"  # miles (1,234,567) / comas de texto → error claro
 
 
 def _resolve_sep_decimal(path: "str | Path", encoding: str) -> "tuple[str, str]":
@@ -664,30 +647,78 @@ def _choose_read_sep(path: "str | Path", encoding: str) -> str:
     return "\t" if best == "\t" else r"\|"
 
 
-def _read_csv_dataframe(path: "str | Path", nrows: "int | None" = None):
-    """Lee el CSV tolerando BOM/encoding y delimitadores (, ; tab |).
+def _read_csv_dataframe(
+    path: "str | Path",
+    nrows: "int | None" = None,
+    sniff: "SniffReport | None" = None,
+):
+    """Lee el CSV tolerando BOM/encoding/preámbulo y delimitadores (, ; tab |).
 
-    Devuelve (df, warnings). `utf-8-sig` quita el BOM transparente; si el archivo no
-    es UTF-8 se reintenta como latin-1 con aviso. Propaga pd.errors.EmptyDataError.
+    Devuelve (df, warnings). Dos caminos:
+      - HISTÓRICO (byte-idéntico): sin preámbulo y encoding UTF-8/cp1252/latin-1 →
+        sep/decimal por `_resolve_sep_decimal` como siempre; si el archivo no es
+        UTF-8 se reintenta con el encoding que detectó el sniffer (cp1252/latin-1),
+        con aviso.
+      - NORMALIZADO (F2, antes ROTO): preámbulo detectado (Excel-ES "Proyecto: …",
+        directivas '#') o UTF-16 → se decodifica completo, se salta el preámbulo
+        con evidencia y se parsea el cuerpo con el sep/decimal del sniffer. Lo
+        indecidible sigue siendo AmbiguousDelimiterError (jamás basura).
+    Propaga pd.errors.EmptyDataError.
     """
+    import io
+
     import pandas as pd
 
+    if sniff is None:
+        sniff = sniff_csv(path)
+
     warns: list[str] = []
-    encoding = "utf-8-sig"
-    try:
-        sep, decimal = _resolve_sep_decimal(path, encoding)
+    _needs_normalized = sniff.preamble_count > 0 or sniff.encoding.value == "utf-16"
+
+    if _needs_normalized:
+        # Camino NUEVO: el histórico convertía el preámbulo en encabezado basura
+        # (o el UTF-16 en mojibake latin-1) → aquí no hay regresión posible.
+        if sniff.decimal.value == "?":
+            raise AmbiguousDelimiterError(_AMBIGUOUS_DELIM_MSG)
+        encoding = sniff.encoding.value
+        text = Path(path).read_bytes().decode(encoding, errors="replace")
+        lines = text.splitlines()
+        start = (sniff.header_line_number or 1) - 1
+        body = "\n".join(lines[start:])
+        sep_char = sniff.separator.value
         df = pd.read_csv(
-            path, sep=sep, engine="python", encoding=encoding,
-            on_bad_lines="skip", nrows=nrows, decimal=decimal,
+            io.StringIO(body), sep=sep_char, engine="python",
+            on_bad_lines="skip", nrows=nrows, decimal=sniff.decimal.value,
         )
-    except UnicodeDecodeError:
-        encoding = "latin-1"
-        warns.append("El archivo no es UTF-8; se leyó como latin-1.")
-        sep, decimal = _resolve_sep_decimal(path, encoding)
-        df = pd.read_csv(
-            path, sep=sep, engine="python", encoding=encoding,
-            on_bad_lines="skip", nrows=nrows, decimal=decimal,
-        )
+        warns.extend(sniff.import_warnings())
+        if encoding not in ("utf-8-sig", "utf-8"):
+            warns.append(f"El archivo no es UTF-8; se leyó como {encoding}.")
+    else:
+        encoding = "utf-8-sig"
+        try:
+            sep, decimal = _resolve_sep_decimal(path, encoding)
+            df = pd.read_csv(
+                path, sep=sep, engine="python", encoding=encoding,
+                on_bad_lines="skip", nrows=nrows, decimal=decimal,
+            )
+        except UnicodeDecodeError:
+            # El sniffer ya identificó el encoding real (cp1252 típico de
+            # Excel-ES; latin-1 como último recurso que nunca falla).
+            encoding = (
+                sniff.encoding.value
+                if sniff.encoding.value in ("cp1252", "latin-1")
+                else "latin-1"
+            )
+            warns.append(f"El archivo no es UTF-8; se leyó como {encoding}.")
+            sep, decimal = _resolve_sep_decimal(path, encoding)
+            df = pd.read_csv(
+                path, sep=sep, engine="python", encoding=encoding,
+                on_bad_lines="skip", nrows=nrows, decimal=decimal,
+            )
+        # Filas rotas detectadas por el sniffer: SIEMPRE avisar (antes se
+        # tragaban en silencio con on_bad_lines="skip").
+        if sniff.broken_row_count:
+            warns.extend(sniff.import_warnings())
 
     # DEFENSA EN PROFUNDIDAD (BUG decimal-coma): si el CSV colapsó a UNA sola columna
     # pese a que las líneas crudas tenían delimitadores, la estructura está rota — no
@@ -709,6 +740,31 @@ def import_gravity_csv_v1(
     allow_g_raw: bool = False,
     data_kind: str = "gravity",
     column_map: "dict | None" = None,
+) -> GravityImportResult:
+    """Punto de entrada público del import (F2): sniff físico + import.
+
+    El sniff (encoding/separador/decimal/preámbulo/filas rotas, con evidencia)
+    se adjunta SIEMPRE al resultado como `sniff_report` — también en error —
+    para que el frontend muestre qué se detectó y el usuario lo confirme.
+    """
+    path = Path(file_path)
+    _sniff = sniff_csv(path) if path.exists() else None
+    result = _import_gravity_csv_v1_impl(
+        file_path, strict=strict, allow_g_raw=allow_g_raw,
+        data_kind=data_kind, column_map=column_map, _sniff=_sniff,
+    )
+    if _sniff is not None:
+        result.sniff_report = _sniff.to_dict()
+    return result
+
+
+def _import_gravity_csv_v1_impl(
+    file_path: str | Path,
+    strict: bool = True,
+    allow_g_raw: bool = False,
+    data_kind: str = "gravity",
+    column_map: "dict | None" = None,
+    _sniff: "SniffReport | None" = None,
 ) -> GravityImportResult:
     # PILAR 1 — `column_map` (opcional) re-etiqueta columnas crudas a roles
     # (x, y, elevation, depth, gravity_value, gravity_type, magnetic_value, sigma,
@@ -732,7 +788,7 @@ def import_gravity_csv_v1(
     try:
         import pandas as pd
         try:
-            df, _read_warns = _read_csv_dataframe(path)
+            df, _read_warns = _read_csv_dataframe(path, sniff=_sniff)
         except pd.errors.EmptyDataError:
             errors_list.append("El archivo CSV está vacío (sin columnas ni datos).")
             return _build_error_result(path.name, errors_list, warnings_list)

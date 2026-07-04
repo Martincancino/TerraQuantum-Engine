@@ -277,6 +277,11 @@ class GravityImportResult(BaseModel):
     # joint/ambiguous/unknown) a partir de las columnas presentes. Informativo:
     # permite al frontend pre-seleccionar el tipo o pedir confirmación si es ambiguo.
     detected_data_type: Optional[DataTypeDetection] = None
+    # F2 — SniffReport de la capa física (encoding/separador/decimal/preámbulo/
+    # filas rotas, cada dimensión con confianza + evidencia + descartados).
+    # Viaja al frontend para que el usuario CONFIRME lo detectado; presente
+    # también en resultados de error (el usuario ve QUÉ se intentó leer).
+    sniff_report: Optional[Dict[str, Any]] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

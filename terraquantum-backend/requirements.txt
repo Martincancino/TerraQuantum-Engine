@@ -23,6 +23,9 @@ python-multipart==0.0.27
 pandas==3.0.2
 pyarrow>=12.0.0
 zarr>=2.14.0
+# F2 sniffer: detección de encoding (ya presente como transitiva; se declara
+# porque csv_sniffer_service la usa directamente — permiso 2026-07-03)
+charset-normalizer==3.4.7
 
 # Google Earth Engine / GEE
 earthengine-api==1.7.22
