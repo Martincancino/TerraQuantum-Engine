@@ -431,6 +431,147 @@ def _suggest_missing_by_range(
     return suggestions
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# F2.4 — Preguntas ESTRUCTURADAS de ingesta (extensión del patrón needs_context)
+#
+# Dato no-derivable = PREGUNTA tipada al frontend, no error ni default
+# silencioso. Las respuestas viajan por el canal que YA existe: los literales
+# de `column_map` (unit / gravity_type / coordinate_system) — cero mecanismos
+# nuevos de ida y vuelta.
+#   blocking=True  → el endpoint de enriquecimiento NO genera paquete sin la
+#                    respuesta (unidad sin la cual el import falla; tipo de
+#                    gravedad sin el cual el enriquecimiento puede re-reducir
+#                    un dato ya reducido = doble-Bouguer silencioso, bug 9045719).
+#   blocking=False → informativa; el flujo continúa si el usuario no responde.
+# ─────────────────────────────────────────────────────────────────────────────
+_GRAVITY_UNIT_OPTIONS = [
+    {"value": "mGal", "label": "mGal (miligales — lo usual en anomalías)"},
+    {"value": "µGal", "label": "µGal (microgales — microgravimetría)"},
+    {"value": "Gal", "label": "Gal (galileos)"},
+    {"value": "m/s2", "label": "m/s² (SI)"},
+]
+_GRAVITY_TYPE_OPTIONS = [
+    {"value": "bouguer_anomaly", "label": "Anomalía de Bouguer (ya reducida)"},
+    {"value": "complete_bouguer_anomaly", "label": "Anomalía de Bouguer completa (con corrección de terreno)"},
+    {"value": "free_air_anomaly", "label": "Anomalía de aire libre"},
+    {"value": "residual_gravity", "label": "Anomalía residual (regional removida)"},
+    {"value": "absolute_gravity", "label": "Gravedad absoluta / cruda de campo (sin reducir)"},
+]
+
+# Inferencia del TIPO desde el NOMBRE de la columna gravimétrica (evidencia en
+# el propio header, mismo espíritu que la unidad embebida 60d1c56): el orden
+# importa (complete_bouguer antes que bouguer). Tokens cortos = match exacto.
+_GTYPE_SUBSTRING_RULES = [
+    ("completebouguer", "complete_bouguer_anomaly"),
+    ("bouguer", "bouguer_anomaly"),
+    ("freeair", "free_air_anomaly"),
+    ("airelibre", "free_air_anomaly"),
+    ("residual", "residual_gravity"),
+]
+_GTYPE_EXACT_RULES = {
+    "cba": "complete_bouguer_anomaly",
+    "faa": "free_air_anomaly",
+    "graw": "g_raw",
+}
+
+
+def infer_gravity_type_from_column(column: Optional[str]) -> Optional[str]:
+    """Tipo de gravedad inferible desde el nombre de la columna, o None."""
+    if not column:
+        return None
+    token = normalize_token(column)
+    if token in _GTYPE_EXACT_RULES:
+        return _GTYPE_EXACT_RULES[token]
+    for needle, gtype in _GTYPE_SUBSTRING_RULES:
+        if needle in token:
+            return gtype
+    return None
+
+
+def _build_ingest_questions(
+    data_kind: str,
+    roles: Dict[str, Optional[str]],
+    literals: Dict[str, str],
+    headers_lower: List[str],
+    headers: List[str],
+) -> "tuple[list, dict]":
+    """Preguntas tipadas + literales inferidos con evidencia.
+
+    Devuelve (questions, inferred_literals). Nada se aplica aquí: el endpoint
+    decide (inferido con evidencia → pre-aplica CON AVISO; pregunta blocking
+    sin responder → detiene y pregunta).
+    """
+    if data_kind != "gravity":
+        return [], {}
+    # Imports lazy (mismo patrón del resto del módulo, evita ciclo).
+    from services.gravity_import_service import (
+        _UNIT_COL_CANDIDATES,
+        _find_by_priority,
+    )
+
+    questions: List[Dict[str, Any]] = []
+    inferred: Dict[str, Dict[str, str]] = {}
+    gravity_col = roles.get(ROLE_GRAVITY_VALUE)
+
+    # 1. UNIDAD: sin columna, sin literal y sin unidad embebida en el header
+    #    → el import fallaría con "Missing required column: unit". Preguntar.
+    unit_col = _find_by_priority(headers_lower, headers, _UNIT_COL_CANDIDATES)
+    unit_embedded = bool(gravity_col and "mgal" in gravity_col.strip().lower())
+    if gravity_col and not unit_col and not literals.get("unit") and not unit_embedded:
+        questions.append({
+            "key": "unit",
+            "target": "column_map.unit",
+            "kind": "choice",
+            "blocking": True,
+            "question": (
+                f"¿En qué unidad están los valores de la columna '{gravity_col}'? "
+                "El archivo no trae columna de unidad ni la declara en el nombre."
+            ),
+            "options": list(_GRAVITY_UNIT_OPTIONS),
+            "reason": (
+                "Sin la unidad no se puede convertir el dato (1 mGal = 1e-5 m/s²); "
+                "adivinarla corrompería los valores en silencio."
+            ),
+        })
+
+    # 2. TIPO DE GRAVEDAD: sin columna ni literal. Si el NOMBRE de la columna
+    #    lo declara (bouguer/free_air/residual...) se INFIERE con aviso (patrón
+    #    60d1c56); si no, se pregunta — el enriquecimiento podría re-reducir un
+    #    dato ya reducido (doble-Bouguer, bug 9045719) o al revés.
+    if gravity_col and not roles.get(ROLE_GRAVITY_TYPE) and not literals.get(ROLE_GRAVITY_TYPE):
+        gtype = infer_gravity_type_from_column(gravity_col)
+        if gtype:
+            inferred["gravity_type"] = {
+                "value": gtype,
+                "source_column": gravity_col,
+                "note": (
+                    f"Tipo de gravedad inferido '{gtype}' desde el nombre de la "
+                    f"columna '{gravity_col}' (evidencia embebida en el header). "
+                    "Corrígelo en el mapeo si no corresponde."
+                ),
+            }
+        else:
+            questions.append({
+                "key": "gravity_type",
+                "target": "column_map.gravity_type",
+                "kind": "choice",
+                "blocking": True,
+                "question": (
+                    f"¿Qué tipo de dato gravimétrico contiene la columna "
+                    f"'{gravity_col}'? El archivo no lo declara."
+                ),
+                "options": list(_GRAVITY_TYPE_OPTIONS),
+                "reason": (
+                    "Si el dato YA viene reducido y no se declara, el "
+                    "enriquecimiento podría aplicar Bouguer dos veces "
+                    "(corrupción silenciosa); si viene crudo y no se declara, "
+                    "se invertiría sin reducir."
+                ),
+            })
+
+    return questions, inferred
+
+
 def build_column_mapping_plan(
     headers: Sequence[str],
     data_kind: str = "gravity",
@@ -539,6 +680,11 @@ def build_column_mapping_plan(
         if missing:
             suggestions = _suggest_missing_by_range(missing, roles, sample_values)
 
+    # F2.4 — preguntas estructuradas + literales inferidos con evidencia.
+    questions, inferred_literals = _build_ingest_questions(
+        data_kind, roles, literals, headers_lower, headers
+    )
+
     # needs_confirmation: hay sospechas sobre roles AUTO-detectados (el usuario
     # aún no eligió) o sugerencias por rango pendientes → el endpoint PREGUNTA.
     # Las sospechas sobre roles ya overridden se reportan pero no re-preguntan
@@ -574,6 +720,10 @@ def build_column_mapping_plan(
         "role_confidence": role_confidence,
         "suggestions": suggestions,
         "needs_confirmation": needs_confirmation,
+        # F2.4 — preguntas tipadas (blocking → el enrich no genera sin
+        # respuesta) + literales inferidos del header con evidencia.
+        "questions": questions,
+        "inferred_literals": inferred_literals,
     }
 
 

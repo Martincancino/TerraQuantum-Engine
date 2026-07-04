@@ -1321,8 +1321,18 @@ async def enrich_package_endpoint(
             _primary_headers, data_kind=data_type, column_map=column_map,
             sample_values=_primary_samples or None,
         )
-        if _plan["needs_mapping"] or (
-            _plan.get("needs_confirmation") and not column_map
+        # F2.4 — preguntas blocking sin responder (unidad, tipo de gravedad):
+        # se pregunta ANTES de importar (responder viaja por column_map_json).
+        _blocking_questions = [
+            q for q in _plan.get("questions", []) if q.get("blocking")
+        ]
+        # blocking gates SIEMPRE que sigan sin respuesta (el plan las recalcula
+        # con el column_map recibido: una pregunta respondida desaparece);
+        # needs_confirmation solo gatea si el usuario aún no mapeó nada.
+        if (
+            _plan["needs_mapping"]
+            or _blocking_questions
+            or (_plan.get("needs_confirmation") and not column_map)
         ):
             from services.csv_sniffer_service import sniff_csv as _sniff_csv
 
@@ -1352,6 +1362,17 @@ async def enrich_package_endpoint(
                     ),
                 })
             )
+
+        # F2.4 — literal inferido con evidencia (tipo de gravedad desde el
+        # nombre de la columna, patrón 60d1c56): se PRE-APLICA con aviso
+        # visible, nunca en silencio. Evita que el enriquecimiento re-reduzca
+        # un dato ya reducido (doble-Bouguer) cuando el header lo declara.
+        _inferred = _plan.get("inferred_literals") or {}
+        _inferred_notes: list = []
+        if "gravity_type" in _inferred and not (column_map or {}).get("gravity_type"):
+            column_map = dict(column_map or {})
+            column_map["gravity_type"] = _inferred["gravity_type"]["value"]
+            _inferred_notes.append(_inferred["gravity_type"]["note"])
 
         primary = import_gravity_csv_v1(
             tmp_primary, strict=strict, allow_g_raw=allow_g_raw,
@@ -1508,7 +1529,8 @@ async def enrich_package_endpoint(
                 "package_text": text,
                 "enrichment_summary": summary,
                 "plan": plan,
-                "warnings": list(primary.warnings or []),
+                # F2.4 — los literales inferidos con evidencia SIEMPRE avisan.
+                "warnings": list(primary.warnings or []) + _inferred_notes,
                 "needs_context": summary["needs_context"],
                 "n_stations": n_sensors,
                 # F2 — sniff físico del CSV primario (evidencia de formato).
