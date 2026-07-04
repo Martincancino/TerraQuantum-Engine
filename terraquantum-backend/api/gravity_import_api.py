@@ -33,6 +33,18 @@ from services.gravity_import_service import (
     read_csv_headers,
     read_csv_sample,
 )
+
+
+def _sample_rows_preview(headers, samples, limit: int = 5):
+    """Primeras filas YA parseadas como lista de dicts (preview honesto F2)."""
+    if not headers or not samples:
+        return []
+    n = min(limit, max((len(v) for v in samples.values()), default=0))
+    return [
+        {h: (samples.get(h) or [""] * n)[i] if i < len(samples.get(h) or []) else ""
+         for h in headers}
+        for i in range(n)
+    ]
 from services.column_mapping_service import build_column_mapping_plan
 from services.regional_scale_preflight_service import build_preflight_from_import_result
 from services.spatial_readiness_service import classify_from_csv_analysis
@@ -1156,13 +1168,15 @@ async def analyze_columns_endpoint(
         )
         # F2 — sniff físico con evidencia (encoding/sep/decimal/preámbulo/filas
         # rotas): la UI lo muestra junto al plan de mapeo para que el usuario
-        # confirme lo detectado.
+        # confirme lo detectado. sample_rows = primeras filas YA parseadas
+        # (preview honesto: lo que el importador ve, no lo que el archivo dice).
         from services.csv_sniffer_service import sniff_csv
 
         sniff = sniff_csv(tmp)
         return JSONResponse(content=sanitize_nan({
             "column_mapping": plan,
             "sniff_report": sniff.to_dict(),
+            "sample_rows": _sample_rows_preview(headers, samples),
         }))
     finally:
         if tmp.exists():
@@ -1346,8 +1360,12 @@ async def enrich_package_endpoint(
                     "needs_confirmation": _needs_conf,
                     "column_mapping": _plan,
                     # F2 — el sniff acompaña al plan: la UI muestra qué formato
-                    # se detectó mientras el usuario asigna roles.
+                    # se detectó mientras el usuario asigna roles; sample_rows
+                    # = preview de filas YA parseadas.
                     "sniff_report": _sniff_csv(tmp_primary).to_dict(),
+                    "sample_rows": _sample_rows_preview(
+                        _primary_headers, _primary_samples
+                    ),
                     "message": (
                         (
                             "El mapeo automático detectó algo sospechoso en los "

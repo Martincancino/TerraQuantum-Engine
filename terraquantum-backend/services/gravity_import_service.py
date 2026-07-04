@@ -782,7 +782,15 @@ def _read_csv_dataframe(
         sniff = sniff_csv(path)
 
     warns: list[str] = []
-    _needs_normalized = sniff.preamble_count > 0 or sniff.encoding.value == "utf-16"
+    # Camino normalizado para lo que el histórico NUNCA soportó: preámbulo
+    # (se volvía encabezado basura), UTF-16 (mojibake) y tab/pipe con coma
+    # decimal (Excel-ES "texto delimitado por tabulaciones": el histórico
+    # dejaba los números como strings → filas descartadas → error).
+    _needs_normalized = (
+        sniff.preamble_count > 0
+        or sniff.encoding.value == "utf-16"
+        or (sniff.separator.value in ("\t", "|") and sniff.decimal.value == ",")
+    )
 
     if _needs_normalized:
         # Camino NUEVO: el histórico convertía el preámbulo en encabezado basura
@@ -795,20 +803,29 @@ def _read_csv_dataframe(
         start = (sniff.header_line_number or 1) - 1
         body = "\n".join(lines[start:])
         sep_char = sniff.separator.value
+        # index_col=False: si la PRIMERA fila de datos es una fila rota con
+        # más campos que el encabezado, pandas inferiría columnas-índice y
+        # DESPLAZARÍA todo el parseo (corrupción silenciosa detectada por el
+        # harness generativo F2.6); con index_col=False esas filas se saltan.
         df = pd.read_csv(
             io.StringIO(body), sep=sep_char, engine="python",
             on_bad_lines="skip", nrows=nrows, decimal=sniff.decimal.value,
+            index_col=False,
         )
         warns.extend(sniff.import_warnings())
         if encoding not in ("utf-8-sig", "utf-8"):
             warns.append(f"El archivo no es UTF-8; se leyó como {encoding}.")
     else:
         encoding = "utf-8-sig"
+        # index_col=False también aquí: una fila rota con campos extra como
+        # PRIMERA fila de datos hacía que pandas infiriera columnas-índice y
+        # desplazara todo el parseo (mismo bug del camino normalizado).
         try:
             sep, decimal = _resolve_sep_decimal(path, encoding)
             df = pd.read_csv(
                 path, sep=sep, engine="python", encoding=encoding,
                 on_bad_lines="skip", nrows=nrows, decimal=decimal,
+                index_col=False,
             )
         except UnicodeDecodeError:
             # El sniffer ya identificó el encoding real (cp1252 típico de
@@ -823,6 +840,7 @@ def _read_csv_dataframe(
             df = pd.read_csv(
                 path, sep=sep, engine="python", encoding=encoding,
                 on_bad_lines="skip", nrows=nrows, decimal=decimal,
+                index_col=False,
             )
         # Filas rotas detectadas por el sniffer: SIEMPRE avisar (antes se
         # tragaban en silencio con on_bad_lines="skip").
