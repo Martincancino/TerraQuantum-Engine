@@ -96,16 +96,32 @@ GRAVITY_COLUMN_PRIORITY = [
     "complete_bouguer_anomaly",
     "bouguer_anomaly",
     "bouguer_mgal",
+    # F2 — sinónimos ES del corpus real (Anom_Bouguer_mGal de LdM crudo, etc.).
+    # La unidad embebida ("..._mgal") sigue disparando la inferencia con aviso
+    # del fix 60d1c56. Solo se agregan nombres: la prioridad relativa de los
+    # históricos no cambia.
+    "anom_bouguer_mgal",
+    "anomalia_bouguer_mgal",
+    "anomalia_bouguer",
+    "anom_bouguer",
+    "bouguer",
     "free_air_anomaly",
     "free_air_mgal",
+    "anomalia_aire_libre",
     "cba",
     "faa",
     "gravity_mgal",
+    "gravedad_mgal",
     "g_mgal",
     "observed_gravity",
     "observed_g",
+    "gravedad_observada",
     "residual_gravity",
+    "anomalia_residual",
+    "residual_mgal",
     "gravity",
+    "gravedad",
+    "g_obs",
     "g",
     "g_raw",
 ]
@@ -113,23 +129,75 @@ GRAVITY_COLUMN_PRIORITY = [
 # ---------------------------------------------------------------------------
 # R3.5-J — Flexible coordinate column aliases
 # Internal convention: x_m slot = east/lon, z_m slot = north/lat
+# F2 (deuda histórica): sinónimos en ESPAÑOL — el corpus real (LdM crudo) trae
+# Este_UTM / Norte_UTM / Cota_msnm / Estacion. El match es exacto-lowercase y
+# luego fuzzy normalizado (sin acentos/separadores), así "Elevación (m)" o
+# "COTA MSNM" también resuelven. Solo se AGREGAN alias: cero regresión.
 # ---------------------------------------------------------------------------
-_LON_ALIASES: frozenset = frozenset({"lon", "longitude", "long", "lon_deg", "x_lon"})
-_LAT_ALIASES: frozenset = frozenset({"lat", "latitude", "lat_deg", "y_lat"})
-_UTM_EASTING_ALIASES: frozenset = frozenset({"easting", "east", "utm_e", "utm_x", "x_utm"})
-_UTM_NORTHING_ALIASES: frozenset = frozenset({"northing", "north", "utm_n", "utm_y", "y_utm"})
-_UTM_ZONE_COL_ALIASES: frozenset = frozenset({"utm_zone", "zone", "zone_utm"})
+_LON_ALIASES: frozenset = frozenset({
+    "lon", "longitude", "long", "lon_deg", "x_lon",
+    "longitud", "longitud_deg", "longitud_grados",
+})
+_LAT_ALIASES: frozenset = frozenset({
+    "lat", "latitude", "lat_deg", "y_lat",
+    "latitud", "latitud_deg", "latitud_grados",
+})
+_UTM_EASTING_ALIASES: frozenset = frozenset({
+    "easting", "east", "utm_e", "utm_x", "x_utm",
+    "este", "este_utm", "utm_este", "este_m", "coordenada_este", "x_este",
+})
+_UTM_NORTHING_ALIASES: frozenset = frozenset({
+    "northing", "north", "utm_n", "utm_y", "y_utm",
+    "norte", "norte_utm", "utm_norte", "norte_m", "coordenada_norte", "y_norte",
+})
+_UTM_ZONE_COL_ALIASES: frozenset = frozenset({
+    "utm_zone", "zone", "zone_utm", "zona", "zona_utm", "huso",
+})
 _LOCAL_X_ALIASES: frozenset = frozenset({"x", "local_x", "coord_x"})
 _LOCAL_Z_ALIASES: frozenset = frozenset({"z", "local_z", "coord_z"})
 _LOCAL_Y_ALIASES: frozenset = frozenset({"y", "local_y", "coord_y"})
 _DEPTH_COL_ALIASES: frozenset = frozenset({
     "depth", "depth_m", "depth_below_surface", "depth_below_surface_m",
-    "profundidad", "profundidad_m",
+    "profundidad", "profundidad_m", "prof_m", "profundidad_bajo_superficie",
 })
 _ELEVATION_SURFACE_ALIASES: frozenset = frozenset({
     "elevation", "elevation_m", "elev", "elev_m", "rl", "rl_m",
     "altitude", "altitude_m", "height", "height_m", "cota", "cota_m",
+    "cota_msnm", "elevacion", "elevacion_m", "altitud", "altitud_m",
+    "altura", "altura_m", "msnm",
 })
+# F2 — columnas literales auxiliares con sinónimos ES (antes solo el nombre
+# exacto en inglés). TUPLAS ordenadas por PRIORIDAD: el nombre histórico va
+# primero, así un CSV con ambas variantes elige igual que siempre.
+_UNIT_COL_CANDIDATES: tuple = ("unit", "units", "unidad", "unidades")
+_GRAVITY_TYPE_COL_CANDIDATES: tuple = (
+    "gravity_type", "tipo_gravedad", "tipo_de_gravedad", "gravedad_tipo",
+)
+_STATION_ID_CANDIDATES: tuple = (
+    "station_id", "station", "estacion", "estacion_id", "id_estacion",
+    "nombre_estacion", "station_name", "punto", "point_id", "id",
+)
+
+
+def _find_by_priority(
+    headers_lower: list[str], headers: list[str], candidates: "tuple | list"
+) -> "str | None":
+    """Primer CANDIDATO (en orden de prioridad) presente en headers.
+
+    A diferencia de _find_first_alias (orden de headers), aquí manda el orden
+    de los candidatos: 'station_id' le gana a 'id' aunque 'id' aparezca antes
+    en el archivo — preserva la elección histórica cuando ambos existen.
+    """
+    for cand in candidates:
+        for i, h in enumerate(headers_lower):
+            if h == cand:
+                return headers[i]
+    norm_headers = [_norm(h) for h in headers_lower]
+    for cand in candidates:
+        nc = _norm(cand)
+        if nc in norm_headers:
+            return headers[norm_headers.index(nc)]
+    return None
 
 
 def _find_first_alias(
@@ -398,9 +466,16 @@ MAGNETIC_COLUMN_PRIORITY = [
     "magnetic_anomaly",
     "magnetic_anomaly_nt",
     "total_field_anomaly",
+    # F2 — sinónimos ES (solo se agregan nombres, prioridad histórica intacta).
+    "anomalia_magnetica",
+    "anomalia_magnetica_nt",
+    "campo_total",
+    "campo_total_nt",
+    "campo_magnetico",
     "rtp",                 # reduced-to-pole
     "rtp_nt",
     "mag_nt",
+    "magnetismo",
     "magnetic",
     "nt",
 ]
@@ -533,6 +608,40 @@ def read_csv_headers(file_path: str | Path) -> list[str]:
         return [normalize_header_name(str(h)) for h in df.columns if h]
     except Exception:
         return []
+
+
+def read_csv_sample(
+    file_path: str | Path, nrows: int = 200
+) -> "tuple[list[str], dict[str, list[str]]]":
+    """Encabezados + primeras `nrows` filas como strings, con el MISMO parseo
+    que el importador (sniff de encoding/sep/decimal/preámbulo incluido).
+
+    Alimenta la heurística de RANGO físico del plan de mapeo (F2): los valores
+    permiten distinguir easting/northing/lat/lon/elevación/mGal/nT cuando los
+    nombres de columna no bastan. Devuelve ([], {}) si el archivo no parsea —
+    el plan degrada a mapeo por nombre, nunca crashea.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        return [], {}
+    try:
+        import pandas as pd
+
+        df, _ = _read_csv_dataframe(path, nrows=nrows)
+        df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
+        headers: list[str] = []
+        samples: dict[str, list[str]] = {}
+        for orig in df.columns:
+            clean = normalize_header_name(str(orig))
+            if not clean:
+                continue
+            headers.append(clean)
+            samples[clean] = [
+                "" if pd.isna(v) else str(v) for v in df[orig].tolist()
+            ]
+        return headers, samples
+    except Exception:
+        return read_csv_headers(path), {}
 
 # PILAR 4 (Fase 4) — Errores de fila que son DATOS sucios (NaN/vacío/no-numérico en
 # una estación puntual): se OMITEN con aviso (tolerante), no rompen el import. Los
@@ -827,7 +936,17 @@ def _import_gravity_csv_v1_impl(
         # sin la clave → byte-idéntico (no fuerza nada, columna por defecto "gravity_type").
         _gtype_raw = (str(_cmap.get("gravity_type") or "").strip()) or None
         _forced_gravity_type: "str | None" = None
-        _gtype_col = "gravity_type"
+        # F2 — la columna de tipo acepta sinónimos ES (Tipo_Gravedad del corpus
+        # LdM); "gravity_type" exacto sigue ganando (orden de prioridad).
+        _gtype_col = (
+            _find_by_priority(headers_lower, headers, _GRAVITY_TYPE_COL_CANDIDATES)
+            or "gravity_type"
+        )
+        if _gtype_col != "gravity_type":
+            warnings_list.append(
+                f"Columna de tipo de gravedad detectada como '{_gtype_col}' "
+                "(sinónimo de gravity_type)."
+            )
         if _gtype_raw and not _is_magnetic:
             if _gtype_raw in ALLOWED_GRAVITY_TYPES:
                 _forced_gravity_type = _gtype_raw          # literal declarado
@@ -855,7 +974,10 @@ def _import_gravity_csv_v1_impl(
         # o que la unidad venga EMBEBIDA en el header de la columna de gravedad
         # (p.ej. g_mgal, bouguer_mgal → mGal); en ese caso se infiere con warning,
         # nunca en silencio. Cualquier otro caso sigue siendo error (no adivinar).
-        if "unit" not in headers_lower and not _is_magnetic and not _forced_unit:
+        # F2 — la columna de unidad acepta sinónimos ES ("Unidad") y variantes
+        # de mayúsculas; "unit" exacto conserva el comportamiento histórico.
+        _unit_col = _find_by_priority(headers_lower, headers, _UNIT_COL_CANDIDATES)
+        if _unit_col is None and not _is_magnetic and not _forced_unit:
             _g_col_guess = choose_gravity_column(headers)
             if _g_col_guess and "mgal" in _g_col_guess.strip().lower():
                 _forced_unit = "mGal"
@@ -866,12 +988,11 @@ def _import_gravity_csv_v1_impl(
             else:
                 errors_list.append("Missing required column: unit")
 
-        # R3.5-K — station_id is optional; auto-generate if column absent
-        _sid_idx = next(
-            (i for i, h in enumerate(headers_lower) if h == "station_id"), None
-        )
-        _station_id_original_col: "str | None" = (
-            headers[_sid_idx] if _sid_idx is not None else None
+        # R3.5-K — station_id is optional; auto-generate if column absent.
+        # F2 — acepta sinónimos ES (Estacion, punto, id); station_id exacto
+        # sigue teniendo prioridad (orden de _STATION_ID_CANDIDATES).
+        _station_id_original_col: "str | None" = _find_by_priority(
+            headers_lower, headers, _STATION_ID_CANDIDATES
         )
         # PILAR 1 — override manual del station_id.
         _sid_override = _resolve_mapped(_cmap.get("station_id"), headers)
@@ -1027,7 +1148,10 @@ def _import_gravity_csv_v1_impl(
                     station_id = f"ST_{row_count:06d}"
                     
                 # PILAR 3 — canonicaliza la unidad (acepta mgal/Gal/m·s⁻²/nT, etc.).
-                unit_raw = row.get("unit", "").strip() or (_forced_unit or "")
+                unit_raw = (
+                    (row.get(_unit_col, "").strip() if _unit_col else "")
+                    or (_forced_unit or "")
+                )
                 if _is_magnetic:
                     # nT implícito; si se declara unidad, validarla como magnética.
                     unit = canonicalize_unit(unit_raw, magnetic=True) if unit_raw else ""
@@ -1203,6 +1327,32 @@ def _import_gravity_csv_v1_impl(
                 "valores no numéricos, NaN) se omitieron. "
                 f"Ejemplos: {'; '.join(skipped_examples)}"
             )
+
+        # F2 — GOTCHA MEDIDO (fixtures test_r37, 2026-07-03): la convención
+        # interna es x=este, z=norte, y=PROFUNDIDAD bajo superficie. Un usuario
+        # que ponga el northing en la columna 'y' produce geometría corrupta EN
+        # SILENCIO. Guardia por rango físico: ninguna profundidad de sensor
+        # llega a 100 km; un northing UTM la supera siempre (1e5–1e7 m).
+        if coord_map.get("y_col") and observations:
+            _abs_y = sorted(abs(o.y_m) for o in observations)
+            _med_y = _abs_y[len(_abs_y) // 2]
+            if _med_y > 100_000.0:
+                errors_list.append(
+                    f"La columna '{coord_map['y_col']}' quedó mapeada a "
+                    f"PROFUNDIDAD (eje vertical) pero sus valores (mediana "
+                    f"~{_med_y:,.0f} m) parecen coordenada NORTE (northing UTM). "
+                    "Asigne esa columna al rol 'y' (Coordenada Y / norte) en el "
+                    "mapeo de columnas, o declare coordinate_system='utm'. "
+                    "Invertir así produciría un modelo 3D geométricamente corrupto."
+                )
+                return _build_error_result(
+                    path.name, errors_list, warnings_list,
+                    row_count=row_count, valid_rows=valid_rows,
+                    rejected_rows=rejected_rows, unit_original=first_unit,
+                    gravity_column_used=gravity_col,
+                    gravity_type=first_gravity_type,
+                    detected_data_type=_detected_data_type,
+                )
 
         csv_analysis = analyze_csv_observations(
             observations=observations,

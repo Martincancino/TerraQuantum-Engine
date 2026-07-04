@@ -65,12 +65,22 @@ def test_plan_autodetect_standard_no_mapping_needed():
 
 # ── 3. needs_mapping con columnas arbitrarias ─────────────────────────────────
 def test_plan_arbitrary_columns_needs_mapping():
-    headers = ["Anomalia_Bouguer_mGal", "X", "Y", "Z"]
+    # F2.2 cerró la deuda ES: "Anomalia_Bouguer_mGal" YA se auto-detecta, así
+    # que el caso needs_mapping requiere un nombre genuinamente irreconocible.
+    headers = ["ValorMedido", "X", "Y", "Z"]
     plan = build_column_mapping_plan(headers, data_kind="gravity")
     # X/Y se auto-detectan como local (alias x/y), pero el valor gravimétrico no.
     assert plan["needs_mapping"] is True
     assert "gravity_value" in plan["missing_required"]
     assert plan["raw_columns"] == headers
+
+
+def test_plan_es_bouguer_header_now_autodetects():
+    """Deuda F2 cerrada: el header ES del corpus resuelve sin mapeo manual."""
+    headers = ["Anomalia_Bouguer_mGal", "X", "Y", "Z"]
+    plan = build_column_mapping_plan(headers, data_kind="gravity")
+    assert plan["needs_mapping"] is False
+    assert plan["roles"]["gravity_value"] == "Anomalia_Bouguer_mGal"
 
 
 def test_plan_with_override_resolves():
@@ -120,11 +130,26 @@ def test_import_arbitrary_columns_with_manual_map(tmp_path):
 
 
 def test_import_arbitrary_columns_without_map_fails_clearly(tmp_path):
-    path = _write(tmp_path, "weird.csv", _arbitrary_csv())
+    # Columnas genuinamente irreconocibles (F2.2 auto-resuelve el header ES
+    # histórico, así que este caso usa nombres sin significado).
+    rows = ["ValorMedido,ColA,ColB,ColC"]
+    for i in range(12):
+        rows.append(f"{1.0 + 0.1 * i},{i * 100.0},{i * 50.0},{100.0 + i}")
+    path = _write(tmp_path, "weird.csv", "\n".join(rows) + "\n")
     res = import_gravity_csv_v1(path, strict=False, allow_g_raw=True, data_kind="gravity")
     # Sin mapeo ni columna de unidad/valor reconocible → error claro, no crash.
     assert res.status == "error"
     assert res.errors
+
+
+def test_import_es_bouguer_header_now_imports_without_map(tmp_path):
+    """Deuda F2 cerrada: el CSV con header ES importa SIN column_map (unidad
+    inferida del nombre — patrón 60d1c56 — y coordenadas locales X/Y/Z)."""
+    path = _write(tmp_path, "es.csv", _arbitrary_csv())
+    res = import_gravity_csv_v1(path, strict=False, allow_g_raw=True, data_kind="gravity")
+    assert res.status == "ok", res.errors
+    assert res.import_metadata.gravity_column_used == "Anomalia_Bouguer_mGal"
+    assert any("inferida mGal" in w for w in res.warnings)
 
 
 def test_read_csv_headers(tmp_path):

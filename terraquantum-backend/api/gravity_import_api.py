@@ -28,7 +28,11 @@ from core.geo_utils import compute_footprint_from_center, extract_utm_zone_safe
 from schemas.geophysics_schema import GeophysicsInvertInput
 from schemas.gravity_import_schema import SpatialReadiness, RegionalScalePreflight
 from schemas.response_schema import GravityImportPreviewResponse, GravityImportInvertResponse
-from services.gravity_import_service import import_gravity_csv_v1, read_csv_headers
+from services.gravity_import_service import (
+    import_gravity_csv_v1,
+    read_csv_headers,
+    read_csv_sample,
+)
 from services.column_mapping_service import build_column_mapping_plan
 from services.regional_scale_preflight_service import build_preflight_from_import_result
 from services.spatial_readiness_service import classify_from_csv_analysis
@@ -1135,7 +1139,9 @@ async def analyze_columns_endpoint(
         with open(tmp, "wb") as f:
             f.write(content)
 
-        headers = read_csv_headers(tmp)
+        # F2 — muestra de valores para la heurística de RANGO físico (además
+        # del mapeo por nombre): permite sospechas (northing-en-y) y sugerencias.
+        headers, samples = read_csv_sample(tmp)
         if not headers:
             raise HTTPException(
                 status_code=422,
@@ -1144,7 +1150,10 @@ async def analyze_columns_endpoint(
                     "message": "No se pudieron leer columnas del CSV (archivo vacío o ilegible).",
                 },
             )
-        plan = build_column_mapping_plan(headers, data_kind=data_type, column_map=column_map)
+        plan = build_column_mapping_plan(
+            headers, data_kind=data_type, column_map=column_map,
+            sample_values=samples or None,
+        )
         # F2 — sniff físico con evidencia (encoding/sep/decimal/preámbulo/filas
         # rotas): la UI lo muestra junto al plan de mapeo para que el usuario
         # confirme lo detectado.
@@ -1305,23 +1314,41 @@ async def enrich_package_endpoint(
 
         # Si la auto-detección no resuelve los roles requeridos y el usuario NO aportó
         # mapeo → responder needs_mapping (200, sin paquete) para mostrar el MAPEO.
-        _primary_headers = read_csv_headers(tmp_primary)
+        # F2 — con muestra de valores: la heurística de rango puede además marcar
+        # needs_confirmation (confianza MEDIA: sugiere y PREGUNTA, jamás aplica solo).
+        _primary_headers, _primary_samples = read_csv_sample(tmp_primary)
         _plan = build_column_mapping_plan(
             _primary_headers, data_kind=data_type, column_map=column_map,
+            sample_values=_primary_samples or None,
         )
-        if _plan["needs_mapping"]:
+        if _plan["needs_mapping"] or (
+            _plan.get("needs_confirmation") and not column_map
+        ):
             from services.csv_sniffer_service import sniff_csv as _sniff_csv
 
+            _needs_conf = not _plan["needs_mapping"]
             return JSONResponse(
                 content=sanitize_nan({
+                    # needs_mapping=True también en el caso de confirmación:
+                    # la UI existente abre el paso de mapeo prellenado y el
+                    # re-envío con column_map destraba ambos gates.
                     "needs_mapping": True,
+                    "needs_confirmation": _needs_conf,
                     "column_mapping": _plan,
                     # F2 — el sniff acompaña al plan: la UI muestra qué formato
                     # se detectó mientras el usuario asigna roles.
                     "sniff_report": _sniff_csv(tmp_primary).to_dict(),
                     "message": (
-                        "No se reconocieron automáticamente todas las columnas "
-                        "requeridas. Asigne manualmente los roles e intente de nuevo."
+                        (
+                            "El mapeo automático detectó algo sospechoso en los "
+                            "RANGOS de valores (ver 'suspicions'/'suggestions'). "
+                            "Confirme o corrija el mapeo de columnas antes de continuar."
+                        )
+                        if _needs_conf
+                        else (
+                            "No se reconocieron automáticamente todas las columnas "
+                            "requeridas. Asigne manualmente los roles e intente de nuevo."
+                        )
                     ),
                 })
             )

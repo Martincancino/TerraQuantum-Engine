@@ -21,8 +21,9 @@ importador sí importa `normalize_token` desde aquí.
 """
 from __future__ import annotations
 
+import math
 import unicodedata
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 # ── Roles canónicos del mapeo ────────────────────────────────────────────────
 # Convención interna del importador: x_m slot = este/lon, z_m slot = norte/lat,
@@ -149,10 +150,292 @@ def resolve_mapped_column(
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# F2 — Heurística por RANGO físico (segunda opinión sobre el mapeo por nombre)
+#
+# GOTCHA MEDIDO (2026-07-03, fixtures test_r37 / commit 60d1c56): la convención
+# interna es x=este, z=norte, y=PROFUNDIDAD. Un usuario que pone el northing en
+# la columna 'y' corrompe la geometría EN SILENCIO. La heurística detecta ese y
+# otros desajustes comparando los VALORES contra rangos físicos:
+#   lat ∈ [-90,90] · lon ∈ [-180,180] · UTM este ∈ [1e4,1.2e6] ·
+#   UTM norte ∈ [1e5,1.1e7] · elevación ∈ [-500,7000] · anomalía ∈ ±500 mGal ·
+#   TMI anomalía ∈ ±10k nT (campo total 15k-75k).
+#
+# Regla de confianza (NUNCA auto-mapear silencioso con confianza no-alta):
+#   alta  = nombre resuelto y rango plausible → pre-mapea (el plan lo muestra).
+#   media = nombre resuelto pero rango sospechoso, o solo sugerencia por rango
+#           → `needs_confirmation`: el endpoint DEVUELVE el plan y PREGUNTA.
+#   baja  = rol requerido sin resolver → `needs_mapping` (mapeo manual, ya existía).
+# ─────────────────────────────────────────────────────────────────────────────
+_EMPTY_TOKENS = {"", "nan", "none", "null", "na", "n/a"}
+
+
+def _numeric_stats(values: Sequence[Any]) -> Optional[Dict[str, float]]:
+    """min/max/mediana/fracción-numérica de una columna muestreada (strings)."""
+    nums: List[float] = []
+    n_filled = 0
+    for v in values:
+        s = str(v).strip()
+        if s.lower() in _EMPTY_TOKENS:
+            continue
+        n_filled += 1
+        try:
+            x = float(s)
+        except ValueError:
+            if s.count(",") == 1:
+                try:
+                    x = float(s.replace(",", "."))
+                except ValueError:
+                    continue
+            else:
+                continue
+        if math.isfinite(x):
+            nums.append(x)
+    if not nums or n_filled == 0:
+        return None
+    nums.sort()
+    return {
+        "n_filled": float(n_filled),
+        "numeric_fraction": len(nums) / n_filled,
+        "min": nums[0],
+        "max": nums[-1],
+        "median": nums[len(nums) // 2],
+        "abs_median": abs(nums[len(nums) // 2]),
+    }
+
+
+def _looks_lat(st: Dict[str, float]) -> bool:
+    return st["min"] >= -90.0 and st["max"] <= 90.0
+
+
+def _looks_lon(st: Dict[str, float]) -> bool:
+    return st["min"] >= -180.0 and st["max"] <= 180.0
+
+
+def _looks_utm_easting(st: Dict[str, float]) -> bool:
+    return 1e4 <= st["abs_median"] <= 1.2e6 and st["min"] >= 0.0
+
+
+def _looks_utm_northing(st: Dict[str, float]) -> bool:
+    return 1e5 <= st["abs_median"] <= 1.1e7
+
+
+def _looks_elevation(st: Dict[str, float]) -> bool:
+    return st["min"] >= -500.0 and st["max"] <= 7000.0
+
+
+def _looks_mgal_anomaly(st: Dict[str, float]) -> bool:
+    return abs(st["min"]) <= 500.0 and abs(st["max"]) <= 500.0
+
+
+def _looks_nt(st: Dict[str, float]) -> bool:
+    anomaly = abs(st["min"]) <= 10_000.0 and abs(st["max"]) <= 10_000.0
+    total_field = 15_000.0 <= st["abs_median"] <= 75_000.0
+    return anomaly or total_field
+
+
+def _assess_plan_ranges(
+    roles: Dict[str, Optional[str]],
+    overridden: Dict[str, str],
+    sample_values: Dict[str, List[Any]],
+) -> "tuple[dict, list, dict]":
+    """Chequea los roles resueltos contra los rangos físicos.
+
+    Devuelve (range_checks, suspicions, role_confidence). Las sospechas sobre
+    roles que el USUARIO mapeó explícitamente (overridden) igualmente se
+    reportan (prevenir corrupción > respetar el click), pero con nota distinta.
+    """
+    checks: Dict[str, Dict[str, Any]] = {}
+    suspicions: List[Dict[str, Any]] = []
+    confidence: Dict[str, str] = {}
+
+    def _stats_for(col: Optional[str]) -> Optional[Dict[str, float]]:
+        if not col or col not in sample_values:
+            return None
+        return _numeric_stats(sample_values[col])
+
+    for role, col in roles.items():
+        if not col:
+            confidence[role] = "low"
+            continue
+        st = _stats_for(col)
+        if st is None or st["numeric_fraction"] < 0.5:
+            # Columna no-numérica (station_id, gravity_type) o sin muestra:
+            # el rango no aplica — la confianza la da el match por nombre.
+            confidence[role] = "high"
+            checks[role] = {"column": col, "verdict": "unknown", "note": None}
+            continue
+
+        verdict, note = "ok", None
+        if role == ROLE_DEPTH and st["abs_median"] > 1e5:
+            verdict = "suspicious"
+            note = (
+                f"'{col}' está en el eje de PROFUNDIDAD pero su mediana "
+                f"(~{st['abs_median']:,.0f} m) parece un northing UTM."
+            )
+            suspicions.append({
+                "role": ROLE_DEPTH,
+                "column": col,
+                "kind": "northing_in_depth_slot",
+                "user_mapped": ROLE_DEPTH in overridden,
+                "message": (
+                    f"La columna '{col}' quedó como PROFUNDIDAD (eje vertical) "
+                    f"pero sus valores (~{st['abs_median']:,.0f} m de mediana) "
+                    "parecen coordenada NORTE (northing UTM). Si es el norte, "
+                    "asígnela al rol 'Coordenada Y (norte)'; de lo contrario la "
+                    "geometría 3D saldría corrupta."
+                ),
+                "suggested_role": ROLE_Y,
+            })
+        elif role == ROLE_ELEVATION and st["abs_median"] > 10_000:
+            verdict = "suspicious"
+            note = (
+                f"'{col}' está como elevación pero su mediana "
+                f"(~{st['abs_median']:,.0f}) excede toda topografía terrestre "
+                "(máx ~7.000 m): ¿es un northing UTM?"
+            )
+            suspicions.append({
+                "role": ROLE_ELEVATION,
+                "column": col,
+                "kind": "elevation_out_of_range",
+                "user_mapped": ROLE_ELEVATION in overridden,
+                "message": (
+                    f"La columna '{col}' quedó como ELEVACIÓN pero sus valores "
+                    f"(~{st['abs_median']:,.0f} de mediana) están fuera de "
+                    "cualquier topografía terrestre (−500 a 7.000 m). Verifique "
+                    "el mapeo (¿coordenada norte? ¿unidad en pies?)."
+                ),
+                "suggested_role": None,
+            })
+        elif role == ROLE_GRAVITY_VALUE:
+            if 9.5e5 <= st["abs_median"] <= 1.0e6:
+                note = (
+                    "Valores ~9,8e5 mGal = gravedad ABSOLUTA de campo: requiere "
+                    "correcciones (deriva/latitud/aire libre/Bouguer) antes de invertir."
+                )
+            elif not _looks_mgal_anomaly(st):
+                verdict = "suspicious"
+                note = (
+                    f"'{col}' como valor gravimétrico tiene magnitudes "
+                    f"(mediana ~{st['abs_median']:,.1f}) fuera del rango típico "
+                    "de anomalía (±500 mGal): verifique columna y unidad."
+                )
+        elif role == ROLE_MAGNETIC_VALUE and not _looks_nt(st):
+            verdict = "suspicious"
+            note = (
+                f"'{col}' como valor magnético (mediana ~{st['abs_median']:,.0f}) "
+                "no calza con anomalía TMI (±10.000 nT) ni campo total "
+                "(15.000–75.000 nT): verifique columna y unidad."
+            )
+
+        checks[role] = {"column": col, "verdict": verdict, "note": note}
+        confidence[role] = "high" if verdict != "suspicious" else "medium"
+
+    return checks, suspicions, confidence
+
+
+def _suggest_missing_by_range(
+    missing: List[str],
+    roles: Dict[str, Optional[str]],
+    sample_values: Dict[str, List[Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Para roles requeridos SIN resolver por nombre: candidato ÚNICO por rango.
+
+    Solo sugiere cuando exactamente UNA columna no-asignada calza el rango del
+    rol (ambigüedad → nada: mejor pedir mapeo manual que adivinar). La
+    sugerencia es confianza MEDIA: el endpoint pregunta, jamás aplica solo.
+    """
+    assigned = {c for c in roles.values() if c}
+    fits = {
+        ROLE_X: lambda st: _looks_lon(st) or _looks_utm_easting(st),
+        ROLE_Y: lambda st: _looks_lat(st) or _looks_utm_northing(st),
+        ROLE_ELEVATION: _looks_elevation,
+        ROLE_GRAVITY_VALUE: lambda st: (
+            _looks_mgal_anomaly(st)
+            and not _looks_utm_easting(st)
+            and not _looks_utm_northing(st)
+        ),
+        ROLE_MAGNETIC_VALUE: _looks_nt,
+    }
+    suggestions: Dict[str, Dict[str, Any]] = {}
+
+    stats_by_col: Dict[str, Dict[str, float]] = {}
+    for col, vals in sample_values.items():
+        if col in assigned:
+            continue
+        st = _numeric_stats(vals)
+        if st is not None and st["numeric_fraction"] >= 0.9:
+            stats_by_col[col] = st
+
+    # Caso PAR UTM (los rangos de este y norte se SOLAPAN [1e5, 1.2e6], así que
+    # sueltos casi nunca son únicos): si faltan x e y, buscar el único par
+    # (este, norte) con norte > este (UTM sur siempre; el caso del corpus).
+    if ROLE_X in missing and ROLE_Y in missing:
+        # Separación CLARA exigida (norte > 2e6 m, o > 3× el este): dos columnas
+        # con medianas vecinas (~3.6e5 y ~3.6e5) calzan ambas en el solape
+        # este/norte y sugerirlas sería adivinar.
+        pairs = [
+            (a, b)
+            for a, sa in stats_by_col.items()
+            for b, sb in stats_by_col.items()
+            if a != b
+            and _looks_utm_easting(sa)
+            and _looks_utm_northing(sb)
+            and (
+                sb["abs_median"] > 2e6
+                or sb["abs_median"] > 3.0 * sa["abs_median"]
+            )
+        ]
+        if len(pairs) == 1:
+            a, b = pairs[0]
+            suggestions[ROLE_X] = {
+                "column": a,
+                "confidence": "medium",
+                "reason": (
+                    f"Rango de '{a}' (mediana ~{stats_by_col[a]['abs_median']:,.0f}) "
+                    "calza con UTM este; forma par único con el norte sugerido. "
+                    "Confírmelo antes de continuar."
+                ),
+            }
+            suggestions[ROLE_Y] = {
+                "column": b,
+                "confidence": "medium",
+                "reason": (
+                    f"Rango de '{b}' (mediana ~{stats_by_col[b]['abs_median']:,.0f}) "
+                    "calza con UTM norte; forma par único con el este sugerido. "
+                    "Confírmelo antes de continuar."
+                ),
+            }
+
+    for role in missing:
+        if role in suggestions:
+            continue
+        fit = fits.get(role)
+        if fit is None:
+            continue
+        candidates = [
+            (col, st) for col, st in stats_by_col.items()
+            if col not in {s["column"] for s in suggestions.values()} and fit(st)
+        ]
+        if len(candidates) == 1:
+            col, st = candidates[0]
+            suggestions[role] = {
+                "column": col,
+                "confidence": "medium",
+                "reason": (
+                    f"Única columna numérica cuyo rango (mín {st['min']:,.4g}, "
+                    f"máx {st['max']:,.4g}) calza con el rol "
+                    f"'{ROLE_LABELS.get(role, role)}'. Confírmela antes de continuar."
+                ),
+            }
+    return suggestions
+
+
 def build_column_mapping_plan(
     headers: Sequence[str],
     data_kind: str = "gravity",
     column_map: Optional[dict] = None,
+    sample_values: "Optional[Dict[str, List[Any]]]" = None,
 ) -> dict:
     """Construye el plan de mapeo: auto-detección + overrides → roles resueltos.
 
@@ -176,6 +459,8 @@ def build_column_mapping_plan(
         choose_gravity_column,
         choose_magnetic_column,
         _find_first_alias,
+        _GRAVITY_TYPE_COL_CANDIDATES,
+        _STATION_ID_CANDIDATES,
     )
     from services.csv_analysis_service import UNCERTAINTY_ALIASES
 
@@ -192,9 +477,10 @@ def build_column_mapping_plan(
         ROLE_DEPTH: coord_auto.get("y_col"),
         ROLE_GRAVITY_VALUE: choose_gravity_column(headers),
         ROLE_MAGNETIC_VALUE: choose_magnetic_column(headers),
-        ROLE_GRAVITY_TYPE: _resolve_present(["gravity_type"], headers),
+        # F2 — sinónimos ES para las columnas literales (Tipo_Gravedad, Estacion).
+        ROLE_GRAVITY_TYPE: _resolve_present(list(_GRAVITY_TYPE_COL_CANDIDATES), headers),
         ROLE_SIGMA: _find_first_alias(headers_lower, headers, UNCERTAINTY_ALIASES),
-        ROLE_STATION_ID: _resolve_present(["station_id"], headers),
+        ROLE_STATION_ID: _resolve_present(list(_STATION_ID_CANDIDATES), headers),
     }
 
     # ── 2. Overrides explícitos del usuario ───────────────────────────────────
@@ -217,6 +503,18 @@ def build_column_mapping_plan(
         else:
             roles[role] = real
             overridden[role] = real
+            # F2 — una columna sirve a UN solo rol: si el usuario la asigna
+            # explícitamente, se des-asigna de cualquier rol AUTO-detectado
+            # (p.ej. 'y_m' auto-detectada como profundidad y luego mapeada a
+            # norte: dejarla en ambos roles mantendría viva la sospecha ya
+            # resuelta y duplicaría la columna en el plan).
+            for other_role in list(roles.keys()):
+                if (
+                    other_role != role
+                    and roles.get(other_role) == real
+                    and other_role not in overridden
+                ):
+                    roles[other_role] = None
 
     required = list(required_roles_for(data_kind))
     optional = list(optional_roles_for(data_kind))
@@ -226,6 +524,35 @@ def build_column_mapping_plan(
     literals = {k: cm[k] for k in LITERAL_KEYS if cm.get(k)}
     if _is_gravity_type_literal(cm.get(ROLE_GRAVITY_TYPE)):
         literals[ROLE_GRAVITY_TYPE] = cm[ROLE_GRAVITY_TYPE]
+
+    # ── 3. F2 — Segunda opinión por RANGO físico (si hay muestra de valores) ──
+    range_checks: Dict[str, Dict[str, Any]] = {}
+    suspicions: List[Dict[str, Any]] = []
+    role_confidence: Dict[str, str] = {
+        r: ("high" if roles.get(r) else "low") for r in roles
+    }
+    suggestions: Dict[str, Dict[str, Any]] = {}
+    if sample_values:
+        range_checks, suspicions, role_confidence = _assess_plan_ranges(
+            roles, overridden, sample_values
+        )
+        if missing:
+            suggestions = _suggest_missing_by_range(missing, roles, sample_values)
+
+    # needs_confirmation: hay sospechas sobre roles AUTO-detectados (el usuario
+    # aún no eligió) o sugerencias por rango pendientes → el endpoint PREGUNTA.
+    # Las sospechas sobre roles ya overridden se reportan pero no re-preguntan
+    # (el usuario ya decidió con la advertencia a la vista).
+    needs_confirmation = bool(
+        [s for s in suspicions if not s.get("user_mapped")] or suggestions
+    )
+
+    if needs_mapping:
+        confidence = "low"
+    elif needs_confirmation:
+        confidence = "medium"
+    else:
+        confidence = "high"
 
     return {
         "data_kind": data_kind,
@@ -238,9 +565,15 @@ def build_column_mapping_plan(
         "optional_roles": optional,
         "missing_required": missing,
         "needs_mapping": needs_mapping,
-        "confidence": "low" if needs_mapping else "high",
+        "confidence": confidence,
         "role_labels": {r: ROLE_LABELS[r] for r in (required + optional)},
         "literals": literals,
+        # F2 — heurística por rango físico (vacíos si no hubo muestra de valores).
+        "range_checks": range_checks,
+        "suspicions": suspicions,
+        "role_confidence": role_confidence,
+        "suggestions": suggestions,
+        "needs_confirmation": needs_confirmation,
     }
 
 

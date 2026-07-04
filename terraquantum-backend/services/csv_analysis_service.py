@@ -46,10 +46,15 @@ def _group_has_values(col_values: Dict[str, List[Any]], aliases: frozenset) -> b
 
 # z / z_m are NOT here because they serve as coordinate columns in the v1 format
 # and must not be miscounted as elevation metadata.
+# F2: sinónimos ES agregados (corpus real: Cota_msnm, Error_mGal, etc.). El
+# match es exacto-lowercase o fuzzy normalizado según el consumidor; solo se
+# AGREGAN nombres (cero regresión sobre los históricos).
 ELEVATION_ALIASES: frozenset = frozenset({
     "elevation", "elevation_m", "elev_m", "elev",
     "rl", "rl_m", "altitude", "altitude_m",
     "height", "height_m", "cota", "cota_m",
+    "cota_msnm", "elevacion", "elevacion_m", "altitud", "altitud_m",
+    "altura", "altura_m", "msnm",
 })
 
 UNCERTAINTY_ALIASES: frozenset = frozenset({
@@ -57,6 +62,7 @@ UNCERTAINTY_ALIASES: frozenset = frozenset({
     "std", "stddev", "standard_deviation",
     "error", "error_mgal", "measurement_error",
     "gravity_uncertainty", "uncertainty_gravity",
+    "incertidumbre", "incertidumbre_mgal", "desviacion", "desviacion_estandar",
 })
 
 INSTRUMENT_ALIASES: frozenset = frozenset({
@@ -64,6 +70,7 @@ INSTRUMENT_ALIASES: frozenset = frozenset({
     "gravimeter", "gravimeter_id",
     "sensor", "sensor_id", "device", "device_id",
     "operator", "survey_date", "date", "timestamp",
+    "instrumento", "gravimetro", "operador", "fecha",
 })
 
 # bouguer_anomaly / cba / faa are intentionally dual-use: they can appear as
