@@ -22,7 +22,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from api.async_api import router as async_router
 from api.keys_api import router as keys_router
 from api.metrics_api import router as metrics_router
 from api.system_api import router as system_router
@@ -154,7 +153,8 @@ def _register_never_crash_handlers(fastapi_app: FastAPI) -> None:
 _register_never_crash_handlers(app)
 
 # ── Routers siempre activos (núcleo geofísico + datos) ───────────────────────
-app.include_router(async_router)
+# F3: async_router (Celery/Redis) ELIMINADO — la vía asíncrona del producto es
+# la nativa (run_queue_service + /geophysics-status), cero infraestructura.
 app.include_router(keys_router)
 app.include_router(metrics_router)
 app.include_router(system_router)

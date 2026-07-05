@@ -57,13 +57,7 @@ INVERSION_DURATION = Histogram(
 
 ACTIVE_INVERSIONS = Gauge(
     "terraquantum_active_inversions",
-    "Number of inversions currently running (BackgroundTask or Celery STARTED)",
-)
-
-CELERY_TASKS_ENQUEUED = Counter(
-    "terraquantum_celery_tasks_enqueued_total",
-    "Total tasks enqueued in Celery",
-    ["task_name"],
+    "Number of inversions currently running (BackgroundTask or process worker)",
 )
 
 

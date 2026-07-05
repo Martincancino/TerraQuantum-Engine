@@ -149,7 +149,7 @@ class GeophysicsInversionStartResponse(BaseModel):
     status: str = Field(default="queued", pattern="^(queued|processing|done|error)$")
     project_id: Optional[str] = None
     run_id: Optional[str] = None
-    task_id: Optional[str] = None  # Celery task ID if applicable
+    task_id: Optional[str] = None  # id de tarea legado (la vía Celery fue eliminada en F3)
     message: str = "Inversion queued for background processing"
     warnings: List[str] = Field(default_factory=list)
 

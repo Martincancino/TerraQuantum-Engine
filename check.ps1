@@ -9,7 +9,7 @@ $root = $PSScriptRoot
 
 Write-Host "[1/4] compileall backend..." -ForegroundColor Cyan
 Push-Location "$root\terraquantum-backend"
-python -m compileall -q api services exploration core schemas workers scripts
+python -m compileall -q api services exploration core schemas scripts
 if ($LASTEXITCODE -ne 0) { $fail = $true; Write-Host "  FALLO compileall" -ForegroundColor Red }
 Pop-Location
 

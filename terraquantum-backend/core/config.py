@@ -95,10 +95,9 @@ WAVELET_THRESHOLD_N_ACTIVE: int = int(os.getenv("WAVELET_THRESHOLD_N_ACTIVE", "2
 # STORAGE_BACKEND env var is read by core/storage.py at import time.
 # Valid values: "local" (default), "s3", "gcs".
 
-# HITO 7: Celery async workers.
-# Default points at a local Redis instance (docker run -d -p 6379:6379 redis:7-alpine).
-CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+# F3: la configuración Celery/Redis (HITO 7) fue ELIMINADA — la vía asíncrona
+# del producto es nativa (services/run_queue_service, workers de proceso,
+# cero infraestructura que un local-first no debe pedir).
 
 # HITO 7: Observability — OpenTelemetry + Prometheus.
 # OTEL_ENABLED=false (default) → zero overhead; set true to activate tracing.
