@@ -1620,6 +1620,15 @@ export async function analyzeColumns(opts: {
   }
 }
 
+// F3 — presupuesto previo de la inversión (estimado orientativo del backend).
+export type InversionBudget = {
+  voxel_count: number;
+  route_kind: string;
+  estimated_seconds: number;
+  estimated_minutes: number;
+  warning: string | null;
+};
+
 export type LoadPackageData = {
   status?: string;
   stage?: string;
@@ -1630,6 +1639,9 @@ export type LoadPackageData = {
   warnings?: string[];
   errors?: string[];
   inversionResult?: unknown;
+  // F3 — respuesta asíncrona (status "queued"): presupuesto + info de polling.
+  budget?: InversionBudget | null;
+  poll?: { status_url: string; cancel_url: string; interval_ms: number } | null;
 };
 
 export type LoadPackageResult = {
@@ -1760,6 +1772,39 @@ export function connectGeophysicsStatusStream(
   };
 
   return () => es.close();
+}
+
+// ─── F3 — Cancelación e historial del flujo de paquete ───────────────────────
+
+/** Cancela una corrida del flujo de paquete (backend: bandera + terminate). */
+export async function cancelGeophysicsRun(projectId: string, runId: string) {
+  return fetchInternalJson<{ status: string; outcome?: string }>({
+    path: `/api/geophysics-cancel?project_id=${encodeURIComponent(projectId)}&run_id=${encodeURIComponent(runId)}`,
+    method: "POST",
+    timeoutMs: 25_000,
+  });
+}
+
+// F3 — corrida del historial SQLite (estado real que sobrevive reinicios).
+export type HistoryRun = {
+  project_id: string;
+  run_id: string;
+  status: string;          // queued|running|done|error|cancelled|interrumpida
+  source?: string | null;
+  route?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+};
+
+export async function getHistoryRuns(projectId?: string) {
+  const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+  return fetchInternalJson<{ runs: HistoryRun[]; count: number }>({
+    path: `/api/history/runs${qs}`,
+    method: "GET",
+    timeoutMs: 15_000,
+  });
 }
 
 // ─── Celery Async Inversion (§2.5) ───────────────────────────────────────────

@@ -8,17 +8,45 @@
 // sube el archivo y se carga el modelo resultante en el visor. No calcula física
 // ni arma payloads (eso vive en el backend).
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store/useAppStore";
-import { loadModelFromPackage } from "../lib/terraquantum/packageInversion";
+import {
+  loadModelFromPackage,
+  type PackageProgress,
+} from "../lib/terraquantum/packageInversion";
 import { errorViewFromString, type TQErrorView } from "../lib/terraquantum/errorContract";
 import ErrorModal from "./ErrorModal";
+
+// F3 — etiquetas ES para las etapas reales que reporta el backend.
+const STAGE_LABEL: Record<string, string> = {
+  queued: "En cola",
+  loading_data: "Validando datos",
+  building_mesh: "Construyendo malla",
+  kernel: "Armando kernel",
+  solving_lsqr: "Resolviendo (LSQR)",
+  solving: "Resolviendo",
+  postprocess: "Postproceso",
+  "post-processing": "Postproceso",
+  done: "Completado",
+};
 
 export default function LoadPanel() {
   const displayResolutionFactor = useAppStore((s) => s.displayResolutionFactor);
 
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  // F3 — progreso en vivo (etapas reales del solver vía polling) + cancelar.
+  const [progress, setProgress] = useState<PackageProgress | null>(null);
+  const cancelRequested = useRef(false);
+  // Al desmontar el panel se ABANDONA el polling (la corrida sigue en el
+  // backend y aparece en Historial) — no se cancela ni se toca más el store.
+  const abandoned = useRef(false);
+  useEffect(() => {
+    abandoned.current = false;
+    return () => {
+      abandoned.current = true;
+    };
+  }, []);
   // FASE 23 — error accionable del backend (load-package): se normaliza al contrato
   // TQErrorView y se muestra en ErrorModal (RESUMEN/DETALLES/ACCIÓN), no inline plano.
   const [errorView, setErrorView] = useState<TQErrorView | null>(null);
@@ -41,15 +69,24 @@ export default function LoadPanel() {
     setLoading(true);
     setErrorView(null);
     setModalOpen(false);
+    setProgress(null);
+    cancelRequested.current = false;
     try {
-      const res = await loadModelFromPackage(file, displayResolutionFactor);
-      if (!res.ok) reportError(res.error);
+      const res = await loadModelFromPackage(file, displayResolutionFactor, {
+        onProgress: (p) => {
+          if (!abandoned.current) setProgress(p);
+        },
+        shouldCancel: () => cancelRequested.current,
+        shouldAbandon: () => abandoned.current,
+      });
+      if (!res.ok && !res.cancelled && !abandoned.current) reportError(res.error);
     } catch (err) {
       reportError(
         err instanceof Error ? err.message : "Error inesperado al cargar el modelo 3D.",
       );
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   };
 
@@ -95,9 +132,52 @@ export default function LoadPanel() {
       </button>
 
       {loading && (
-        <div className="flex items-center gap-2 text-[9px] font-mono text-white/55">
-          <span className="h-3 w-3 rounded-full border-2 border-white/20 border-t-[#C2D8C4] animate-spin" />
-          Invirtiendo en el backend (puede tardar)...
+        <div className="flex flex-col gap-2">
+          {/* F3 — progreso REAL por etapas del solver (polling 1.5 s) */}
+          {progress ? (
+            <div className="rounded border border-white/10 bg-white/[0.03] p-2 flex flex-col gap-1.5">
+              <div className="flex items-center justify-between gap-2 text-[9px] font-mono text-white/70">
+                <span>
+                  {STAGE_LABEL[progress.stage ?? ""] ?? progress.stage ?? "Procesando"}
+                </span>
+                {typeof progress.progress === "number" && (
+                  <span className="text-white/50">
+                    {Math.round(progress.progress * 100)}%
+                  </span>
+                )}
+              </div>
+              <div className="h-1.5 w-full rounded bg-white/10 overflow-hidden">
+                <div
+                  className="h-full bg-[#C2D8C4] transition-all duration-500"
+                  style={{
+                    width: `${Math.max(3, Math.round((progress.progress ?? 0) * 100))}%`,
+                  }}
+                />
+              </div>
+              {progress.message && (
+                <p className="text-[8px] font-mono text-white/45 leading-relaxed">
+                  {progress.message}
+                </p>
+              )}
+              {progress.budget?.warning && (
+                <p className="text-[8px] font-mono text-amber-400/90 leading-relaxed">
+                  {progress.budget.warning}
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={() => { cancelRequested.current = true; }}
+                className="self-start mt-1 px-2 py-1 rounded border border-red-700/50 text-[9px] uppercase tracking-widest text-red-400 hover:bg-red-950/40"
+              >
+                Cancelar corrida
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-[9px] font-mono text-white/55">
+              <span className="h-3 w-3 rounded-full border-2 border-white/20 border-t-[#C2D8C4] animate-spin" />
+              Enviando el paquete al backend…
+            </div>
+          )}
         </div>
       )}
 

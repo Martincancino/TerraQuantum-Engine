@@ -32,6 +32,80 @@ import {
 import RunComparePanel from "../datos/RunComparePanel";
 import RunDiagnosticsPanel from "../datos/RunDiagnosticsPanel";
 
+// ─── F3: panel de estado de corridas (historial SQLite del backend) ──────────
+// Display-only: lista las corridas registradas con su estado REAL persistente
+// (queued/running/done/error/cancelled/interrumpida) — sobrevive reinicios del
+// backend. Los detalles y la re-apertura de modelos siguen en la lista de
+// proyectos de abajo (escaneo de disco); esto agrega el ESTADO que esa lista
+// no conoce (p.ej. una corrida interrumpida a mitad de inversión).
+const HISTORY_STATUS_META: Record<string, { label: string; cls: string }> = {
+  done: { label: "Completada", cls: "text-green-400 border-green-600/40 bg-green-900/20" },
+  running: { label: "En curso", cls: "text-sky-400 border-sky-600/40 bg-sky-900/20" },
+  queued: { label: "En cola", cls: "text-neutral-300 border-neutral-600/40 bg-neutral-800/40" },
+  error: { label: "Error", cls: "text-red-400 border-red-600/40 bg-red-900/20" },
+  cancelled: { label: "Cancelada", cls: "text-amber-400 border-amber-600/40 bg-amber-900/20" },
+  interrumpida: { label: "Interrumpida", cls: "text-orange-400 border-orange-600/40 bg-orange-900/20" },
+};
+
+function HistoryStatusPanel() {
+  const [runs, setRuns] = useState<import("../../lib/terraquantum/frontendApi").HistoryRun[]>([]);
+  const [open, setOpen] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    import("../../lib/terraquantum/frontendApi").then(({ getHistoryRuns }) =>
+      getHistoryRuns().then((res) => {
+        if (!cancelled && res.ok && res.data) setRuns(res.data.runs);
+      })
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (runs.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-neutral-800 bg-neutral-950/50 px-4 py-3">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between text-left"
+      >
+        <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">
+          Estado de corridas · {runs.length} registradas
+        </span>
+        <span className="text-[9px] text-neutral-600">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <ul className="mt-2 flex flex-col gap-1">
+          {runs.slice(0, 12).map((r) => {
+            const meta = HISTORY_STATUS_META[r.status] ?? {
+              label: r.status, cls: "text-neutral-400 border-neutral-700 bg-neutral-900",
+            };
+            return (
+              <li
+                key={`${r.project_id}/${r.run_id}`}
+                className="flex items-center gap-2 text-[9px] font-mono text-neutral-400"
+              >
+                <span className={`px-1.5 py-0.5 rounded border text-[8px] uppercase tracking-wider ${meta.cls}`}>
+                  {meta.label}
+                </span>
+                <span className="truncate">{r.project_id} / {r.run_id}</span>
+                {r.route && <span className="text-neutral-600">{r.route}</span>}
+                {r.finished_at && (
+                  <span className="ml-auto text-neutral-600 shrink-0">
+                    {new Date(r.finished_at).toLocaleString()}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ─── Georef badge helper ────────────────────────────────────────────────────
 function georefBadge(confidence?: string | null) {
   const c = (confidence ?? "MISSING").toUpperCase();
@@ -258,6 +332,9 @@ export default function HistorialView() {
           {loading ? "Actualizando…" : "↺ Actualizar"}
         </button>
       </div>
+
+      {/* ── F3: estado real de corridas (SQLite, sobrevive reinicios) ── */}
+      <HistoryStatusPanel />
 
       {/* ── Errores globales ── */}
       {loadError && (

@@ -10,6 +10,9 @@
 import {
   loadPackage,
   getExplorationBlockModelForRunWithArrow,
+  getGeophysicsStatus,
+  cancelGeophysicsRun,
+  type InversionBudget,
 } from "./frontendApi";
 import { isJsonObject, readStringField, readNumberField } from "../../componentes/datos/helpers";
 import type { VoxelMineralModel, VoxelData } from "../terraQuantumGeology";
@@ -113,16 +116,49 @@ function buildVoxelModelFromBackend(data: unknown): BackendVoxelModel | null {
 
 export type LoadModelFromPackageResult =
   | { ok: true; route: string | null }
-  | { ok: false; error: string };
+  | { ok: false; error: string; cancelled?: boolean };
+
+// F3 — progreso reportado a la UI durante el polling (datos del backend tal cual).
+export type PackageProgress = {
+  status: string;
+  stage: string | null;
+  progress: number | null;   // 0..1 del backend
+  message: string | null;
+  budget: InversionBudget | null;
+  projectId: string;
+  runId: string;
+};
+
+export type LoadModelHooks = {
+  onProgress?: (p: PackageProgress) => void;
+  /** La UI lo pone en true para cancelar; aquí se llama al endpoint de cancel. */
+  shouldCancel?: () => boolean;
+  /** Panel desmontado: detener el POLLING sin cancelar la corrida del backend
+   * (sigue en segundo plano y aparece en Historial) y sin tocar más el store. */
+  shouldAbandon?: () => boolean;
+};
+
+const POLL_INTERVAL_MS = 1500;
+const TERMINAL_STATUSES = new Set(["done", "error", "cancelled", "interrumpida"]);
+
+function _sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
 
 /**
- * Sube el paquete al backend (que invierte y persiste) y carga el block model
- * resultante en el visor. Maneja directamente el store (activeRun, model,
- * viewMode, show3D, view). Devuelve el resultado para que la UI muestre errores.
+ * Sube el paquete al backend y carga el block model resultante en el visor.
+ *
+ * F3: load-package ENCOLA (worker de proceso) y devuelve {status:"queued"} de
+ * inmediato; aquí se POLLEA GET /geophysics-status (1.5 s) mostrando etapas
+ * reales del solver hasta done/error/cancelled — nunca más un proxy colgado
+ * 20 minutos. `hooks.onProgress` alimenta la barra de la UI; si
+ * `hooks.shouldCancel()` devuelve true se llama al endpoint de cancelación.
+ * Maneja directamente el store (activeRun, model, viewMode, show3D, view).
  */
 export async function loadModelFromPackage(
   file: File,
   displayResolutionFactor = 1,
+  hooks: LoadModelHooks = {},
 ): Promise<LoadModelFromPackageResult> {
   const store = useAppStore.getState();
 
@@ -133,10 +169,97 @@ export async function loadModelFromPackage(
   }
 
   const { project_id: projectId, run_id: runId, route } = res.data;
-  if (res.data.status !== "done" || !projectId || !runId) {
+  if (!projectId || !runId) {
+    const msg = (res.data.errors && res.data.errors[0]) || "El backend no devolvió project_id/run_id.";
+    store.setActiveRun({ source: "csv", status: "error", error: msg });
+    return { ok: false, error: msg };
+  }
+
+  const budget = res.data.budget ?? null;
+
+  // ── F3: corrida ENCOLADA → poll de estado con progreso real ────────────────
+  if (res.data.status === "queued") {
+    store.setActiveRun({ projectId, runId, source: "csv", status: "loading", error: null });
+    hooks.onProgress?.({
+      status: "queued", stage: "queued", progress: 0,
+      message: "Inversión en cola de procesamiento.", budget, projectId, runId,
+    });
+
+    let finalStatus = "";
+    // Tope de fallos CONSECUTIVOS del endpoint de status (~90 s sin señal):
+    // sin esto el loop reintentaría eternamente ante un backend caído.
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 60;
+    for (;;) {
+      if (hooks.shouldAbandon?.()) {
+        // La corrida SIGUE en el backend; su estado queda en el Historial.
+        return {
+          ok: false,
+          error: "Panel cerrado: la corrida continúa en segundo plano (ver Historial).",
+          cancelled: false,
+        };
+      }
+      if (hooks.shouldCancel?.()) {
+        await cancelGeophysicsRun(projectId, runId);
+        store.setActiveRun({ projectId, runId, source: "csv", status: "error", error: "Corrida cancelada por el usuario." });
+        return { ok: false, error: "Corrida cancelada por el usuario.", cancelled: true };
+      }
+      const st = await getGeophysicsStatus(projectId, runId);
+      if (!st.ok || !st.data) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          const msg =
+            "Sin respuesta del estado de la corrida (~90 s). La inversión puede " +
+            "seguir en el backend: revisa el Historial cuando vuelva la conexión.";
+          store.setActiveRun({ projectId, runId, source: "csv", status: "error", error: msg });
+          return { ok: false, error: msg };
+        }
+      } else {
+        consecutiveFailures = 0;
+      }
+      if (st.ok && st.data) {
+        const s = st.data;
+        hooks.onProgress?.({
+          status: s.status,
+          stage: s.stage ?? null,
+          progress: typeof s.progress === "number" ? s.progress : null,
+          message: s.message ?? null,
+          budget, projectId, runId,
+        });
+        if (TERMINAL_STATUSES.has(s.status)) {
+          finalStatus = s.status;
+          if (s.status !== "done") {
+            const msg = s.error || s.message ||
+              (s.status === "cancelled" ? "Corrida cancelada." : "La inversión del paquete no finalizó.");
+            store.setActiveRun({ projectId, runId, source: "csv", status: "error", error: msg });
+            return { ok: false, error: msg, cancelled: s.status === "cancelled" };
+          }
+          break;
+        }
+      }
+      // Errores transitorios de red/poll: se reintenta en el siguiente tick.
+      await _sleep(POLL_INTERVAL_MS);
+    }
+    if (finalStatus !== "done") {
+      const msg = "La inversión del paquete no finalizó.";
+      store.setActiveRun({ projectId, runId, source: "csv", status: "error", error: msg });
+      return { ok: false, error: msg };
+    }
+  } else if (res.data.status !== "done") {
+    // Modo síncrono histórico con fallo inline.
     const msg = (res.data.errors && res.data.errors[0]) || "La inversión del paquete no finalizó.";
     store.setActiveRun({ source: "csv", status: "error", error: msg });
     return { ok: false, error: msg };
+  }
+
+  // Panel cerrado mientras terminaba: no secuestrar el visor con setModel/
+  // setView — el modelo queda persistido y se re-abre desde Historial.
+  if (hooks.shouldAbandon?.()) {
+    return {
+      ok: false,
+      error: "Panel cerrado: el modelo quedó persistido (ver Historial).",
+      cancelled: false,
+    };
   }
 
   const isMagnetic = (route ?? "").includes("magnetic_only");
