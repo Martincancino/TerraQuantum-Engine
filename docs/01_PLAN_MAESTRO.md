@@ -15,7 +15,7 @@
 |---|------|-------------|--------|
 | **F0** | **Definición de producto y reglas** | `docs/02_PRODUCTO.md`: quién es el usuario, el camino dorado, qué significa "robusto". Las reglas de trabajo. | ✅ 2026-07-02 |
 | **F1** | **Mapa y limpieza del código** | Inventario ruta-por-ruta (dorado/secundario/muerto), borrado de lo muerto, raíz del repo limpia, CI mínima que corre en cada cambio. | ✅ 2026-07-03 (gate: mapa publicado, 5 muertos podados verificados, raíz limpia, check.ps1, suite 1700 tests verde tras fix del único fallo; 2ª pasada de símbolos intra-servicio continúa dentro de F2) |
-| **F2** | **Ingesta blindada universal** | "Cualquier CSV entra": encoding/separador/decimales/preámbulos/columnas en español auto-mapeadas; cuando falta algo, PREGUNTA (nunca inventa, nunca crashea). Corpus de CSVs sucios reales + tests generativos. | ⬜ (~70% hecho) |
+| **F2** | **Ingesta blindada universal** | "Cualquier CSV entra": encoding/separador/decimales/preámbulos/columnas en español auto-mapeadas; cuando falta algo, PREGUNTA (nunca inventa, nunca crashea). Corpus de CSVs sucios reales + tests generativos. | ✅ 2026-07-04 (gate MEDIDO: corpus real 19/19 a TQPKG vía enrich sin mapeo manual; 10.000 casos generativos con 0 excepciones y 0 corrupción vs ground truth; subset ingesta 673 verde; check.ps1 VERDE con eslint 0 errores; commits 1e712b1→fb4fef7) |
 | **F2B** | **El gabinete del consultor automatizado** | La preparación no solo LEE: TRABAJA. Todo el procesamiento que hoy el consultor hace a mano: drift+marea desde lecturas crudas, Nettleton, regional-residual; diurna, RTP, derivadas (tilt/señal analítica/1VD), continuación ascendente, deconvolución de Euler (profundidades!); desurvey + QA/QC de sondajes. | ⬜ (correcciones básicas hechas; el resto NO existe) |
 | **F3** | **Flujo dorado asíncrono + base de datos** | Preparación → inversión → 3D sin timeouts: cola de trabajos con progreso en vivo, historial de proyectos/corridas en SQLite, botón cancelar, presupuesto de vóxeles con aviso previo. | ⬜ (ruta async ya existe, sin cablear) |
 | **F4** | **Render 3D clase mundial** | Isosuperficies suaves (adiós confeti de cubos), cortes transversales arbitrarios, sondajes dibujados, terreno, incertidumbre visible, WebGPU progresivo. El 3D más CLARO y HONESTO de su rango de precio. | ⬜ (building blocks listos) |
@@ -77,7 +77,8 @@ Esta sección existe para que ninguna fase re-implemente lo que ya funciona.
 |---|---|
 | load-package síncrono → proxy timeout en inversiones largas | F3 |
 | B2 DOI half-max demasiado agresivo en producción (deep_frac ~0.94 casi siempre) | F5 |
-| Auto-mapeo de nombres de columna en español | F2 |
+| ~~Auto-mapeo de nombres de columna en español~~ ✅ F2 2026-07-04 | F2 |
+| Parser CSV local de GravityCorrectionWizard (parseFloat, sin sniffer) — decimal-coma latente | F2B |
 | UQ posterior_std 100% NaN + filtrado NaN downstream | F5 |
 | `findDemoHighlightVoxel` import muerto con física en TS (Exploration3DView.tsx:26) | F1 |
 | Render = confeti de vóxeles, sin isosuperficie | F4 |
@@ -148,6 +149,15 @@ Formato de cada fase: **Objetivo → Investigación previa → Trabajo → Tests
 - Regresión: los 2 bugs históricos (decimal-coma, doble-Bouguer) como tests con nombre propio.
 
 **Gate:** 100% del corpus real pasa; 0 excepciones no-catalogadas en 10.000 casos generativos; demo en vivo: Martín le da un CSV sucio nunca visto y llega a TQPKG sin ayuda.
+
+**✅ CERRADA 2026-07-04.** Entregado en 6 commits atómicos (backend 1e712b1, 991897b, 4fab917, 81c131e, 647219a; frontend fb4fef7):
+1. `csv_sniffer_service.py` (SniffReport con evidencia; UTF-8/BOM→UTF-16→cp1252→latin-1; preámbulo; filas rotas con nº de línea) cableado sin romper byte-idéntico.
+2. Auto-mapeo ES/EN + heurística por RANGO físico + guardia northing-en-y (2 capas: plan pregunta, import bloquea).
+3. Handlers globales nunca-crashea (TerraquantumError→payload F23; Exception→TQ_INTERNAL) + fuzz 4 endpoints.
+4. Preguntas estructuradas blocking (unidad/tipo) por el canal column_map existente; tipo inferido del header CON aviso.
+5. UI: SniffReportCard/SuspicionsBanner/QuestionsForm/SampleRowsTable display-only (reviewer frontera física PASS) + los 7 errores eslint react-hooks preexistentes ARREGLADOS (check.ps1 VERDE).
+6. Gate medido: corpus 19/19, generativo 10k en verde (9m12s), subset 673. Bug real cazado por el harness: fila rota con campos extra como 1ª fila de datos → pandas infería index_col y desplazaba TODO el parseo (fix `index_col=False`).
+Deuda que pasa a F2B: parser local de `GravityCorrectionWizard` (parseCsvText/parseFloat) no pasa por el sniffer — riesgo decimal-coma latente; se cierra cuando F2B rehaga el wizard.
 
 ---
 

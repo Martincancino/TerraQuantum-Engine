@@ -78,6 +78,18 @@ Verificación post-poda: compileall OK, 41 tests export+corrections PASS, `tsc -
 | svdag/volumetric | Medir si la ruta se ejecuta; decidir en render | F4 |
 | `/v2/geophysics-invert` (solo tests) | Revisar al unificar rutas de inversión | F3 |
 
+## 5B. Símbolos nuevos F2 (2026-07-04) — clasificación
+
+| Símbolo | Clase | Rol |
+|---|---|---|
+| `services/csv_sniffer_service.py` (sniff_csv, SniffReport, detect_encoding/separator, decimal_verdict_for_lines, AmbiguousDelimiterError movida aquí) | **DORADO** | Capa física de la ingesta; lo llaman `_read_csv_dataframe`, import, analyze-columns, enrich-package |
+| `gravity_import_service.read_csv_sample`, `_find_by_priority`, guardia northing-en-profundidad | **DORADO** | Muestra para heurística de rango + resolución por prioridad de sinónimos ES |
+| `column_mapping_service`: `_assess_plan_ranges`, `_suggest_missing_by_range`, `_build_ingest_questions`, `infer_gravity_type_from_column` | **DORADO** | Plan de mapeo con confianza alta/media/baja, sospechas, sugerencias y preguntas tipadas |
+| `main._register_never_crash_handlers` | **DORADO** | Red transversal: TerraquantumError→payload F23; Exception→TQ_INTERNAL (prohibido el 500 pelado) |
+| `api/gravity_import_api._sample_rows_preview` | **DORADO** | Preview de filas parseadas para la UI |
+| Frontend: `SniffReportCard`/`SuspicionsBanner`/`QuestionsForm`/`SampleRowsTable` (PrepEnrichPanel), tipos `SniffReport`/`IngestQuestion` (frontendApi) | **DORADO** | Display-only (reviewer frontera física PASS) |
+| Tests nuevos: test_csv_sniffer (25), test_auto_mapping_es (12), test_ingesta_never_crashes (6), test_ingest_questions (10), test_corpus_csv_reales (19), test_ingesta_generativa (1×N, TQ_GEN_N) | **DORADO** | Guardianes del gate F2 |
+
 ## 6. Bugs y riesgos encontrados de pasada (no bloqueantes, anotados)
 
 1. Proxy `app/api/async/tasks/[task_id]/route.ts:35`: el handler DELETE llama al backend con `method: "GET"` — nunca cancelaría. Corregir si F3 adopta esa vía.
@@ -85,7 +97,8 @@ Verificación post-poda: compileall OK, 41 tests export+corrections PASS, `tsc -
 3. `TQ_AUTH_ENABLED=true` rompería la web UI actual (frontend no envía el header) — resolver en F7 (licencias/seguridad).
 4. `_BANNED_WORDS` duplicada (chat_api vs gemini_agent) — unificar en F6.
 5. Cobertura de tests HTTP inexistente en: borehole_api, chat_api, export_api, keys_api, favorability (endpoint) — F8 (schemathesis) lo cubrirá de golpe.
-6. eslint baseline (2026-07-02): **7 errores preexistentes** react-hooks — `GravityCorrectionWizard.tsx` (setState síncrono en effect :218 + 5× componentes creados durante render :386-390) y `ObsVsCalcPanel.tsx` (:266 setState en effect). Arreglar cuando F2B rehaga el wizard (es el mismo componente); mientras, la CI usa umbral de warnings, no de errores nuevos.
+6. ~~eslint baseline (2026-07-02): 7 errores preexistentes react-hooks~~ ✅ **ARREGLADOS en F2.5 (fb4fef7)**: ColSelect fuera del componente, validStationCount→useMemo, ObsVsCalcPanel→Inner con key-remount. eslint frontend = 0 errores; check.ps1 VERDE.
+7. **NUEVO (reviewer F2.5, latente para F2B)**: `GravityCorrectionWizard.parseCsvText/buildStations` parsean CSV localmente con `split`+`parseFloat` — con decimal-coma, `parseFloat("1,23")=1` en silencio (misma clase que e7d2858). Cerrar cuando F2B rehaga el wizard (reusar sniff del backend).
 
 ## 7. Raíz del repo — orden ✅ EJECUTADO 2026-07-02
 
