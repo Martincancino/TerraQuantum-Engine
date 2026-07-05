@@ -1807,81 +1807,10 @@ export async function getHistoryRuns(projectId?: string) {
   });
 }
 
-// ─── Celery Async Inversion (§2.5) ───────────────────────────────────────────
-
-export type AsyncInvertResponse = {
-  task_id: string;
-  run_id: string;
-  project_id: string;
-  status: string;
-  status_url: string;
-};
-
-export type CeleryTaskStatusResponse = {
-  task_id: string;
-  celery_state: string;
-  project_id?: string | null;
-  run_id?: string | null;
-  stage?: string | null;
-  progress?: number | null;
-  error?: string | null;
-};
-
-export async function enqueueGeophysicsInversion(
-  params: Record<string, unknown>
-): Promise<FrontendApiResult<AsyncInvertResponse>> {
-  return fetchInternalJson<AsyncInvertResponse>({
-    path: "/api/async/invert",
-    method: "POST",
-    body: params,
-    timeoutMs: 10_000,
-  });
-}
-
-export async function getCeleryTaskStatus(
-  taskId: string
-): Promise<FrontendApiResult<CeleryTaskStatusResponse>> {
-  return fetchInternalJson<CeleryTaskStatusResponse>({
-    path: `/api/async/tasks/${encodeURIComponent(taskId)}`,
-    method: "GET",
-    timeoutMs: 10_000,
-  });
-}
-
-export function pollInversionStatus(
-  taskId: string,
-  onProgress: (stage: string, progress: number) => void,
-  intervalMs = 3_000
-): { promise: Promise<CeleryTaskStatusResponse>; cancel: () => void } {
-  let intervalId: ReturnType<typeof setInterval> | null = null;
-  let cancelled = false;
-
-  const promise = new Promise<CeleryTaskStatusResponse>((resolve, reject) => {
-    intervalId = setInterval(async () => {
-      if (cancelled) return;
-      const res = await getCeleryTaskStatus(taskId);
-      if (!res.ok || !res.data) {
-        if (intervalId !== null) clearInterval(intervalId);
-        reject(new Error(res.error ?? "Error polling task status"));
-        return;
-      }
-      const data = res.data;
-      onProgress(data.stage ?? data.celery_state ?? "running", data.progress ?? 0);
-      const terminal = ["SUCCESS", "FAILURE", "REVOKED"];
-      if (terminal.includes(data.celery_state)) {
-        if (intervalId !== null) clearInterval(intervalId);
-        resolve(data);
-      }
-    }, intervalMs);
-  });
-
-  const cancel = () => {
-    cancelled = true;
-    if (intervalId !== null) clearInterval(intervalId);
-  };
-
-  return { promise, cancel };
-}
+// F3: los helpers de la vía Celery (§2.5: enqueueGeophysicsInversion,
+// getCeleryTaskStatus, pollInversionStatus) fueron ELIMINADOS — 0 llamadores
+// UI (grep). La vía asíncrona del producto es loadModelFromPackage (encolar
+// nativo + poll de getGeophysicsStatus) en packageInversion.ts.
 
 // ─────────────────────────────────────────────────────────────────────────────
 
