@@ -169,8 +169,17 @@ class ErrorDetails(BaseModel):
 
 
 class GeophysicsStatusResponse(BaseModel):
-    """Inversion status polling response."""
-    status: str = Field(..., pattern="^(queued|processing|done|error)$")
+    """Inversion status polling response.
+
+    F3: el pattern histórico (queued|processing|done|error) NO incluía
+    "running" — exactamente lo que escribe el solver durante la inversión
+    (heartbeat solving_lsqr) → el polling devolvía 500 de validación en plena
+    corrida. Se amplía con los estados reales + los terminales de F3
+    (cancelled / interrumpida).
+    """
+    status: str = Field(
+        ..., pattern="^(queued|processing|running|done|error|cancelled|interrumpida)$"
+    )
     stage: str = Field(default="unknown")  # import, preprocessing, solving, post-processing, done
     progress: Optional[float] = Field(default=0.0, ge=0, le=100)  # Percentage
     project_id: Optional[str] = None

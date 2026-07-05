@@ -180,9 +180,12 @@ def _build(client, files, params=None, data=None):
 
 
 def _load(client, package_text):
+    # F3: load-package encola por defecto (worker de proceso); estos tests
+    # validan el CONTRATO COMPLETO de la inversión → modo síncrono explícito.
     return client.post(
         "/v2/gravity-import/load-package",
         files={"file": ("pkg.tqpkg.csv", package_text, "text/csv")},
+        data={"sync": "true"},
     )
 
 

@@ -1571,13 +1571,20 @@ async def load_package(
     file: UploadFile = File(...),
     project_id: Optional[str] = Form(None),
     run_id: Optional[str] = Form(None),
+    sync: bool = Form(False),
 ):
-    """FASE R4 — Lee el paquete auto-contenido y corre la inversión ruteada.
+    """FASE R4 + F3 — Lee el paquete auto-contenido y ENCOLA la inversión ruteada.
 
     Separa encabezado (config + sondajes + plan) del cuerpo CSV, importa el cuerpo
     por el mismo camino que /invert, y construye GeophysicsInvertInput. El ruteo a
     grav/mag/joint/+sondajes lo decide run_geophysics_inversion según la presencia
     de señal gravimétrica/magnética y los sondajes.
+
+    F3 (default): la inversión corre en un worker de PROCESO y este endpoint
+    devuelve {status:"queued", project_id, run_id, budget} de inmediato; el
+    progreso por etapas se consulta en GET /geophysics-status/{p}/{r} y se
+    cancela con POST /geophysics-cancel/{p}/{r}. Con sync=true se conserva el
+    comportamiento histórico bloqueante (tests de contrato / scripts).
     """
     from services.csv_package_service import parse_package_text
 
@@ -1777,6 +1784,52 @@ async def load_package(
                 },
             ) from exc
 
+        # ── F3 — Presupuesto de vóxeles ANTES de encolar (aviso previo). ─────
+        from services.run_queue_service import (
+            estimate_inversion_budget,
+            submit_package_inversion,
+        )
+
+        _route = str(parsed.plan.get("route") or "gravity_only")
+        _budget = estimate_inversion_budget(
+            _route, invert_input.nx * invert_input.ny * invert_input.nz
+        )
+
+        if not sync:
+            # F3 — FLUJO POR DEFECTO: encolar en un worker de PROCESO y
+            # devolver de inmediato. El progreso por etapas reales viaja por
+            # GET /geophysics-status (mismo canal que el flujo directo); la
+            # cancelación por POST /geophysics-cancel. Nunca más "error
+            # interno del proxy" por una inversión larga.
+            submit_package_inversion(
+                invert_input.model_dump(),
+                project_id, run_id,
+                route=_route,
+                config={k: cfg.get(k) for k in ("nx", "ny", "nz", "block_size", "depth") if k in cfg},
+            )
+            return sanitize_nan({
+                "status": "queued",
+                "stage": "queued",
+                "project_id": project_id,
+                "run_id": run_id,
+                "route": _route,
+                "multimodal_plan": parsed.plan,
+                "budget": _budget,
+                "warnings": (
+                    list(import_result.warnings)
+                    + ([_budget["warning"]] if _budget.get("warning") else [])
+                ),
+                "errors": [],
+                "poll": {
+                    "status_url": f"/geophysics-status/{project_id}/{run_id}",
+                    "cancel_url": f"/geophysics-cancel/{project_id}/{run_id}",
+                    "interval_ms": 1500,
+                },
+                "inversionResult": None,
+            })
+
+        # ── Camino SÍNCRONO (sync=true): comportamiento histórico, para tests
+        # de contrato y scripts; NO es el camino del producto (proxy timeout).
         # Crea el run_dir antes de invertir (igual que /invert) para que el SSE
         # pueda conectar y el solver persista el block model (parquet).
         try:

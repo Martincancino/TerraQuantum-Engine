@@ -109,6 +109,37 @@ async def invert_geophysics(
     return {"status": "queued", "run_id": run_id, "project_id": project_id}
 
 
+@router.post("/geophysics-cancel/{project_id}/{run_id}")
+async def cancel_geophysics_run(project_id: str, run_id: str):
+    """F3 — Cancela una corrida del flujo de paquete (worker de proceso).
+
+    Dos capas: bandera cooperativa + terminate() del proceso worker. Deja
+    estado terminal 'cancelled' en schedule.json y en el historial SQLite.
+    Para corridas del flujo DIRECTO (BackgroundTasks en el mismo proceso) solo
+    aplica la bandera cooperativa: se informa el alcance con honestidad.
+    """
+    from services.run_queue_service import cancel_run
+
+    try:
+        result = cancel_run(project_id, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if not result.get("cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "CANCEL_FAILED",
+                "message": result.get("reason", "No se pudo cancelar la corrida."),
+            },
+        )
+    return {
+        "status": "cancelled",
+        "project_id": project_id,
+        "run_id": run_id,
+        "outcome": result.get("outcome"),
+    }
+
+
 @router.get("/geophysics-status/{project_id}/{run_id}", response_model=GeophysicsStatusResponse)
 async def get_geophysics_status(project_id: str, run_id: str):
     _log.info("request_received", endpoint="/geophysics-status",
