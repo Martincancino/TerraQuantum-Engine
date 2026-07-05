@@ -17,7 +17,7 @@
 | **F1** | **Mapa y limpieza del código** | Inventario ruta-por-ruta (dorado/secundario/muerto), borrado de lo muerto, raíz del repo limpia, CI mínima que corre en cada cambio. | ✅ 2026-07-03 (gate: mapa publicado, 5 muertos podados verificados, raíz limpia, check.ps1, suite 1700 tests verde tras fix del único fallo; 2ª pasada de símbolos intra-servicio continúa dentro de F2) |
 | **F2** | **Ingesta blindada universal** | "Cualquier CSV entra": encoding/separador/decimales/preámbulos/columnas en español auto-mapeadas; cuando falta algo, PREGUNTA (nunca inventa, nunca crashea). Corpus de CSVs sucios reales + tests generativos. | ✅ 2026-07-04 (gate MEDIDO: corpus real 19/19 a TQPKG vía enrich sin mapeo manual; 10.000 casos generativos con 0 excepciones y 0 corrupción vs ground truth; subset ingesta 673 verde; check.ps1 VERDE con eslint 0 errores; commits 1e712b1→fb4fef7) |
 | **F2B** | **El gabinete del consultor automatizado** | La preparación no solo LEE: TRABAJA. Todo el procesamiento que hoy el consultor hace a mano: drift+marea desde lecturas crudas, Nettleton, regional-residual; diurna, RTP, derivadas (tilt/señal analítica/1VD), continuación ascendente, deconvolución de Euler (profundidades!); desurvey + QA/QC de sondajes. | ⬜ (correcciones básicas hechas; el resto NO existe) |
-| **F3** | **Flujo dorado asíncrono + base de datos** | Preparación → inversión → 3D sin timeouts: cola de trabajos con progreso en vivo, historial de proyectos/corridas en SQLite, botón cancelar, presupuesto de vóxeles con aviso previo. | ⬜ (ruta async ya existe, sin cablear) |
+| **F3** | **Flujo dorado asíncrono + base de datos** | Preparación → inversión → 3D sin timeouts: cola de trabajos con progreso en vivo, historial de proyectos/corridas en SQLite, botón cancelar, presupuesto de vóxeles con aviso previo. | ✅ 2026-07-05 (gate MEDIDO: joint 96.768 vóxeles E2E con progreso visible en 11,5 min — encolado en 0,3 s, aviso previo ~21 min, etapas queued→warmup→joint_loop→done, parquets + historial SQLite done; historial sobrevive reinicio con reconciliación "interrumpida"; Celery ELIMINADO con evidencia de 0 llamadores; commits eed5b76→a8c9546) |
 | **F4** | **Render 3D clase mundial** | Isosuperficies suaves (adiós confeti de cubos), cortes transversales arbitrarios, sondajes dibujados, terreno, incertidumbre visible, WebGPU progresivo. El 3D más CLARO y HONESTO de su rango de precio. | ⬜ (building blocks listos) |
 | **F5** | **Datos, gráficos y exportables** | Todo descargable: imágenes PNG alta resolución con escala/norte/leyenda, cortes, obs-vs-calc, histogramas, reporte PDF, block model CSV/VTK/GLB. Diagnósticos SIEMPRE coherentes (fix UQ NaN, recalibrar B2). | ⬜ (export_service ya existe) |
 | **F6** | **Copiloto IA para el consultor (Gemini)** | Chat anclado a los datos de la corrida + borrador de secciones de informe + explicación de cada métrica. Nunca inventa números. Context caching para costo mínimo. | ⬜ (base ya existe: gemini_agent.py) |
@@ -75,7 +75,7 @@ Esta sección existe para que ninguna fase re-implemente lo que ya funciona.
 ## Deuda técnica conocida (registrada aquí, cada ítem tiene fase asignada)
 | Deuda | Fase |
 |---|---|
-| load-package síncrono → proxy timeout en inversiones largas | F3 |
+| ~~load-package síncrono → proxy timeout en inversiones largas~~ ✅ F3 2026-07-05 (encola en worker de proceso + progreso + cancelar) | F3 |
 | B2 DOI half-max demasiado agresivo en producción (deep_frac ~0.94 casi siempre) | F5 |
 | ~~Auto-mapeo de nombres de columna en español~~ ✅ F2 2026-07-04 | F2 |
 | Parser CSV local de GravityCorrectionWizard (parseFloat, sin sniffer) — decimal-coma latente | F2B |
@@ -213,6 +213,14 @@ Deuda que pasa a F2B: parser local de `GravityCorrectionWizard` (parseCsvText/pa
 **Tests/verificación:** E2E con inversión artificialmente lenta (sleep en hook) → el flujo completo responde, cancela y persiste; matar el backend a mitad de corrida → al reiniciar, la corrida figura "interrumpida", no colgada; los 3 CSVs multi-física de fixtures pasan por el flujo nuevo.
 
 **Gate:** joint de 96k vóxeles (el caso que mató al proxy) completa vía UI con progreso visible de principio a fin; historial sobrevive reinicio.
+
+**✅ CERRADA 2026-07-05.** Entregado (backend eed5b76/74919ad + frontend 207b85e + poda 37a98e1/cc6db03/a8c9546):
+1. `project_store.py` (SQLite local-first, un archivo, WAL) + `GET /v2/history/runs`; reconciliación al arrancar: corridas huérfanas → "interrumpida", jamás colgadas.
+2. `run_queue_service.py`: load-package ENCOLA por defecto (worker de PROCESO spawn; Process directo en vez de pool para poder cancelar de verdad) y devuelve `{queued, budget}` de inmediato; progreso por el canal NATIVO existente (etapas reales del solver → /geophysics-status); cancelación de 2 capas (bandera + terminate) vía `POST /geophysics-cancel`; presupuesto de vóxeles con aviso previo (coeficiente CALIBRADO con el gate: 7,16 ms/vóxel joint).
+3. Frontend: encolar+poll 1,5 s con barra de etapas, botón cancelar, abandono limpio al desmontar, HistoryStatusPanel con estados persistentes (reviewer frontera física PASS).
+4. Vía Celery/Redis BORRADA (backend+frontend) con grep de 0 llamadores — cero infraestructura, coherente local-first. Su bug DELETE-como-GET murió con ella.
+5. BUG preexistente arreglado: el pattern de GeophysicsStatusResponse no admitía "running" → el polling devolvía 500 DURANTE la inversión.
+**Gate medido** (`scripts/validation/f3_gate_joint96k.py`): joint 96.768 vóxeles → encolado 0,3 s, aviso previo "~21 min", progreso visible de punta a punta, done en 11,5 min, parquets persistidos, historial done. sync=true conserva el contrato histórico para tests/scripts. **Suite completa post-F3: 1786 passed, 5 skipped (VERDE).**
 
 ---
 

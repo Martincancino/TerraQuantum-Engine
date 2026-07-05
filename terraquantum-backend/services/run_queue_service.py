@@ -52,16 +52,18 @@ _WATCHER_STARTED = False
 
 # ── Presupuesto de vóxeles/tiempo ────────────────────────────────────────────
 # Coeficientes segundos-por-vóxel por ruta física, CALIBRADOS con mediciones
-# reales en la máquina de referencia (2026-07-05, ver gate F3):
-#   - suite: inversiones chicas (~4-10k vóxeles) tardan 2-15 s
-#   - caso que motivó F3: joint ~96k vóxeles ≈ 20+ min (~0.013 s/vóxel)
+# reales en la máquina de referencia:
+#   - GATE F3 MEDIDO (2026-07-05, scripts/validation/f3_gate_joint96k.py):
+#     joint 96.768 vóxeles (256 estaciones) = 693 s → 7,16 ms/vóxel.
+#   - suite: inversiones chicas (~4-10k vóxeles) tardan 2-15 s.
 # La escala es aproximadamente lineal en vóxeles para malla fija de sensores;
-# el estimado es ORIENTATIVO (±2×) y se comunica como tal. Se recalibra al
-# medir la matriz grav/mag/joint × 10k/50k/100k (F8 presupuestos).
+# el estimado es ORIENTATIVO (±2×: depende de #estaciones e iteraciones IRLS)
+# y se comunica como tal. Se refina con la matriz grav/mag/joint ×
+# 10k/50k/100k (F8 presupuestos).
 _BUDGET_COEFFS_S_PER_VOXEL = {
-    "gravity": 0.004,
-    "magnetic": 0.004,
-    "joint": 0.013,
+    "gravity": 0.003,
+    "magnetic": 0.003,
+    "joint": 0.0072,
 }
 _BUDGET_BASE_S = 8.0            # arranque del worker (spawn + imports pesados)
 _BUDGET_WARN_MINUTES = 5.0      # umbral de aviso previo

@@ -33,7 +33,7 @@ CSV usuario → PrepPanel/PreparacionView
 | block_model_api.py | **DORADO** (mixto) | arrow/json/zarr vivos E2E. `/v2/block-model-profile` (secciones A-A') 0 llamadores → **es la semilla de los cortes de F4/F5** |
 | borehole_api.py | **DORADO** (mixto) | parse-csv cableado E2E. `/lithology-properties` 0 llamadores → F4 (colorear sondajes) |
 | geophysics_api.py | **DORADO** (mixto) | ⭐ **HALLAZGO F3**: `/geophysics-invert` (BackgroundTasks, :232) + `/geophysics-status` + `/v2/…/stream` (SSE) + `/geophysics-misfit` — ruta asíncrona SIN Celery que el flujo DIRECTO ya usa (Exploration3DView importa runGeophysicsInvert+getGeophysicsStatus); el flujo de PAQUETE nunca la adoptó → F3 = replicar ese patrón en load-package. Muertos: `/geophysics-live-update` (Woodbury, 0 usos → F11), ~~`/export/vtr`~~ (podado), `/v2/geophysics-invert` (solo tests) |
-| async_api.py | **SIN_CABLEAR** | Celery/Redis punta a punta (worker, proxies, helpers TS con poll/cancel) y CERO llamadores UI. Bug: proxy DELETE llama con GET (route.ts:35). F3 decide: esta vía (requiere Redis) vs geophysics_api nativa (cero infra) |
+| ~~async_api.py~~ | **ELIMINADO F3.4** | Celery/Redis punta a punta con CERO llamadores UI → borrado completo (backend+frontend) el 2026-07-05; la vía del producto es la nativa (run_queue_service + geophysics-status/cancel) |
 | gravity_corrections_api.py | **SECUNDARIO** (mixto) | `/apply` vivo (wizard opt-in en Preparación). ⭐ `/nettleton` EXISTE (servicio testeado) sin UI → F2B lo cablea (corrige al plan que lo daba por inexistente). `/terrain-dem` 0 usos → MUERTO (cubierto por /apply) |
 | export_api.py | **DORADO** (mixto) | `/export/bundle` = paso exports del camino. `/qa-diagnostics` 0 usos (datos llegan vía report) → **MUERTO confirmado** (arrastra export_service.get_run_qa_diagnostics:975) |
 | chat_api.py | **SECUNDARIO** | IAChatView E2E vivo. Base de F6. Duplica _BANNED_WORDS con gemini_agent (F6 unifica). 0 tests |
@@ -69,7 +69,7 @@ Verificación post-poda: compileall OK, 41 tests export+corrections PASS, `tsc -
 
 | Pieza | Propuesta | Fase |
 |---|---|---|
-| async_api (Celery/Redis) | Preferir la vía nativa de geophysics_api (cero infra, coherente local-first); Celery se borra o congela al cerrar F3 | F3 |
+| async_api (Celery/Redis) | ✅ EJECUTADO F3.4 (2026-07-05): vía nativa adoptada (run_queue_service); Celery BORRADO con evidencia de 0 llamadores | F3 |
 | `/v2/block-model-profile` (secciones A-A') | Cablear como base de los cortes | F4/F5 |
 | `/borehole/lithology-properties` | Cablear al colorear sondajes en el visor | F4 |
 | `/gravity-corrections/nettleton` | Cablear UI (¡ya existe el cálculo!) | F2B |
@@ -90,9 +90,24 @@ Verificación post-poda: compileall OK, 41 tests export+corrections PASS, `tsc -
 | Frontend: `SniffReportCard`/`SuspicionsBanner`/`QuestionsForm`/`SampleRowsTable` (PrepEnrichPanel), tipos `SniffReport`/`IngestQuestion` (frontendApi) | **DORADO** | Display-only (reviewer frontera física PASS) |
 | Tests nuevos: test_csv_sniffer (25), test_auto_mapping_es (12), test_ingesta_never_crashes (6), test_ingest_questions (10), test_corpus_csv_reales (19), test_ingesta_generativa (1×N, TQ_GEN_N) | **DORADO** | Guardianes del gate F2 |
 
+## 5C. Símbolos nuevos F3 (2026-07-05) — clasificación
+
+| Símbolo | Clase | Rol |
+|---|---|---|
+| `services/project_store.py` (SQLite runs, reconcile_interrupted) | **DORADO** | Historial persistente local-first; escriben servidor + workers; main.py reconcilia huérfanas al arrancar |
+| `services/run_queue_service.py` (submit/cancel/watcher/_worker_entry, estimate_inversion_budget) | **DORADO** | Cola de inversiones en procesos (spawn), cancelación de 2 capas, presupuesto de vóxeles |
+| `api/history_api.py` (GET /v2/history/runs) | **DORADO** | Historial para la UI |
+| `POST /geophysics-cancel/{p}/{r}` (geophysics_api) | **DORADO** | Cancelación del flujo de paquete |
+| `load-package` con `sync=false` default + budget/poll en respuesta | **DORADO** | El flujo del producto encola; sync=true conserva contrato de tests/scripts |
+| Frontend: poll en `packageInversion.loadModelFromPackage` (hooks onProgress/shouldCancel/shouldAbandon), LoadPanel progreso+cancelar, HistoryStatusPanel, proxies geophysics-cancel + history/runs | **DORADO** | Display-only (reviewer PASS) |
+| `scripts/validation/f3_gate_joint96k.py` | **SECUNDARIO** | Gate medido F3 + calibración del presupuesto |
+
+**ELIMINADO en F3 (decisión §5 ejecutada):** `api/async_api.py`, `workers/` completo (celery_app, tasks), CELERY_* en config, contador Celery en metrics, celery+redis en requirements, helpers/proxies Celery del frontend (0 llamadores, grep). El bug del proxy DELETE (method GET) murió con la vía.
+
 ## 6. Bugs y riesgos encontrados de pasada (no bloqueantes, anotados)
 
-1. Proxy `app/api/async/tasks/[task_id]/route.ts:35`: el handler DELETE llama al backend con `method: "GET"` — nunca cancelaría. Corregir si F3 adopta esa vía.
+1. ~~Proxy `app/api/async/tasks/[task_id]/route.ts:35`: DELETE con method GET~~ ✅ RESUELTO en F3.4 (la vía Celery completa fue eliminada; la cancelación real es POST /geophysics-cancel).
+1b. **BUG PREEXISTENTE arreglado en F3.2**: `GeophysicsStatusResponse.status` tenía pattern sin "running" (lo que escribe el solver) → el polling devolvía 500 DURANTE la inversión. Ampliado a queued|processing|running|done|error|cancelled|interrumpida.
 2. `/block-model-zarr` serializa vóxel por vóxel a JSON (block_model_api.py:151-161) — funciona pero contradice el camino binario; revisar en F4 si los grids grandes se vuelven norma.
 3. `TQ_AUTH_ENABLED=true` rompería la web UI actual (frontend no envía el header) — resolver en F7 (licencias/seguridad).
 4. `_BANNED_WORDS` duplicada (chat_api vs gemini_agent) — unificar en F6.
