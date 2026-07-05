@@ -40,6 +40,7 @@ from api.spectral_api import router as spectral_router
 from api.export_api import router as export_router
 from api.chat_api import router as chat_router
 from api.gravity_corrections_api import router as gravity_corrections_router
+from api.history_api import router as history_router
 
 from core.config import (
     APP_TITLE,
@@ -171,6 +172,23 @@ app.include_router(spectral_router)
 app.include_router(export_router)
 app.include_router(chat_router)
 app.include_router(gravity_corrections_router)
+app.include_router(history_router)
+
+# ── F3 — Historial SQLite: esquema + reconciliación de corridas huérfanas ─────
+# Una corrida queued/running al arrancar quedó huérfana (los workers mueren con
+# el proceso padre) → se marca "interrumpida" en vez de quedar colgada.
+try:
+    from services import project_store as _project_store
+
+    _project_store.init_db()
+    _n_reconciled = _project_store.reconcile_interrupted()
+    if _n_reconciled:
+        _startup_log.warning(
+            "F3: %d corrida(s) huérfana(s) marcadas 'interrumpida' al arrancar.",
+            _n_reconciled,
+        )
+except Exception as _exc:  # noqa: BLE001 — el historial jamás impide arrancar
+    _startup_log.error("F3: init del historial SQLite falló: %s", _exc)
 
 # Middleware order matters: last add_middleware = outermost layer.
 # Stack: CORS (outer) → ApiKey → Prometheus (inner) → routes.
