@@ -147,6 +147,25 @@ def _client():
     return TestClient(app)
 
 
+def test_endpoint_parse_csv_file_multipart_encoding():
+    """F2B — la variante multipart pasa por el sniffer de encoding: un CSV
+    latin-1 con litologías con ñ llega INTACTO (la variante csv_text lo
+    corrompía a mojibake por decodificarse como UTF-8 en el navegador)."""
+    csv_es = (
+        "hole_id,easting,northing,depth_from,depth_to,density,lithology\n"
+        "DDH-1,100,200,0,10,2.7,andesita con ñ\n"
+        "DDH-1,100,200,10,25,3.9,magnetita\n"
+    )
+    r = _client().post(
+        "/borehole/parse-csv-file",
+        files={"file": ("sondajes.csv", csv_es.encode("latin-1"), "text/csv")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["n_samples"] == 2
+    assert "andesita con ñ" in body["lithologies_detected"]
+
+
 def test_endpoint_desurvey_roundtrip():
     r = _client().post("/borehole/desurvey", json={
         "holes": [{

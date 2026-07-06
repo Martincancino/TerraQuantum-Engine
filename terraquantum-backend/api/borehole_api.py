@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from core.logging import get_logger
@@ -152,14 +152,15 @@ def desurvey_endpoint(req: DesurveyRequest):
     })
 
 
-@router.post("/parse-csv", response_model=ParseBoreholeCsvResponse)
-def parse_csv(req: ParseBoreholeCsvRequest) -> ParseBoreholeCsvResponse:
+def _build_parse_response(
+    csv_text: str, length_units: str, crs: str, datum_elevation_m: float
+) -> ParseBoreholeCsvResponse:
     try:
         survey = parse_borehole_csv(
-            req.csv_text,
-            length_units=req.length_units,
-            crs=req.crs,
-            datum_elevation_m=req.datum_elevation_m,
+            csv_text,
+            length_units=length_units,
+            crs=crs,
+            datum_elevation_m=datum_elevation_m,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -182,6 +183,39 @@ def parse_csv(req: ParseBoreholeCsvRequest) -> ParseBoreholeCsvResponse:
         lithologies_detected=distinct_lithos,
         unrecognized_lithologies=unrecognized,
     )
+
+
+@router.post("/parse-csv", response_model=ParseBoreholeCsvResponse)
+def parse_csv(req: ParseBoreholeCsvRequest) -> ParseBoreholeCsvResponse:
+    return _build_parse_response(
+        req.csv_text, req.length_units, req.crs, req.datum_elevation_m
+    )
+
+
+@router.post("/parse-csv-file", response_model=ParseBoreholeCsvResponse)
+async def parse_csv_file(
+    file: UploadFile = File(...),
+    length_units: str = Form("m"),
+    crs: str = Form("local"),
+    datum_elevation_m: float = Form(0.0),
+) -> ParseBoreholeCsvResponse:
+    """F2B — variante MULTIPART: los BYTES llegan intactos y el encoding lo
+    decide el sniffer (UTF-8/UTF-16/cp1252/latin-1).
+
+    Cierra el gap del reviewer F2: la variante csv_text recibe texto YA
+    decodificado como UTF-8 por el navegador — un CSV latin-1 con litologías
+    con ñ/acentos llegaba con mojibake y bypasseaba el sniffer.
+    """
+    from services.csv_sniffer_service import detect_encoding
+
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="CSV de sondajes > 20 MB.")
+    enc = detect_encoding(content)
+    csv_text = content.decode(enc.value, errors="replace")
+    resp = _build_parse_response(csv_text, length_units, crs, datum_elevation_m)
+    _log.info("borehole_parse_csv_file", encoding=enc.value, n_samples=resp.n_samples)
+    return resp
 
 
 class LithologyEntry(BaseModel):
