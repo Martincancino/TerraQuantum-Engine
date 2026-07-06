@@ -41,6 +41,7 @@ from api.chat_api import router as chat_router
 from api.gravity_corrections_api import router as gravity_corrections_router
 from api.history_api import router as history_router
 from api.mag_enhancement_api import router as mag_enhancement_router
+from api.depth_estimate_api import router as depth_estimate_router
 
 from core.config import (
     APP_TITLE,
@@ -175,6 +176,7 @@ app.include_router(chat_router)
 app.include_router(gravity_corrections_router)
 app.include_router(history_router)
 app.include_router(mag_enhancement_router)
+app.include_router(depth_estimate_router)
 
 # ── F3 — Historial SQLite: esquema + reconciliación de corridas huérfanas ─────
 # Una corrida queued/running al arrancar quedó huérfana (los workers mueren con
