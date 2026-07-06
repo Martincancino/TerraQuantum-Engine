@@ -190,6 +190,120 @@ compute_terrain_correction_prism = compute_terrain_correction_pointmass
 
 
 # ---------------------------------------------------------------------------
+# 4b. F2B — Pre-reducciones de CAMPO (marea Longman + deriva instrumental)
+# ---------------------------------------------------------------------------
+
+def apply_field_prereductions(
+    lats_deg: np.ndarray,
+    lons_deg: np.ndarray,
+    elevs_m: np.ndarray,
+    g_obs_mgal: np.ndarray,
+    station_ids: "list[str]",
+    time_strings: "list[str] | None",
+    apply_tide: bool = False,
+    apply_drift: bool = False,
+    drift_method: str = "linear",
+    base_station_id: "str | None" = None,
+) -> "Tuple[np.ndarray, dict]":
+    """F2B — Pre-reducciones de CAMPO sobre lecturas crudas: marea y deriva.
+
+    Orden estándar de gabinete: MAREA primero (Longman 1959, astronomía pura),
+    DERIVA después (los cierres de base se evalúan sobre lecturas ya libres de
+    marea). Ambas son previas a la cadena GRS80→FAC→Bouguer→TC existente y
+    solo tienen sentido sobre g_raw (el llamador lo valida).
+
+    Nunca adivina: sin columna de tiempo parseable → ValueError con formatos
+    aceptados; deriva sin base_station_id → ValueError que PREGUNTA e incluye
+    la candidata detectada (id repetido con más ocupaciones), patrón
+    needs_context.
+    """
+    from services.drift_correction_service import (
+        DriftInputError,
+        correct_drift,
+        suggest_base_station,
+    )
+    from services.earth_tide_service import (
+        parse_survey_timestamps,
+        solve_longman_tide,
+    )
+
+    g = np.asarray(g_obs_mgal, dtype=np.float64).copy()
+    meta: dict = {"corrections_applied": [], "warnings": []}
+    if not (apply_tide or apply_drift):
+        return g, meta
+
+    if not time_strings or all(not str(t).strip() for t in time_strings):
+        raise ValueError(
+            "La corrección de marea/deriva requiere la hora de cada lectura: "
+            "agregue la columna de tiempo (time_utc) por estación. Formatos "
+            "aceptados: 'YYYY-MM-DD HH:MM[:SS]' o ISO-8601 (UTC)."
+        )
+    times = parse_survey_timestamps([str(t) for t in time_strings])
+    if times is None:
+        raise ValueError(
+            "La columna de tiempo tiene valores ilegibles: TODOS los timestamps "
+            "deben parsear (una corrección de marea/deriva a medias corrompería "
+            "en silencio). Formatos: 'YYYY-MM-DD HH:MM[:SS]' o ISO-8601 (UTC)."
+        )
+
+    if apply_tide:
+        tide = np.array([
+            solve_longman_tide(
+                float(lats_deg[i]), float(lons_deg[i]),
+                float(elevs_m[i]) if np.isfinite(elevs_m[i]) else 0.0,
+                times[i],
+            )[2]
+            for i in range(len(g))
+        ])
+        g = g - tide   # g_corregida = g_leída − aceleración de marea
+        meta["corrections_applied"].append("earth_tide_longman1959")
+        meta["tide_min_mgal"] = float(tide.min())
+        meta["tide_max_mgal"] = float(tide.max())
+
+    if apply_drift:
+        ids_norm = [str(s).strip().casefold() for s in station_ids]
+        if not base_station_id:
+            cand = suggest_base_station([str(s).strip() for s in station_ids])
+            hint = (
+                f" Candidata detectada: '{cand[0]}' ({cand[1]} ocupaciones)."
+                if cand else
+                " Ningún station_id se repite: sin re-ocupaciones no hay "
+                "cierres que midan la deriva."
+            )
+            raise ValueError(
+                "La corrección de deriva necesita saber cuál es la estación "
+                "BASE (base_station_id) cuyas re-ocupaciones cierran el loop." + hint
+            )
+        is_base = np.array(
+            [sid == str(base_station_id).strip().casefold() for sid in ids_norm]
+        )
+        if int(is_base.sum()) == 0:
+            raise ValueError(
+                f"base_station_id='{base_station_id}' no aparece en las "
+                "estaciones: verifique el identificador de la base."
+            )
+        # correct_drift exige tiempos crecientes: ordenar, corregir, restaurar.
+        order = np.argsort([t.timestamp() for t in times], kind="stable")
+        inv = np.empty_like(order)
+        inv[order] = np.arange(len(order))
+        try:
+            res = correct_drift(
+                [times[i] for i in order], g[order], is_base[order],
+                method=drift_method,
+            )
+        except DriftInputError as exc:
+            raise ValueError(str(exc)) from exc
+        g = res.corrected_mgal[inv]
+        meta["corrections_applied"].append(f"instrument_drift_{res.method}")
+        meta["drift_rate_mgal_per_day"] = res.drift_rate_mgal_per_day
+        meta["drift_closure_mgal"] = res.closure_mgal
+        meta["drift_n_base"] = res.n_base_occupations
+        meta["warnings"].extend(res.warnings)
+
+    return g, meta
+
+
+# ---------------------------------------------------------------------------
 # 5. Aplicar correcciones completas
 # ---------------------------------------------------------------------------
 

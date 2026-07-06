@@ -164,6 +164,9 @@ async def apply_gravity_corrections(
         raise HTTPException(status_code=422, detail="Se requiere al menos 1 estación.")
 
     lats, lons, elevs, g_obs = _extract_arrays(stations, g_col)
+    # F2B: g_obs puede pre-reducirse (marea/deriva) antes de la cadena; el
+    # reporte por estación muestra SIEMPRE la lectura original.
+    g_obs_original = g_obs.copy()
 
     # Validate elevations if needed
     needs_elev = (
@@ -181,6 +184,34 @@ async def apply_gravity_corrections(
                 "deshabilite apply_fac, apply_bouguer y apply_terrain."
             ),
         )
+
+    # --- F2B: pre-reducciones de CAMPO (marea Longman + deriva por cierres) ---
+    prereduction_meta: dict = {}
+    if params.apply_tide or params.apply_drift:
+        if gtype_in != "g_raw":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Las correcciones de marea y deriva solo aplican a lecturas "
+                    f"CRUDAS de campo (g_raw); el dato declarado es '{gtype_in}' "
+                    "(ya reducido: la marea/deriva ya fueron removidas o no son "
+                    "recuperables). Desactive apply_tide/apply_drift."
+                ),
+            )
+        from services.gravity_corrections_service import apply_field_prereductions
+
+        station_ids = [str(s.get("station_id", f"ST_{i:06d}")) for i, s in enumerate(stations)]
+        time_strings = [str(s.get("time_utc") or s.get("timestamp") or "") for s in stations]
+        try:
+            g_obs, prereduction_meta = apply_field_prereductions(
+                lats_deg=lats, lons_deg=lons, elevs_m=elevs, g_obs_mgal=g_obs,
+                station_ids=station_ids, time_strings=time_strings,
+                apply_tide=params.apply_tide, apply_drift=params.apply_drift,
+                drift_method=params.drift_method,
+                base_station_id=params.base_station_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # --- Terrain correction via OpenTopography ---
     tc_per_station: Optional[np.ndarray] = None
@@ -236,7 +267,7 @@ async def apply_gravity_corrections(
                 lat_deg=float(lats[i]),
                 lon_deg=float(lons[i]),
                 elev_m=float(elevs[i]) if not math.isnan(float(elevs[i])) else 0.0,
-                g_obs_mgal=float(g_obs[i]),
+                g_obs_mgal=float(g_obs_original[i]),
                 gamma_mgal=float(gamma_arr[i]) if gamma_arr is not None else None,
                 fac_mgal=float(fac_arr[i])   if fac_arr   is not None else None,
                 bc_mgal=float(bc_arr[i])     if bc_arr    is not None else None,
@@ -247,9 +278,14 @@ async def apply_gravity_corrections(
             )
         )
 
+    # F2B — las pre-reducciones de campo van PRIMERO en la lista (orden real).
+    _all_corrections = (
+        list(prereduction_meta.get("corrections_applied", []))
+        + list(meta["corrections_applied"])
+    )
     report = CorrectionReport(
         n_stations=len(stations),
-        corrections_applied=meta["corrections_applied"],
+        corrections_applied=_all_corrections,
         reduction_density_gcc=params.reduction_density_gcc,
         dem_source=dem_source,
         terrain_radius_m=params.terrain_radius_m if params.apply_terrain else None,
@@ -261,6 +297,12 @@ async def apply_gravity_corrections(
         tc_max_mgal=float(tc_per_station.max()) if tc_per_station is not None else None,
         g_bouguer_min_mgal=meta.get("g_reduced_min_mgal"),
         g_bouguer_max_mgal=meta.get("g_reduced_max_mgal"),
+        tide_min_mgal=prereduction_meta.get("tide_min_mgal"),
+        tide_max_mgal=prereduction_meta.get("tide_max_mgal"),
+        drift_rate_mgal_per_day=prereduction_meta.get("drift_rate_mgal_per_day"),
+        drift_closure_mgal=prereduction_meta.get("drift_closure_mgal"),
+        drift_n_base=prereduction_meta.get("drift_n_base"),
+        warnings=list(prereduction_meta.get("warnings", [])),
     )
 
     _log.info(

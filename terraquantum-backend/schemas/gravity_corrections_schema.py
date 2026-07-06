@@ -28,6 +28,13 @@ class CorrectionParams(BaseModel):
     apply_fac: bool = True
     apply_bouguer: bool = True
     apply_terrain: bool = False
+    # F2B — pre-reducciones de CAMPO (solo g_raw): marea Longman 1959 y
+    # deriva por cierres de base. Requieren time_utc por estación; la deriva
+    # además base_station_id (el backend sugiere la candidata si falta).
+    apply_tide: bool = False
+    apply_drift: bool = False
+    drift_method: Literal["linear", "piecewise"] = "linear"
+    base_station_id: Optional[str] = None
     polynomial_regional_order: Optional[int] = Field(
         default=None,
         ge=1,
@@ -65,6 +72,12 @@ class CorrectionReport(BaseModel):
     tc_max_mgal: Optional[float] = None
     g_bouguer_min_mgal: Optional[float] = None
     g_bouguer_max_mgal: Optional[float] = None
+    # F2B — reporte de las pre-reducciones de campo (marea/deriva).
+    tide_min_mgal: Optional[float] = None
+    tide_max_mgal: Optional[float] = None
+    drift_rate_mgal_per_day: Optional[float] = None
+    drift_closure_mgal: Optional[float] = None
+    drift_n_base: Optional[int] = None
     warnings: List[str] = Field(default_factory=list)
 
 
