@@ -113,7 +113,8 @@ Verificación post-poda: compileall OK, 41 tests export+corrections PASS, `tsc -
 4. `_BANNED_WORDS` duplicada (chat_api vs gemini_agent) — unificar en F6.
 5. Cobertura de tests HTTP inexistente en: borehole_api, chat_api, export_api, keys_api, favorability (endpoint) — F8 (schemathesis) lo cubrirá de golpe.
 6. ~~eslint baseline (2026-07-02): 7 errores preexistentes react-hooks~~ ✅ **ARREGLADOS en F2.5 (fb4fef7)**: ColSelect fuera del componente, validStationCount→useMemo, ObsVsCalcPanel→Inner con key-remount. eslint frontend = 0 errores; check.ps1 VERDE.
-7. **NUEVO (reviewer F2.5, latente para F2B)**: `GravityCorrectionWizard.parseCsvText/buildStations` parsean CSV localmente con `split`+`parseFloat` — con decimal-coma, `parseFloat("1,23")=1` en silencio (misma clase que e7d2858). Cerrar cuando F2B rehaga el wizard (reusar sniff del backend).
+7. ~~GravityCorrectionWizard parsea CSV localmente~~ ✅ **RESUELTO 2026-07-06** (`5129d8d`+`433217f`): nuevo `POST /v2/gravity-import/parse-rows` (filas completas canónicas del pipeline oficial + SniffReport); el wizard quedó como marshaling puro con `Number()` ruidoso. Reviewer PASS.
+8. **NUEVO (reviewer 2026-07-06, misma clase, para F2B)**: `BoreholeUploadPanel.tsx` usa `FileReader.readAsText` (decodifica UTF-8 en el cliente) y envía `csv_text` — el sniffer de ENCODING queda bypasseado para sondajes (litologías latin-1 con ñ/acentos → mojibake). Migrar a multipart de bytes (mismo patrón parse-rows) cuando F2B toque sondajes (desurvey/QAQC).
 
 ## 7. Raíz del repo — orden ✅ EJECUTADO 2026-07-02
 

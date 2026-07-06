@@ -51,19 +51,28 @@ _PENDING: "deque[Tuple[dict, str, str]]" = deque()
 _WATCHER_STARTED = False
 
 # ── Presupuesto de vóxeles/tiempo ────────────────────────────────────────────
-# Coeficientes segundos-por-vóxel por ruta física, CALIBRADOS con mediciones
-# reales en la máquina de referencia:
-#   - GATE F3 MEDIDO (2026-07-05, scripts/validation/f3_gate_joint96k.py):
-#     joint 96.768 vóxeles (256 estaciones) = 693 s → 7,16 ms/vóxel.
-#   - suite: inversiones chicas (~4-10k vóxeles) tardan 2-15 s.
-# La escala es aproximadamente lineal en vóxeles para malla fija de sensores;
-# el estimado es ORIENTATIVO (±2×: depende de #estaciones e iteraciones IRLS)
-# y se comunica como tal. Se refina con la matriz grav/mag/joint ×
-# 10k/50k/100k (F8 presupuestos).
+# Base MEDIDA (máquina de referencia, scripts/validation/):
+#   - joint: 7,16 ms/vóxel — GATE F3 2026-07-05 (96.768 vóxeles, 256 est.,
+#     malla auto 48×42×48, worker de proceso). MEDIDO.
+#   - gravity/magnetic: HEURÍSTICO (mitad del joint). La calibración
+#     2026-07-06 (f3_budget_calibration.py) DEMOSTRÓ que un coeficiente
+#     constante por vóxel NO existe para estas rutas: con bloques chicos
+#     (52 m) la gravedad de 10,6k vóxeles midió 82,7 ms/vóxel (11× el joint)
+#     y dos mallas murieron con SOLVER_KERNEL_TOO_DENSE (catalogado): el
+#     costo real lo dominan la DENSIDAD del kernel (cutoff/block) y la RAM
+#     disponible en el momento, no el nº de vóxeles ni de físicas.
+# Por eso el estimado se comunica como ORIENTATIVO sin cifra de precisión, y
+# las garantías duras del flujo son otras: progreso visible + cancelable +
+# guardia de memoria catalogada. La matriz sistemática por régimen es F8.
 _BUDGET_COEFFS_S_PER_VOXEL = {
-    "gravity": 0.003,
-    "magnetic": 0.003,
+    "gravity": 0.0036,
+    "magnetic": 0.0036,
     "joint": 0.0072,
+}
+_BUDGET_BASIS = {
+    "gravity": "heurístico (½ del joint medido; matriz sistemática en F8)",
+    "magnetic": "heurístico (½ del joint medido; matriz sistemática en F8)",
+    "joint": "medido (gate F3: 96.768 vóxeles → 7,16 ms/vóxel)",
 }
 _BUDGET_BASE_S = 8.0            # arranque del worker (spawn + imports pesados)
 _BUDGET_WARN_MINUTES = 5.0      # umbral de aviso previo
@@ -85,15 +94,18 @@ def estimate_inversion_budget(route: str, voxel_count: int) -> Dict[str, Any]:
     if est_min > _BUDGET_WARN_MINUTES:
         warning = (
             f"Inversión grande: ~{voxel_count:,} vóxeles por la ruta {kind} → "
-            f"estimado ~{est_min:.0f} min (orientativo, ±2×). Puede continuar "
-            "(el progreso es visible y cancelable), reducir la resolución de la "
-            "malla, o usar una malla más gruesa."
+            f"estimado ~{est_min:.0f} min (orientativo: el costo real depende "
+            "de la densidad del kernel y la memoria disponible). Puede "
+            "continuar (el progreso es visible y cancelable), reducir la "
+            "resolución de la malla, o usar una malla más gruesa."
         )
     return {
         "voxel_count": int(voxel_count),
         "route_kind": kind,
         "estimated_seconds": round(est_s, 1),
         "estimated_minutes": round(est_min, 1),
+        # Honestidad: de dónde sale el número (medido vs heurístico).
+        "basis": _BUDGET_BASIS[kind],
         "warning": warning,
     }
 

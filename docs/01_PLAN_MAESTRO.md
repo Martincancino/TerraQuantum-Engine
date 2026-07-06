@@ -78,7 +78,8 @@ Esta sección existe para que ninguna fase re-implemente lo que ya funciona.
 | ~~load-package síncrono → proxy timeout en inversiones largas~~ ✅ F3 2026-07-05 (encola en worker de proceso + progreso + cancelar) | F3 |
 | B2 DOI half-max demasiado agresivo en producción (deep_frac ~0.94 casi siempre) | F5 |
 | ~~Auto-mapeo de nombres de columna en español~~ ✅ F2 2026-07-04 | F2 |
-| Parser CSV local de GravityCorrectionWizard (parseFloat, sin sniffer) — decimal-coma latente | F2B |
+| ~~Parser CSV local de GravityCorrectionWizard~~ ✅ 2026-07-06 (endpoint parse-rows: el backend parsea, el wizard solo marshaling + Number() ruidoso) | F2 |
+| BoreholeUploadPanel envía csv_text ya decodificado UTF-8 (bypassea el sniffer de encoding para sondajes; litologías con ñ/acentos en latin-1 → mojibake) — migrar a multipart | F2B |
 | UQ posterior_std 100% NaN + filtrado NaN downstream | F5 |
 | `findDemoHighlightVoxel` import muerto con física en TS (Exploration3DView.tsx:26) | F1 |
 | Render = confeti de vóxeles, sin isosuperficie | F4 |
@@ -221,6 +222,8 @@ Deuda que pasa a F2B: parser local de `GravityCorrectionWizard` (parseCsvText/pa
 4. Vía Celery/Redis BORRADA (backend+frontend) con grep de 0 llamadores — cero infraestructura, coherente local-first. Su bug DELETE-como-GET murió con ella.
 5. BUG preexistente arreglado: el pattern de GeophysicsStatusResponse no admitía "running" → el polling devolvía 500 DURANTE la inversión.
 **Gate medido** (`scripts/validation/f3_gate_joint96k.py`): joint 96.768 vóxeles → encolado 0,3 s, aviso previo "~21 min", progreso visible de punta a punta, done en 11,5 min, parquets persistidos, historial done. sync=true conserva el contrato histórico para tests/scripts. **Suite completa post-F3: 1786 passed, 5 skipped (VERDE).**
+
+**Post-cierre 2026-07-06 (calibración del presupuesto, `f3_budget_calibration.py`):** MEDIDO que un coeficiente constante s/vóxel para grav/mag NO existe — con bloques chicos la gravedad de 10,6k vóxeles dio 82,7 ms/vóxel (11× el joint) y dos mallas cortaron con `SOLVER_KERNEL_TOO_DENSE` (catalogado: la guardia funciona). El costo lo dominan la densidad del kernel (cutoff/block) y la RAM del momento. El estimador declara su base (`basis`: joint MEDIDO, grav/mag heurístico) y NO promete precisión; las garantías duras son progreso visible + cancelación + guardia de memoria. La matriz sistemática por régimen queda en F8 (donde el plan ya la tenía).
 
 ---
 
