@@ -1186,6 +1186,66 @@ async def analyze_columns_endpoint(
                 pass
 
 
+@router_v2.post("/parse-rows")
+@limiter.limit("30/minute")
+async def parse_rows_endpoint(
+    request: Request,
+    file: UploadFile = File(...),
+    max_rows: int = Query(50_000, ge=1, le=200_000),
+):
+    """F2 cierre de deuda — filas COMPLETAS ya parseadas por el pipeline oficial.
+
+    Para consumidores frontend que necesitan las FILAS (no solo encabezados),
+    como el wizard de correcciones: parsear CSV en TypeScript duplicaría el
+    sniffer y reintroduciría el bug decimal-coma (parseFloat("1,23")=1 en
+    silencio). Aquí el sniffer + el lector del importador hacen el trabajo
+    (encoding/separador/decimal/preámbulo/filas rotas) y los valores vuelven
+    canónicos (punto decimal). Devuelve además el SniffReport (evidencia).
+    """
+    from fastapi.responses import JSONResponse
+
+    _fn = (file.filename or "").lower()
+    if not (_fn.endswith(".csv") or _fn.endswith(".tqpkg") or _fn.endswith(".txt")):
+        raise HTTPException(status_code=400, detail="File must end with .csv/.tqpkg/.txt")
+
+    tmp = Path(TMP_DIR) / f"{uuid.uuid4()}.csv"
+    try:
+        content = await file.read()
+        if len(content) > CSV_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Archivo CSV demasiado grande. Máximo: {CSV_MAX_BYTES // 1048576} MB.",
+            )
+        with open(tmp, "wb") as f:
+            f.write(content)
+
+        headers, samples = read_csv_sample(tmp, nrows=max_rows)
+        if not headers:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "CSV_NO_HEADERS",
+                    "message": "No se pudieron leer columnas del CSV (archivo vacío o ilegible).",
+                },
+            )
+        rows = _sample_rows_preview(headers, samples, limit=max_rows)
+        from services.csv_sniffer_service import sniff_csv
+
+        return JSONResponse(content=sanitize_nan({
+            "headers": headers,
+            "rows": rows,
+            "n_rows": len(rows),
+            "truncated": len(rows) >= max_rows,
+            "sniff_report": sniff_csv(tmp).to_dict(),
+        }))
+    finally:
+        if tmp.exists():
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+
 @router_v2.post("/enrich-package")
 @limiter.limit("10/minute")
 async def enrich_package_endpoint(
