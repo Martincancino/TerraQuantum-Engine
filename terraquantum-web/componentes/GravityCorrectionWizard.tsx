@@ -3,10 +3,12 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   applyGravityCorrections,
+  nettletonAnalysis,
   parseCsvRows,
   GravityCorrectionParams,
   GravityCorrectedStation,
   GravityCorrectionReport,
+  type NettletonResult,
   type SniffReport,
 } from "../lib/terraquantum/frontendApi";
 
@@ -24,6 +26,11 @@ const G_ALIASES = new Set([
   "g", "g_raw", "gravity", "gz", "g_obs", "g_obs_mgal",
 ]);
 const ID_ALIASES = new Set(["station_id", "station", "sta", "id", "name", "estacion", "punto"]);
+// F2B — hora de lectura (para marea Longman y deriva por cierres de base).
+const TIME_ALIASES = new Set([
+  "time_utc", "time", "timestamp", "datetime", "date_time", "fecha_hora",
+  "hora", "hora_utc", "fecha",
+]);
 
 function detectColumn(headers: string[], aliases: Set<string>): string {
   for (const h of headers) {
@@ -38,7 +45,7 @@ function detectColumn(headers: string[], aliases: Set<string>): string {
 // Record<col, string> con valores canónicos (punto decimal) — parseFloat es
 // seguro. Este componente solo re-etiqueta columnas y arma el payload.
 
-type ColMap = { lat: string; lon: string; elev: string; g: string; id: string };
+type ColMap = { lat: string; lon: string; elev: string; g: string; id: string; time: string };
 type CsvRow = Record<string, string>;
 
 function buildStations(
@@ -70,6 +77,10 @@ function buildStations(
     };
     const elev = num(colMap.elev, row);
     if (Number.isFinite(elev)) station.elev_m = elev;
+    // F2B — la hora viaja como STRING tal cual; el backend la parsea
+    // (todo-o-nada) para marea Longman y deriva.
+    const timeRaw = colMap.time ? (row[colMap.time] ?? "").trim() : "";
+    if (timeRaw) station.time_utc = timeRaw;
     result.push(station);
   }
   return result;
@@ -178,13 +189,48 @@ function ColSelect({
   );
 }
 
+// F2B — mini-gráfico del barrido de Nettleton (correlación vs densidad).
+// Display-only: los puntos vienen del backend; aquí solo se dibuja el SVG.
+function NettletonSweepChart({ result }: { result: NettletonResult }) {
+  const { densities_gcc: xs, correlations: ys, best_density_gcc } = result;
+  if (xs.length < 2) return null;
+  const w = 240;
+  const h = 70;
+  const pad = 6;
+  const xmin = Math.min(...xs);
+  const xmax = Math.max(...xs);
+  const absYs = ys.map((v) => Math.abs(v));
+  const ymax = Math.max(...absYs, 1e-6);
+  const px = (x: number) => pad + ((x - xmin) / (xmax - xmin || 1)) * (w - 2 * pad);
+  const py = (v: number) => h - pad - (Math.abs(v) / ymax) * (h - 2 * pad);
+  const path = xs.map((x, i) => `${i === 0 ? "M" : "L"}${px(x).toFixed(1)},${py(ys[i]).toFixed(1)}`).join(" ");
+  const bx = px(best_density_gcc);
+  return (
+    <svg width={w} height={h} className="block">
+      <line x1={bx} y1={pad} x2={bx} y2={h - pad} stroke="#f59e0b" strokeWidth={1} strokeDasharray="3 2" />
+      <path d={path} fill="none" stroke="#93c5fd" strokeWidth={1.5} />
+      <text x={pad} y={h - 1} className="fill-neutral-500" style={{ fontSize: 7 }}>
+        {xmin.toFixed(1)}
+      </text>
+      <text x={w - pad - 12} y={h - 1} className="fill-neutral-500" style={{ fontSize: 7 }}>
+        {xmax.toFixed(1)} g/cm³
+      </text>
+      <text x={pad} y={9} className="fill-neutral-500" style={{ fontSize: 7 }}>
+        |corr| ↓ (mínimo = óptima)
+      </text>
+    </svg>
+  );
+}
+
 export default function GravityCorrectionWizard({ file, onComplete, onCancel }: Props) {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
   const [sniff, setSniff] = useState<SniffReport | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
-  const [colMap, setColMap] = useState<ColMap>({ lat: "", lon: "", elev: "", g: "", id: "" });
+  const [colMap, setColMap] = useState<ColMap>({
+    lat: "", lon: "", elev: "", g: "", id: "", time: "",
+  });
   const [gravityType, setGravityType] = useState<
     "g_raw" | "free_air_anomaly" | "bouguer_anomaly" | "complete_bouguer_anomaly"
   >("g_raw");
@@ -196,7 +242,16 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
     apply_fac: true,
     apply_bouguer: true,
     apply_terrain: false,
+    // F2B — pre-reducciones de campo (solo g_raw).
+    apply_tide: false,
+    apply_drift: false,
+    drift_method: "linear",
+    base_station_id: "",
   });
+  // F2B — Nettleton (barrido calculado en el backend; aquí solo se muestra).
+  const [nettleton, setNettleton] = useState<NettletonResult | null>(null);
+  const [nettletonLoading, setNettletonLoading] = useState(false);
+  const [nettletonError, setNettletonError] = useState<string | null>(null);
 
   const [previewStations, setPreviewStations] = useState<GravityCorrectedStation[] | null>(null);
   const [previewOutputType, setPreviewOutputType] = useState<string>("");
@@ -235,6 +290,7 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
         elev: detectColumn(res.headers, ELEV_ALIASES),
         g: detectColumn(res.headers, G_ALIASES),
         id: detectColumn(res.headers, ID_ALIASES),
+        time: detectColumn(res.headers, TIME_ALIASES),
       };
       setColMap(detected);
     });
@@ -274,6 +330,25 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
     setPreviewStations(res.data.corrected);
     setPreviewOutputType(res.data.output_gravity_type);
     setStep(4);
+  };
+
+  // ─── F2B: Nettleton (el barrido lo hace el backend) ──────────────────────────
+  const handleNettleton = async () => {
+    setNettletonError(null);
+    setNettleton(null);
+    const stations = buildStations(csvRows, colMap);
+    if (stations.length === 0) {
+      setNettletonError("No hay estaciones válidas con el mapeo actual.");
+      return;
+    }
+    setNettletonLoading(true);
+    const res = await nettletonAnalysis(stations);
+    setNettletonLoading(false);
+    if (!res.ok || !res.data) {
+      setNettletonError(res.error ?? "No se pudo correr el análisis de Nettleton.");
+      return;
+    }
+    setNettleton(res.data);
   };
 
   // ─── Final apply ─────────────────────────────────────────────────────────────
@@ -398,6 +473,7 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
             <ColSelect label="Elevación (m)" field="elev" required={false} colMap={colMap} csvHeaders={csvHeaders} onSelect={handleColSelect} />
             <ColSelect label="Gravedad observada" field="g" required={true} colMap={colMap} csvHeaders={csvHeaders} onSelect={handleColSelect} />
             <ColSelect label="ID de estación" field="id" required={false} colMap={colMap} csvHeaders={csvHeaders} onSelect={handleColSelect} />
+            <ColSelect label="Hora de lectura (UTC)" field="time" required={false} colMap={colMap} csvHeaders={csvHeaders} onSelect={handleColSelect} />
           </div>
 
           {!colMap.elev && (params.apply_fac || params.apply_bouguer || params.apply_terrain) && (
@@ -476,6 +552,80 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
       {/* ── STEP 3: Reduction params ── */}
       {step === 3 && (
         <div className="space-y-4">
+          {/* F2B — pre-reducciones de CAMPO (solo lecturas crudas g_raw) */}
+          {gravityType === "g_raw" && (
+            <div className="p-3 border border-neutral-700/40 rounded space-y-2">
+              <p className="text-[9px] uppercase tracking-widest text-neutral-400 font-bold">
+                Pre-reducciones de campo (lecturas crudas)
+              </p>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(params.apply_tide)}
+                  onChange={(e) => setParams({ ...params, apply_tide: e.target.checked })}
+                  className="accent-amber-500"
+                />
+                <span className="text-[11px] text-neutral-300">
+                  Marea terrestre (Longman 1959, offline) — requiere columna de hora
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(params.apply_drift)}
+                  onChange={(e) => setParams({ ...params, apply_drift: e.target.checked })}
+                  className="accent-amber-500"
+                />
+                <span className="text-[11px] text-neutral-300">
+                  Deriva instrumental (cierres a estación base) — requiere hora + base
+                </span>
+              </label>
+              {(params.apply_tide || params.apply_drift) && !colMap.time && (
+                <p className="text-[10px] text-amber-400 border border-amber-600/30 bg-amber-900/20 p-2 rounded">
+                  Asigna la columna «Hora de lectura (UTC)» en el paso 1: sin la hora
+                  el backend rechazará la corrección (no adivina).
+                </p>
+              )}
+              {params.apply_drift && (
+                <div className="pl-4 border-l border-neutral-700/40 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label className="text-[9px] uppercase tracking-widest text-neutral-400 font-bold">
+                      Método
+                    </label>
+                    <select
+                      value={params.drift_method ?? "linear"}
+                      onChange={(e) =>
+                        setParams({
+                          ...params,
+                          drift_method: e.target.value as "linear" | "piecewise",
+                        })
+                      }
+                      className="bg-neutral-800 border border-neutral-600/40 rounded px-2 py-1 text-[11px] text-white"
+                    >
+                      <option value="linear">Lineal (tasa única)</option>
+                      <option value="piecewise">Por tramos (entre cierres)</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[9px] uppercase tracking-widest text-neutral-400 font-bold">
+                      ID estación base
+                    </label>
+                    <input
+                      type="text"
+                      value={params.base_station_id ?? ""}
+                      onChange={(e) => setParams({ ...params, base_station_id: e.target.value })}
+                      placeholder="ej. BASE"
+                      className="w-32 bg-neutral-800 border border-neutral-600/40 rounded px-2 py-1 text-[11px] text-white placeholder:text-neutral-600"
+                    />
+                    <span className="text-[9px] text-neutral-500">
+                      Si lo dejas vacío, el backend te sugerirá la candidata detectada.
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Density */}
           <div>
             <label className="block text-[9px] uppercase tracking-widest text-neutral-400 font-bold mb-1">
@@ -499,6 +649,54 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
               <span className="text-[10px] text-neutral-500">
                 Estándar: 2.67 g/cm³ (corteza continental). Chile andino volcánico: 2.70–2.80.
               </span>
+            </div>
+
+            {/* F2B — Nettleton: el backend barre densidades; el usuario CONFIRMA */}
+            <div className="mt-2 space-y-2">
+              <button
+                type="button"
+                onClick={handleNettleton}
+                disabled={nettletonLoading || !colMap.elev}
+                className="px-2 py-1 text-[10px] rounded border border-neutral-600 text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
+              >
+                {nettletonLoading ? "Analizando…" : "Sugerir densidad (Nettleton)"}
+              </button>
+              {!colMap.elev && (
+                <span className="ml-2 text-[9px] text-neutral-500">
+                  Requiere columna de elevación (paso 1).
+                </span>
+              )}
+              {nettletonError && (
+                <p className="text-[10px] text-red-400">{nettletonError}</p>
+              )}
+              {nettleton && (
+                <div className="p-2 border border-neutral-700/40 rounded space-y-1">
+                  <NettletonSweepChart result={nettleton} />
+                  <p className="text-[10px] text-neutral-300">
+                    Óptima: <span className="text-amber-400 font-bold">
+                      {nettleton.best_density_gcc.toFixed(2)} g/cm³
+                    </span>{" "}
+                    (correlación Bouguer-topografía r={nettleton.best_r.toFixed(3)})
+                  </p>
+                  {nettleton.warning && (
+                    <p className="text-[9px] text-amber-400">{nettleton.warning}</p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setParams({
+                        ...params,
+                        reduction_density_gcc: Number(
+                          nettleton.best_density_gcc.toFixed(2)
+                        ),
+                      })
+                    }
+                    className="px-2 py-1 text-[10px] rounded bg-amber-600 hover:bg-amber-500 text-white font-semibold"
+                  >
+                    Usar {nettleton.best_density_gcc.toFixed(2)} g/cm³
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

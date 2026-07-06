@@ -5,6 +5,7 @@ import React, { useMemo, useState } from "react";
 import {
   enrichPackage,
   analyzeColumns,
+  parseCsvRows,
   type BuildPackageConfig,
   type ColumnMappingPlan,
   type EnrichmentStep,
@@ -13,6 +14,7 @@ import {
   type IngestQuestion,
   type SniffReport,
 } from "../lib/terraquantum/frontendApi";
+import MapRoomPanel from "./MapRoomPanel";
 
 /**
  * PrepEnrichPanel — flujo SIMPLE de Preparación con enriquecimiento.
@@ -120,6 +122,14 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
   // parseadas. El backend detecta; aquí solo se muestran para CONFIRMAR.
   const [sniffReport, setSniffReport] = useState<SniffReport | null>(null);
   const [sampleRows, setSampleRows] = useState<Record<string, string>[]>([]);
+  // F2B — "Sala de mapas": estaciones (lat/lon + valor) para regional-residual.
+  // Se cargan bajo demanda con parse-rows (el backend parsea; aquí solo se
+  // normalizan las claves de columna a lat_deg/lon_deg para el endpoint).
+  const [mapRoomStations, setMapRoomStations] = useState<
+    Record<string, number | string>[] | null
+  >(null);
+  const [mapRoomLoading, setMapRoomLoading] = useState(false);
+  const [mapRoomError, setMapRoomError] = useState<string | null>(null);
   const [result, setResult] = useState<
     | {
         filename: string;
@@ -243,6 +253,53 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
       setColumnMap((prev) => prefillMap(res.plan, prev));
     } finally {
       setLoading(false);
+    }
+  }
+
+  // F2B — carga estaciones (lat/lon + valor) para la sala de mapas. Usa
+  // parse-rows (el backend parsea con el sniffer) y remapea las claves de
+  // columna a lat_deg/lon_deg + el valor gravimétrico según el columnMap.
+  async function handleOpenMapRoom() {
+    setMapRoomError(null);
+    if (!gravFile) {
+      setMapRoomError("La sala de mapas necesita el CSV de gravimetría cargado.");
+      return;
+    }
+    setMapRoomLoading(true);
+    try {
+      const res = await parseCsvRows({ file: gravFile });
+      if (!res.ok) {
+        setMapRoomError(res.error || "No se pudieron leer las filas del CSV.");
+        return;
+      }
+      const roles = mappingPlan?.roles ?? {};
+      const lonCol = columnMap.x || (roles.x as string) || "lon";
+      const latCol = columnMap.y || (roles.y as string) || "lat";
+      const valCol = columnMap.gravity_value || (roles.gravity_value as string) || "";
+      const findKey = (row: Record<string, string>, want: string) =>
+        Object.keys(row).find((k) => k.toLowerCase() === want.toLowerCase());
+      const stations: Record<string, number | string>[] = [];
+      for (const row of res.rows) {
+        const lk = findKey(row, latCol);
+        const ok = findKey(row, lonCol);
+        const vk = valCol ? findKey(row, valCol) : undefined;
+        if (!lk || !ok) continue;
+        const lat = Number(row[lk]);
+        const lon = Number(row[ok]);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        const st: Record<string, number | string> = { lat_deg: lat, lon_deg: lon };
+        if (vk && Number.isFinite(Number(row[vk]))) st.value = Number(row[vk]);
+        stations.push(st);
+      }
+      if (stations.length < 8) {
+        setMapRoomError(
+          "No se pudieron extraer ≥8 estaciones con lat/lon. Revisa el mapeo de columnas."
+        );
+        return;
+      }
+      setMapRoomStations(stations);
+    } finally {
+      setMapRoomLoading(false);
     }
   }
 
@@ -429,6 +486,32 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
           nStations={result.nStations}
           onDownload={handleDownload}
         />
+      )}
+
+      {/* F2B — Sala de mapas (regional-residual) bajo demanda tras el paquete */}
+      {result && (
+        <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4">
+          {!mapRoomStations ? (
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                type="button"
+                onClick={handleOpenMapRoom}
+                disabled={mapRoomLoading}
+                className="rounded-lg px-4 py-2 text-xs font-bold uppercase tracking-widest border border-neutral-700 text-neutral-300 hover:bg-neutral-900 disabled:opacity-40"
+              >
+                {mapRoomLoading ? "Cargando…" : "Abrir sala de mapas"}
+              </button>
+              <span className="text-[10px] font-mono text-neutral-600">
+                Separación regional-residual y mapas de gabinete (grillas descargables).
+              </span>
+              {mapRoomError && (
+                <p className="w-full text-[10px] font-mono text-rose-300">{mapRoomError}</p>
+              )}
+            </div>
+          ) : (
+            <MapRoomPanel stations={mapRoomStations} dataKind="gravity" valueColumn="value" />
+          )}
+        </div>
       )}
     </div>
   );

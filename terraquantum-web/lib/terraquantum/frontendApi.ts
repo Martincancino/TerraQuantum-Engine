@@ -2242,7 +2242,102 @@ export type GravityCorrectionParams = {
   apply_fac?: boolean;
   apply_bouguer?: boolean;
   apply_terrain?: boolean;
+  // F2B — pre-reducciones de CAMPO (solo g_raw): marea Longman y deriva por
+  // cierres de base. Requieren time_utc por estación; la deriva además el id
+  // de la estación base (el backend sugiere la candidata si falta).
+  apply_tide?: boolean;
+  apply_drift?: boolean;
+  drift_method?: "linear" | "piecewise";
+  base_station_id?: string | null;
 };
+
+// ── F2B — Gabinete del consultor: Nettleton / regional-residual / realce mag ─
+
+export type NettletonResult = {
+  densities_gcc: number[];
+  correlations: number[];
+  best_density_gcc: number;
+  best_r: number;
+  warning?: string | null;
+};
+
+/** Barrido de Nettleton (el CÁLCULO vive en el backend; aquí solo POST). */
+export async function nettletonAnalysis(
+  stations: Record<string, unknown>[],
+  opts?: { densityMin?: number; densityMax?: number; densityStep?: number }
+): Promise<FrontendApiResult<NettletonResult>> {
+  const qs = new URLSearchParams();
+  if (opts?.densityMin != null) qs.set("density_min", String(opts.densityMin));
+  if (opts?.densityMax != null) qs.set("density_max", String(opts.densityMax));
+  if (opts?.densityStep != null) qs.set("density_step", String(opts.densityStep));
+  return fetchInternalJson<NettletonResult>({
+    path: `/api/gravity-corrections/nettleton${qs.size ? `?${qs}` : ""}`,
+    method: "POST",
+    body: stations,
+    timeoutMs: 60_000,
+  });
+}
+
+export type GridMeta = {
+  nx: number;
+  ny: number;
+  x0: number;
+  y0: number;
+  dx: number;
+  dy: number;
+  outside_hull_fraction: number;
+  warnings: string[];
+};
+
+export type RegionalResidualResponse = {
+  method: string;
+  report: Record<string, unknown> & { warnings?: string[] };
+  stations: Record<string, number | string>[];
+  grids?: GridMeta & {
+    observed: number[][];
+    regional: number[][];
+    residual: number[][];
+  };
+};
+
+export async function regionalResidual(payload: {
+  stations: Record<string, unknown>[];
+  method: "polynomial" | "upward_continuation";
+  order?: number;
+  height_m?: number;
+  value_column?: string;
+  include_grids?: boolean;
+}): Promise<FrontendApiResult<RegionalResidualResponse>> {
+  return fetchInternalJson<RegionalResidualResponse>({
+    path: "/api/gravity-corrections/regional-residual",
+    method: "POST",
+    body: payload,
+    timeoutMs: 120_000,
+  });
+}
+
+export type MagEnhanceResponse = {
+  report: Record<string, unknown> & { warnings?: string[] };
+  grid_meta: GridMeta;
+  observed_tmi: number[][];
+  products: Record<string, number[][]>;
+};
+
+export async function magEnhance(payload: {
+  stations: Record<string, unknown>[];
+  products: string[];
+  tmi_column?: string;
+  inclination_deg?: number;
+  declination_deg?: number;
+  uc_height_m?: number;
+}): Promise<FrontendApiResult<MagEnhanceResponse>> {
+  return fetchInternalJson<MagEnhanceResponse>({
+    path: "/api/mag-enhance",
+    method: "POST",
+    body: payload,
+    timeoutMs: 120_000,
+  });
+}
 
 export type GravityCorrectedStation = {
   station_id: string;
@@ -2362,6 +2457,44 @@ export type ParseBoreholeCsvRequest = {
   crs?: string;
   datum_elevation_m?: number;
 };
+
+/** F2B — variante MULTIPART: los bytes viajan intactos y el sniffer del
+ * backend decide el encoding (un CSV latin-1 con ñ ya no llega mojibake). */
+export async function parseBoreholeCsvFile(opts: {
+  file: File;
+  lengthUnits?: "m" | "ft" | "auto";
+  crs?: string;
+  datumElevationM?: number;
+}): Promise<FrontendApiResult<ParseBoreholeCsvResponse>> {
+  const fd = new FormData();
+  fd.append("file", opts.file);
+  fd.append("length_units", opts.lengthUnits ?? "m");
+  fd.append("crs", opts.crs ?? "local");
+  fd.append("datum_elevation_m", String(opts.datumElevationM ?? 0));
+  try {
+    const res = await fetch("/api/borehole/parse-file", { method: "POST", body: fd });
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    if (!res.ok) {
+      const detail =
+        (data as { detail?: unknown })?.detail;
+      return {
+        ok: false, status: res.status, data: null,
+        error: typeof detail === "string"
+          ? detail
+          : (detail as { message?: string })?.message ?? `Error ${res.status}`,
+      };
+    }
+    return { ok: true, status: res.status, data: data as ParseBoreholeCsvResponse, error: null };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, status: 500, data: null, error: message };
+  }
+}
 
 export async function parseBoreholeCsv(
   request: ParseBoreholeCsvRequest

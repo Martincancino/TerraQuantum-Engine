@@ -9,7 +9,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import {
-  parseBoreholeCsv,
+  parseBoreholeCsvFile,
   boreholeSurveyToIntervals,
   type BoreholeSurvey,
   type ParseBoreholeCsvResponse,
@@ -65,7 +65,10 @@ function fmt(n: number | null | undefined, digits = 2): string {
 }
 
 export default function BoreholeUploadPanel({ sensors, onConfirm }: Props) {
-  const [csvText, setCsvText] = useState<string>("");
+  // F2B — el archivo viaja como BYTES (multipart): el sniffer del backend
+  // decide el encoding. Antes: FileReader.readAsText forzaba UTF-8 y un CSV
+  // latin-1 con ñ en litologías llegaba mojibake.
+  const [csvFile, setCsvFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState<string>("");
   const [units, setUnits] = useState<"m" | "ft" | "auto">("m");
   const [crs, setCrs] = useState<string>("local");
@@ -77,9 +80,7 @@ export default function BoreholeUploadPanel({ sensors, onConfirm }: Props) {
 
   const readFile = (file: File) => {
     setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = () => setCsvText(String(reader.result ?? ""));
-    reader.readAsText(file);
+    setCsvFile(file);
   };
 
   const onDrop = (e: React.DragEvent) => {
@@ -92,12 +93,12 @@ export default function BoreholeUploadPanel({ sensors, onConfirm }: Props) {
   const handleParse = async () => {
     setError(null);
     setResult(null);
-    if (!csvText.trim()) {
+    if (!csvFile) {
       setError("Carga un archivo CSV de sondajes primero.");
       return;
     }
     setLoading(true);
-    const res = await parseBoreholeCsv({ csv_text: csvText, length_units: units, crs });
+    const res = await parseBoreholeCsvFile({ file: csvFile, lengthUnits: units, crs });
     setLoading(false);
     if (!res.ok || !res.data) {
       setError(res.error ?? "No se pudo parsear el CSV de sondajes.");
@@ -207,7 +208,7 @@ export default function BoreholeUploadPanel({ sensors, onConfirm }: Props) {
         </label>
         <button
           onClick={handleParse}
-          disabled={loading || !csvText.trim()}
+          disabled={loading || !csvFile}
           className="rounded bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
         >
           {loading ? "Validando…" : "Validar sondajes"}
