@@ -1629,6 +1629,57 @@ export type InversionBudget = {
   warning: string | null;
 };
 
+// F2 (deuda wizard) — filas COMPLETAS parseadas por el pipeline oficial del
+// backend (sniffer incluido): el cliente jamás parsea CSV (decimal-coma, etc.).
+export type ParseCsvRowsResult =
+  | {
+      ok: true;
+      headers: string[];
+      rows: Record<string, string>[];
+      nRows: number;
+      truncated: boolean;
+      sniffReport: SniffReport | null;
+    }
+  | { ok: false; error: string };
+
+export async function parseCsvRows(opts: {
+  file: File;
+  maxRows?: number;
+}): Promise<ParseCsvRowsResult> {
+  const fd = new FormData();
+  fd.append("file", opts.file);
+  const qs = opts.maxRows ? `?max_rows=${opts.maxRows}` : "";
+  try {
+    const res = await fetch(`/api/gravity-import/parse-rows${qs}`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = `Error ${res.status}`;
+      try {
+        const d = await res.json();
+        if (typeof d?.detail === "string") detail = d.detail;
+        else if (d?.detail?.message) detail = String(d.detail.message);
+      } catch {
+        /* respuesta no-JSON */
+      }
+      return { ok: false, error: detail };
+    }
+    const data = await res.json();
+    return {
+      ok: true,
+      headers: Array.isArray(data.headers) ? data.headers : [],
+      rows: Array.isArray(data.rows) ? data.rows : [],
+      nRows: Number(data.n_rows ?? 0),
+      truncated: Boolean(data.truncated),
+      sniffReport: (data.sniff_report as SniffReport) ?? null,
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, error: message };
+  }
+}
+
 export type LoadPackageData = {
   status?: string;
   stage?: string;

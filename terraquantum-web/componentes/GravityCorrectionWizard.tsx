@@ -3,9 +3,11 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   applyGravityCorrections,
+  parseCsvRows,
   GravityCorrectionParams,
   GravityCorrectedStation,
   GravityCorrectionReport,
+  type SniffReport,
 } from "../lib/terraquantum/frontendApi";
 
 // ─── Column auto-detection ────────────────────────────────────────────────────
@@ -30,65 +32,44 @@ function detectColumn(headers: string[], aliases: Set<string>): string {
   return "";
 }
 
-// ─── CSV parsing ─────────────────────────────────────────────────────────────
-
-function parseCsvText(text: string): {
-  headers: string[];
-  rows: string[][];
-  separator: string;
-} {
-  const rawLines = text
-    .split(/\r?\n/)
-    .filter((l) => l.trim() && !l.trim().startsWith("#"));
-  if (rawLines.length === 0) return { headers: [], rows: [], separator: "," };
-
-  const headerLine = rawLines[0];
-  const sep = headerLine.includes(";") ? ";" : ",";
-  const parseRow = (line: string) =>
-    line.split(sep).map((v) => v.trim().replace(/^"(.*)"$/, "$1"));
-
-  return {
-    headers: parseRow(headerLine),
-    rows: rawLines.slice(1).map(parseRow),
-    separator: sep,
-  };
-}
+// ─── Marshaling de filas YA parseadas por el backend ─────────────────────────
+// F2 (cierre de deuda): el CSV se parsea en el BACKEND (POST parse-rows, con
+// el sniffer: encoding/separador/decimal/preámbulo). Aquí llegan filas como
+// Record<col, string> con valores canónicos (punto decimal) — parseFloat es
+// seguro. Este componente solo re-etiqueta columnas y arma el payload.
 
 type ColMap = { lat: string; lon: string; elev: string; g: string; id: string };
+type CsvRow = Record<string, string>;
 
 function buildStations(
-  rows: string[][],
-  headers: string[],
+  rows: CsvRow[],
   colMap: ColMap
 ): Record<string, number | string>[] {
-  const idx = (col: string) => (col ? headers.indexOf(col) : -1);
-  const latIdx = idx(colMap.lat);
-  const lonIdx = idx(colMap.lon);
-  const elevIdx = idx(colMap.elev);
-  const gIdx = idx(colMap.g);
-  const idIdx = idx(colMap.id);
+  // Number() y no parseFloat: si el contrato canónico del backend se violara
+  // alguna vez ("1234,5"), Number() da NaN RUIDOSO (fila descartada) mientras
+  // parseFloat truncaría a 1234 en silencio (observación del reviewer F2).
+  const num = (col: string, row: CsvRow) => {
+    const raw = col ? (row[col] ?? "").trim() : "";
+    return raw === "" ? NaN : Number(raw);
+  };
 
   const result: Record<string, number | string>[] = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const lat = latIdx >= 0 ? parseFloat(row[latIdx] ?? "") : NaN;
-    const lon = lonIdx >= 0 ? parseFloat(row[lonIdx] ?? "") : NaN;
-    const g = gIdx >= 0 ? parseFloat(row[gIdx] ?? "") : NaN;
+    const lat = num(colMap.lat, row);
+    const lon = num(colMap.lon, row);
+    const g = num(colMap.g, row);
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(g)) continue;
 
+    const idRaw = colMap.id ? (row[colMap.id] ?? "").trim() : "";
     const station: Record<string, number | string> = {
-      station_id:
-        idIdx >= 0 && row[idIdx]?.trim()
-          ? row[idIdx].trim()
-          : `ST_${String(i).padStart(6, "0")}`,
+      station_id: idRaw || `ST_${String(i).padStart(6, "0")}`,
       lat_deg: lat,
       lon_deg: lon,
       g_obs_mgal: g,
     };
-    if (elevIdx >= 0 && row[elevIdx]) {
-      const elev = parseFloat(row[elevIdx]);
-      if (Number.isFinite(elev)) station.elev_m = elev;
-    }
+    const elev = num(colMap.elev, row);
+    if (Number.isFinite(elev)) station.elev_m = elev;
     result.push(station);
   }
   return result;
@@ -200,7 +181,8 @@ function ColSelect({
 export default function GravityCorrectionWizard({ file, onComplete, onCancel }: Props) {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
-  const [csvRows, setCsvRows] = useState<string[][]>([]);
+  const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
+  const [sniff, setSniff] = useState<SniffReport | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [colMap, setColMap] = useState<ColMap>({ lat: "", lon: "", elev: "", g: "", id: "" });
   const [gravityType, setGravityType] = useState<
@@ -224,37 +206,41 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
   // F2.5 (fix eslint react-hooks/set-state-in-effect): el conteo de estaciones
   // válidas es DERIVADO de rows+headers+mapa → useMemo, no estado + effect.
   const validStationCount = useMemo(
-    () =>
-      csvHeaders.length > 0
-        ? buildStations(csvRows, csvHeaders, colMap).length
-        : 0,
+    () => (csvHeaders.length > 0 ? buildStations(csvRows, colMap).length : 0),
     [colMap, csvHeaders, csvRows]
   );
 
-  // ─── Parse CSV on mount ──────────────────────────────────────────────────────
-
+  // ─── Parse CSV on mount — EN EL BACKEND (F2, cierre de deuda) ────────────────
+  // Antes: FileReader + split/parseFloat locales → con decimal-coma,
+  // parseFloat("362472,4")=362472 EN SILENCIO (misma clase que e7d2858).
+  // Ahora: POST parse-rows entrega filas canónicas del pipeline oficial.
   useEffect(() => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = (e.target?.result as string) || "";
-      const { headers, rows } = parseCsvText(text);
-      if (headers.length === 0) {
-        setParseError("No se pudo parsear el CSV. Verifica el formato del archivo.");
+    let cancelled = false;
+    parseCsvRows({ file }).then((res) => {
+      if (cancelled) return;
+      if (!res.ok) {
+        setParseError(res.error || "No se pudo parsear el CSV en el backend.");
         return;
       }
-      setCsvHeaders(headers);
-      setCsvRows(rows);
+      if (res.headers.length === 0 || res.rows.length === 0) {
+        setParseError("El CSV no tiene columnas o filas legibles. Verifica el formato.");
+        return;
+      }
+      setCsvHeaders(res.headers);
+      setCsvRows(res.rows);
+      setSniff(res.sniffReport);
       const detected = {
-        lat: detectColumn(headers, LAT_ALIASES),
-        lon: detectColumn(headers, LON_ALIASES),
-        elev: detectColumn(headers, ELEV_ALIASES),
-        g: detectColumn(headers, G_ALIASES),
-        id: detectColumn(headers, ID_ALIASES),
+        lat: detectColumn(res.headers, LAT_ALIASES),
+        lon: detectColumn(res.headers, LON_ALIASES),
+        elev: detectColumn(res.headers, ELEV_ALIASES),
+        g: detectColumn(res.headers, G_ALIASES),
+        id: detectColumn(res.headers, ID_ALIASES),
       };
       setColMap(detected);
+    });
+    return () => {
+      cancelled = true;
     };
-    reader.onerror = () => setParseError("Error al leer el archivo CSV.");
-    reader.readAsText(file);
   }, [file]);
 
   const canProceedStep1 = Boolean(colMap.lat && colMap.lon && colMap.g);
@@ -267,7 +253,7 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
 
   const handleStep3Continue = async () => {
     setApiError(null);
-    const allStations = buildStations(csvRows, csvHeaders, colMap);
+    const allStations = buildStations(csvRows, colMap);
     const preview = allStations.slice(0, 5);
     if (preview.length === 0) {
       setApiError("No se pudieron extraer estaciones válidas con el mapeo actual.");
@@ -294,7 +280,7 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
 
   const handleApplyAll = async () => {
     setApiError(null);
-    const allStations = buildStations(csvRows, csvHeaders, colMap);
+    const allStations = buildStations(csvRows, colMap);
     if (allStations.length === 0) {
       setApiError("No hay estaciones válidas para procesar.");
       return;
@@ -392,6 +378,19 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
               </span>
             )}
           </p>
+
+          {/* F2 — formato detectado por el sniffer del backend (evidencia) */}
+          {sniff && (
+            <p className="text-[9px] font-mono text-neutral-500" title={sniff.separator.evidence}>
+              Formato detectado: {sniff.encoding.value} · separador{" "}
+              {sniff.separator.value === "\t" ? "tabulador" : `'${sniff.separator.value}'`} ·
+              decimal {`'${sniff.decimal.value}'`}
+              {sniff.preamble_count > 0 && ` · ${sniff.preamble_count} línea(s) de preámbulo omitidas`}
+              {sniff.broken_row_count > 0 && (
+                <span className="text-amber-400"> · {sniff.broken_row_count} fila(s) rotas omitidas</span>
+              )}
+            </p>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <ColSelect label="Latitud (°)" field="lat" required={true} colMap={colMap} csvHeaders={csvHeaders} onSelect={handleColSelect} />
