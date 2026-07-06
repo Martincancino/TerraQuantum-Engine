@@ -55,6 +55,103 @@ class ParseBoreholeCsvResponse(BaseModel):
     unrecognized_lithologies: List[str]
 
 
+# ── F2B — Desurvey por curvatura mínima + QA/QC + compositación ─────────────
+class SurveyStation(BaseModel):
+    md: float = Field(..., ge=0.0, description="Profundidad medida [m].")
+    azimuth_deg: float = Field(..., ge=0.0, le=360.0)
+    dip_deg: float = Field(
+        ..., ge=-90.0, le=90.0,
+        description="Grados BAJO la horizontal, positivo hacia abajo (90=vertical).",
+    )
+
+
+class DesurveyHole(BaseModel):
+    hole_id: str
+    collar_x_m: float
+    collar_z_m: float
+    total_depth_m: Optional[float] = None
+    survey: List[SurveyStation]
+    intervals: List[dict] = Field(default_factory=list)
+
+
+class DesurveyRequest(BaseModel):
+    holes: List[DesurveyHole]
+    composite_length_m: Optional[float] = Field(default=None, gt=0.0, le=1000.0)
+
+
+@router.post("/desurvey")
+def desurvey_endpoint(req: DesurveyRequest):
+    """F2B — Traza 3D verdadera (curvatura mínima) + QA/QC + compositación.
+
+    Devuelve por pozo la traza desurveyada (para dibujarla), los intervalos
+    posicionados en el contrato del ancla (x_m/z_m del punto medio +
+    profundidades verticales verdaderas), el reporte QA/QC con fila y
+    severidad, y opcionalmente los composites al largo pedido.
+    """
+    from core.utils import sanitize_nan
+    from services.borehole_desurvey_service import (
+        DesurveyInputError,
+        composite_intervals,
+        desurvey_minimum_curvature,
+        position_intervals_on_trace,
+        qaqc_intervals,
+    )
+
+    if not req.holes:
+        raise HTTPException(status_code=422, detail="Se requiere al menos 1 pozo.")
+
+    all_intervals: List[dict] = []
+    holes_out: List[dict] = []
+    for hole in req.holes:
+        try:
+            trace = desurvey_minimum_curvature(
+                hole.hole_id,
+                [s.md for s in hole.survey],
+                [s.azimuth_deg for s in hole.survey],
+                [s.dip_deg for s in hole.survey],
+                total_depth_m=hole.total_depth_m,
+            )
+        except DesurveyInputError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        positioned = position_intervals_on_trace(
+            trace, hole.collar_x_m, hole.collar_z_m,
+            [{**iv, "hole_id": hole.hole_id} for iv in hole.intervals],
+        )
+        all_intervals.extend(
+            {**iv, "hole_id": hole.hole_id} for iv in hole.intervals
+        )
+        holes_out.append({
+            "hole_id": hole.hole_id,
+            "trace": [
+                {
+                    "md": float(trace.md[i]),
+                    "x_m": hole.collar_x_m + float(trace.east[i]),
+                    "z_m": hole.collar_z_m + float(trace.north[i]),
+                    "depth_m": float(trace.depth[i]),
+                }
+                for i in range(len(trace.md))
+            ],
+            "intervals_positioned": positioned,
+            "warnings": trace.warnings,
+        })
+
+    qaqc = qaqc_intervals(all_intervals)
+
+    composites = None
+    composite_warnings: List[str] = []
+    if req.composite_length_m:
+        composites, composite_warnings = composite_intervals(
+            all_intervals, req.composite_length_m
+        )
+
+    return sanitize_nan({
+        "holes": holes_out,
+        "qaqc": qaqc,
+        "composites": composites,
+        "composite_warnings": composite_warnings,
+    })
+
+
 @router.post("/parse-csv", response_model=ParseBoreholeCsvResponse)
 def parse_csv(req: ParseBoreholeCsvRequest) -> ParseBoreholeCsvResponse:
     try:
