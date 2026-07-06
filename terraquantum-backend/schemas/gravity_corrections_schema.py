@@ -81,6 +81,20 @@ class CorrectionReport(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
+# ── F2B — Separación regional-residual (producto de usuario) ────────────────
+class RegionalResidualRequest(BaseModel):
+    stations: List[dict]
+    method: Literal["polynomial", "upward_continuation"] = "polynomial"
+    order: int = Field(default=1, ge=1, le=3)
+    height_m: float = Field(default=2000.0, gt=0.0, le=100_000.0)
+    value_column: str = Field(
+        default="g_bouguer_mgal",
+        description="Columna del valor a separar (mGal o nT).",
+    )
+    include_grids: bool = True
+    output_format: Literal["json", "csv"] = "json"
+
+
 class ApplyCorrectionsRequest(BaseModel):
     stations: List[dict]
     params: CorrectionParams = Field(default_factory=CorrectionParams)

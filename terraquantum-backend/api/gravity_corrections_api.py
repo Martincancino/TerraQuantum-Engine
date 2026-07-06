@@ -28,6 +28,7 @@ from schemas.gravity_corrections_schema import (
     ApplyCorrectionsResponse,
     CorrectedStation,
     CorrectionReport,
+    RegionalResidualRequest,
 )
 from services.gravity_corrections_service import apply_all_corrections, nettleton_analysis
 
@@ -317,6 +318,109 @@ async def apply_gravity_corrections(
         report=report,
         output_gravity_type=meta["output_gravity_type"],
     )
+
+
+# ---------------------------------------------------------------------------
+# F2B — POST /gravity-corrections/regional-residual (producto de usuario)
+# ---------------------------------------------------------------------------
+
+@router.post("/regional-residual")
+def regional_residual_endpoint(req: "RegionalResidualRequest"):
+    """Separa regional/residual (tendencia polinomial u continuación ascendente).
+
+    Producto de MAPA y decisión del usuario — cada respuesta lleva la
+    advertencia medida: NO se aplica automático antes de invertir. Acepta
+    x_m/y_m (metros locales del import) o lat_deg/lon_deg (se proyecta
+    equirectangular local SOLO para la separación, no georreferencia).
+    `output_format=csv` devuelve el CSV descargable por estación.
+    """
+    from fastapi.responses import PlainTextResponse
+
+    from services.regional_residual_service import (
+        result_to_csv,
+        separate_regional_residual,
+    )
+
+    stations = req.stations
+    if len(stations) < 8:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Se necesitan ≥8 estaciones (hay {len(stations)}).",
+        )
+    ids = [str(s.get("station_id", f"ST_{i:06d}")) for i, s in enumerate(stations)]
+    try:
+        vals = np.array([float(s[req.value_column]) for s in stations])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Columna de valor '{req.value_column}' ausente o no numérica en "
+                f"alguna estación: {exc}"
+            ),
+        ) from exc
+
+    if all(("x_m" in s and "y_m" in s) for s in stations):
+        xs = np.array([float(s["x_m"]) for s in stations])
+        ys = np.array([float(s["y_m"]) for s in stations])
+    elif all(("lat_deg" in s and "lon_deg" in s) for s in stations):
+        lats = np.array([float(s["lat_deg"]) for s in stations])
+        lons = np.array([float(s["lon_deg"]) for s in stations])
+        lat0 = float(np.mean(lats))
+        xs = (lons - float(np.mean(lons))) * 111_320.0 * math.cos(math.radians(lat0))
+        ys = (lats - lat0) * 110_540.0
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Cada estación debe traer x_m/y_m (metros locales) o "
+                "lat_deg/lon_deg para la separación regional-residual."
+            ),
+        )
+
+    try:
+        res = separate_regional_residual(
+            xs, ys, vals,
+            method=req.method, order=req.order, height_m=req.height_m,
+            with_grids=req.include_grids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if req.output_format == "csv":
+        csv_text = result_to_csv(ids, xs, ys, vals, res, value_name=req.value_column)
+        return PlainTextResponse(
+            csv_text, media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="regional_residual_{req.method}.csv"'
+            },
+        )
+
+    from core.utils import sanitize_nan
+
+    payload = {
+        "method": res.method,
+        "report": res.report,
+        "stations": [
+            {
+                "station_id": ids[i],
+                "x_m": float(xs[i]),
+                "y_m": float(ys[i]),
+                req.value_column: float(vals[i]),
+                "regional": float(res.regional[i]),
+                "residual": float(res.residual[i]),
+            }
+            for i in range(len(vals))
+        ],
+    }
+    if req.include_grids and res.grid is not None:
+        payload["grids"] = {
+            **res.grid.meta(),
+            "observed": res.grid.values.tolist(),
+            "regional": res.regional_grid.tolist(),
+            "residual": res.residual_grid.tolist(),
+        }
+    return sanitize_nan(payload)
 
 
 # ---------------------------------------------------------------------------
