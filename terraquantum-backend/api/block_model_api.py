@@ -12,6 +12,7 @@ from services.block_model_service import (
     build_block_model_arrow_bytes,
     build_block_model_profile_response,
 )
+from services.isosurface_service import build_isosurface_response
 
 router = APIRouter()
 
@@ -166,6 +167,60 @@ async def get_block_model_zarr(
         "voxel_count": len(chunk_voxels),
         **metadata,
     }
+
+
+@router.get("/v2/isosurface")
+async def get_isosurface(
+    project_id: str,
+    run_id: str,
+    field: str = Query("density", pattern="^(density|susceptibility)$"),
+    levels: Optional[str] = Query(
+        None,
+        description="Fracciones del pico de |contraste| separadas por coma, p.ej. '0.5,0.7,0.9'.",
+    ),
+    taubin_iterations: int = Query(12, ge=0, le=100),
+):
+    """Isosuperficies suaves del block model (Fase F4.1).
+
+    Marching cubes sobre el campo de CONTRASTE robusto (idéntico al del visor de
+    vóxeles) a 2-3 niveles (fracciones del pico), suavizadas con Taubin y ya
+    transformadas al espacio visual de Three.js (centrado + flip-Y) para
+    superponerse a /block-model-arrow.  El frontend NO calcula física.
+
+    Respuesta JSON: metadata (background/scale/peak/weak_anomaly/cell_size/center)
+    + levels[] con posiciones/normales/índices/contraste en base64 Float32/Uint32.
+    """
+    print(
+        f"[ISOSURFACE-API] GET /v2/isosurface field={field} levels={levels} "
+        f"project_id={project_id} run_id={run_id}"
+    )
+
+    parsed_levels = None
+    if levels:
+        try:
+            parsed_levels = tuple(
+                float(tok) for tok in levels.split(",") if tok.strip()
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="El parámetro 'levels' debe ser fracciones numéricas separadas por coma.",
+            )
+
+    try:
+        return build_isosurface_response(
+            project_id=project_id,
+            run_id=run_id,
+            field=field,
+            levels=parsed_levels,
+            taubin_iterations=taubin_iterations,
+        )
+    except Exception as exc:  # nunca-crashea: error catalogado en payload
+        print(f"[ISOSURFACE-API] Error inesperado: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Error interno al construir las isosuperficies.",
+        )
 
 
 @router.get("/v2/block-model-profile")
