@@ -205,7 +205,7 @@ Deuda que pasa a F2B: parser local de `GravityCorrectionWizard` (parseCsvText/pa
 7. **Desurvey por curvatura mínima + QA/QC + compositación** (`borehole_desurvey_service.py`): pozo de 3 tramos contra cálculo a mano; el inclinado queda en su posición verdadera (cierra la deuda de asumir vertical); QA/QC detecta 7 defectos con fila+severidad.
 8. **Encoding de sondajes** (`/borehole/parse-csv-file` multipart): cierra el gap del reviewer (latin-1 con ñ ya no llega mojibake).
 9. **Frontend**: wizard con marea/deriva/Nettleton, `MapRoomPanel` (sala de mapas), `BoreholeUploadPanel` multipart — reviewer frontera física PASS.
-**Gate medido** (`scripts/validation/f2b_gate_cabinet.py`): los 4 criterios en verde. Suite F2B 80/80.
+**Gate medido** (`scripts/validation/f2b_gate_cabinet.py`): los 4 criterios en verde. Suite F2B 80/80. **Suite completa post-F2B: 1852 passed, 5 skipped (VERDE, +66 vs post-F3, cero regresiones).**
 Deuda que pasa a F5 (donde el plan ya visualiza los mapas): la Sala de Mapas hoy cablea regional-residual (gravedad, lat/lon); el realce magnético y Euler tienen endpoint+componente listos pero se integran plenamente al visor 3D en F4/F5 con los productos de mapa.
 
 ---
