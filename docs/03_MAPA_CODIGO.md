@@ -114,7 +114,25 @@ Verificación post-poda: compileall OK, 41 tests export+corrections PASS, `tsc -
 5. Cobertura de tests HTTP inexistente en: borehole_api, chat_api, export_api, keys_api, favorability (endpoint) — F8 (schemathesis) lo cubrirá de golpe.
 6. ~~eslint baseline (2026-07-02): 7 errores preexistentes react-hooks~~ ✅ **ARREGLADOS en F2.5 (fb4fef7)**: ColSelect fuera del componente, validStationCount→useMemo, ObsVsCalcPanel→Inner con key-remount. eslint frontend = 0 errores; check.ps1 VERDE.
 7. ~~GravityCorrectionWizard parsea CSV localmente~~ ✅ **RESUELTO 2026-07-06** (`5129d8d`+`433217f`): nuevo `POST /v2/gravity-import/parse-rows` (filas completas canónicas del pipeline oficial + SniffReport); el wizard quedó como marshaling puro con `Number()` ruidoso. Reviewer PASS.
-8. **NUEVO (reviewer 2026-07-06, misma clase, para F2B)**: `BoreholeUploadPanel.tsx` usa `FileReader.readAsText` (decodifica UTF-8 en el cliente) y envía `csv_text` — el sniffer de ENCODING queda bypasseado para sondajes (litologías latin-1 con ñ/acentos → mojibake). Migrar a multipart de bytes (mismo patrón parse-rows) cuando F2B toque sondajes (desurvey/QAQC).
+8. ~~`BoreholeUploadPanel.tsx` bypassea el sniffer de encoding~~ ✅ **RESUELTO F2B 2026-07-06** (`/borehole/parse-csv-file` multipart de bytes; `parseBoreholeCsvFile`).
+
+## 5D. Símbolos nuevos F2B (2026-07-06) — clasificación
+
+Todos **DORADO** (el gabinete del consultor es camino de venta directo; docs/01 F2B):
+
+| Símbolo | Rol |
+|---|---|
+| `services/earth_tide_service.py` (solve_longman_tide, tide_series_mgal, parse_survey_timestamps) | Marea terrestre Longman 1959 offline |
+| `services/drift_correction_service.py` (correct_drift, suggest_base_station) | Deriva por cierres de base (lineal/tramos) |
+| `gravity_corrections_service.apply_field_prereductions` | Encadena marea+deriva antes de GRS80/FAC/BC/TC en `/apply` |
+| `services/potential_field_grid_service.py` (grid_scattered, apply_fft_filter, upward_continue_grid) | Utilitario de grilla/FFT compartido (regional + mag) |
+| `services/regional_residual_service.py` + `POST /gravity-corrections/regional-residual` | Regional-residual producto de usuario (poly + continuación) |
+| `services/mag_enhancement_service.py` + `api/mag_enhancement_api.py` (`/v2/mag-enhance`) | Diurna, RTP, 1VD/THD/tilt/|AS|, continuación |
+| `services/euler_spectral_service.py` + `api/depth_estimate_api.py` (`/v2/depth-estimate`) | Euler + espectro radial (profundidad independiente; puente a F11) |
+| `services/borehole_desurvey_service.py` + `POST /borehole/desurvey` + `POST /borehole/parse-csv-file` | Desurvey curvatura mínima, QA/QC, compositación, encoding multipart |
+| Frontend: `MapRoomPanel.tsx` (sala de mapas), wizard con marea/deriva/Nettleton, `BoreholeUploadPanel` multipart, proxies nettleton/regional-residual/mag-enhance/parse-file | Display-only (reviewer PASS) |
+| Tests: test_earth_tide (7), test_drift_correction (6), test_field_prereductions (5), test_regional_residual (10), test_mag_enhancement (14), test_euler_spectral (8), test_borehole_desurvey (13) | Guardianes del gate F2B (80 tests) |
+| Gate: `scripts/validation/f2b_gate_cabinet.py` | Los 4 criterios de salida F2B medidos |
 
 ## 7. Raíz del repo — orden ✅ EJECUTADO 2026-07-02
 
