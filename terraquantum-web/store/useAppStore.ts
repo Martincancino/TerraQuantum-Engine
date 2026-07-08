@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { TerrainResponse, VoxelMineralModel } from '../lib/terraQuantumGeology';
+import type { IsosurfaceData } from '../lib/render/IsosurfaceMeshLayer';
 import type { FavorabilityResult } from '../componentes/datos/favorability_types';
 import type { GeorefConfidence, ProjectFootprint, CrsInfo, ElevationRange, PercentileStats, GravityImportPreviewResponse, GravityCsvInvertResponse } from '../lib/terraquantum/frontendApi';
 
@@ -160,6 +161,14 @@ export interface AppState {
   setView: (v: string) => void;
   model: VoxelMineralModel | null;
   setModel: (m: VoxelMineralModel | null) => void;
+
+  // ── Fase F4.2: Isosuperficies del backend (mallas suaves) ──────────────────
+  /** Mallas de /v2/isosurface (ya en espacio visual). null = no cargadas. */
+  isosurfaceData: IsosurfaceData | null;
+  setIsosurfaceData: (d: IsosurfaceData | null) => void;
+  /** Mostrar isosuperficies (default off hasta el QA visual). */
+  showIsosurfaces: boolean;
+  setShowIsosurfaces: (v: boolean) => void;
 
   // 2. FAVORABILITY GATE
   favorabilityScore: number | null;
@@ -460,10 +469,17 @@ export const useAppStore = create<AppState>((set) => ({
             blockModelGeorefConfidence: null,
             blockModelElevationRange: null,
             percentileStats: null,
+            isosurfaceData: null,
           }
         : {}),
     });
   },
+
+  // ── Fase F4.2: Isosuperficies del backend ──────────────────────────────────
+  isosurfaceData: null,
+  setIsosurfaceData: (d) => set({ isosurfaceData: d }),
+  showIsosurfaces: false,
+  setShowIsosurfaces: (v) => set({ showIsosurfaces: v }),
 
   // 2. FAVORABILITY GATE
   favorabilityScore: null,

@@ -25,6 +25,9 @@ export default function VolumeRenderControls() {
   const subsurfaceAoEnabled = useAppStore((s) => s.subsurfaceAoEnabled);
   const setSubsurfaceAoEnabled = useAppStore((s) => s.setSubsurfaceAoEnabled);
   const hasElevationData = useAppStore((s) => s.hasElevationData);
+  const showIsosurfaces = useAppStore((s) => s.showIsosurfaces);
+  const setShowIsosurfaces = useAppStore((s) => s.setShowIsosurfaces);
+  const isosurfaceData = useAppStore((s) => s.isosurfaceData);
 
   if (!model) {
     return (
@@ -66,6 +69,27 @@ export default function VolumeRenderControls() {
           retículo regular no alinea con la Y deformada por elevación).
         </p>
       )}
+
+      {/* F4.2: isosuperficies suaves calculadas en el backend (marching cubes). */}
+      <div className="mt-1 border-t border-white/10 pt-2">
+        <label className="flex items-center gap-2 text-[8px] font-mono text-white/50 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showIsosurfaces}
+            onChange={(e) => setShowIsosurfaces(e.target.checked)}
+            className="accent-[#22d3ee]"
+          />
+          Isosuperficies (mallas suaves)
+        </label>
+        {showIsosurfaces && isosurfaceData && (
+          <p className="mt-1 text-[8px] font-mono leading-relaxed text-white/40">
+            {isosurfaceData.error
+              ? `Sin superficie: ${isosurfaceData.error}`
+              : `${isosurfaceData.n_levels} nivel(es)` +
+                (isosurfaceData.weak_anomaly ? " · anomalía débil" : "")}
+          </p>
+        )}
+      </div>
 
       <label className="flex items-center gap-2 mt-1 text-[8px] font-mono text-white/50 cursor-pointer select-none">
         <input

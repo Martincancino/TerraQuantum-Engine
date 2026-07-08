@@ -218,6 +218,16 @@ function sampleColormap(stops: ColorStop[], t: number): [number, number, number]
   }
   return stops[stops.length - 1][1];
 }
+
+/**
+ * Viridis divergente de densidad por contraste, expuesto para que otras capas de
+ * visualización (p.ej. las isosuperficies del backend) coloreen con EXACTAMENTE el
+ * mismo mapa que los vóxeles.  `u` ∈ [0,1] con 0.5 = fondo, <0.5 déficit (azul),
+ * >0.5 exceso (amarillo).  Es visualización pura, no física.
+ */
+export function sampleDensityViridis(u: number): [number, number, number] {
+  return sampleColormap(DENSITY_VIRIDIS_STOPS, clamp01(u));
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 function clamp01(v: number): number {

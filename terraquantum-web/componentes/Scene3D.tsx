@@ -28,6 +28,7 @@ import { fmtNum, fmtSci, asRecord, safeNumber, clamp01, readFiniteRecordNumber }
 import { motion } from "framer-motion";
 import MagnetizationVectors from "./MagnetizationVectors";
 import VolumeRaymarchLayer from "../lib/render/VolumeRaymarchLayer";
+import IsosurfaceMeshLayer from "../lib/render/IsosurfaceMeshLayer";
 import type { VolumeCell } from "../lib/render/buildVolumeTexture";
 import { probeGpuCapabilities } from "../lib/render/gpuCapabilities";
 import SubsurfaceAOEffect from "../lib/render/SubsurfaceAOEffect";
@@ -1613,6 +1614,8 @@ export default function Scene3D() {
     slicePosition,
     clipBoxEnabled,
     clipBox,
+    isosurfaceData,
+    showIsosurfaces,
   } = useAppStore();
 
   const hasElevationData = useAppStore((s) => s.hasElevationData);
@@ -1920,6 +1923,14 @@ export default function Scene3D() {
             />
             <MineralComplex
               elevationVisualState={elevationVisualState}
+              clippingPlanes={allClippingPlanes}
+            />
+            {/* F4.2: isosuperficies suaves del backend. Mismo grupo centrado que
+                los vóxeles → superposición exacta. Se ocultan en modo elevación
+                (usan la grilla regular, no el retículo deformado por vóxel). */}
+            <IsosurfaceMeshLayer
+              data={isosurfaceData}
+              visible={showIsosurfaces && !elevationVisualState.enabled}
               clippingPlanes={allClippingPlanes}
             />
             <MagnetizationVectors
