@@ -277,6 +277,61 @@ def test_weak_anomaly_flagged(patched_projects_dir):
         assert resp["weak_anomaly"] == (resp["peak_contrast"] < 0.60)
 
 
+def _make_coord_only_df(values: np.ndarray, origin: float, step: float) -> pl.DataFrame:
+    """DataFrame con SOLO x/y/z en metros (sin ix/iy/iz) — como los block models
+    reales del motor (joint), donde x/y/z son coordenadas, no índices de grilla."""
+    nx, ny, nz = values.shape
+    gi, gj, gk = np.meshgrid(np.arange(nx), np.arange(ny), np.arange(nz), indexing="ij")
+    x = origin + gi.ravel() * step
+    y = origin + gj.ravel() * step
+    z = origin + gk.ravel() * step
+    return pl.DataFrame({
+        "x": x, "y": y, "z": z,
+        "x_m": x, "y_m": y, "z_m": z,
+        "density": values.ravel().astype(np.float64),
+    })
+
+
+def test_coordinate_only_grid_no_ix_no_oom(patched_projects_dir):
+    """Regresión: block model REAL sin ix/iy/iz, con x/y/z en METROS grandes
+    (24..960). El bug tomaba las coordenadas como índices → volumen de ~961³ (GiB)
+    → OOM/500. El fix rank/step-encodea por coordenada → grilla compacta."""
+    n, step, origin = 20, 48.0, 24.0     # x va de 24 a 24+19*48 = 936 m
+    df = _make_coord_only_df(_gaussian_blob(n, amp=0.8, sigma_cells=5.0), origin, step)
+    assert "ix" not in df.columns  # el caso que reventaba
+    _setup_run(patched_projects_dir, "coordonly", "run_1", df)
+
+    resp = build_isosurface_response("coordonly", "run_1", field="density")
+    assert resp["error"] is None
+    assert resp["n_levels"] >= 1
+    # La grilla debe ser COMPACTA (~20 por eje), no ~937 (coord/1).
+    assert resp["grid_dims"]["nx"] <= n + 1
+    assert resp["cell_size"]["x"] == step
+    # El centro replica el de Arrow: (min+max)/2 de la coordenada.
+    assert abs(resp["center_m"]["x"] - (origin + (n - 1) * step / 2.0)) < 1e-6
+
+
+def test_continuous_coords_hits_oom_guard_gracefully(patched_projects_dir):
+    """Coordenadas continuas (no una grilla regular) → el volumen denso sería
+    inviable; el tope anti-OOM aborta con gracia (error, sin crash ni OOM)."""
+    # x con rango enorme y paso mínimo 1 → nx ~ 1e8 → producto > _MAX_GRID_CELLS.
+    x = np.array([0.0, 1.0, 1.0e8, 1.0e8 + 1.0])
+    df = pl.DataFrame({
+        "x": x,
+        "y": np.array([0.0, 48.0, 0.0, 48.0]),
+        "z": np.array([0.0, 0.0, 48.0, 48.0]),
+        "x_m": x,
+        "y_m": np.array([0.0, 48.0, 0.0, 48.0]),
+        "z_m": np.array([0.0, 0.0, 48.0, 48.0]),
+        "density": np.array([2.7, 3.7, 3.7, 2.7]),
+    })
+    _setup_run(patched_projects_dir, "cont", "run_1", df)
+
+    resp = build_isosurface_response("cont", "run_1", field="density")
+    assert resp["n_levels"] == 0
+    assert resp["error"] is not None  # abortó con gracia, no OOM
+
+
 def _gaussian_blob_rect(nx: int, ny: int, nz: int, amp: float = 0.8, sigma: float = 3.0, bg: float = 2.67) -> np.ndarray:
     cx, cy, cz = (nx - 1) / 2.0, (ny - 1) / 2.0, (nz - 1) / 2.0
     gx, gy, gz = np.meshgrid(np.arange(nx), np.arange(ny), np.arange(nz), indexing="ij")

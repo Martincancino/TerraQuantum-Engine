@@ -32,11 +32,7 @@ import numpy as np
 import polars as pl
 
 from core.block_model_store import resolve_block_model_reference
-from services.block_model_service import (
-    ensure_visual_columns,
-    get_index_columns,
-    infer_cell_size,
-)
+from services.block_model_service import ensure_visual_columns
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +54,9 @@ _LOG_EPS = 1e-9
 _WEAK_PEAK = 0.60
 # Niveles por defecto (fracciones del pico de |contraste|).
 _DEFAULT_LEVELS = (0.5, 0.7, 0.9)
+# Tope de celdas del volumen denso (float64). ~40M celdas ≈ 320 MB por array.
+# Por encima, la grilla no es regular (coordenadas continuas) y se aborta.
+_MAX_GRID_CELLS = 40_000_000
 # Iteraciones Taubin por defecto (suavizado que no encoge el volumen).
 _DEFAULT_TAUBIN_ITERS = 12
 # Coeficientes Taubin clásicos (λ>0, μ<0 con |μ|>λ) — pasa-banda que cancela el
@@ -120,28 +119,71 @@ def _extract_field_values(df: pl.DataFrame, field: str) -> np.ndarray:
 
 # ─── Construcción del volumen ────────────────────────────────────────────────
 
+def _axis_coords(df: pl.DataFrame, names: tuple[str, ...]) -> np.ndarray | None:
+    """Coordenadas por celda desde la 1ª columna presente (x_m→x→ix)."""
+    for name in names:
+        if name in df.columns:
+            arr = df[name].to_numpy().astype(np.float64)
+            if np.isfinite(arr).any():
+                return arr
+    return None
+
+
+def _axis_grid(coord: np.ndarray) -> tuple[np.ndarray, int, float, float, float] | None:
+    """(idx compacto, n, spacing, origin, center) de una grilla regular en un eje.
+
+    CLAVE: se rank/step-encodea por COORDENADA, no por el índice crudo. El índice
+    de cada celda es round((coord − origin)/paso), con paso = mínima diferencia
+    entre coordenadas únicas. Así una grilla en metros (x = 24..1992, paso 48) da
+    n=42 en vez de 1993 — jamás se intenta reservar un volumen gigante a partir de
+    coordenadas tomadas como índices (el bug que cazó el dato real: 29 GiB).
+
+    Devuelve None si el eje es degenerado (<2 planos).
+    """
+    r = np.round(coord.astype(np.float64), 3)
+    finite = r[np.isfinite(r)]
+    if finite.size == 0:
+        return None
+    uniq = np.unique(finite)
+    if uniq.size < 2:  # marching cubes necesita ≥2 planos
+        return None
+    diffs = np.diff(uniq)
+    pos = diffs[diffs > 0]
+    spacing = float(pos.min()) if pos.size else 1.0
+    origin = float(uniq[0])
+    last = float(uniq[-1])
+    idx = np.clip(np.rint((r - origin) / spacing), 0, None).astype(np.int64)
+    n = int(idx.max()) + 1
+    center = (origin + last) / 2.0
+    return idx, n, spacing, origin, center
+
+
 def _build_field_grid(df: pl.DataFrame, field: str) -> _FieldGrid | None:
     """Arma el volumen regular nx×ny×nz de |contraste| y contraste con signo.
 
-    Devuelve None si el modelo no tiene grilla utilizable (columnas ausentes,
-    grilla degenerada <2 celdas en algún eje, o sin celdas activas).
+    Devuelve None si el modelo no tiene grilla utilizable (columnas de coordenadas
+    ausentes, grilla degenerada <2 celdas en algún eje, sin celdas activas, o una
+    grilla no-regular tan grande que el volumen denso sería inviable).
     """
-    try:
-        ix_col, iy_col, iz_col = get_index_columns(df)
-    except ValueError:
+    # Prioridad de coordenadas: x_m/y_m/z_m (v4.0) → x/y/z (v3.0) → ix/iy/iz (índice).
+    xm = _axis_coords(df, ("x_m", "x", "ix"))
+    ym = _axis_coords(df, ("y_m", "y", "iy"))
+    zm = _axis_coords(df, ("z_m", "z", "iz"))
+    if xm is None or ym is None or zm is None or len(xm) == 0:
         return None
 
-    ix = df[ix_col].to_numpy().astype(np.int64)
-    iy = df[iy_col].to_numpy().astype(np.int64)
-    iz = df[iz_col].to_numpy().astype(np.int64)
-    if ix.size == 0:
+    gx = _axis_grid(xm)
+    gy = _axis_grid(ym)
+    gz = _axis_grid(zm)
+    if gx is None or gy is None or gz is None:
         return None
+    ix, nx, dx, x0, xc = gx
+    iy, ny, dy, y0, yc = gy
+    iz, nz, dz, z0, zc = gz
 
-    nx = int(ix.max()) + 1
-    ny = int(iy.max()) + 1
-    nz = int(iz.max()) + 1
-    # Marching cubes necesita ≥2 muestras por eje.
-    if min(nx, ny, nz) < 2:
+    # Tope anti-OOM: un volumen denso por encima de esto es inviable (coordenadas
+    # continuas / grilla no regular). Se aborta con gracia en vez de reventar la RAM.
+    if nx * ny * nz > _MAX_GRID_CELLS:
         return None
 
     # Máscara de actividad: is_active True (o ausente) y densidad no-null.
@@ -168,35 +210,10 @@ def _build_field_grid(df: pl.DataFrame, field: str) -> _FieldGrid | None:
         return None
 
     # Gradiente del campo (espacio índice): -∇ apunta hacia afuera del cuerpo
-    # (campo decreciente). Sirve para orientar las normales de forma robusta incluso
-    # en mallas ABIERTAS (cuerpo pegado al borde del dominio), donde el signo del
-    # volumen firmado no es fiable.
+    # (campo decreciente). Orienta las normales de forma robusta incluso en mallas
+    # ABIERTAS (cuerpo pegado al borde del dominio), donde el signo del volumen
+    # firmado no es fiable.
     grad = np.gradient(magnitude_vol)
-
-    # Coordenadas físicas por celda (preferir x_m/y_m/z_m; caer a x/y/z; luego a
-    # ix*cell). Réplica de la prioridad del transporte Arrow, que es lo que el
-    # visor realmente carga.
-    cell = infer_cell_size(df)
-    xm = _coord_array(df, ("x", "x_m"), ix, cell)
-    ym = _coord_array(df, ("y", "y_m"), iy, cell)
-    zm = _coord_array(df, ("z", "z_m"), iz, cell)
-
-    # Tamaño de celda por eje desde los valores únicos ordenados (grilla regular).
-    dx = _axis_spacing(xm, cell)
-    dy = _axis_spacing(ym, cell)
-    dz = _axis_spacing(zm, cell)
-
-    # Origen físico del índice (0,0,0): coord de la celda con ix==0 (idem iy,iz).
-    x0 = _axis_origin(xm, ix, dx)
-    y0 = _axis_origin(ym, iy, dy)
-    z0 = _axis_origin(zm, iz, dz)
-
-    # Centro = (min+max)/2 de las coordenadas de celda, igual que el endpoint Arrow.
-    center = (
-        (float(xm.min()) + float(xm.max())) / 2.0,
-        (float(ym.min()) + float(ym.max())) / 2.0,
-        (float(zm.min()) + float(zm.max())) / 2.0,
-    )
 
     return _FieldGrid(
         magnitude=magnitude_vol,
@@ -204,7 +221,7 @@ def _build_field_grid(df: pl.DataFrame, field: str) -> _FieldGrid | None:
         grad=(grad[0], grad[1], grad[2]),
         spacing=(dx, dy, dz),
         origin_m=(x0, y0, z0),
-        center_m=center,
+        center_m=(xc, yc, zc),
         background=bg,
         scale=scale,
         peak=peak,
@@ -212,45 +229,6 @@ def _build_field_grid(df: pl.DataFrame, field: str) -> _FieldGrid | None:
         ny=ny,
         nz=nz,
     )
-
-
-def _coord_array(df: pl.DataFrame, names: tuple[str, ...], idx: np.ndarray, cell: float) -> np.ndarray:
-    """Array de coordenadas por celda desde la 1ª columna presente; fallback ix*cell+cell/2."""
-    for name in names:
-        if name in df.columns:
-            arr = df[name].to_numpy().astype(np.float64)
-            if np.isfinite(arr).any():
-                return arr
-    return idx.astype(np.float64) * cell + cell / 2.0
-
-
-def _axis_spacing(coord: np.ndarray, cell: float) -> float:
-    """Espaciado de la grilla en un eje = mínima diferencia positiva entre coords únicas."""
-    finite = coord[np.isfinite(coord)]
-    if finite.size < 2:
-        return float(cell)
-    uniq = np.unique(np.round(finite, 6))
-    if uniq.size < 2:
-        return float(cell)
-    diffs = np.diff(uniq)
-    pos = diffs[diffs > 0]
-    return float(pos.min()) if pos.size else float(cell)
-
-
-def _axis_origin(coord: np.ndarray, idx: np.ndarray, spacing: float) -> float:
-    """Coordenada física del índice 0 en un eje.
-
-    marching_cubes devuelve vértices como `i_continuo * spacing`; sumarle este
-    origen recupera la coordenada física de la celda central.  Con grilla regular,
-    origin = coord(idx==0) = min(coord) - min(idx)*spacing.
-    """
-    finite_mask = np.isfinite(coord)
-    if not finite_mask.any():
-        return 0.0
-    c = coord[finite_mask]
-    i = idx[finite_mask].astype(np.float64)
-    # origin tal que coord ≈ origin + idx*spacing → origin = mediana(coord - idx*spacing).
-    return float(np.median(c - i * spacing))
 
 
 # ─── Marching cubes + transformación al espacio visual ───────────────────────
