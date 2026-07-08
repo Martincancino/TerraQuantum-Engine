@@ -16,6 +16,7 @@ import Panel from "../workspace/Panel";
 import BoxClipControls from "../viewport/BoxClipControls";
 import AnalyticsPanel from "../analytics/AnalyticsPanel";
 import VolumeRenderControls from "../viewport/VolumeRenderControls";
+import IsosurfaceControls from "../viewport/IsosurfaceControls";
 
 import { GravityObservation } from "../../lib/terraquantum/geophysicsSurvey";
 import {
@@ -644,6 +645,11 @@ export default function Exploration3DView() {
             <SidebarSection title="Modelo 3D">
               <LoadPanel />
             </SidebarSection>
+            {show3D && model && (
+              <SidebarSection title="Isosuperficies">
+                <IsosurfaceControls />
+              </SidebarSection>
+            )}
             {show3D && model && (
               <SidebarSection title="Corte caja A-A' / B-B'">
                 <BoxClipControls />
