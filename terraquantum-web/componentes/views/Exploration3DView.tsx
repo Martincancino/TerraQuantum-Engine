@@ -36,7 +36,6 @@ import {
 import { AppState, VoxelInfo } from "../../store/useAppStore";
 import type { BlockModelDataMode } from "../../store/useAppStore";
 import type { VoxelData } from "../../lib/terraQuantumGeology";
-import type { IsosurfaceData } from "../../lib/render/IsosurfaceMeshLayer";
 
 /** Extiende VoxelMineralModel con campos opcionales que devuelve el backend. */
 type BackendVoxelModel = VoxelMineralModel & {
@@ -264,7 +263,6 @@ export default function Exploration3DView() {
   const loadedVoxelCount = returnedVoxels ?? (Array.isArray(model?.cells) ? model.cells.length : 0);
   const percentileStats = useAppStore((s) => s.percentileStats);
   const viewMode = useAppStore((s) => s.viewMode);
-  const setIsosurfaceData = useAppStore((s) => s.setIsosurfaceData);
   const isWorkerProcessing = useAppStore((s) => s.isWorkerProcessing);
   const susceptibilityDataAvailable = useAppStore((s) => s.susceptibilityDataAvailable);
   const report = useAppStore((s) => s.report);
@@ -523,49 +521,6 @@ export default function Exploration3DView() {
     setSliceX,
     show3D,
     view,
-  ]);
-
-  // ── Fase F4.2: cargar isosuperficies del backend cuando el run esté listo ──
-  // Effect aislado: no toca la carga de vóxeles. Si falla, deja isosurfaceData
-  // en null (el visor simplemente no muestra mallas). El campo sigue a viewMode.
-  useEffect(() => {
-    if (view !== "figura 3d") return;
-    if (!activeRun.projectId || !activeRun.runId || activeRun.status !== "ready") {
-      return;
-    }
-    const projectId = activeRun.projectId;
-    const runId = activeRun.runId;
-    const field = viewMode === "susceptibility" ? "susceptibility" : "density";
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/isosurface?project_id=${encodeURIComponent(projectId)}` +
-            `&run_id=${encodeURIComponent(runId)}&field=${field}`,
-          { cache: "no-store" }
-        );
-        if (!res.ok) {
-          if (!cancelled) setIsosurfaceData(null);
-          return;
-        }
-        const data = (await res.json()) as IsosurfaceData;
-        if (!cancelled) setIsosurfaceData(data);
-      } catch {
-        if (!cancelled) setIsosurfaceData(null);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeRun.projectId,
-    activeRun.runId,
-    activeRun.status,
-    view,
-    viewMode,
-    setIsosurfaceData,
   ]);
 
   // handleSyncMachine eliminado
