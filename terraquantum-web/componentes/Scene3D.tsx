@@ -546,9 +546,13 @@ const LOD_WORKER_THRESHOLD = 50_000;
 function MineralComplex({
   elevationVisualState,
   clippingPlanes,
+  ghostMode = false,
 }: {
   elevationVisualState: ElevationVisualState;
   clippingPlanes?: THREE.Plane[];
+  /** F4.2: cuando las isosuperficies están activas, los vóxeles se muestran como
+   *  nube TENUE (contexto) detrás de la cáscara sólida, sin escribir profundidad. */
+  ghostMode?: boolean;
 }) {
   const {
     model, showVoxels,
@@ -1107,9 +1111,10 @@ function MineralComplex({
           ior={1.45}
           specularIntensity={0.6}
           envMapIntensity={0.9}
-          transparent={!effectiveProfessionalMode && isExplorationMode}
-          opacity={!effectiveProfessionalMode && isExplorationMode ? voxelOpacity : 1}
-          transmission={useTransmission ? 0.32 : 0}
+          transparent={ghostMode || (!effectiveProfessionalMode && isExplorationMode)}
+          opacity={ghostMode ? 0.08 : (!effectiveProfessionalMode && isExplorationMode ? voxelOpacity : 1)}
+          depthWrite={!ghostMode}
+          transmission={ghostMode ? 0 : (useTransmission ? 0.32 : 0)}
           thickness={useTransmission ? cellRef : 0}
           attenuationDistance={useTransmission ? cellRef * 10 : Infinity}
           attenuationColor="#dfe7ee"
@@ -1120,8 +1125,9 @@ function MineralComplex({
           roughness={effectiveProfessionalMode ? 0.48 : 0.4}
           metalness={0.12}
           envMapIntensity={0.9}
-          transparent={!effectiveProfessionalMode && isExplorationMode}
-          opacity={!effectiveProfessionalMode && isExplorationMode ? voxelOpacity : 1}
+          transparent={ghostMode || (!effectiveProfessionalMode && isExplorationMode)}
+          opacity={ghostMode ? 0.08 : (!effectiveProfessionalMode && isExplorationMode ? voxelOpacity : 1)}
+          depthWrite={!ghostMode}
           clippingPlanes={clippingPlanes}
         />
       )}
@@ -1928,14 +1934,14 @@ export default function Scene3D() {
             <HostVolume
               modelCenter={modelCenter}
             />
-            {/* Bloques (vóxeles): se ocultan cuando las isosuperficies están
-                activas → modo alternativo, sin tapar la cáscara suave. */}
-            {!isosurfacesActive && (
-              <MineralComplex
-                elevationVisualState={elevationVisualState}
-                clippingPlanes={allClippingPlanes}
-              />
-            )}
+            {/* Bloques (vóxeles): cuando las isosuperficies están activas se
+                muestran TENUES (nube fantasma de contexto) detrás de la cáscara
+                suave, para que se vea que la superficie es el núcleo denso de la nube. */}
+            <MineralComplex
+              elevationVisualState={elevationVisualState}
+              clippingPlanes={allClippingPlanes}
+              ghostMode={isosurfacesActive}
+            />
             {/* F4.2: isosuperficies suaves del backend. Mismo grupo centrado que
                 los vóxeles → superposición exacta. Se ocultan en modo elevación
                 (usan la grilla regular, no el retículo deformado por vóxel). */}
