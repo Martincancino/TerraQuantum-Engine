@@ -1753,6 +1753,18 @@ async def load_package(
                     detail={"error": "INVALID_PACKAGE_BOREHOLES", "message": str(exc)},
                 )
 
+            # F4.4: persistir los sondajes por corrida para el visor 3D. Aislado en
+            # try/except → nunca rompe el load (si falla, el visor solo no los muestra).
+            try:
+                from core.block_model_store import get_run_dir as _get_run_dir
+                _bh_dir = _get_run_dir(project_id, run_id)
+                _bh_dir.mkdir(parents=True, exist_ok=True)
+                (_bh_dir / "boreholes.json").write_text(
+                    json.dumps(parsed.boreholes, ensure_ascii=False), encoding="utf-8"
+                )
+            except Exception as _bh_persist_exc:
+                print(f"[LOAD-PACKAGE] No se pudieron persistir sondajes: {_bh_persist_exc}")
+
         # Sigma por estación (mediana de la columna uncertainty) + topografía.
         noise_floor = None
         _unc = import_result.station_uncertainties

@@ -30,6 +30,7 @@ from services.borehole_service import (
     lithology_properties,
     parse_borehole_csv,
 )
+from services.borehole_view_service import build_borehole_view_response
 
 router = APIRouter(prefix="/borehole", tags=["Borehole (Fase 20)"])
 _log = get_logger(__name__)
@@ -235,3 +236,22 @@ def lithology_table() -> List[LithologyEntry]:
         )
         for name, props in LITHOLOGY_PROPERTIES.items()
     ]
+
+
+@router.get("/view")
+async def get_borehole_view(project_id: str, run_id: str):
+    """Sondajes de la corrida en coordenadas del visor 3D (Fase F4.4).
+
+    Devuelve los intervalos ya centrados + flip-Y (mismo espacio que vóxeles e
+    isosuperficies) para dibujarlos como cilindros, con contraste de densidad para
+    colorear con el mismo Viridis. El frontend NO calcula coordenadas ni física.
+    """
+    print(f"[BOREHOLE-API] GET /borehole/view project_id={project_id} run_id={run_id}")
+    try:
+        return build_borehole_view_response(project_id=project_id, run_id=run_id)
+    except Exception as exc:  # nunca-crashea: error catalogado en el payload
+        print(f"[BOREHOLE-API] Error inesperado en /view: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Error interno al construir la vista de sondajes.",
+        )
