@@ -1708,6 +1708,13 @@ export default function Scene3D() {
       )
     : 600;
   const maxCameraDistance = Math.max(modelMaxExtent * 4, 600);
+
+  // F4.2: las isosuperficies están "activas" (visibles) solo si el usuario las
+  // encendió y NO estamos en modo elevación (usan la grilla regular). Cuando lo
+  // están, los vóxeles se OCULTAN → los bloques quedan como modo alternativo y la
+  // cáscara suave es la vista (estilo Leapfrog/VOXI), sin que los cubos la tapen.
+  const isosurfacesActive = showIsosurfaces && !elevationVisualState.enabled;
+
   const terrainRows = Math.max(
     2,
     Math.floor(safeNumber(terrainData?.metadata.dem_rows, 32))
@@ -1921,16 +1928,20 @@ export default function Scene3D() {
             <HostVolume
               modelCenter={modelCenter}
             />
-            <MineralComplex
-              elevationVisualState={elevationVisualState}
-              clippingPlanes={allClippingPlanes}
-            />
+            {/* Bloques (vóxeles): se ocultan cuando las isosuperficies están
+                activas → modo alternativo, sin tapar la cáscara suave. */}
+            {!isosurfacesActive && (
+              <MineralComplex
+                elevationVisualState={elevationVisualState}
+                clippingPlanes={allClippingPlanes}
+              />
+            )}
             {/* F4.2: isosuperficies suaves del backend. Mismo grupo centrado que
                 los vóxeles → superposición exacta. Se ocultan en modo elevación
                 (usan la grilla regular, no el retículo deformado por vóxel). */}
             <IsosurfaceMeshLayer
               data={isosurfaceData}
-              visible={showIsosurfaces && !elevationVisualState.enabled}
+              visible={isosurfacesActive}
               clippingPlanes={allClippingPlanes}
             />
             <MagnetizationVectors

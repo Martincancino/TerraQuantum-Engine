@@ -94,7 +94,7 @@ interface BuiltGeometry {
 
 interface BuiltLevel {
   geometry: THREE.BufferGeometry;
-  material: THREE.MeshStandardMaterial;
+  material: THREE.Material;
   renderOrder: number;
   key: string;
 }
@@ -158,7 +158,7 @@ export default function IsosurfaceMeshLayer({
       );
       const material = new THREE.MeshStandardMaterial({
         vertexColors: true,
-        roughness: 0.55,
+        roughness: 0.5,
         metalness: 0.1,
         side: THREE.DoubleSide, // mallas abiertas en el borde muestran interior
         transparent: levelOpacity < 0.999,
