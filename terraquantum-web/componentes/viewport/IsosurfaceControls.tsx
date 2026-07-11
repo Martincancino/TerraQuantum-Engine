@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { IsosurfaceData } from "../../lib/render/IsosurfaceMeshLayer";
 
@@ -11,6 +11,9 @@ import type { IsosurfaceData } from "../../lib/render/IsosurfaceMeshLayer";
  * /api/isosurface (autónomo, con botón de recarga y estado explícito) para no
  * depender del timing de otros effects y dar feedback claro: Calculando / N
  * niveles / error del backend. Es puramente visual.
+ *
+ * Gate F4 (QA visual aprobado): default ON — al cargar un modelo, las mallas se
+ * piden solas (auto-fetch) y la vista producto es la cáscara suave.
  */
 type FetchState = "idle" | "loading" | "ok" | "error";
 
@@ -68,6 +71,16 @@ export default function IsosurfaceControls() {
     setShowIsosurfaces(next);
     if (next) load(); // al encender, (re)pide las mallas — recoge un backend recién reiniciado
   };
+
+  // Auto-fetch (gate F4, default ON): al quedar lista una corrida con el toggle
+  // encendido, pide las mallas sin exigir un click. `load` cambia con
+  // projectId/runId/viewMode → re-fetch automático al cambiar de corrida o campo.
+  // Diferido con timeout: sin setState síncrono dentro del effect.
+  useEffect(() => {
+    if (!(showIsosurfaces && model && projectId && runId)) return;
+    const timer = setTimeout(load, 0);
+    return () => clearTimeout(timer);
+  }, [showIsosurfaces, model, projectId, runId, load]);
 
   if (!model) {
     return (

@@ -18,6 +18,7 @@ import AnalyticsPanel from "../analytics/AnalyticsPanel";
 import VolumeRenderControls from "../viewport/VolumeRenderControls";
 import IsosurfaceControls from "../viewport/IsosurfaceControls";
 import BoreholeControls from "../viewport/BoreholeControls";
+import DoiOverlayControls from "../viewport/DoiOverlayControls";
 
 import { GravityObservation } from "../../lib/terraquantum/geophysicsSurvey";
 import {
@@ -609,6 +610,11 @@ export default function Exploration3DView() {
             {show3D && model && (
               <SidebarSection title="Sondajes">
                 <BoreholeControls />
+              </SidebarSection>
+            )}
+            {show3D && model && (
+              <SidebarSection title="Horizonte DOI">
+                <DoiOverlayControls />
               </SidebarSection>
             )}
             {show3D && model && (

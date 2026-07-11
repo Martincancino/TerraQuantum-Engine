@@ -30,6 +30,8 @@ import MagnetizationVectors from "./MagnetizationVectors";
 import VolumeRaymarchLayer from "../lib/render/VolumeRaymarchLayer";
 import IsosurfaceMeshLayer from "../lib/render/IsosurfaceMeshLayer";
 import BoreholeLayer from "../lib/render/BoreholeLayer";
+import SectionPaintLayer from "../lib/render/SectionPaintLayer";
+import DoiOverlayLayer from "../lib/render/DoiOverlayLayer";
 import type { VolumeCell } from "../lib/render/buildVolumeTexture";
 import { probeGpuCapabilities } from "../lib/render/gpuCapabilities";
 import SubsurfaceAOEffect from "../lib/render/SubsurfaceAOEffect";
@@ -1625,6 +1627,10 @@ export default function Scene3D() {
     showIsosurfaces,
     boreholeData,
     showBoreholes,
+    sectionData,
+    showSectionPaint,
+    doiOverlayData,
+    showDoiOverlay,
   } = useAppStore();
 
   const hasElevationData = useAppStore((s) => s.hasElevationData);
@@ -1959,6 +1965,18 @@ export default function Scene3D() {
               data={boreholeData}
               visible={showBoreholes}
               clippingPlanes={allClippingPlanes}
+            />
+            {/* F4.3: cara del corte pintada con el raster de contraste del
+                backend, en la capa snapeada del slice activo. */}
+            <SectionPaintLayer
+              data={sectionData}
+              visible={sliceAxis !== "none" && showSectionPaint && !elevationVisualState.enabled}
+            />
+            {/* F4.5: horizonte DOI — velo bajo la profundidad de investigación
+                (el dato del backend manda; esto solo lo dibuja). */}
+            <DoiOverlayLayer
+              data={doiOverlayData}
+              visible={showDoiOverlay && !elevationVisualState.enabled}
             />
             <MagnetizationVectors
               elevationEnabled={elevationVisualState.enabled}

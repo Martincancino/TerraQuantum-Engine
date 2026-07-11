@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import type { TerrainResponse, VoxelMineralModel } from '../lib/terraQuantumGeology';
 import type { IsosurfaceData } from '../lib/render/IsosurfaceMeshLayer';
 import type { BoreholeViewData } from '../lib/render/BoreholeLayer';
+import type { SectionData } from '../lib/render/SectionPaintLayer';
+import type { DoiOverlayData } from '../lib/render/DoiOverlayLayer';
 import type { FavorabilityResult } from '../componentes/datos/favorability_types';
 import type { GeorefConfidence, ProjectFootprint, CrsInfo, ElevationRange, PercentileStats, GravityImportPreviewResponse, GravityCsvInvertResponse } from '../lib/terraquantum/frontendApi';
 
@@ -176,6 +178,19 @@ export interface AppState {
   setBoreholeData: (d: BoreholeViewData | null) => void;
   showBoreholes: boolean;
   setShowBoreholes: (v: boolean) => void;
+
+  // ── Fase F4.3: Cara del corte pintada ──────────────────────────────────────
+  sectionData: SectionData | null;
+  setSectionData: (d: SectionData | null) => void;
+  /** Pintar la cara del corte cuando hay slice activo (default ON). */
+  showSectionPaint: boolean;
+  setShowSectionPaint: (v: boolean) => void;
+
+  // ── Fase F4.5: Horizonte DOI (incertidumbre visible) ───────────────────────
+  doiOverlayData: DoiOverlayData | null;
+  setDoiOverlayData: (d: DoiOverlayData | null) => void;
+  showDoiOverlay: boolean;
+  setShowDoiOverlay: (v: boolean) => void;
 
   // 2. FAVORABILITY GATE
   favorabilityScore: number | null;
@@ -478,6 +493,8 @@ export const useAppStore = create<AppState>((set) => ({
             percentileStats: null,
             isosurfaceData: null,
             boreholeData: null,
+            sectionData: null,
+            doiOverlayData: null,
           }
         : {}),
     });
@@ -486,7 +503,9 @@ export const useAppStore = create<AppState>((set) => ({
   // ── Fase F4.2: Isosuperficies del backend ──────────────────────────────────
   isosurfaceData: null,
   setIsosurfaceData: (d) => set({ isosurfaceData: d }),
-  showIsosurfaces: false,
+  // Default ON: QA visual aprobado 2026-07-09 (gate F4) — la vista producto es
+  // la cáscara suave; los vóxeles quedan como nube fantasma de contexto.
+  showIsosurfaces: true,
   setShowIsosurfaces: (v) => set({ showIsosurfaces: v }),
 
   // ── Fase F4.4: Sondajes en el visor 3D ─────────────────────────────────────
@@ -494,6 +513,18 @@ export const useAppStore = create<AppState>((set) => ({
   setBoreholeData: (d) => set({ boreholeData: d }),
   showBoreholes: false,
   setShowBoreholes: (v) => set({ showBoreholes: v }),
+
+  // ── Fase F4.3: Cara del corte pintada ──────────────────────────────────────
+  sectionData: null,
+  setSectionData: (d) => set({ sectionData: d }),
+  showSectionPaint: true,
+  setShowSectionPaint: (v) => set({ showSectionPaint: v }),
+
+  // ── Fase F4.5: Horizonte DOI ────────────────────────────────────────────────
+  doiOverlayData: null,
+  setDoiOverlayData: (d) => set({ doiOverlayData: d }),
+  showDoiOverlay: false,
+  setShowDoiOverlay: (v) => set({ showDoiOverlay: v }),
 
   // 2. FAVORABILITY GATE
   favorabilityScore: null,
