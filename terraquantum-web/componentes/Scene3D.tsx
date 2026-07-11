@@ -29,6 +29,7 @@ import { motion } from "framer-motion";
 import MagnetizationVectors from "./MagnetizationVectors";
 import VolumeRaymarchLayer from "../lib/render/VolumeRaymarchLayer";
 import IsosurfaceMeshLayer from "../lib/render/IsosurfaceMeshLayer";
+import BoreholeLayer from "../lib/render/BoreholeLayer";
 import type { VolumeCell } from "../lib/render/buildVolumeTexture";
 import { probeGpuCapabilities } from "../lib/render/gpuCapabilities";
 import SubsurfaceAOEffect from "../lib/render/SubsurfaceAOEffect";
@@ -1622,6 +1623,8 @@ export default function Scene3D() {
     clipBox,
     isosurfaceData,
     showIsosurfaces,
+    boreholeData,
+    showBoreholes,
   } = useAppStore();
 
   const hasElevationData = useAppStore((s) => s.hasElevationData);
@@ -1948,6 +1951,13 @@ export default function Scene3D() {
             <IsosurfaceMeshLayer
               data={isosurfaceData}
               visible={isosurfacesActive}
+              clippingPlanes={allClippingPlanes}
+            />
+            {/* F4.4: sondajes como cilindros (contexto geológico), mismo grupo
+                centrado → caen donde el pozo cruza el cuerpo. */}
+            <BoreholeLayer
+              data={boreholeData}
+              visible={showBoreholes}
               clippingPlanes={allClippingPlanes}
             />
             <MagnetizationVectors

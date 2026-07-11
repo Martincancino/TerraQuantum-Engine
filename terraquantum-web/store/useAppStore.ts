@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { TerrainResponse, VoxelMineralModel } from '../lib/terraQuantumGeology';
 import type { IsosurfaceData } from '../lib/render/IsosurfaceMeshLayer';
+import type { BoreholeViewData } from '../lib/render/BoreholeLayer';
 import type { FavorabilityResult } from '../componentes/datos/favorability_types';
 import type { GeorefConfidence, ProjectFootprint, CrsInfo, ElevationRange, PercentileStats, GravityImportPreviewResponse, GravityCsvInvertResponse } from '../lib/terraquantum/frontendApi';
 
@@ -169,6 +170,12 @@ export interface AppState {
   /** Mostrar isosuperficies (default off hasta el QA visual). */
   showIsosurfaces: boolean;
   setShowIsosurfaces: (v: boolean) => void;
+
+  // ── Fase F4.4: Sondajes en el visor 3D ─────────────────────────────────────
+  boreholeData: BoreholeViewData | null;
+  setBoreholeData: (d: BoreholeViewData | null) => void;
+  showBoreholes: boolean;
+  setShowBoreholes: (v: boolean) => void;
 
   // 2. FAVORABILITY GATE
   favorabilityScore: number | null;
@@ -470,6 +477,7 @@ export const useAppStore = create<AppState>((set) => ({
             blockModelElevationRange: null,
             percentileStats: null,
             isosurfaceData: null,
+            boreholeData: null,
           }
         : {}),
     });
@@ -480,6 +488,12 @@ export const useAppStore = create<AppState>((set) => ({
   setIsosurfaceData: (d) => set({ isosurfaceData: d }),
   showIsosurfaces: false,
   setShowIsosurfaces: (v) => set({ showIsosurfaces: v }),
+
+  // ── Fase F4.4: Sondajes en el visor 3D ─────────────────────────────────────
+  boreholeData: null,
+  setBoreholeData: (d) => set({ boreholeData: d }),
+  showBoreholes: false,
+  setShowBoreholes: (v) => set({ showBoreholes: v }),
 
   // 2. FAVORABILITY GATE
   favorabilityScore: null,

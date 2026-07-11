@@ -2530,8 +2530,10 @@ export async function parseBoreholeCsv(
 }
 
 // Convierte un BoreholeSurvey al formato `boreholes` que consume /geophysics-invert
-// (BoreholeInterval: x_m, z_m, y_from_m, y_to_m, density_t_m3, susceptibility_si).
-// Solo incluye muestras con al menos una propiedad física.
+// (BoreholeInterval: x_m, z_m, y_from_m, y_to_m, density_t_m3, susceptibility_si,
+//  lithology). Solo incluye muestras con al menos una propiedad física.
+// F4.4: se conserva `lithology` para colorear los sondajes por unidad geológica
+// en el visor 3D (el backend ya la acepta y la usa para bounds por litología).
 export function boreholeSurveyToIntervals(
   survey: BoreholeSurvey
 ): Array<{
@@ -2541,6 +2543,7 @@ export function boreholeSurveyToIntervals(
   y_to_m: number;
   density_t_m3?: number;
   susceptibility_si?: number;
+  lithology?: string;
 }> {
   return survey.holes
     .filter((h) => h.density_t_m3 != null || h.susceptibility_si != null)
@@ -2551,6 +2554,7 @@ export function boreholeSurveyToIntervals(
       y_to_m: h.depth_to_m,
       ...(h.density_t_m3 != null ? { density_t_m3: h.density_t_m3 } : {}),
       ...(h.susceptibility_si != null ? { susceptibility_si: h.susceptibility_si } : {}),
+      ...(h.lithology != null ? { lithology: h.lithology } : {}),
     }));
 }
 
