@@ -12,7 +12,9 @@ from services.block_model_service import (
     build_block_model_arrow_bytes,
     build_block_model_profile_response,
 )
+from services.doi_overlay_service import build_doi_overlay_response
 from services.isosurface_service import build_isosurface_response
+from services.section_service import build_section_response
 
 router = APIRouter()
 
@@ -220,6 +222,59 @@ async def get_isosurface(
         raise HTTPException(
             status_code=500,
             detail="Error interno al construir las isosuperficies.",
+        )
+
+
+@router.get("/v2/section")
+async def get_section(
+    project_id: str,
+    run_id: str,
+    axis: str = Query(..., pattern="^(x|y|z)$"),
+    position: float = Query(..., description="Posición del plano en coordenadas VISUALES del visor."),
+    field: str = Query("density", pattern="^(density|susceptibility)$"),
+):
+    """Cara del corte pintada (Fase F4.3).
+
+    Raster 2D del contraste con signo en el plano axis=position (coords visuales,
+    snapeado a la capa de celdas más cercana). El frontend lo pinta con el mismo
+    Viridis; NO calcula física ni coordenadas.
+    """
+    print(
+        f"[SECTION-API] GET /v2/section axis={axis} position={position} "
+        f"field={field} project_id={project_id} run_id={run_id}"
+    )
+    try:
+        return build_section_response(
+            project_id=project_id,
+            run_id=run_id,
+            axis=axis,
+            position=position,
+            field=field,
+        )
+    except Exception as exc:  # nunca-crashea: error catalogado en payload
+        print(f"[SECTION-API] Error inesperado: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Error interno al construir la sección.",
+        )
+
+
+@router.get("/v2/doi-overlay")
+async def get_doi_overlay(project_id: str, run_id: str):
+    """Horizonte DOI para el visor 3D (Fase F4.5 — incertidumbre visible).
+
+    Devuelve la profundidad bajo la cual el dato deja de restringir el modelo
+    (sensibilidad half-max por capa, misma convención que B2), en coordenadas
+    visuales, para atenuar/velar esa zona. El frontend NO calcula física.
+    """
+    print(f"[DOI-API] GET /v2/doi-overlay project_id={project_id} run_id={run_id}")
+    try:
+        return build_doi_overlay_response(project_id=project_id, run_id=run_id)
+    except Exception as exc:  # nunca-crashea: error catalogado en payload
+        print(f"[DOI-API] Error inesperado: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Error interno al construir el horizonte DOI.",
         )
 
 

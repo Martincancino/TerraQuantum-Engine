@@ -57,6 +57,9 @@ _DEFAULT_LEVELS = (0.5, 0.7, 0.9)
 # Tope de celdas del volumen denso (float64). ~40M celdas ≈ 320 MB por array.
 # Por encima, la grilla no es regular (coordenadas continuas) y se aborta.
 _MAX_GRID_CELLS = 40_000_000
+# F4.7 LOD (MEDIDO): sobre este tamaño, marching cubes usa step_size=2
+# (~4-10× más rápido, pérdida visual nula — ver _lod_step).
+_LOD_STEP_THRESHOLD = 2_000_000
 # Iteraciones Taubin por defecto (suavizado que no encoge el volumen).
 _DEFAULT_TAUBIN_ITERS = 12
 # Coeficientes Taubin clásicos (λ>0, μ<0 con |μ|>λ) — pasa-banda que cancela el
@@ -311,6 +314,18 @@ def _b64_u32(arr: np.ndarray) -> str:
     return base64.b64encode(np.ascontiguousarray(arr, dtype="<u4").tobytes()).decode("ascii")
 
 
+def _lod_step(n_cells: int) -> int:
+    """LOD medido (F4.7): step de marching cubes según tamaño del volumen.
+
+    MEDIDO 2026-07-09: los vértices son pocos incluso a 8M celdas (~29k) — el
+    render nunca es el cuello; el costo es la EXTRACCIÓN CPU (~650 ms/nivel a 8M,
+    ~125 ms a 1.7M) + gradientes float64. step=2 divide el costo ~4-10× con
+    pérdida visual nula a esas resoluciones (la malla sigue más fina que el dato).
+    El octree (decimación GPU) NO se justifica: quedó congelado con esta medición.
+    """
+    return 1 if n_cells <= _LOD_STEP_THRESHOLD else 2
+
+
 def _build_one_level(
     grid: _FieldGrid,
     fraction: float,
@@ -329,12 +344,14 @@ def _build_one_level(
     if not (vmin < level < vmax):
         return None
 
+    step = _lod_step(grid.nx * grid.ny * grid.nz)
     try:
         verts_phys, faces, _normals, _values = marching_cubes(
             grid.magnitude,
             level=level,
             spacing=grid.spacing,
             allow_degenerate=False,
+            step_size=step,
         )
     except (ValueError, RuntimeError):
         return None
@@ -514,6 +531,7 @@ def build_isosurface_response(
             "z": round(grid.center_m[2], 4),
         },
         "grid_dims": {"nx": grid.nx, "ny": grid.ny, "nz": grid.nz},
+        "lod_step": _lod_step(grid.nx * grid.ny * grid.nz),
         "levels": level_meshes,
         "n_levels": len(level_meshes),
         "warnings": warnings,

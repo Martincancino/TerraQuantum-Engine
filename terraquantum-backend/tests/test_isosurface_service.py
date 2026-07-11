@@ -332,6 +332,15 @@ def test_continuous_coords_hits_oom_guard_gracefully(patched_projects_dir):
     assert resp["error"] is not None  # abortó con gracia, no OOM
 
 
+def test_lod_step_thresholds():
+    """F4.7 (medido): step=1 hasta 2M celdas; step=2 por encima (extracción 4-10× más rápida)."""
+    from services.isosurface_service import _lod_step
+    assert _lod_step(42 * 21 * 42) == 1        # demo real
+    assert _lod_step(2_000_000) == 1           # borde inclusivo
+    assert _lod_step(2_000_001) == 2
+    assert _lod_step(8_000_000) == 2
+
+
 def _gaussian_blob_rect(nx: int, ny: int, nz: int, amp: float = 0.8, sigma: float = 3.0, bg: float = 2.67) -> np.ndarray:
     cx, cy, cz = (nx - 1) / 2.0, (ny - 1) / 2.0, (nz - 1) / 2.0
     gx, gy, gz = np.meshgrid(np.arange(nx), np.arange(ny), np.arange(nz), indexing="ij")
