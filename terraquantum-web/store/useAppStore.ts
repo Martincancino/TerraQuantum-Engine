@@ -433,12 +433,30 @@ export const useAppStore = create<AppState>((set) => ({
     focusing: null,
   },
   setActiveRun: (patch) =>
-    set((state) => ({
-      activeRun: {
-        ...state.activeRun,
-        ...patch,
-      },
-    })),
+    set((state) => {
+      // Trazabilidad (reviewer F4, hallazgo T1): al cambiar la IDENTIDAD de la
+      // corrida se invalidan los caches del visor derivados de ella — si no,
+      // Historial podría dibujar sondajes/velo DOI/sección del run ANTERIOR
+      // sobre el modelo nuevo. (isosurface/section re-fetchean solos; borehole
+      // y DOI solo cargan al toggle, por eso la limpieza central.)
+      const runChanged =
+        (patch.projectId !== undefined && patch.projectId !== state.activeRun.projectId) ||
+        (patch.runId !== undefined && patch.runId !== state.activeRun.runId);
+      return {
+        activeRun: {
+          ...state.activeRun,
+          ...patch,
+        },
+        ...(runChanged
+          ? {
+              isosurfaceData: null,
+              boreholeData: null,
+              sectionData: null,
+              doiOverlayData: null,
+            }
+          : {}),
+      };
+    }),
   clearActiveRun: () =>
     set({
       activeRun: {
