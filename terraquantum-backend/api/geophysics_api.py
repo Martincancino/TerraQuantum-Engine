@@ -14,6 +14,7 @@ from core.logging import get_logger
 from core.utils import sanitize_nan
 from core.block_model_store import (
     get_run_dir,
+    get_run_report_path,
     get_run_schedule_path,
     update_run_status,
 )
@@ -24,6 +25,7 @@ from schemas.geophysics_schema import (
     GeophysicsLiveUpdateResponse,
 )
 from schemas.response_schema import (
+    ConvergenceResponse,
     GeophysicsInversionStartResponse,
     GeophysicsStatusResponse,
     MisfitResponse,
@@ -408,3 +410,71 @@ async def get_geophysics_misfit(project_id: str, run_id: str):
         "r2":              r2,
         "n_stations":      n,
     }
+
+
+# ── F5: Convergencia (barrido λ / Morozov chi² discrepancy) ─────────────────
+@router.get("/v2/geophysics-convergence/{project_id}/{run_id}", response_model=ConvergenceResponse)
+async def get_geophysics_convergence(project_id: str, run_id: str):
+    """
+    F5 — Expone el barrido de λ (Morozov chi² discrepancy) que el solver YA
+    calcula al seleccionar la regularización automática (`fit_diagnostics.
+    lambda_scan_chi2` en el report.json persistido). Es la única curva de
+    'convergencia' que hoy se loguea de forma estructurada: NO es chi² por
+    iteración interna de un solve único IRLS/PGI (ese log es efímero, no se
+    persiste) — el campo `note` en la respuesta lo aclara explícitamente para
+    que el frontend nunca lo presente como algo que no es.
+
+    `available=False` (con lambda_mag fijo, sin auto_lambda) es un resultado
+    legítimo, no un error: se devuelve 200 con la razón en `note`.
+    """
+    try:
+        report_path = get_run_report_path(project_id=project_id, run_id=run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    if report_path is None or not report_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"report.json no encontrado para project_id={project_id}, "
+                f"run_id={run_id}. La inversión puede no haber completado aún."
+            ),
+        )
+
+    try:
+        with open(report_path, "r", encoding="utf-8") as f:
+            report_data = json.load(f)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error leyendo report.json: {exc}")
+
+    scan = ((report_data.get("fitDiagnostics") or {}).get("lambda_scan_chi2")
+            or report_data.get("lambda_scan_chi2"))
+
+    if not scan:
+        return sanitize_nan({
+            "available": False,
+            "trials": [],
+            "warnings": [],
+            "note": (
+                "Sin barrido de λ registrado para esta corrida: se usó lambda_mag "
+                "fijo (auto_lambda=False), no Morozov automático."
+            ),
+        })
+
+    trials = [
+        {"lambda_value": t.get("lambda"), "chi2_reduced": t.get("chi2_red")}
+        for t in (scan.get("trials") or [])
+    ]
+    return sanitize_nan({
+        "available": True,
+        "selection_method": scan.get("selection_method"),
+        "lambda_selected": scan.get("lambda_selected"),
+        "chi2_achieved": scan.get("chi2_achieved"),
+        "n_solves": scan.get("n_solves"),
+        "trials": trials,
+        "warnings": scan.get("warnings") or [],
+        "note": (
+            "Cada punto es un λ candidato del barrido Morozov con su chi² reducido "
+            "resultante — NO es chi² por iteración de un solve único."
+        ),
+    })

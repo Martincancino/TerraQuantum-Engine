@@ -375,3 +375,31 @@ class MisfitResponse(BaseModel):
     normalized_rmse: float
     r2: float
     n_stations: int
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /v2/geophysics-convergence/{project_id}/{run_id}  — F5
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ConvergenceTrial(BaseModel):
+    """Un candidato λ probado por el barrido Morozov, con su chi² resultante."""
+    lambda_value: float
+    chi2_reduced: Optional[float] = None
+
+
+class ConvergenceResponse(BaseModel):
+    """
+    F5 — Curva de 'convergencia' YA calculada por el solver: el barrido de λ
+    (Morozov chi² discrepancy) usado para seleccionar la regularización. NO es
+    chi² por iteración interna de un único solve (esa serie no se persiste
+    estructuradamente hoy — ver docs/01_PLAN_MAESTRO.md F5); es honesto sobre
+    qué mide cada punto.
+    """
+    available: bool
+    selection_method: Optional[str] = None
+    lambda_selected: Optional[float] = None
+    chi2_achieved: Optional[float] = None
+    n_solves: Optional[int] = None
+    trials: List[ConvergenceTrial] = []
+    warnings: List[str] = []
+    note: str

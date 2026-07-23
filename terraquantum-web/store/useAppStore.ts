@@ -417,6 +417,12 @@ export interface AppState {
   // 14. DOI THRESHOLD (Fase 7B-1) — slider interactivo 0.0–1.0
   doiThreshold: number;
   setDoiThreshold: (val: number) => void;
+
+  // 15. F5 — PUENTE DE CAPTURA PNG (Canvas → botonera de descarga)
+  // Función viva del renderer (no serializable) que registra CanvasExportBridge
+  // al montar el <Canvas>; ExportPanel la lee para exportar PNG de alta resolución.
+  capturePngSnapshot: ((targetWidthPx: number) => string) | null;
+  setCapturePngSnapshot: (fn: ((targetWidthPx: number) => string) | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -791,4 +797,8 @@ export const useAppStore = create<AppState>((set) => ({
   // 14. DOI THRESHOLD (Fase 7B-1)
   doiThreshold: 0.9,
   setDoiThreshold: (val) => set({ doiThreshold: Math.max(0, Math.min(1, val)) }),
+
+  // 15. F5 — Puente de captura PNG
+  capturePngSnapshot: null,
+  setCapturePngSnapshot: (fn) => set({ capturePngSnapshot: fn }),
 }));

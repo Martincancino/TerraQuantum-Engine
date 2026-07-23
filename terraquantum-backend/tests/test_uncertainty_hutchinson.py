@@ -149,6 +149,9 @@ def test_run_inversion_with_uncertainty_populates_report(test_project_id, test_r
     assert up.get("computed") is True
     assert up.get("is_statistical_posterior") is True
     assert up.get("p95") is not None and up["p95"] >= 0.0
+    # T2: 'status' machine-readable + 'reason' ES (por qué está o no la σ).
+    assert up.get("status") in ("computed", "ill_conditioned")
+    assert isinstance(up.get("reason"), str) and up["reason"]
 
 
 @pytest.mark.integration
@@ -168,3 +171,6 @@ def test_run_inversion_without_uncertainty_is_off_by_default(test_project_id, te
     assert "error" not in result, result.get("error")
     up = result["report"].get("uncertaintyPosterior")
     assert up is not None and up.get("computed") is False
+    # T2: default apagado explícito y con razón (para el EmptyState del frontend).
+    assert up.get("status") == "disabled_by_default"
+    assert isinstance(up.get("reason"), str) and up["reason"]

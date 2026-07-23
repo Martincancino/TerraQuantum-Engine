@@ -670,6 +670,32 @@ export async function getGeophysicsMisfit(projectId: string, runId: string) {
   });
 }
 
+// ─── F5: Convergencia (barrido λ / Morozov chi² discrepancy) ────────────────
+
+export type ConvergenceTrial = {
+  lambda_value: number | null;
+  chi2_reduced: number | null;
+};
+
+export type ConvergenceResponse = {
+  available: boolean;
+  selection_method: string | null;
+  lambda_selected: number | null;
+  chi2_achieved: number | null;
+  n_solves: number | null;
+  trials: ConvergenceTrial[];
+  warnings: string[];
+  note: string;
+};
+
+export async function getGeophysicsConvergence(projectId: string, runId: string) {
+  return fetchInternalJson<ConvergenceResponse>({
+    path: `/api/geophysics-convergence?project_id=${encodeURIComponent(projectId)}&run_id=${encodeURIComponent(runId)}`,
+    method: "GET",
+    timeoutMs: 30_000,
+  });
+}
+
 export async function runGeophysicsInvert(payload: unknown) {
   return fetchInternalJson<BackendInvertResponse>({
     path: "/api/geophysics-invert",
@@ -874,6 +900,59 @@ export async function downloadTechnicalReport(
         .get("content-disposition")
         ?.match(/filename="?([^"]+)"?/)?.[1] ||
       `reporte_tecnico_${projectId}_${runId}.html`;
+
+    try {
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+
+    return { ok: true, error: null };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, error: message || "Error de red" };
+  }
+}
+
+// F5 — Block model CSV estándar minero (X_m,Y_m,Z_m,Density_gcm3[,Susceptibility_SI],…).
+export async function downloadBlockModelCsv(
+  projectId: string,
+  runId: string
+): Promise<{ ok: boolean; error: string | null }> {
+  const path = `/api/export-block-model-csv?project_id=${encodeURIComponent(
+    projectId
+  )}&run_id=${encodeURIComponent(runId)}`;
+
+  try {
+    const res = await fetch(path, {
+      method: "GET",
+      cache: "no-store",
+      headers: { accept: "text/csv" },
+    });
+
+    if (!res.ok) {
+      let error = `La ruta ${path} falló con status ${res.status}.`;
+      try {
+        const data = (await res.json()) as { detail?: unknown };
+        error = (typeof data.detail === "string" ? data.detail : null) ?? error;
+      } catch {
+        // Keep the status-based fallback when the response is not JSON.
+      }
+      return { ok: false, error };
+    }
+
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const filename =
+      res.headers
+        .get("content-disposition")
+        ?.match(/filename="?([^"]+)"?/)?.[1] ||
+      `block_model_${projectId}_${runId}.csv`;
 
     try {
       const link = document.createElement("a");

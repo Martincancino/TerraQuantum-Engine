@@ -16,6 +16,9 @@ import {
   BestTargetWidget,
   DepthResolutionWidget,
 } from "./HonestReportWidgets";
+import ObsVsCalcPanel from "../datos/ObsVsCalcPanel";
+import ConvergenceCurveWidget from "./ConvergenceCurveWidget";
+import DensitySusceptibilityHistogramWidget from "./DensitySusceptibilityHistogramWidget";
 
 /** Entrada escalonada (Fase E — microinteracciones) preservando el gap del slot. */
 function FadePanel({ index, children }: { index: number; children: ReactNode }) {
@@ -119,6 +122,27 @@ export default function AnalyticsPanel() {
       <FadePanel index={9}>
         <Panel title="Recuperación sintética" subtitle="Benchmark de resolución">
           <RecoveryWidget report={report} metrics={metrics} />
+        </Panel>
+      </FadePanel>
+
+      {/* ── F5: gráficos + exportables — obs-vs-calc, histograma, convergencia ── */}
+      {activeRun.projectId && activeRun.runId && (
+        <FadePanel index={10}>
+          <Panel title="Obs vs Calc" subtitle="Residuales por estación (H-C2)">
+            <ObsVsCalcPanel projectId={activeRun.projectId} runId={activeRun.runId} />
+          </Panel>
+        </FadePanel>
+      )}
+
+      <FadePanel index={11}>
+        <Panel title="Densidad / Susceptibilidad" subtitle="Distribución sobre celdas activas">
+          <DensitySusceptibilityHistogramWidget cells={cells} />
+        </Panel>
+      </FadePanel>
+
+      <FadePanel index={12}>
+        <Panel title="Convergencia" subtitle="Barrido λ (Morozov chi² discrepancy)">
+          <ConvergenceCurveWidget projectId={activeRun.projectId} runId={activeRun.runId} />
         </Panel>
       </FadePanel>
 

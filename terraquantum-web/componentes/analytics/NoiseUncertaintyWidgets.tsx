@@ -96,6 +96,12 @@ export function UncertaintyPosteriorWidget({
 }) {
   const summary = asRec(report?.uncertaintyPosterior);
   const computed = boolOf(summary, "computed");
+  // F5: campo machine-readable del backend — distingue "apagado por default" de
+  // "mal condicionada" (survey subdeterminado → σ no física) en vez de un solo
+  // EmptyState genérico. Backward-compatible: si el report es viejo y no trae
+  // status/reason, cae al mensaje anterior.
+  const uqStatus = strOf(summary, "status");
+  const backendReason = strOf(summary, "reason");
   const unit = strOf(summary, "unit") ?? "t/m³";
   const p50 = numOf(summary, "p50");
   const p95 = numOf(summary, "p95");
@@ -112,16 +118,21 @@ export function UncertaintyPosteriorWidget({
   const sigmaQa = classifyUncertaintyValues(sigmaValues);
 
   const backendSaysNotComputed = !computed && p50 === null && sigmaValues.length === 0;
+  // "ill_conditioned" ⇒ aunque existan valores finitos, no son físicos (σ no acotado
+  // para un contraste de densidad real) — nunca se muestran como si fueran válidos.
+  const isIllConditioned = uqStatus === "ill_conditioned";
 
-  if (backendSaysNotComputed || sigmaQa.status === "NOT_AVAILABLE") {
-    const reason = backendSaysNotComputed
-      ? "σ posterior no calculada en esta corrida (compute_uncertainty desactivado)."
-      : sigmaQa.reason;
+  if (backendSaysNotComputed || isIllConditioned || sigmaQa.status === "NOT_AVAILABLE") {
+    const reason =
+      backendReason ??
+      (backendSaysNotComputed
+        ? "σ posterior no calculada en esta corrida (compute_uncertainty desactivado)."
+        : sigmaQa.reason);
     return (
       <div className="space-y-1.5">
         <EmptyState>{reason}</EmptyState>
         <p className="text-[8px] font-mono text-white/30 leading-tight">
-          Estado: No disponible para esta corrida
+          Estado: {uqStatus ?? "No disponible para esta corrida"}
         </p>
       </div>
     );

@@ -241,6 +241,10 @@ def generate_technical_report_html(
 
     mining_section = _mining_section_html(metrics, economic_gate)
 
+    # F5 — Veredicto reconciliado (B3) en prosa + resolución de profundidad (B2)
+    reconciled_verdict_section = _reconciled_verdict_section_html(report.get("overall_verdict"))
+    depth_resolution_section = _depth_resolution_section_html(report.get("depthResolution"))
+
     return f"""<!doctype html>
 <html lang="es">
 <head>
@@ -590,6 +594,8 @@ def generate_technical_report_html(
     {_list_html(technical_summary.get("recommended_next_steps"))}
   </section>
 
+{reconciled_verdict_section}
+
 {chi_squared_section}
 
 {obs_vs_calc_section}
@@ -597,17 +603,24 @@ def generate_technical_report_html(
 {corrections_section}
 
   <section>
-    <h2>4. Target Geofísico Principal</h2>
+    <h2>4. Target Geofísico Principal (B1 — Blanco Resoluble, Transparencia Null-Space)</h2>
     <table>
       {_row("X", _number(best_target.get("x_m"), " m"))}
       {_row("Y", _number(best_target.get("y_m"), " m"))}
       {_row("Z", _number(best_target.get("z_m"), " m"))}
+      {_row("Profundidad", _number(best_target.get("depth_m"), " m"))}
       {_row("Densidad", best_target.get("density"))}
       {_relative_score_row("Score Relativo del Target", best_target.get("relative_target_score") or best_target.get("target_score") or best_target.get("probability"))}
       {_row("Ley Proxy", _number(best_target.get("grade"), " %"))}
       {_row("Confidence Level", best_target.get("confidence_level"))}
+      {_row("¿Profundidad Resoluble?", _bool_value(best_target.get("is_resolvable_depth")))}
+      {_row("¿Es Artefacto Null-Space?", _bool_value(best_target.get("is_null_space_artifact")))}
+      {_row("Celdas de Piso Saturadas Degradadas", best_target.get("n_floor_saturated_cells"))}
+      {_row("Nota de Selección", best_target.get("selection_note"))}
     </table>
   </section>
+
+{depth_resolution_section}
 
 {favorability_section}
 
@@ -723,6 +736,82 @@ def _mining_section_html(metrics: dict[str, Any] | None, economic_gate: dict) ->
       {_metric_card("Bloques Totales", _number(metrics_data.get("total_blocks")))}
       {_metric_card("Pit Mesh Mode", metrics_data.get("pit_mesh_mode"))}
     </div>
+  </section>
+"""
+
+
+def _reconciled_verdict_section_html(overall_verdict: "dict[str, Any] | None") -> str:
+    """F5 — Veredicto reconciliado (B3) en PROSA: el texto honesto es el activo
+    legal (eslabón más débil entre survey/modelo/prioridad/padding/null-space)."""
+    v = _as_dict(overall_verdict)
+    if not v:
+        return ""
+
+    level = str(v.get("level") or "UNKNOWN").upper()
+    badge_class = {
+        "HIGH": "georef-HIGH", "MEDIUM": "georef-MEDIUM", "LOW": "georef-LOW",
+    }.get(level, "georef-MISSING")
+
+    components = _as_dict(v.get("components"))
+    comp_rows = "".join(
+        _row(str(k).replace("_", " ").title(), val) for k, val in components.items()
+    )
+    limiting = _as_list(v.get("limiting_factors"))
+    limiting_html = (
+        _list_html(limiting) if limiting
+        else f"<p>{_escape('Ninguno — todas las señales coinciden.')}</p>"
+    )
+
+    return f"""
+  <section id="reconciled-verdict">
+    <h2>3.5 Veredicto Reconciliado (B3 — Un Solo Veredicto Honesto)</h2>
+    <div class="georef-badge {badge_class}">{_escape(level)}</div>
+    <p><strong>{_escape(v.get("headline") or "")}</strong></p>
+    <p>{_escape(v.get("recommended_action") or "")}</p>
+    <h3>Factores Limitantes (eslabón más débil)</h3>
+    {limiting_html}
+    <h3>Señales Reconciliadas</h3>
+    <table>{comp_rows}</table>
+    <p style="font-size:12px;color:var(--muted);">{_escape(v.get("note") or "")}</p>
+  </section>
+"""
+
+
+def _depth_resolution_section_html(depth_resolution: "dict[str, Any] | None") -> str:
+    """F5 — Resolución de profundidad por-eje (B2): la gravimetría resuelve DÓNDE
+    en planta, no a qué profundidad — esta sección lo dice en prosa + tabla."""
+    dr = _as_dict(depth_resolution)
+    if not dr:
+        return ""
+
+    if not dr.get("computed"):
+        reason = dr.get("reason") or "No disponible para esta corrida."
+        return f"""
+  <section id="depth-resolution">
+    <h2>4.5 Resolución de Profundidad por-Eje (B2)</h2>
+    <p>{_escape("No calculado: " + str(reason))}</p>
+  </section>
+"""
+
+    per_axis = _as_dict(dr.get("per_axis"))
+    horiz = _as_dict(per_axis.get("horizontal"))
+    vert = _as_dict(per_axis.get("vertical"))
+
+    return f"""
+  <section id="depth-resolution">
+    <h2>4.5 Resolución de Profundidad por-Eje (B2)</h2>
+    <p>{_escape(dr.get("statement") or "")}</p>
+    <table>
+      {_row("Footprint Horizontal Determinado", _bool_value(horiz.get("determined")))}
+      {_row("Compacidad (propiedad geológica, no falla de resolución)", horiz.get("compactness"))}
+      {_row("Extensión Horizontal Característica", _number(horiz.get("extent_m"), " m"))}
+      {_row("Calidad Vertical", vert.get("quality"))}
+      {_row("Fracción de Masa en Cola Null-Space", dr.get("deep_mass_fraction"))}
+      {_row("Profundidad Resoluble Máxima", _number(dr.get("resolvable_depth_max_m"), " m"))}
+      {_row("Método del Horizonte DOI", dr.get("resolvable_depth_horizon_method"))}
+      {_row("Profundidad del Cuerpo Resoluble", _number(dr.get("resolvable_body_depth_m"), " m"))}
+    </table>
+    <p style="font-size:12px;color:var(--muted);">{_escape(dr.get("note") or "")}</p>
   </section>
 """
 

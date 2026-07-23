@@ -628,6 +628,71 @@ def export_core_to_ubc(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# F5 — Block model CSV (estándar minero, desde el parquet REAL persistido)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def export_block_model_to_csv(project_id: str, run_id: str) -> Optional[str]:
+    """
+    F5 — Exporta el block model a CSV estándar minero: X_m, Y_m, Z_m, Density_gcm3
+    [, Susceptibility_SI] + columnas de diagnóstico disponibles (Sensitivity_Proxy,
+    DOI_Index, Posterior_Std, Probability, Is_Active).
+
+    A diferencia de GSLIB/UBC/VTR (que reconstruyen una grilla densa nx·ny·nz desde
+    `inputs`), este export lee DIRECTAMENTE `block_model.parquet` — coherente con el
+    gotcha F4 (coordenadas reales en metros, celdas dispersas, sin ix/iy/iz densos).
+    Non-fatal: retorna None si el parquet no existe, falta una columna mínima, o falla.
+    """
+    try:
+        import pandas as pd
+        from core.block_model_store import RUN_BLOCK_MODEL_FILENAME, get_run_dir
+
+        run_dir = get_run_dir(project_id, run_id)
+        bm_path = run_dir / RUN_BLOCK_MODEL_FILENAME
+        if not bm_path.exists():
+            logger.warning("[F5] block_model.parquet no encontrado para %s/%s", project_id, run_id)
+            return None
+
+        df = pd.read_parquet(bm_path)
+
+        # Preferir columnas v4.0 (x_m/y_m/z_m/density_t_m3); fallback a legacy (x/y/z/density).
+        coord_cols = (["x_m", "y_m", "z_m"] if {"x_m", "y_m", "z_m"}.issubset(df.columns)
+                      else ["x", "y", "z"])
+        density_col = "density_t_m3" if "density_t_m3" in df.columns else "density"
+        if not set(coord_cols).issubset(df.columns) or density_col not in df.columns:
+            logger.warning(
+                "[F5] block_model.parquet sin columnas mínimas x/y/z/density (%s/%s)",
+                project_id, run_id,
+            )
+            return None
+
+        column_map = {
+            coord_cols[0]: "X_m", coord_cols[1]: "Y_m", coord_cols[2]: "Z_m",
+            density_col: "Density_gcm3",
+            "susceptibility_si": "Susceptibility_SI",
+            "sensitivity_proxy": "Sensitivity_Proxy",
+            "doi_index": "DOI_Index",
+            "posterior_std": "Posterior_Std_gcm3",
+            "probability": "Probability",
+            "is_active": "Is_Active",
+        }
+        present = [c for c in column_map if c in df.columns]
+        out = df[present].rename(columns=column_map)
+
+        out_path = run_dir / "block_model.csv"
+        out.to_csv(out_path, index=False, float_format="%.6f")
+
+        size_kb = out_path.stat().st_size / 1024
+        logger.info(
+            "[F5] Block model CSV exportado | path=%s | filas=%d | size=%.1f KB",
+            str(out_path), len(out), size_kb,
+        )
+        return str(out_path)
+    except Exception as exc:
+        logger.warning("[F5] Error en exportación CSV de block model (non-fatal): %s", exc)
+        return None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # FASE 11 — Bundle ZIP industrial + QA Diagnostics
 # (Lee datos persistidos en disco — NO ejecuta física nueva)
 # ═════════════════════════════════════════════════════════════════════════════
@@ -799,6 +864,7 @@ def _build_bundle_manifest(
             {"file": "model.gslib",    "format": "Stanford GSLIB / SGeMS",     "software": ["SGeMS", "ISATIS"]},
             {"file": "model.dfn",      "format": "ASEG-GDF2 Definition File",  "software": ["Oasis Montaj", "Geosoft"]},
             {"file": "model.dat",      "format": "ASEG-GDF2 Data File",        "software": ["Oasis Montaj", "Geosoft"]},
+            {"file": "model.csv",      "format": "CSV estándar minero (X_m,Y_m,Z_m,Density_gcm3,…)", "software": ["Excel", "Leapfrog", "Datamine"]},
             {"file": "manifest.json",  "format": "Audit Trail JSON Fase 11",   "note": "Trazabilidad completa"},
             {"file": "run_manifest.json", "format": "Run Provenance HITO 2",   "note": "SHA-256 parquet+CSV, solver_stats, schema_version"},
         ],
@@ -853,6 +919,13 @@ def create_run_bundle_zip(project_id: str, run_id: str) -> "tuple[bytes, str]":
     aseg_dfn = _aseg_gdf2_dfn_text(nx, ny, nz, bs, str(utm_zone))
     aseg_dat = _aseg_gdf2_dat_text(dens, nx, ny, nz, bs)
 
+    # F5: CSV desde el parquet REAL (coordenadas verdaderas, no re-derivadas de nx/ny/nz).
+    try:
+        _csv_path = export_block_model_to_csv(clean_pid, clean_rid)
+        _csv_bytes = Path(_csv_path).read_bytes() if _csv_path else None
+    except Exception:
+        _csv_bytes = None
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         vtr_path = run_dir / RUN_VTK_FILENAME
@@ -868,6 +941,10 @@ def create_run_bundle_zip(project_id: str, run_id: str) -> "tuple[bytes, str]":
         zf.writestr("model.gslib", gslib)
         zf.writestr("model.dfn", aseg_dfn)
         zf.writestr("model.dat", aseg_dat)
+        if _csv_bytes:
+            zf.writestr("model.csv", _csv_bytes)
+        else:
+            zf.writestr("model.csv.missing.txt", f"CSV no disponible para {clean_rid}.\n")
         zf.writestr("manifest.json", mfst)
 
     safe = lambda s: "".join(c if c.isalnum() or c in {"-", "_"} else "_" for c in s)[:32]

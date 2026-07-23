@@ -19,6 +19,8 @@ import VolumeRenderControls from "../viewport/VolumeRenderControls";
 import IsosurfaceControls from "../viewport/IsosurfaceControls";
 import BoreholeControls from "../viewport/BoreholeControls";
 import DoiOverlayControls from "../viewport/DoiOverlayControls";
+import ExportPanel from "../viewport/ExportPanel";
+import CanvasExportBridge from "../../lib/render/CanvasExportBridge";
 
 import { GravityObservation } from "../../lib/terraquantum/geophysicsSurvey";
 import {
@@ -622,6 +624,11 @@ export default function Exploration3DView() {
                 <BoxClipControls />
               </SidebarSection>
             )}
+            {activeRun.projectId && activeRun.runId && (
+              <SidebarSection title="Descargar">
+                <ExportPanel projectId={activeRun.projectId} runId={activeRun.runId} />
+              </SidebarSection>
+            )}
           </div>
         }
         viewport={
@@ -665,6 +672,7 @@ export default function Exploration3DView() {
                   <Suspense fallback={null}>
                     <Scene3D />
                   </Suspense>
+                  <CanvasExportBridge />
                 </Canvas>
               )}
               {/* ── HITO 6: overlay no-bloqueante mientras el WebWorker construye ──

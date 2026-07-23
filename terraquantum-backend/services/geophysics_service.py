@@ -925,6 +925,18 @@ def apply_reconciled_verdict(report_payload: dict) -> dict:
     return verdict
 
 
+# ── B2 — umbral DOI del horizonte de resolubilidad ──────────────────────────────
+# doi_raw = |m1 − m2| / |m_ref1 − m_ref2|  (índice DOI de Oldenburg & Li 1999, doble
+# inversión). doi ≥ 1.0 ⇒ la celda recuperada se movió AL MENOS el offset completo entre
+# los dos modelos de referencia ⇒ está controlada por el prior/referencia, NO por el dato
+# ⇒ vive en el null-space. Es un umbral ABSOLUTO y físico (no un percentil por-caso).
+# CALIBRADO empíricamente (scripts/validation/f5_b2_doi_calibration.py) contra 3 corridas
+# reales: separa el smear patológico (LdM, deep_mass_fraction=0.75 → null_space) de los
+# casos sanos (DO-27 0.43, San Nicolás 0.40 → 'poor'), donde el umbral previo (half-max de
+# sensibilidad CRUDA) daba 0.92–0.98 para TODOS y no discriminaba nada.
+_DOI_NULLSPACE_CUTOFF = 1.0
+
+
 def build_depth_resolution(df_full, observable_depth_max_m, best_target,
                            block_size) -> dict:
     """B2 — resolución de profundidad POR-EJE, derivada del MODELO recuperado (NO usa el
@@ -934,6 +946,21 @@ def build_depth_resolution(df_full, observable_depth_max_m, best_target,
     masa que cae bajo la profundidad observable es cola null-space (data-consistente pero no
     constreñida). Este bloque MIDE esa cola y reporta una historia honesta por-eje, en vez
     de ofrecer un número de profundidad global engañoso.
+
+    HORIZONTE DE RESOLUBILIDAD — por qué DOI y NO sensibilidad cruda (medido F5/B2, 2026-07):
+      El proxy `sensitivity_proxy` es la norma-L2 de columna del kernel G_w tomada ANTES del
+      cambio de variable de depth-weighting Wz_inv (gravimetry.py:2160, previo a la línea
+      2208). Es la sensibilidad CRUDA: decae ~1/prof² y su half-max se alcanza en ~1 capa.
+      Pero la densidad recuperada es Wz_inv·m_tilde (gravimetry.py:2633): el depth-weighting
+      (Li & Oldenburg 1998) COMPENSA esa caída para dejar la amplitud ~uniforme en
+      profundidad. Comparar la masa (post-compensación) contra un horizonte de sensibilidad
+      cruda (pre-compensación) daba deep_mass_fraction≈0.92–0.98 SIEMPRE — sano o patológico —
+      un artefacto estructural del propio depth-weighting, sin poder discriminante.
+      La corrección: el horizonte usa el índice DOI de doble inversión (doi_index/doi_raw,
+      Oldenburg & Li 1999), que mide la resolubilidad del modelo RECUPERADO (post-Wz, mismo
+      espacio que la masa). Horizonte = capa MATERIAL más profunda con DOI medio ≤ 1.0. Así
+      numerador (masa) y horizonte (DOI) viven en el mismo espacio post-compensación.
+      Fallback si no hay DOI: half-max de sensibilidad (comportamiento previo); luego geométrico.
 
     Pura y aditiva. df_full = block model recuperado (polars, columnas density,x,y,z).
     observable_depth_max_m = min(cutoff, ny·block) (r05). best_target = salida de B1
@@ -960,6 +987,12 @@ def build_depth_resolution(df_full, observable_depth_max_m, best_target,
         zs = active["z"].to_numpy().astype(float) if "z" in active.columns else None
         sens = (np.clip(np.nan_to_num(active["sensitivity_proxy"].to_numpy().astype(float), nan=0.0), 0.0, None)
                 if "sensitivity_proxy" in active.columns else None)
+        # Índice DOI de doble inversión (Oldenburg & Li 1999). NaN = no resoluble (se trata
+        # como +inf para que no rebaje el horizonte). doi_index es canónico v4.0; doi_raw alias.
+        _doi_col = ("doi_index" if "doi_index" in active.columns
+                    else ("doi_raw" if "doi_raw" in active.columns else None))
+        doi = (np.nan_to_num(active[_doi_col].to_numpy().astype(float), nan=np.inf)
+               if _doi_col is not None else None)
 
         background = float(np.median(dens))                 # MISMA def de fondo que B1
         anomaly = np.abs(dens - background)
@@ -971,18 +1004,37 @@ def build_depth_resolution(df_full, observable_depth_max_m, best_target,
         geometric_max = (float(observable_depth_max_m) if observable_depth_max_m is not None
                          else float(np.max(ys)))
 
-        # ── Horizonte de RESOLUBILIDAD = profundidad de investigación (DOI) por SENSIBILIDAD,
-        #    NO el cutoff geométrico. MEDIDO: el cutoff (p.ej. 5022 m en LdM) es más profundo
-        #    que el propio artefacto null-space → daría deep_mass_fraction=0, contradiciendo
-        #    la cola real (~0.88). La sensibilidad cae con la profundidad (el dato deja de
-        #    restringir); el horizonte = capa más profunda con sens media ≥ 15% del pico. ──
+        # ── Horizonte de RESOLUBILIDAD (DOI) — ver docstring para el POR QUÉ medido ──
+        #   PRIMARIO: índice DOI de doble inversión (resolubilidad del modelo RECUPERADO,
+        #     post depth-weighting). Horizonte = capa MATERIAL más profunda con DOI medio ≤
+        #     _DOI_NULLSPACE_CUTOFF (=1.0). "Material" = capa con masa ≥ 1% de la capa pico,
+        #     para no extender el horizonte hacia capas base ~vacías (DOI≈0 trivial) ni
+        #     dejarlo colgado de un artefacto somero de borde (masa ≈ 0).
+        #   FALLBACK: half-max de sensibilidad cruda (comportamiento previo) → geométrico.
+        layers = np.unique(ys)
         horizon_method = "geometric_cutoff_fallback"
         doi_horizon = geometric_max
-        if sens is not None and float(np.max(sens)) > 0.0:
-            # DOI half-max: capa más profunda cuya sensibilidad media ≥ 50% del PICO de capa.
-            # Es la "profundidad de investigación" donde la sensibilidad del dato cae a la
-            # mitad de su máximo — convención estándar y robusta (no un umbral arbitrario).
-            layers = np.unique(ys)
+        if doi is not None and np.isfinite(doi).any():
+            layer_mass = np.array([float(anomaly[ys == yy].sum()) for yy in layers])
+            max_layer_mass = float(layer_mass.max())
+            material = layer_mass >= 0.01 * max_layer_mass if max_layer_mass > 0 else np.ones_like(layer_mass, dtype=bool)
+            layer_doi = np.array([
+                (float(doi[(ys == yy) & np.isfinite(doi)].mean())
+                 if np.isfinite(doi[ys == yy]).any() else np.inf)
+                for yy in layers
+            ])
+            resolved = material & (layer_doi <= _DOI_NULLSPACE_CUTOFF)
+            if resolved.any():
+                doi_horizon = float(layers[resolved].max())
+            elif material.any():
+                # Ninguna capa material resuelta → horizonte = tope material (todo null-space).
+                doi_horizon = float(layers[material].min())
+            else:
+                doi_horizon = float(layers.min())
+            horizon_method = "doi_double_inversion_horizon"
+        elif sens is not None and float(np.max(sens)) > 0.0:
+            # Fallback previo — half-max de sensibilidad cruda: capa más profunda cuya
+            # sensibilidad media ≥ 50% del pico de capa (sesga somero, ver docstring).
             layer_mean = np.array([float(sens[ys == yy].mean()) for yy in layers])
             peak = float(layer_mean.max())
             if peak > 0.0:
@@ -1030,7 +1082,12 @@ def build_depth_resolution(df_full, observable_depth_max_m, best_target,
             compactness = "diffuse"
         horizontal_determined = horiz_metric_m is not None
 
-        # Calidad vertical: dominada por la cola null-space si la mayoría de la masa cae profundo.
+        # Calidad vertical según la fracción de masa bajo el horizonte DOI (controlada por el
+        # prior, no por el dato). Con el horizonte DOI recalibrado los umbrales SÍ discriminan
+        # (medido F5/B2): 'poor' ≈ ambigüedad de profundidad NORMAL de gravedad-sola (DO-27
+        # sano 0.43, San Nicolás 0.40), 'null_space_dominated' RESERVADO al smear profundo
+        # real donde la mayoría de la masa vive fuera del alcance del dato (LdM 0.75). Antes,
+        # con horizonte de sensibilidad cruda, TODOS daban 0.92–0.98 → siempre null_space.
         if deep_mass_fraction >= 0.66:
             vert_quality = "null_space_dominated"
         elif deep_mass_fraction >= 0.33:
@@ -1076,8 +1133,11 @@ def build_depth_resolution(df_full, observable_depth_max_m, best_target,
                 "vertical": {
                     "quality": vert_quality,
                     "deep_mass_fraction": round(deep_mass_fraction, 3),
-                    "reason": (f"deep_mass_fraction={round(deep_mass_fraction,3)}; "
-                               f"bajo {round(rdmax,1)} m el dato no restringe"),
+                    "doi_cutoff": (_DOI_NULLSPACE_CUTOFF
+                                   if horizon_method == "doi_double_inversion_horizon" else None),
+                    "reason": (f"deep_mass_fraction={round(deep_mass_fraction,3)} bajo el "
+                               f"horizonte DOI ~{round(rdmax,1)} m ({horizon_method}); "
+                               f"la masa profunda está controlada por el prior, no por el dato"),
                 },
             },
             "statement": statement,
@@ -3983,14 +4043,33 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         }
 
     # ── Track 3 / T3.1: resumen de incertidumbre posterior (Hutchinson) ──────
+    # 'status' (machine-readable) explica POR QUÉ σ está o no disponible, para que el
+    # frontend distinga el default apagado del survey mal condicionado (el EmptyState
+    # genérico "compute_uncertainty desactivado" no lo hacía). Aditivo: NO cambia CUÁNDO
+    # se calcula, sólo la transparencia. σ posterior es densidad (t/m³); un contraste
+    # físico está acotado (|Δρ|≲3), así que p50>5 o máx>1e3 = covarianza mal condicionada
+    # (λ de Morozov en survey subdeterminado → σ explota; ~41/1e13 medido en LdM).
+    _uq_requested = bool(getattr(params, "compute_uncertainty", False))
     _ps_finite = posterior_std[np.isfinite(posterior_std)]
     if _ps_finite.size > 0:
+        _sigma_p50 = round(float(np.percentile(_ps_finite, 50)), 6)
+        _sigma_max = round(float(np.max(_ps_finite)), 6)
+        _ill_conditioned = (_sigma_p50 > 5.0) or (_sigma_max > 1.0e3)
         posterior_uncertainty_summary = {
             "computed": True,
+            "status": "ill_conditioned" if _ill_conditioned else "computed",
+            "reason": (
+                (f"Covarianza posterior mal condicionada: mediana σ={_sigma_p50} t/m³ "
+                 f"(máx {_sigma_max}), no físico para un contraste de densidad (|Δρ|≲3 t/m³). "
+                 "Survey subdeterminado a la λ auto-seleccionada (Morozov); requiere fijar un "
+                 "operating point estable (λ mayor) o regularizar la UQ — decisión de física.")
+                if _ill_conditioned else
+                "σ posterior estadística disponible y en rango físico."
+            ),
             "unit": "t/m3",
-            "p50": round(float(np.percentile(_ps_finite, 50)), 6),
+            "p50": _sigma_p50,
             "p95": round(float(np.percentile(_ps_finite, 95)), 6),
-            "max": round(float(np.max(_ps_finite)), 6),
+            "max": _sigma_max,
             "n_voxels": int(_ps_finite.size),
             "method": "hutchinson_posterior_diag_linear_gaussian",
             "is_statistical_posterior": True,
@@ -4004,6 +4083,18 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     else:
         posterior_uncertainty_summary = {
             "computed": False,
+            # Se pidió (compute_uncertainty=True) pero no salió σ finita → la UQ degeneró
+            # (covarianza singular / mal condicionada). Si no se pidió → apagado por default.
+            "status": "ill_conditioned" if _uq_requested else "disabled_by_default",
+            "reason": (
+                ("compute_uncertainty=True pero la UQ de Hutchinson no produjo σ finita: "
+                 "covarianza posterior singular/mal condicionada (survey subdeterminado a la "
+                 "λ auto-seleccionada). No hay σ física que reportar.")
+                if _uq_requested else
+                ("compute_uncertainty=False por default: a la λ que selecciona Morozov en "
+                 "surveys subdeterminados la covarianza posterior se mal-condiciona y σ explota "
+                 "(mediana ~41, máx ~1e13 t/m³ — no físico). Se deja OFF a propósito.")
+            ),
             "is_statistical_posterior": True,
             "method": "hutchinson_posterior_diag_linear_gaussian",
             "note": "No calculada (compute_uncertainty=False o no disponible en esta corrida).",
