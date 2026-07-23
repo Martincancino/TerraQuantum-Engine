@@ -42,6 +42,8 @@ from api.gravity_corrections_api import router as gravity_corrections_router
 from api.history_api import router as history_router
 from api.mag_enhancement_api import router as mag_enhancement_router
 from api.depth_estimate_api import router as depth_estimate_router
+from api.license_api import router as license_router
+from api.diagnostics_api import router as diagnostics_router
 
 from core.config import (
     APP_TITLE,
@@ -123,6 +125,14 @@ def _register_never_crash_handlers(fastapi_app: FastAPI) -> None:
     async def _tq_error_handler(request: _Request, exc: TerraquantumError):
         payload = exc.to_dict()
         status = 500 if exc.code == "TQ_INTERNAL" else 422
+        if status == 500:  # F7: solo errores internos al buffer de diagnóstico
+            try:
+                from core import diagnostics_buffer
+                diagnostics_buffer.record_error(
+                    str(request.url.path), f"TerraquantumError:{exc.code}", _tb.format_exc(),
+                )
+            except Exception:  # noqa: BLE001 — el diagnóstico jamás rompe el handler
+                pass
         return _JSONResponse(
             status_code=status,
             content={"detail": {"error": exc.code, "message": payload["user_message"], **payload}},
@@ -135,6 +145,13 @@ def _register_never_crash_handlers(fastapi_app: FastAPI) -> None:
             "unhandled_exception path=%s type=%s error=%s",
             str(request.url.path), type(exc).__name__, str(exc)[:500],
         )
+        try:  # F7: registrar en el buffer de diagnóstico (sin body de request)
+            from core import diagnostics_buffer
+            diagnostics_buffer.record_error(
+                str(request.url.path), type(exc).__name__, _tb.format_exc(),
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return _JSONResponse(
             status_code=500,
             content={
@@ -177,6 +194,8 @@ app.include_router(gravity_corrections_router)
 app.include_router(history_router)
 app.include_router(mag_enhancement_router)
 app.include_router(depth_estimate_router)
+app.include_router(license_router)       # F7 — licenciamiento local-first
+app.include_router(diagnostics_router)   # F7 — exportar diagnóstico sin datos
 
 # ── F3 — Historial SQLite: esquema + reconciliación de corridas huérfanas ─────
 # Una corrida queued/running al arrancar quedó huérfana (los workers mueren con

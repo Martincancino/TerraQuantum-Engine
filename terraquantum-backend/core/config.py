@@ -8,8 +8,30 @@ APP_VERSION = "0.2.0"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-DATA_DIR = BASE_DIR / "data"
+
+def _resolve_data_dir() -> Path:
+    """Raíz de DATOS DE USUARIO (proyectos, corridas, historial SQLite, licencia,
+    api keys).
+
+    F7 local-first: en desarrollo vive junto al código (`<repo>/data`), pero el
+    launcher de escritorio fija `TERRAQUANTUM_DATA_DIR` a una carpeta del usuario
+    FUERA del árbol de instalación — %APPDATA%\\TerraQuantum\\data (Windows),
+    ~/Library/Application Support/TerraQuantum/data (macOS),
+    ~/.local/share/TerraQuantum/data (Linux) — para que los datos del cliente
+    NUNCA se pierdan al actualizar la app y se respalden copiando UNA carpeta.
+    Solo se mueven los DATOS del usuario; los assets de instalación
+    (`public/models`, `tmp` de scratch) siguen junto al código.
+    """
+    env = os.getenv("TERRAQUANTUM_DATA_DIR", "").strip()
+    if env:
+        return Path(env).expanduser()
+    return BASE_DIR / "data"
+
+
+# DATOS DE USUARIO (portables vía TERRAQUANTUM_DATA_DIR en modo escritorio).
+DATA_DIR = _resolve_data_dir()
 PROJECTS_DIR = DATA_DIR / "projects"
+# ASSETS DE INSTALACIÓN (siempre junto al código, NO se mueven con los datos).
 TMP_DIR = BASE_DIR / "tmp"
 PUBLIC_DIR = BASE_DIR / "public"
 MODELS_DIR = PUBLIC_DIR / "models"
@@ -34,6 +56,16 @@ CORS_ORIGINS: list[str] = [origin.strip() for origin in _cors_raw.split(",") if 
 CSV_MAX_BYTES: int = int(os.getenv("CSV_MAX_BYTES", "10485760"))
 
 GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash")
+
+# F6 copiloto — modelos por tier (SDK google-genai). Todos configurables por env
+# para no fijar un ID que aún no exista en la cuenta del consultor (BYO-key).
+# Default seguro = GEMINI_MODEL_NAME (gemini-2.0-flash, verificado). Recomendación
+# del plan (state-of-the-art 2026, ajustar por env cuando estén disponibles en la
+# cuenta): chat ágil → "gemini-3.5-flash"; borrador de informe → "gemini-3.1-pro".
+#   GEMINI_CHAT_MODEL   = chat conversacional anclado a la corrida (tier Flash).
+#   GEMINI_REPORT_MODEL = reporte estructurado / borrador de informe (tier Pro).
+GEMINI_CHAT_MODEL: str = os.getenv("GEMINI_CHAT_MODEL", GEMINI_MODEL_NAME)
+GEMINI_REPORT_MODEL: str = os.getenv("GEMINI_REPORT_MODEL", GEMINI_MODEL_NAME)
 
 # H-B3: OpenTopography API key for DEM fetch (terrain correction).
 # Obtener en https://portal.opentopography.org/myopentopo
@@ -112,6 +144,35 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 TQ_AUTH_ENABLED: bool = os.getenv("TQ_AUTH_ENABLED", "false").lower() != "false"
 TQ_MASTER_KEY: str = os.getenv("TQ_MASTER_KEY", "")
 TQ_API_KEYS_DB: Path = DATA_DIR / "api_keys.db"
+
+
+# ── F7 — Licenciamiento local-first (Ed25519, offline, sin servidor) ──────────
+# Producto local-first: la licencia es una clave firmada offline (producto,
+# cliente, tier, expiración) que el backend verifica en la propia máquina; NO
+# hay servidor de activación (un dev solo no opera esa infraestructura).
+#
+# Regla dura: SIN emisor configurado o SIN archivo de licencia el backend corre
+# en modo LOCAL LIBRE (sin límites, nunca bloquea el arranque ni el camino
+# dorado). Los tiers con límites aplican solo cuando una licencia los declara
+# (canal freemium de distribución) — jamás se castiga la instalación propia.
+TQ_LICENSE_PRODUCT: str = "terraquantum"
+# Archivo de licencia activo: en el directorio de DATOS del usuario, así se
+# respalda y sobrevive actualizaciones junto al resto de los datos.
+TQ_LICENSE_FILE: Path = DATA_DIR / "license.key"
+# La licencia también puede inyectarse por env (CI, servidor de demo).
+TQ_LICENSE_TOKEN: str = os.getenv("TQ_LICENSE", "")
+# Clave PÚBLICA Ed25519 del emisor (Martín) que valida las licencias. La clave
+# PRIVADA jamás va al repo — se usa offline para FIRMAR (ver
+# scripts/mint_license.py --genkey). Vacío = sin emisor → modo local libre.
+TQ_LICENSE_PUBLIC_KEY_HEX: str = os.getenv("TQ_LICENSE_PUBLIC_KEY_HEX", "")
+
+# Límites por tier. `local` (default sin licencia) y `pro` = sin límite; `free`
+# = tier de distribución gratuita con tope de vóxeles y marca de agua en export.
+TQ_TIER_LIMITS: dict = {
+    "local": {"max_voxels": None, "watermark": False},
+    "pro":   {"max_voxels": None, "watermark": False},
+    "free":  {"max_voxels": int(os.getenv("TQ_FREE_MAX_VOXELS", "40000")), "watermark": True},
+}
 
 
 def ensure_runtime_dirs():

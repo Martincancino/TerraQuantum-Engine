@@ -1,0 +1,57 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "TerraQuantum",
+  "version": "0.2.0",
+  "identifier": "com.terraquantum.desktop",
+  "build": {
+    "frontendDist": "../src-tauri/splash",
+    "devUrl": "http://localhost:3000"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "TerraQuantum — Exploración geofísica local-first",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGMzQyMzk2MDQyRkEyNjQKUldSa29pOEVsaU0wYjhZeDFsMEkwc0ova05ra0hZaWErS1RPVUhWWDVpeXhTaHBCWEZBS281QWUK",
+      "endpoints": [
+        "https://github.com/TerraQuantum/terraquantum/releases/latest/download/latest.json"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/**/*"
+    ],
+    "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper" }
+    },
+    "shortDescription": "Exploración geofísica local-first",
+    "longDescription": "TerraQuantum: inversión geofísica (gravimetría/magnetometría/sondajes) y visor 3D honesto. Local-first — tus datos nunca salen de tu máquina."
+  }
+}

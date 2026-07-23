@@ -60,3 +60,8 @@ public/models/*.bin
 service-account*.json
 credenciales_gee.json
 credentiales_gee.json
+# F7 build logs
+next_build.log
+tauri_build*.log
+cargo_rebuild*.log
+src-tauri/*.log

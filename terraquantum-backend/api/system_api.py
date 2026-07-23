@@ -60,6 +60,14 @@ async def system_status():
     }
 
 
+@router.get("/system/connectivity")
+async def system_connectivity(probe: bool = False):
+    """F7 — Honestidad offline: qué features necesitan internet y confirmación de
+    que el camino dorado (ingesta→inversión→3D→export) funciona sin conexión."""
+    from services.connectivity_service import connectivity_summary
+    return connectivity_summary(probe=probe)
+
+
 @router.get("/project-runs")
 async def project_runs():
     return list_project_runs()
