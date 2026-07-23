@@ -1,10 +1,48 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useAppStore } from "../../store/useAppStore";
 
+type ChatMode = "explicar" | "redactar" | "ensenar";
+
+interface GroundingMeta {
+  redacted: boolean;
+  ungrounded: string[];
+}
+
 interface ChatMessage {
   role: "user" | "model";
   content: string;
+  grounding?: GroundingMeta;
 }
+
+const MODE_LABELS: { key: ChatMode | null; label: string; hint: string }[] = [
+  { key: null, label: "General", hint: "Chat libre anclado a la corrida" },
+  { key: "explicar", label: "Explicar", hint: "Explica el veredicto y las métricas de esta corrida" },
+  { key: "redactar", label: "Redactar", hint: "Borrador de sección de informe (lo editas y firmas tú)" },
+  { key: "ensenar", label: "Enseñar", hint: "Glosario minero-geofísico en español simple" },
+];
+
+const QUICK_ACTIONS: { label: string; mode: ChatMode; text: string; needsRun: boolean }[] = [
+  {
+    label: "Explícame el veredicto",
+    mode: "explicar",
+    text: "¿Por qué el veredicto de esta corrida es el que es? Explícamelo apoyándote en la trilogía B1/B2/B3 y el χ².",
+    needsRun: true,
+  },
+  {
+    label: "Borrador de informe",
+    mode: "redactar",
+    text: "Redacta un borrador de la sección de resultados del informe geofísico para esta corrida.",
+    needsRun: true,
+  },
+  {
+    label: "¿Qué es el χ² reducido?",
+    mode: "ensenar",
+    text: "¿Qué es el χ² reducido y cómo lo interpreto en una inversión gravimétrica?",
+    needsRun: false,
+  },
+];
+
+const KEY_STORAGE = "tq_gemini_api_key";
 
 export default function IAChatView() {
   const { activeRun, report } = useAppStore();
@@ -16,7 +54,30 @@ export default function IAChatView() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [mode, setMode] = useState<ChatMode | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // BYO-key: la clave vive SOLO en este navegador (local-first) y viaja directo a Google.
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(KEY_STORAGE);
+      if (stored) setApiKey(stored);
+    } catch {
+      /* localStorage no disponible: se usa la clave del servidor */
+    }
+  }, []);
+
+  const handleKeyChange = (value: string) => {
+    setApiKey(value);
+    try {
+      if (value.trim()) window.localStorage.setItem(KEY_STORAGE, value.trim());
+      else window.localStorage.removeItem(KEY_STORAGE);
+    } catch {
+      /* noop */
+    }
+  };
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -24,10 +85,10 @@ export default function IAChatView() {
     }
   }, [messages]);
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+  const sendMessage = async (text: string, sendMode: ChatMode | null) => {
+    if (!text.trim() || isLoading) return;
 
-    const newMessages = [...messages, { role: "user", content: input } as ChatMessage];
+    const newMessages = [...messages, { role: "user", content: text } as ChatMessage];
     setMessages(newMessages);
     setInput("");
     setIsLoading(true);
@@ -39,24 +100,39 @@ export default function IAChatView() {
         body: JSON.stringify({
           project_id: activeRun.projectId || "demo_project",
           run_id: activeRun.runId || "demo_run",
-          messages: newMessages,
+          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
+          mode: sendMode,
+          api_key: apiKey.trim() || undefined,
         }),
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        throw new Error("Error en la respuesta del servidor");
+        const detail = typeof data?.detail === "string" ? data.detail : "Error en la respuesta del servidor";
+        throw new Error(detail);
       }
 
-      const data = await response.json();
-      setMessages([...newMessages, { role: "model", content: data.response }]);
-    } catch (error) {
       setMessages([
         ...newMessages,
-        { role: "model", content: `Error de conexión con la IA: ${error}` },
+        { role: "model", content: data.response, grounding: data.grounding },
+      ]);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setMessages([
+        ...newMessages,
+        { role: "model", content: `Error de conexión con la IA: ${msg}` },
       ]);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSend = () => sendMessage(input, mode);
+
+  const handleQuickAction = (action: (typeof QUICK_ACTIONS)[number]) => {
+    setMode(action.mode);
+    sendMessage(action.text, action.mode);
   };
 
   const isModelLoaded = !!(activeRun.projectId && activeRun.runId);
@@ -76,7 +152,7 @@ export default function IAChatView() {
             <div className="text-sm text-white font-medium tracking-wide">Antigravity Engine</div>
           </div>
         </div>
-        
+
         <div className="flex flex-col gap-3 mt-2">
           <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">Workspace Activo</div>
           <div className="bg-white/[0.02] p-4 rounded-2xl border border-white/5 shadow-sm backdrop-blur-md">
@@ -95,8 +171,29 @@ export default function IAChatView() {
           </div>
         </div>
 
+        {/* Acciones rápidas */}
+        <div className="flex flex-col gap-3">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">Acciones Rápidas</div>
+          <div className="flex flex-col gap-2">
+            {QUICK_ACTIONS.map((action) => {
+              const disabled = isLoading || (action.needsRun && !isModelLoaded);
+              return (
+                <button
+                  key={action.label}
+                  onClick={() => handleQuickAction(action)}
+                  disabled={disabled}
+                  title={action.needsRun && !isModelLoaded ? "Carga una corrida para usar esta acción" : action.text}
+                  className="text-left text-xs px-3 py-2.5 rounded-xl bg-white/[0.02] border border-white/5 text-neutral-300 hover:border-blue-500/30 hover:bg-blue-500/[0.06] hover:text-white disabled:opacity-40 disabled:hover:bg-white/[0.02] disabled:hover:border-white/5 disabled:cursor-not-allowed transition-all"
+                >
+                  {action.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {report && (
-          <div className="flex flex-col gap-3 mt-4">
+          <div className="flex flex-col gap-3">
             <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">Métricas Clave</div>
             <div className="bg-white/[0.02] p-4 rounded-2xl border border-white/5 shadow-sm backdrop-blur-md space-y-3 text-xs">
               <div className="flex justify-between items-center">
@@ -117,6 +214,40 @@ export default function IAChatView() {
           </div>
         )}
 
+        {/* BYO-key: clave de Gemini del consultor (local-first) */}
+        <div className="flex flex-col gap-3">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">API Key de Gemini</div>
+          <div className="bg-white/[0.02] p-4 rounded-2xl border border-white/5 shadow-sm backdrop-blur-md flex flex-col gap-2">
+            <div className="relative">
+              <input
+                type={showKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(e) => handleKeyChange(e.target.value)}
+                placeholder="Pega tu clave (opcional)"
+                autoComplete="off"
+                spellCheck={false}
+                className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 pr-9 text-xs text-white placeholder-neutral-600 outline-none focus:border-blue-500/40 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((s) => !s)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-neutral-500 hover:text-neutral-300 uppercase tracking-wider"
+              >
+                {showKey ? "ocultar" : "ver"}
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${apiKey.trim() ? "bg-green-400" : "bg-neutral-600"}`}></span>
+              <span className="text-[10px] text-neutral-500">
+                {apiKey.trim() ? "Usando tu clave" : "Usando la clave del servidor"}
+              </span>
+            </div>
+            <p className="text-[10px] text-neutral-600 leading-relaxed">
+              Se guarda solo en este navegador y viaja directo a Google con tu cuenta. Nada se comparte con TerraQuantum.
+            </p>
+          </div>
+        </div>
+
         <div className="mt-auto pb-4">
           <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-900/10 to-purple-900/10 border border-blue-500/10">
             <p className="text-[10px] text-blue-200/60 leading-relaxed text-center">
@@ -130,7 +261,7 @@ export default function IAChatView() {
       <div className="flex-1 flex flex-col relative bg-[#050505]">
         {/* Background glow effects */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-3/4 h-32 bg-blue-500/5 blur-[100px] pointer-events-none rounded-full"></div>
-        
+
         <div className="p-6 flex items-center justify-between bg-transparent z-20">
           <h1 className="text-sm font-semibold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">
             Chat Geológico
@@ -145,7 +276,7 @@ export default function IAChatView() {
           {messages.map((msg, idx) => (
             <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} animate-fadeIn`}>
               <div className={`flex gap-4 max-w-[85%] ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
-                
+
                 {/* Avatar */}
                 <div className="shrink-0 pt-1">
                   {msg.role === "model" ? (
@@ -164,16 +295,35 @@ export default function IAChatView() {
                 </div>
 
                 {/* Bubble */}
-                <div
-                  className={`p-5 rounded-3xl ${
-                    msg.role === "user"
-                      ? "bg-white/[0.05] border border-white/10 text-white rounded-tr-sm"
-                      : "bg-gradient-to-b from-blue-900/10 to-transparent border border-blue-500/10 text-neutral-200 rounded-tl-sm"
-                  } shadow-lg backdrop-blur-md`}
-                >
-                  <div className="whitespace-pre-wrap text-[13px] leading-relaxed font-light">
-                    {msg.content}
+                <div className="flex flex-col gap-1.5">
+                  <div
+                    className={`p-5 rounded-3xl ${
+                      msg.role === "user"
+                        ? "bg-white/[0.05] border border-white/10 text-white rounded-tr-sm"
+                        : "bg-gradient-to-b from-blue-900/10 to-transparent border border-blue-500/10 text-neutral-200 rounded-tl-sm"
+                    } shadow-lg backdrop-blur-md`}
+                  >
+                    <div className="whitespace-pre-wrap text-[13px] leading-relaxed font-light">
+                      {msg.content}
+                    </div>
                   </div>
+
+                  {/* Indicador honesto de anclaje (solo respuestas del modelo con metadata) */}
+                  {msg.role === "model" && msg.grounding && (
+                    msg.grounding.redacted ? (
+                      <span className="self-start text-[10px] px-2 py-0.5 rounded-md bg-red-500/10 text-red-400 border border-red-500/20">
+                        Redactado por compliance JORC/NI 43-101
+                      </span>
+                    ) : msg.grounding.ungrounded.length > 0 ? (
+                      <span className="self-start text-[10px] px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        ⚠ {msg.grounding.ungrounded.length} cifra(s) sin anclar a la corrida — verifícalas
+                      </span>
+                    ) : (
+                      <span className="self-start text-[10px] px-2 py-0.5 rounded-md bg-green-500/10 text-green-400 border border-green-500/20">
+                        ⚓ Anclado a los datos de esta corrida
+                      </span>
+                    )
+                  )}
                 </div>
               </div>
             </div>
@@ -201,6 +351,24 @@ export default function IAChatView() {
         {/* Floating Input Area */}
         <div className="absolute bottom-0 left-0 right-0 p-6 md:px-12 md:pb-8 bg-gradient-to-t from-[#050505] via-[#050505] to-transparent pt-20 pointer-events-none">
           <div className="max-w-4xl mx-auto relative group pointer-events-auto">
+            {/* Selector de modo del copiloto */}
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              {MODE_LABELS.map((m) => (
+                <button
+                  key={m.label}
+                  onClick={() => setMode(m.key)}
+                  title={m.hint}
+                  className={`text-[11px] px-3 py-1.5 rounded-full border transition-all ${
+                    mode === m.key
+                      ? "bg-blue-500/15 border-blue-500/40 text-blue-300 font-medium"
+                      : "bg-white/[0.02] border-white/10 text-neutral-400 hover:text-neutral-200 hover:border-white/20"
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
             <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-500 to-purple-500 rounded-[28px] blur-md opacity-20 group-hover:opacity-40 transition duration-500"></div>
             <div className="relative flex items-end gap-3 bg-[#0a0a0a] p-2 rounded-[24px] border border-white/10 shadow-2xl focus-within:border-white/20 transition-all">
               <textarea

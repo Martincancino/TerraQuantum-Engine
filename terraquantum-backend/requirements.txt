@@ -29,7 +29,9 @@ charset-normalizer==3.4.7
 
 # Google Earth Engine / GEE
 earthengine-api==1.7.22
-google-generativeai==0.8.6
+# F6 copiloto — SDK Gemini nuevo (reemplaza el deprecado google-generativeai==0.8.6,
+# cuyo soporte terminó; migración completada en chat_api.py + gemini_agent.py).
+google-genai==2.13.0
 
 # Tests
 pytest==8.3.5

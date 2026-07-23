@@ -20,7 +20,7 @@ from typing import Any, List, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from core.config import GEMINI_MODEL_NAME
+from core.config import GEMINI_REPORT_MODEL
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,8 +260,8 @@ def build_interpretation_prompt(report: dict) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Llamada a la API de Gemini.
-# Requiere: pip install google-generativeai
+# Llamada a la API de Gemini (SDK google-genai, F6 — reemplaza el deprecado
+# google-generativeai). Requiere: pip install google-genai
 # ─────────────────────────────────────────────────────────────────────────────
 
 _GENERATION_CONFIG = {
@@ -279,11 +279,18 @@ _FALLBACK_NO_KEY: dict = {
 }
 
 
-def request_gemini_interpretation(report: dict) -> dict:
-    """Llama a Gemini 1.5 Pro y retorna el reporte de interpretación como dict.
+def request_gemini_interpretation(report: dict, api_key: str | None = None) -> dict:
+    """Llama a Gemini (tier reporte) y retorna la interpretación como dict.
 
-    Lee la clave desde la variable de entorno GEMINI_API_KEY.
-    Si no está configurada, retorna un dict de fallback sin crashear.
+    Migrado al SDK ``google-genai`` (F6). Usa ``GEMINI_REPORT_MODEL``.
+
+    Parameters
+    ----------
+    report : dict
+        ``result["report"]`` del orquestador de inversión.
+    api_key : str | None
+        Clave del usuario (BYO-key). Si es ``None`` se lee de ``GEMINI_API_KEY``.
+        Si no hay clave por ninguna vía, retorna un fallback sin crashear.
 
     Returns
     -------
@@ -292,23 +299,24 @@ def request_gemini_interpretation(report: dict) -> dict:
         overall_assessment, limitations.
         En caso de error incluye además la clave "error".
     """
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = api_key or os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return _FALLBACK_NO_KEY
+        return dict(_FALLBACK_NO_KEY)
 
     user_prompt = build_interpretation_prompt(report)
 
     try:
-        import google.generativeai as genai  # noqa: PLC0415
+        from google import genai  # noqa: PLC0415
+        from google.genai import types  # noqa: PLC0415
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL_NAME,
-            system_instruction=SYSTEM_PROMPT,
-        )
-        response = model.generate_content(
-            user_prompt,
-            generation_config=_GENERATION_CONFIG,
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=GEMINI_REPORT_MODEL,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                **_GENERATION_CONFIG,
+            ),
         )
         raw_text = response.text
     except Exception as exc:
