@@ -1,3 +1,4 @@
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -5,6 +6,24 @@ from pathlib import Path
 import pytest
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
+
+def pytest_collection_modifyitems(config, items):
+    """F9: los tests marcados `validation` re-invierten el motor real (minutos) → NO
+    corren en la suite normal ni en el CI rápido. Se ejecutan A DEMANDA cuando
+    `TQ_RUN_VALIDATION=1` (lo pone el gate `scripts/validation/f9_gate_regression.py`)
+    o con `--run-validation`. Por defecto se SALTAN (skip), nunca fallan por timeout."""
+    if os.environ.get("TQ_RUN_VALIDATION") == "1" or config.getoption("--run-validation", default=False):
+        return
+    skip = pytest.mark.skip(reason="suite de validación física F9 (lenta): usar TQ_RUN_VALIDATION=1 o --run-validation")
+    for item in items:
+        if "validation" in item.keywords:
+            item.add_marker(skip)
+
+
+def pytest_addoption(parser):
+    parser.addoption("--run-validation", action="store_true", default=False,
+                     help="Ejecuta la suite de validación física F9 (lenta, re-invierte el motor).")
 
 
 @pytest.fixture(scope="session", autouse=True)

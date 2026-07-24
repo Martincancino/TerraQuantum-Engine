@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F9 — Validación física como regresión automática</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+       color: #1a1f2b; background: #f6f7f9; line-height: 1.5; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 32px 24px 64px; }
+h1 { font-size: 1.55rem; margin: 0 0 4px; }
+h2 { font-size: 1.05rem; margin: 28px 0 10px; color: #2b3444; }
+.sub { color: #5b6472; font-size: .9rem; margin: 0 0 20px; }
+.banner { border-radius: 12px; padding: 18px 22px; margin: 8px 0 24px; display: flex;
+          align-items: center; gap: 18px; color: #fff; }
+.banner.pass { background: linear-gradient(135deg, #1f8a52, #2fae6a); }
+.banner.fail { background: linear-gradient(135deg, #b3261e, #d9433a); }
+.banner .big { font-size: 2rem; font-weight: 700; letter-spacing: .5px; }
+.banner .meta { font-size: .92rem; opacity: .95; }
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px;
+        overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: .9rem; }
+th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eceef1; }
+th { background: #f0f2f5; font-weight: 600; color: #333c4a; font-size: .8rem;
+     text-transform: uppercase; letter-spacing: .4px; }
+td.num { font-variant-numeric: tabular-nums; }
+.tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: .74rem;
+       font-weight: 700; letter-spacing: .3px; }
+.tag.pass { background: #d8f2e2; color: #146c3f; }
+.tag.fail { background: #fbe0de; color: #a3221b; }
+.tag.limit { background: #fdf0d5; color: #8a5a10; }
+.card { background: #fff; border-radius: 10px; padding: 16px 18px; margin: 12px 0;
+        box-shadow: 0 1px 3px rgba(0,0,0,.06); border-left: 5px solid #cfd4db; }
+.card.pass { border-left-color: #2fae6a; }
+.card.fail { border-left-color: #d9433a; }
+.card.limit { border-left-color: #e0a53a; }
+.card h3 { margin: 0 0 4px; font-size: 1rem; }
+.card .ds { color: #6b7482; font-size: .82rem; margin: 0 0 8px; }
+.card .row { display: flex; flex-wrap: wrap; gap: 20px; font-size: .88rem; }
+.card .row b { color: #2b3444; }
+.card .note { margin: 10px 0 0; font-size: .84rem; color: #55606f; font-style: italic; }
+.sec { margin-top: 6px; font-size: .82rem; color: #6b7482; }
+footer { margin-top: 32px; font-size: .78rem; color: #8b939f; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e7e9ee; background: #14171d; }
+  h2 { color: #c7cdd8; } .sub { color: #9aa2b0; }
+  table { background: #1c2028; box-shadow: none; }
+  th { background: #232833; color: #c7cdd8; } th, td { border-bottom-color: #2b313c; }
+  .card { background: #1c2028; box-shadow: none; } .card .ds { color: #9aa2b0; }
+  .card .row b { color: #dfe3ea; } .card .note, .sec { color: #9aa2b0; }
+}
+@media print {
+  body { background: #fff; } .wrap { max-width: none; padding: 0; }
+  .card, table { box-shadow: none; border: 1px solid #ddd; }
+  .banner { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+</style></head>
+<body><div class="wrap">
+<h1>TerraQuantum — F9: Validación física como regresión automática</h1>
+<p class="sub">Suite de regresión que congela la física ya validada (DO-27, Raglan, San Nicolás, LdM + sintéticos) con tolerancias explícitas.
+&nbsp;·&nbsp; Generado: 2026-07-24T01:49:16Z</p>
+
+<div class="banner pass">
+  <span class="big">✓ PASS</span>
+  <span class="meta">6/6 casos en verde &nbsp;·&nbsp; tiempo total 1972.3s<br>
+  Una degradación del motor (p.ej. romper W_z) hace fallar esta suite.</span>
+</div>
+
+<h2>Resumen</h2>
+<table><thead><tr>
+  <th>Caso / dataset</th><th>Métrica</th><th>Valor</th><th>Tolerancia</th><th>Estado</th><th>Tiempo</th>
+</tr></thead><tbody>
+<tr><td>Esfera sintética (motor real, anti-inverse-crime)</td><td>correlación de Pearson (recuperación)</td><td class='num'>0.7259</td><td class='num'>r ≥ 0.7</td><td><span class="tag pass">PASS</span></td><td class='num'>2.5s</td></tr><tr><td>Ambigüedad de profundidad (gravedad-sola)</td><td>z-error sin restricción</td><td class='num'>2675 m</td><td class='num'>≥ 400 m (LÍMITE conocido, no fallo)</td><td><span class="tag limit">LÍMITE ✓</span></td><td class='num'>563.7s</td></tr><tr><td>DO-27 Tli Kwi Cho (kimberlita)</td><td>error horizontal (grav-sola)</td><td class='num'>53.7 m</td><td class='num'>≤ 70 m</td><td><span class="tag pass">PASS</span></td><td class='num'>1348s</td></tr><tr><td>San Nicolás (VMS, México)</td><td>misfit del ajuste</td><td class='num'>1.51 %</td><td class='num'>≤ 3%</td><td><span class="tag pass">PASS</span></td><td class='num'>48.5s</td></tr><tr><td>Laguna del Maule (dato real, Miller et al. 2017)</td><td>χ² reducido (ajuste al ruido)</td><td class='num'>0.986949</td><td class='num'>∈ [0.7, 1.3]</td><td><span class="tag pass">PASS</span></td><td class='num'>9.6s</td></tr><tr><td>Raglan Ni-Cu (Quebec)</td><td>error pico interior vs ref</td><td class='num'>212.1 m</td><td class='num'>≤ 250 m</td><td><span class="tag pass">PASS</span></td><td class='num'>7.3s</td></tr>
+</tbody></table>
+
+<h2>Detalle por caso</h2>
+<div class='card pass'><h3>Esfera sintética (motor real, anti-inverse-crime) <span class="tag pass">PASS</span></h3><p class='ds'>Sintético con verdad conocida — malla forward ≠ malla de inversión + tendencia regional</p><div class='row'><span><b>correlación de Pearson (recuperación):</b> 0.7259</span><span><b>Tolerancia:</b> r ≥ 0.7</span></div><div class='sec'><b>recovery_score:</b> GOOD · <b>misfit:</b> 0.6538% · <b>χ² reducido:</b> 0.018922</div><p class='note'>La correlación cae si el depth-weighting (W_z) se degrada → canario directo de regresión (umbral 0.70 = el propio CI del benchmark para W_z formal).</p></div><div class='card limit'><h3>Ambigüedad de profundidad (gravedad-sola) <span class="tag limit">LÍMITE ✓</span></h3><p class='ds'>Sintético régimen LdM — cuerpo profundo + cobertura dispersa (esfera analítica)</p><div class='row'><span><b>z-error sin restricción:</b> 2675 m</span><span><b>Tolerancia:</b> ≥ 400 m (LÍMITE conocido, no fallo)</span></div><div class='sec'><b>z-error +guardrails:</b> 2675.0 m · <b>z-error +1 ancla dura:</b> 75.0 m · <b>ganancia del ancla (B→C):</b> 2600.0 m</div><p class='note'>La gravedad-sola NO resuelve profundidad (null-space). Se DOCUMENTA como límite esperado; el producto vende targeting horizontal, jamás profundidad sin restricciones.</p></div><div class='card pass'><h3>DO-27 Tli Kwi Cho (kimberlita) <span class="tag pass">PASS</span></h3><p class='ds'>Benchmark externo peer-reviewed (Astic &amp; Oldenburg 2020) — ground truth de sondajes</p><div class='row'><span><b>error horizontal (grav-sola):</b> 53.7 m</span><span><b>Tolerancia:</b> ≤ 70 m</span></div><div class='sec'><b>joint grav horiz:</b> 74.4 m · <b>misfit grav:</b> 0.072%</div><p class='note'>Targeting horizontal validado contra benchmark publicado.</p></div><div class='card pass'><h3>San Nicolás (VMS, México) <span class="tag pass">PASS</span></h3><p class='ds'>Dato de campo real re-invertido desde observaciones guardadas (λ=0.1 fijo · 256 estaciones, stride 4)</p><div class='row'><span><b>misfit del ajuste:</b> 1.51 %</span><span><b>Tolerancia:</b> ≤ 3%</span></div><div class='sec'><b>χ² reducido:</b> 0.357099 · <b>n observaciones:</b> 256</div><p class='note'>El motor reproduce el dato real a ~1.5% de misfit. Geometría del cuerpo aprobada con campo real (techo ~125 m vs 150–220 publicado). Estaciones submuestreadas por la guardia de memoria (8 GB); el número se congela con este submuestreo.</p></div><div class='card pass'><h3>Laguna del Maule (dato real, Miller et al. 2017) <span class="tag pass">PASS</span></h3><p class='ds'>Bouguer de campo real re-invertido desde observaciones guardadas (191 estaciones, λ=0.1)</p><div class='row'><span><b>χ² reducido (ajuste al ruido):</b> 0.986949</span><span><b>Tolerancia:</b> ∈ [0.7, 1.3]</span></div><div class='sec'><b>λ usado:</b> 0.1 · <b>misfit:</b> 4.75% · <b>n observaciones:</b> 191</div><p class='note'>El motor ajusta el dato real al nivel de ruido (χ²≈1 medido = 0.99) y acierta el targeting somero (~2 km, coincide con la literatura).</p></div><div class='card pass'><h3>Raglan Ni-Cu (Quebec) <span class="tag pass">PASS</span></h3><p class='ds'>Benchmark externo de DATO DE CAMPO REAL — ref. maginv3d (1997)</p><div class='row'><span><b>error pico interior vs ref:</b> 212.1 m</span><span><b>Tolerancia:</b> ≤ 250 m</span></div><div class='sec'><b>corr. horizontal:</b> 0.558 · <b>misfit:</b> 8.06% · <b>n sensores:</b> 410</div><p class='note'>Magnetometría escalar con padding (BC física). El pico GLOBAL cae en artefacto de borde; el blanco geológico es el cuerpo INTERIOR.</p></div>
+
+<footer>
+TerraQuantum · Suite de validación física (F9). Las tolerancias son explícitas y medidas: no se
+tunean para pasar. La ambigüedad de profundidad de la gravimetría-sola se reporta como
+LÍMITE conocido y esperado (no como fallo). Reporte imprimible → "Imprimir a PDF".
+</footer>
+</div></body></html>

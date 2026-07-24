@@ -1,0 +1,165 @@
+{
+  "suite": "F9",
+  "title": "F9 — Validación física como regresión automática",
+  "generated_utc": "2026-07-24T01:49:16Z",
+  "verdict": "PASS",
+  "n_pass": 6,
+  "n_total": 6,
+  "elapsed_s": 1972.3,
+  "cases": [
+    {
+      "key": "synthetic_sphere",
+      "title": "Esfera sintética (motor real, anti-inverse-crime)",
+      "dataset": "Sintético con verdad conocida — malla forward ≠ malla de inversión + tendencia regional",
+      "kind": "regression",
+      "metric": "correlación de Pearson (recuperación)",
+      "value": 0.7259,
+      "unit": "",
+      "tolerance_str": "r ≥ 0.7",
+      "passed": true,
+      "secondary": [
+        {
+          "label": "recovery_score",
+          "value": "GOOD"
+        },
+        {
+          "label": "misfit",
+          "value": "0.6538%"
+        },
+        {
+          "label": "χ² reducido",
+          "value": 0.018922
+        }
+      ],
+      "note": "La correlación cae si el depth-weighting (W_z) se degrada → canario directo de regresión (umbral 0.70 = el propio CI del benchmark para W_z formal).",
+      "elapsed_s": 2.5
+    },
+    {
+      "key": "depth_ambiguity",
+      "title": "Ambigüedad de profundidad (gravedad-sola)",
+      "dataset": "Sintético régimen LdM — cuerpo profundo + cobertura dispersa (esfera analítica)",
+      "kind": "documented_limit",
+      "metric": "z-error sin restricción",
+      "value": 2675.0,
+      "unit": "m",
+      "tolerance_str": "≥ 400 m (LÍMITE conocido, no fallo)",
+      "passed": true,
+      "secondary": [
+        {
+          "label": "z-error +guardrails",
+          "value": "2675.0 m"
+        },
+        {
+          "label": "z-error +1 ancla dura",
+          "value": "75.0 m"
+        },
+        {
+          "label": "ganancia del ancla (B→C)",
+          "value": "2600.0 m"
+        }
+      ],
+      "note": "La gravedad-sola NO resuelve profundidad (null-space). Se DOCUMENTA como límite esperado; el producto vende targeting horizontal, jamás profundidad sin restricciones.",
+      "elapsed_s": 563.7
+    },
+    {
+      "key": "do27",
+      "title": "DO-27 Tli Kwi Cho (kimberlita)",
+      "dataset": "Benchmark externo peer-reviewed (Astic & Oldenburg 2020) — ground truth de sondajes",
+      "kind": "regression",
+      "metric": "error horizontal (grav-sola)",
+      "value": 53.7,
+      "unit": "m",
+      "tolerance_str": "≤ 70 m",
+      "passed": true,
+      "secondary": [
+        {
+          "label": "joint grav horiz",
+          "value": "74.4 m"
+        },
+        {
+          "label": "misfit grav",
+          "value": "0.072%"
+        }
+      ],
+      "note": "Targeting horizontal validado contra benchmark publicado.",
+      "elapsed_s": 1348.0
+    },
+    {
+      "key": "san_nicolas",
+      "title": "San Nicolás (VMS, México)",
+      "dataset": "Dato de campo real re-invertido desde observaciones guardadas (λ=0.1 fijo · 256 estaciones, stride 4)",
+      "kind": "regression",
+      "metric": "misfit del ajuste",
+      "value": 1.51,
+      "unit": "%",
+      "tolerance_str": "≤ 3%",
+      "passed": true,
+      "secondary": [
+        {
+          "label": "χ² reducido",
+          "value": 0.35709940666942763
+        },
+        {
+          "label": "n observaciones",
+          "value": 256
+        }
+      ],
+      "note": "El motor reproduce el dato real a ~1.5% de misfit. Geometría del cuerpo aprobada con campo real (techo ~125 m vs 150–220 publicado). Estaciones submuestreadas por la guardia de memoria (8 GB); el número se congela con este submuestreo.",
+      "elapsed_s": 48.5
+    },
+    {
+      "key": "ldm",
+      "title": "Laguna del Maule (dato real, Miller et al. 2017)",
+      "dataset": "Bouguer de campo real re-invertido desde observaciones guardadas (191 estaciones, λ=0.1)",
+      "kind": "regression",
+      "metric": "χ² reducido (ajuste al ruido)",
+      "value": 0.9869491411973692,
+      "unit": "",
+      "tolerance_str": "∈ [0.7, 1.3]",
+      "passed": true,
+      "secondary": [
+        {
+          "label": "λ usado",
+          "value": 0.1
+        },
+        {
+          "label": "misfit",
+          "value": "4.75%"
+        },
+        {
+          "label": "n observaciones",
+          "value": 191
+        }
+      ],
+      "note": "El motor ajusta el dato real al nivel de ruido (χ²≈1 medido = 0.99) y acierta el targeting somero (~2 km, coincide con la literatura).",
+      "elapsed_s": 9.6
+    },
+    {
+      "key": "raglan",
+      "title": "Raglan Ni-Cu (Quebec)",
+      "dataset": "Benchmark externo de DATO DE CAMPO REAL — ref. maginv3d (1997)",
+      "kind": "regression",
+      "metric": "error pico interior vs ref",
+      "value": 212.1,
+      "unit": "m",
+      "tolerance_str": "≤ 250 m",
+      "passed": true,
+      "secondary": [
+        {
+          "label": "corr. horizontal",
+          "value": 0.558
+        },
+        {
+          "label": "misfit",
+          "value": "8.06%"
+        },
+        {
+          "label": "n sensores",
+          "value": 410
+        }
+      ],
+      "note": "Magnetometría escalar con padding (BC física). El pico GLOBAL cae en artefacto de borde; el blanco geológico es el cuerpo INTERIOR.",
+      "elapsed_s": 7.3
+    }
+  ]
+}
