@@ -92,6 +92,17 @@ def test_estimate_from_grid_none_on_tiny_grid():
     assert estimate_depth_prior_from_grid(tiny, 0, 0, 100, 100, mx, mz, 2.67) is None
 
 
+def test_config_whitelist_carries_depth_prior_flags():
+    """El #CONFIG del paquete pasa `enable_depth_prior`/`depth_prior_safety_fraction`
+    por el whitelist de merge_config (si no, el toggle de la UI sería inerte)."""
+    from services.csv_package_service import merge_config
+    cfg = merge_config({"enable_depth_prior": True, "depth_prior_safety_fraction": 0.6})
+    assert cfg["enable_depth_prior"] is True
+    assert cfg["depth_prior_safety_fraction"] == 0.6
+    # claves desconocidas se descartan (contrato del whitelist)
+    assert "bogus_key" not in merge_config({"bogus_key": 1})
+
+
 def test_estimate_from_stations_grids_and_estimates():
     """Cadena desde estaciones DISPERSAS (grid_scattered + espectro), rápida."""
     span, n, depth = 2000.0, 20, 500.0

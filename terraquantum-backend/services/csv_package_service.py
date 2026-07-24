@@ -87,6 +87,12 @@ _CONFIG_DEFAULTS: dict = {
     # Fase 7B — params avanzados (objetos anidados; None = desactivado).
     "pgi_params": None,
     "remanence": None,
+    # Prior de profundidad opt-in (docs/05 Parte B). OFF por defecto → byte-idéntico.
+    # Fuente = espectro radial; prohíbe contraste somero para recortar el sesgo somero
+    # medido de la gravedad-sola. Whitelisteados aquí para que viajen en el #CONFIG del
+    # paquete hasta GeophysicsInvertInput. Ver schemas/geophysics_schema.py.
+    "enable_depth_prior": False,
+    "depth_prior_safety_fraction": 0.7,
 }
 
 

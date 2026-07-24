@@ -1845,6 +1845,9 @@ async def load_package(
                 regularization_norm=str(cfg.get("regularization_norm", "L2")),
                 compact_max_irls=int(cfg.get("compact_max_irls", 8)),
                 compact_eps=float(cfg.get("compact_eps", 0.05)),
+                # Prior de profundidad opt-in (docs/05 Parte B). OFF por defecto → byte-idéntico.
+                enable_depth_prior=bool(cfg.get("enable_depth_prior", False)),
+                depth_prior_safety_fraction=float(cfg.get("depth_prior_safety_fraction", 0.7)),
             )
         except ValidationError as exc:
             raise HTTPException(
