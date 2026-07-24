@@ -448,6 +448,8 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   const [paddingKappaLog, setPaddingKappaLog] = useState<number>(5); // log10(1e5)
   const [anchorKappaLog, setAnchorKappaLog] = useState<number>(4);   // log10(1e4)
   const [autoKappa, setAutoKappa] = useState(true);
+  // Prior de profundidad opt-in (docs/05 Parte B). Default OFF = comportamiento intacto.
+  const [enableDepthPrior, setEnableDepthPrior] = useState(false);
   const [acknowledgeSpatialRisk, setAcknowledgeSpatialRisk] = useState(false);
   const [acknowledgeRegionalScale, setAcknowledgeRegionalScale] = useState(false);
 
@@ -946,6 +948,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
       padding_kappa: Math.pow(10, paddingKappaLog),
       anchor_kappa: Math.pow(10, anchorKappaLog),
       auto_kappa: autoKappa,
+      enable_depth_prior: enableDepthPrior,
       inclination_deg: inclinationDeg,
       declination_deg: declinationDeg,
       field_intensity_nt: fieldIntensityNt,
@@ -1239,6 +1242,22 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
                 </label>
               </div>
             )}
+          </div>
+          <div>
+            <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">
+              Profundidad (prior)
+            </label>
+            <label className="flex items-center gap-2 text-[10px] text-neutral-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={enableDepthPrior}
+                onChange={(e) => setEnableDepthPrior(e.target.checked)}
+                className="accent-[#C2D8C4]"
+              />
+              <span title="El backend estima la profundidad de la fuente con el espectro radial y restringe la inversión a poner masa por debajo de ese horizonte, reduciendo el sesgo somero de la gravedad-sola (mejora medida en régimen profundo). El espectro tiene ±15% de error: úsalo como restricción, no como medición. Default OFF.">
+                Restringir profundidad (espectro radial)
+              </span>
+            </label>
           </div>
           <div>
             <label className="block text-[9px] uppercase text-neutral-500 tracking-widest mb-1">

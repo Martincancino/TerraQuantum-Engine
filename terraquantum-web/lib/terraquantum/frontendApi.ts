@@ -1320,6 +1320,11 @@ export type BuildPackageConfig = {
   padding_kappa?: number;
   anchor_kappa?: number;
   auto_kappa?: boolean;
+  // Prior de profundidad opt-in (docs/05 Parte B). Default OFF en el backend = byte-idéntico.
+  // El espectro radial estima la profundidad de la fuente y prohíbe contraste somero,
+  // recortando el sesgo somero de la gravedad-sola (mejora medida en régimen profundo).
+  enable_depth_prior?: boolean;
+  depth_prior_safety_fraction?: number;
   utm_zone?: string | null;
   acknowledge_spatial_risk?: boolean;
   acknowledge_regional_scale?: boolean;
