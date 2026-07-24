@@ -1,0 +1,57 @@
+{
+  "kind": "multiphysics_gain_partB",
+  "body": {
+    "depth_m": 500.0,
+    "radius_m": 150.0,
+    "delta_rho": 0.6,
+    "delta_kappa": 0.05
+  },
+  "mesh": {
+    "nx": 18,
+    "ny": 14,
+    "nz": 18,
+    "block_m": 125.0
+  },
+  "results": {
+    "1_grav_sola": {
+      "horizontal_m": 42.7,
+      "depth_centroid_m": 437.5,
+      "depth_peak_m": 437.5,
+      "recovered_depth_m": 62.5,
+      "misfit_pct": 6.9,
+      "s": 42.8
+    },
+    "2_mag_sola": {
+      "horizontal_m": 345.3,
+      "depth_centroid_m": 282.1,
+      "depth_peak_m": 437.5,
+      "recovered_depth_m": 217.9,
+      "misfit_pct": 0.0,
+      "s": 47.9
+    },
+    "3_joint_gm": {
+      "horizontal_m": 45.7,
+      "depth_centroid_m": 437.5,
+      "depth_peak_m": 437.5,
+      "recovered_depth_m": 62.5,
+      "misfit_pct": 6.9,
+      "s": 163.4
+    },
+    "4_grav_anchor": {
+      "horizontal_m": 0.0,
+      "depth_centroid_m": 0.0,
+      "depth_peak_m": 62.5,
+      "recovered_depth_m": 500.0,
+      "misfit_pct": 27.7,
+      "s": 10.8
+    },
+    "5_grav_mag_anchor": {
+      "horizontal_m": 0.0,
+      "depth_centroid_m": 0.0,
+      "depth_peak_m": 62.5,
+      "recovered_depth_m": 500.0,
+      "misfit_pct": 27.7,
+      "s": 53.1
+    }
+  }
+}

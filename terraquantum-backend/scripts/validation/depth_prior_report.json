@@ -1,0 +1,50 @@
+{
+  "body_depth_m": 500.0,
+  "results": {
+    "baseline (sin prior)": {
+      "horizontal_m": 42.7,
+      "depth_centroid_m": 437.5,
+      "recovered_depth_m": 62.5,
+      "depth_peak_m": 437.5,
+      "n_anchored": 0,
+      "misfit_pct": 6.9,
+      "s": 69.0
+    },
+    "prior EULER-perfecto (piso 350 m = techo real)": {
+      "horizontal_m": 10.7,
+      "depth_centroid_m": 62.5,
+      "recovered_depth_m": 437.5,
+      "depth_peak_m": 62.5,
+      "n_anchored": 972,
+      "misfit_pct": 21.4,
+      "s": 32.5
+    },
+    "prior EULER-conservador (piso 300 m)": {
+      "horizontal_m": 88.4,
+      "depth_centroid_m": 187.5,
+      "recovered_depth_m": 312.5,
+      "depth_peak_m": 187.5,
+      "n_anchored": 648,
+      "misfit_pct": 20.27,
+      "s": 44.8
+    },
+    "prior MAG-imperfecto (piso 200 m)": {
+      "horizontal_m": 88.4,
+      "depth_centroid_m": 187.5,
+      "recovered_depth_m": 312.5,
+      "depth_peak_m": 187.5,
+      "n_anchored": 648,
+      "misfit_pct": 20.27,
+      "s": 43.0
+    },
+    "prior MALO (piso 100 m, control)": {
+      "horizontal_m": 117.2,
+      "depth_centroid_m": 312.5,
+      "recovered_depth_m": 187.5,
+      "depth_peak_m": 312.5,
+      "n_anchored": 324,
+      "misfit_pct": 17.11,
+      "s": 42.0
+    }
+  }
+}

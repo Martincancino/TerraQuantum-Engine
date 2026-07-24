@@ -1,0 +1,31 @@
+{
+  "rows": [
+    {
+      "true_depth_m": 300.0,
+      "euler_grav": 205.0,
+      "euler_mag": 247.0,
+      "spectral_grav": 274.0,
+      "spectral_mag": 202.0
+    },
+    {
+      "true_depth_m": 500.0,
+      "euler_grav": 266.0,
+      "euler_mag": 393.0,
+      "spectral_grav": 419.0,
+      "spectral_mag": 312.0
+    },
+    {
+      "true_depth_m": 700.0,
+      "euler_grav": 251.0,
+      "euler_mag": 498.0,
+      "spectral_grav": 564.0,
+      "spectral_mag": 450.0
+    }
+  ],
+  "config": {
+    "span_m": 2000.0,
+    "n_side": 40,
+    "radius_m": 150.0,
+    "incl": -55.0
+  }
+}

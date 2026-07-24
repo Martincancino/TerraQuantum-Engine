@@ -1,0 +1,37 @@
+{
+  "rows": [
+    {
+      "true_depth_m": 300.0,
+      "spectral_depth_m": 297.0,
+      "floor_m": 239.0,
+      "err_prof_baseline_m": 112.5,
+      "err_prof_con_prior_m": 12.5,
+      "horiz_baseline_m": 5.5,
+      "horiz_con_prior_m": 1.0,
+      "n_columnas_ancladas": 324,
+      "s": 5155.1
+    },
+    {
+      "true_depth_m": 500.0,
+      "spectral_depth_m": 488.0,
+      "floor_m": 393.0,
+      "err_prof_baseline_m": 1135.1,
+      "err_prof_con_prior_m": 62.5,
+      "horiz_baseline_m": 1287.9,
+      "horiz_con_prior_m": 2.2,
+      "n_columnas_ancladas": 324,
+      "s": 1249.9
+    },
+    {
+      "true_depth_m": 700.0,
+      "spectral_depth_m": 647.0,
+      "floor_m": 520.0,
+      "err_prof_baseline_m": 987.5,
+      "err_prof_con_prior_m": 137.5,
+      "horiz_baseline_m": 466.2,
+      "horiz_con_prior_m": 33.1,
+      "n_columnas_ancladas": 324,
+      "s": 2078.8
+    }
+  ]
+}

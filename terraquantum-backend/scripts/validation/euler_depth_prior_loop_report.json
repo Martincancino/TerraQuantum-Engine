@@ -1,0 +1,34 @@
+{
+  "euler_depth_m": 65.09605978365539,
+  "true_depth_m": 500.0,
+  "cases": {
+    "baseline": {
+      "horizontal_m": 70.4,
+      "depth_centroid_m": 312.5,
+      "recovered_depth_m": 187.5,
+      "depth_peak_m": 312.5,
+      "n_anchored": 0,
+      "misfit_pct": 18.72
+    },
+    "euler_floor_0.7": {
+      "horizontal_m": 18.3,
+      "depth_centroid_m": 312.5,
+      "recovered_depth_m": 187.5,
+      "depth_peak_m": 312.5,
+      "n_anchored": 324,
+      "misfit_pct": 20.94,
+      "s": 139.1,
+      "floor_m": 45.6
+    },
+    "euler_floor_1.0": {
+      "horizontal_m": 18.3,
+      "depth_centroid_m": 312.5,
+      "recovered_depth_m": 187.5,
+      "depth_peak_m": 312.5,
+      "n_anchored": 324,
+      "misfit_pct": 20.94,
+      "s": 139.0,
+      "floor_m": 65.1
+    }
+  }
+}
