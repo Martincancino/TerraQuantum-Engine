@@ -186,7 +186,15 @@ Cambio mínimo, guardado, **default OFF = byte-idéntico**:
 - **Servicio**: `estimate_depth_prior_from_stations` (survey disperso → grid_scattered → espectro → prior).
 - **Tests**: 7 unit rápidos verdes + 2 `validation` (INTEGRACIÓN en el flujo real: con flag ON la capa somera queda sin contraste, con OFF no — **PASS 39 s**; + ganancia física). Motor validado y frontend INTACTOS salvo este bloque aditivo default-OFF.
 
-**Pendiente de B (iteraciones propias):** (3.3) UI — campo opt-in en el panel (frontend, iteración aparte por la regla de oro backend≠frontend); (4) [PUNTO 4] W_z inerte + PGI/Gramian; luego Parte C.
+### Punto 3.3 — UI + cadena COMPLETA (2026-07-24): ✅
+
+- **3.3a (backend):** `merge_config` es un WHITELIST → se whitelistearon `enable_depth_prior` + `depth_prior_safety_fraction` en `_CONFIG_DEFAULTS`, y el flujo load-package (`gravity_import_api`) los pasa a `GeophysicsInvertInput` (si no, el toggle sería inerte). Test del passthrough.
+- **3.3b (frontend, solo-front):** `BuildPackageConfig` (campos opcionales) + `PrepPanel.tsx` (estado `enableDepthPrior` default false + checkbox "Restringir profundidad (espectro radial)" con disclaimer honesto → lo escribe en el `#CONFIG`). Cero física en el front. **eslint 0 errores, tsc 0.**
+- **Cadena end-to-end VERIFICADA y COMMITEADA:** UI toggle → `#CONFIG` → `merge_config` → load-package → `run_geophysics_inversion` (bloque guardado) → espectro → prior. Todo default OFF = byte-idéntico. 6 commits atómicos en `fases-19-25-cierre`.
+
+**Estado del feature de prior de profundidad: COMPLETO y usable** (opt-in, default OFF). Falta validarlo en un benchmark externo profundo (los actuales son someros) antes de recomendarlo como default.
+
+**Pendiente de B:** (4) [PUNTO 4] arreglar el W_z inerte (cambio de física, campaña antes/después) + PGI/Gramian como coupling alternativo; luego Parte C (red-team).
 
 ---
 
