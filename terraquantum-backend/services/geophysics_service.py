@@ -2669,6 +2669,34 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     _anchor_mode  = str(getattr(params, "anchor_mode", "soft"))   # FASE 2.1
     _auto_kappa   = bool(getattr(params, "auto_kappa", True))
 
+    # ── Prior de profundidad opt-in (docs/05 Parte B, Punto 2) ────────────────
+    # OFF por defecto → byte-idéntico. Cuando ON: estima la profundidad de la fuente con el
+    # ESPECTRO radial sobre el dato (fuente medida como confiable en profundo) y PROHÍBE
+    # contraste somero (ancla dura a densidad-base), recortando el sesgo somero medido de la
+    # gravedad-sola (7-18× mejor en profundidad con verdad conocida). Guardado: si no hay
+    # estimación utilizable o algo falla, se salta sin romper la inversión.
+    if getattr(params, "enable_depth_prior", False):
+        try:
+            from services.depth_prior_service import estimate_depth_prior_from_stations
+            _dp_prior = estimate_depth_prior_from_stations(
+                sensor_coords[:, 0], sensor_coords[:, 2],
+                np.asarray(g_observed, dtype=np.float64), x_c, z_c, _base_density,
+                safety_fraction=float(getattr(params, "depth_prior_safety_fraction", 0.7)),
+            )
+            if _dp_prior is not None:
+                _had_drillholes = boreholes_arr is not None
+                boreholes_arr = (_dp_prior.anchor if boreholes_arr is None
+                                 else np.vstack([boreholes_arr, _dp_prior.anchor]))
+                if not _had_drillholes:
+                    _anchor_mode = "hard"   # el prior se validó con ancla dura (eficiente)
+                _log.info("depth_prior_applied", depth_floor_m=round(_dp_prior.depth_floor_m, 1),
+                          source=_dp_prior.source, n_columns=_dp_prior.n_columns)
+            else:
+                _log.info("depth_prior_no_estimate",
+                          reason="el espectro no dio una profundidad utilizable (survey chico/sin anomalía)")
+        except Exception as _dp_exc:
+            _log.warning("depth_prior_skipped", error=str(_dp_exc))
+
     # ── FASE 7.2 (God-Tier): prior geológico implícito (φ HRBF → m_ref) ───────
     # Si implicit_geology está activado, φ se construye desde los contactos
     # litológicos de los sondajes y se inyecta como modelo de referencia por celda

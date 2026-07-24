@@ -385,6 +385,22 @@ class GeophysicsInvertInput(BaseModel):
     # Separación regional-residual (gap industrial #2). OFF por defecto → comportamiento intacto.
     remove_regional: bool = Field(False, description="Restar tendencia regional polinómica antes de invertir")
     regional_order: int = Field(2, ge=1, le=4, description="Grado del polinomio regional: 1-4")
+    # ── Prior de profundidad (docs/05 Parte B). OFF por defecto → byte-idéntico. ──
+    # Fuente MEDIDA como confiable = espectro radial de potencia (Euler satura en profundo).
+    # Cuando ON: estima la profundidad de la fuente sobre el dato y PROHÍBE contraste somero
+    # (ancla dura a densidad-base), reduciendo el sesgo somero de la gravedad-sola (7-18×
+    # mejor en profundidad en la validación con verdad conocida). Guardado: si no hay
+    # estimación utilizable, se salta sin romper.
+    enable_depth_prior: bool = Field(
+        False,
+        description="Constreñir la profundidad con un prior del espectro radial (docs/05). "
+                    "Default False = comportamiento intacto.",
+    )
+    depth_prior_safety_fraction: float = Field(
+        0.7, gt=0.0, le=1.0,
+        description="Fracción conservadora de la profundidad estimada usada como horizonte "
+                    "(0.7 = prohíbe masa por encima del 70% de la profundidad estimada).",
+    )
     # Integridad científica (gap #1): el "grade"/ley es un PROXY HEURÍSTICO no físico
     # (no derivable de gravimetría). OFF por defecto → el payload industrial NO emite
     # ley inventada (grade/avg_grade = null); el contraste de densidad real se conserva.
