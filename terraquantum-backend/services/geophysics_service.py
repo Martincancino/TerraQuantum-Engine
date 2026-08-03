@@ -609,7 +609,7 @@ def build_voxel_output(df_anomaly: pl.DataFrame, block_size: float, cutoff_densi
 
 def build_best_target(df_full, technical_summary: dict = None, uncertainty_diagnostics: dict = None,
                       *, density_min=None, density_max=None, block_size=None,
-                      cutoff_density=None):
+                      cutoff_density=None, depth_independently_constrained: bool = False):
     """Selecciona el blanco de perforación RESOLUBLE (B1 — null-space honesto).
 
     ANTES elegía la celda de mayor (probabilidad × max(densidad−2.6, 0) × proxy), un
@@ -708,6 +708,29 @@ def build_best_target(df_full, technical_summary: dict = None, uncertainty_diagn
     if surfaced_is_artifact:
         confidence_level = "LOW"
 
+    # ── C2 (red-team): confianza de PROFUNDIDAD DESACOPLADA de la horizontal ──────
+    # LEY del null-space (MEDIDA en config de producción, 5 semillas): la gravedad-sola
+    # NO resuelve la profundidad absoluta. Un cuerpo PROFUNDO se recupera indistinguible
+    # de una PILA SOMERA — el modelo recuperado se ve igual (cuerpo compacto somero) esté
+    # el cuerpo real a 300 m o a 900 m. Por eso `confidence_level` (arriba) aplica al
+    # TARGETING HORIZONTAL (el producto), y la profundidad se marca LOW por defecto: no se
+    # puede saber desde una sola inversión si la profundidad recuperada es real o artefacto.
+    # Sólo un dato INDEPENDIENTE (sondaje real; NO el auto-prior, derivado del espectro que
+    # SATURA ~350 m en profundo) sube la confianza de profundidad. Cierra el hueco medido:
+    # antes la profundidad equivocada (62.5 m para un cuerpo a 900 m) se presentaba con la
+    # misma confianza MEDIUM que una correcta. El caveat de prosa ya lo decía; ahora los
+    # campos ESTRUCTURADOS son consistentes.
+    if depth_independently_constrained:
+        depth_confidence = confidence_level
+        depth_note = ("Profundidad constreñida por dato independiente (sondaje). "
+                      "La confianza de profundidad hereda la del targeting.")
+    else:
+        depth_confidence = "LOW"
+        depth_note = ("Gravedad-sola: la PROFUNDIDAD no está resuelta (null-space) — un cuerpo "
+                      "profundo se recupera indistinguible de uno somero. La profundidad mostrada "
+                      "es INDICATIVA, no un dato resuelto; el targeting confiable es el HORIZONTAL. "
+                      "Aporte sondaje / estimación independiente para constreñir la profundidad.")
+
     g_val = (float(grade[bi]) if (grade is not None and grade[bi] is not None
                                   and np.isfinite(grade[bi])) else None)
     p_val = float(prob[bi])
@@ -734,6 +757,9 @@ def build_best_target(df_full, technical_summary: dict = None, uncertainty_diagn
         "modeled_density_index": d_val,
         "density_anomaly_score": das,
         "confidence_level": confidence_level,
+        # ── C2: confianza de profundidad desacoplada (gravedad-sola no resuelve z) ─
+        "depth_confidence": depth_confidence,
+        "depth_note": depth_note,
         # ── B1: transparencia null-space ───────────────────────────────────────
         "anomaly_magnitude": round(float(anomaly[bi]), 4),
         "anomaly_background_density": round(background, 4),
@@ -841,6 +867,18 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
     components["best_target_null_space"] = bt_artifact
     if bt_artifact:
         levels.append(("LOW", "best_target_null_space"))
+
+    # ── C2 (red-team): resolución del survey (checkerboard) ──────────────────────
+    # Si el survey NO resuelve la estructura de prueba (status FAIL), el modelo no puede
+    # sellarse HIGH: la resolución es demostrablemente pobre. Cap a MEDIUM (no a LOW: un
+    # cuerpo dominante único puede seguir siendo un indicio MEDIUM y el targeting
+    # HORIZONTAL puede ser bueno pese a la baja resolución de estructura fina). Ausente /
+    # NOT_RUN → sin efecto, como r06.
+    cb = report_payload.get("checkerboard_qa") or {}
+    cb_status = str(cb.get("status", "")).upper()
+    components["checkerboard_qa"] = cb_status or "NOT_RUN"
+    if cb_status == "FAIL":
+        levels.append(("MEDIUM", "checkerboard_resolution"))
 
     if not levels:
         overall = "UNKNOWN"
@@ -4023,6 +4061,10 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     # B1 (null-space honesto): el blanco se elige sobre el CAMPO ACTIVO COMPLETO (df_full),
     # no sólo las anomalías de alta densidad, para que el cuerpo de baja densidad a
     # profundidad resoluble pueda surfacear y el artefacto bound-saturado del piso se degrade.
+    # C2: la profundidad sólo se considera CONSTREÑIDA si hay SONDAJE REAL del usuario.
+    # El auto-prior de profundidad (enable_depth_prior) NO cuenta: deriva del espectro
+    # radial, que se MIDIÓ saturando ~350 m → poco confiable justo en el régimen profundo.
+    _depth_constrained = bool(getattr(params, "boreholes", None))
     best_target = build_best_target(
         df_full,
         technical_summary=technical_summary,
@@ -4031,6 +4073,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         density_max=getattr(params, "density_max", None),
         block_size=dx,
         cutoff_density=float(cutoff_density),
+        depth_independently_constrained=_depth_constrained,
     )
 
     report = build_geophysics_report(

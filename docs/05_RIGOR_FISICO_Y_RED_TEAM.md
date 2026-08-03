@@ -63,6 +63,7 @@ Herramientas: `scripts/validation/error_budget.py` (barrido, 15 regímenes, esfe
 → **Regla medida:** el targeting es perforable (≤ ~1–2 celdas) cuando la profundidad objetivo ≲ 1.5× el espaciamiento de estaciones y la señal es clara. Fuera de eso se degrada — y hay que decirlo. Esto ES el producto, y coincide con las validaciones externas (DO-27 53.7 m, Raglan 212 m).
 
 **2. PROFUNDIDAD (cuán profundo) = NO se recupera:**
+> ⚠ **CORRECCIÓN ENDURECIDA 2026-07-29** (ver §*Hallazgos endurecidos — config de producción*): este "no se recupera" era en parte ARTEFACTO del λ **FIJO=1e-3** de este harness. Con **Morozov** (σ declarado, config de producción) el régimen **MODERADO (≤~300 m) SÍ se recupera** (12±0 m a 300 m); el profundo (≥600 m) sigue sin resolverse = LEY.
 - El cuerpo recuperado se **ancla en la capa más somera (~62 m) en 13 de 15 casos**, dé igual que la verdad esté a 250, 400, 600 o 900 m. El error de profundidad = profundidad_real − 62 m (crece lineal: 187 / 337 / 537 / 837 m).
 - No es "incierto": es **sistemáticamente somero**. Hipótesis fuerte (a probar en B): lo domina el hallazgo de F9 de que el **depth-weighting W_z es inerte** (la normalización de columnas Ws lo absorbe) → no hay nada empujando la masa a su profundidad.
 - Matiz honesto: en el régimen REGIONAL de LdM (malla profunda) la masa hace lo OPUESTO (se hunde al piso). La DIRECCIÓN del sesgo depende del régimen; en ambos la profundidad está mal. Gravedad-sola NO resuelve profundidad = LEY, no bug.
@@ -193,6 +194,7 @@ Cambio mínimo, guardado, **default OFF = byte-idéntico**:
 - **Cadena end-to-end VERIFICADA y COMMITEADA:** UI toggle → `#CONFIG` → `merge_config` → load-package → `run_geophysics_inversion` (bloque guardado) → espectro → prior. Todo default OFF = byte-idéntico. 6 commits atómicos en `fases-19-25-cierre`.
 
 **Estado del feature de prior de profundidad: COMPLETO y usable** (opt-in, default OFF). Falta validarlo en un benchmark externo profundo (los actuales son someros) antes de recomendarlo como default.
+> ⚠ **REENCUADRE ENDURECIDO 2026-07-29** (ver §B′): el 7-18× se midió contra el baseline λ=1e-3 sobreajustado. En config de producción el prior **NO rescata la profundidad profunda** (el espectro satura ~350 m); su valor MEDIDO es **robustez** (cura el hundimiento del cliente sin-σ a 300 m). NO recomendarlo como "solver de profundidad".
 
 **Pendiente de B:** (4) [PUNTO 4] arreglar el W_z inerte (cambio de física, campaña antes/después) + PGI/Gramian como coupling alternativo; luego Parte C (red-team).
 
@@ -206,10 +208,50 @@ Cambio mínimo, guardado, **default OFF = byte-idéntico**:
 
 - **C1 — Caza de corrupción silenciosa** (MÁXIMA prioridad; extiende F8): generar el dato más feo posible (formatos de instrumento raros, unidades ambiguas, preámbulos, filas rotas, CRS mal declarado, decimales europeos, negativos, huecos) y verificar el invariante duro: **o sale un modelo válido, o un error claro en español — nunca un número silenciosamente equivocado con sello de calidad**. Métrica: `0` corrupciones silenciosas en N miles de casos generativos + corpus real.
 - **C2 — Red-team de física** (el más importante para la confianza): intentar ACTIVAMENTE forzar al motor a dar un **target confiado donde el dato no resuelve** (null-space, bajo el horizonte DOI, cuerpo profundo con cobertura pobre). Si se logra sacar un "HIGH" en zona no-resoluble → **es un bug de honestidad** → se tapa (la trilogía B1/B2/B3 debe degradarlo a LOW). Es el escudo legal del mundo JORC.
+  > ✅ **HECHO 2026-07-29** (ver §C2′): se DEMOSTRÓ el bug (target a 62.5 m, confianza MEDIUM, para un cuerpo a 900 m; is_null_space_artifact=False) y se TAPÓ (confianza de profundidad desacoplada = LOW por defecto + checkerboard capa a MEDIUM). Falta el display frontend + el residual de honestidad horizontal en profundo.
 - **C3 — Verificación cruzada con otras IAs** (para lo caro, no para todo): protocolo — se pide segunda opinión de otra IA cuando (a) hay una afirmación de física NUEVA, (b) una bifurcación de arquitectura, (c) un número que irá a un informe que **alguien firma**. Se comparan y se concilian; si difieren, se MIDE para desempatar. Barato, y sube la certeza donde importa.
 - **C4 — Exposición a dato REAL** (lo que ningún test sintético reemplaza, y donde comprimimos de verdad los 20 años): 1–2 consultores reales intentan romperlo con SU dato de campo. Cada fricción → lista priorizada sobre cualquier feature nueva.
 
 **Gate C (medible):** (1) K rondas adversariales sin una sola corrupción silenciosa nueva; (2) el reporte honesto resiste el intento de extraerle un target falso en null-space; (3) al menos 1 consultor real pasó su dato de punta a punta sin sorpresa catastrófica.
+
+---
+
+# HALLAZGOS ENDURECIDOS — config de PRODUCCIÓN (2026-07-29)
+
+*Todo lo de abajo se MIDIÓ con verdad conocida (esfera analítica anti-inverse-crime) en **config de PRODUCCIÓN real** (malla con padding n_pad=5, IRLS=8, los 3 modos de λ de producción) y **≥5 semillas**. Corrige/endurece las "primeras pasadas" de arriba, que usaron λ **FIJO=1e-3** (la config de DO-27 somero) y malla chica — NO representativa de producción. Harness: `scripts/validation/{wz_lever_probe, wz_tradeoff, morozov_depth_recovery, morozov_stability_diag, morozov_prod_hardened, depth_prior_headtohead, honesty_test}.py`.*
+
+## A′ — El "profundidad NO se recupera" era, en parte, ARTEFACTO del λ fijo del harness
+
+La palanca de la profundidad **NO es el depth-weighting W_z** (algebraicamente INERTE — Ws lo cancela; un peso al smallness también resultó inerte/redundante, medido y **REVERTIDO** — `gravimetry.py` byte-idéntico) ni la suavidad: es la **MAGNITUD de la regularización (λ)**, que producción YA elige por **Morozov** (σ declarado, candidatos hasta λ=10) o **operating-point λ=0.1** (sin σ). El harness de Parte A fijó λ=1e-3, que SOBREAJUSTA en profundo (χ²≈0.1) → apila somero.
+
+Error de profundidad del PICO, media±σ (5 semillas, config de producción):
+
+| Prof. real | FIJO 1e-3 (config Parte A) | OPER 0.1 (sin-σ) | **MOROZOV (con-σ)** |
+|---|---|---|---|
+| 150 m | 48±20 | 38±0 | **38±0** ✓ |
+| 300 m | 1158±460 | 288±**550** (frágil) | **12±0** ✓✓ |
+| 600 m | 1062±50 | 648±220 | 312±**184** (frágil) |
+| 900 m | 762±50 | 818±24 | 798±20 (falla) |
+
+**Conclusión ESCOPADA:** Morozov (σ declarado) recupera el **MODERADO (≤~300 m) robusto**; **frágil a 600 m, falla a 900 m**. La **frontera** cae ~300-600 m. **La LEY del null-space sigue en pie en profundo** — el titular original era correcto ahí, sólo sobre-generalizaba el moderado. **MECANISMO medido:** la fragilidad de Morozov ES el null-space — la pendiente de χ²(λ) en el cruce se APLANA con la profundidad (**4.06 → 1.27 → 0.56** a 300/600/900 m) → la selección de λ se vuelve no-única; `cond(A)≈1` = NO es numérico.
+
+**Riesgo de honestidad NUEVO:** el cliente **sin-σ (operating-0.1)** es frágil **incluso a 300 m** (288±550 m: en algunas semillas se **hunde catastróficamente** al piso), no sólo en profundo.
+
+## B′ — El prior de profundidad: REENCUADRADO (no es un solver de profundidad profunda)
+
+El 7-18× de la "primera pasada" se midió contra el baseline λ=1e-3 sobreajustado. En config de producción (head-to-head de 4 brazos, 5 semillas):
+- **El espectro radial SATURA ~350 m** (estima z≈267/370/360 para cuerpos a 300/600/900 m) → el piso que da es demasiado somero en profundo → **el prior NO rescata lo profundo** (ni con piso ORÁCULO 0.7×verdad: a 900 m sigue 442±282 m).
+- **El VALOR REAL del prior, medido:** ROBUSTEZ en el moderado — **cura el hundimiento del cliente sin-σ a 300 m (288±550 → 12±0 m)** y estabiliza Morozov a 600 m. Es una herramienta de **honestidad/robustez**, NO de recuperación de profundidad profunda.
+
+## C2′ — Red-team de física: BUG de honestidad DEMOSTRADO y TAPADO
+
+Se forzó (medido, `honesty_test.py`, verdad conocida) un **`best_target` a 62.5 m con confianza MEDIUM para un cuerpo a 900 m**, con `is_null_space_artifact=False` = un target confiado en zona null-space. Los campos de honestidad daban lo MISMO (MEDIUM / False / deep_mass_fraction=0) para error de 12 m y de 837 m. **Causa:** B1/B3 sólo detectan el null-space como *smear profundo* saturado al piso (LdM); la falla real profunda es *pila somera*, que se ve como un cuerpo somero bien resuelto.
+
+**FIX (backend, aditivo, medido):** `best_target.depth_confidence` **DESACOPLADA de la horizontal** = LOW por defecto (gravedad-sola no resuelve z = LEY; sube sólo con **SONDAJE real**, no con el auto-prior que satura) + `depth_note`; y `checkerboard=FAIL` capa el veredicto a MEDIUM. El `confidence_level` horizontal (el producto) queda INTACTO. Tests B1/B3 15/15 + reporte 10/10 verdes. **Residual (no arreglado):** a 900 m el HORIZONTAL también es malo (301±342 m) pero conf(horiz) sigue MEDIUM — detectar la falla horizontal desde el dato es problema aparte. **Pendiente FRONTEND** (iteración separada): mostrar `depth_confidence` al usuario.
+
+## Traducción a PRODUCTO (endurecida)
+
+Vendés **targeting HORIZONTAL en régimen moderado** (Morozov, con σ declarado), con la **profundidad marcada honestamente como NO resuelta**. **Pedir σ al cliente habilita el mejor modo** (Morozov); sin σ el operating-0.1 es frágil — un formulario que multiplica valor. El **sondaje/prior** es la vía de robustez y de profundidad post-perforación. La profundidad profunda por gravedad-sola sigue siendo LEY: no se vende.
 
 ---
 
