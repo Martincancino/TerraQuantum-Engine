@@ -132,9 +132,13 @@ export function BestTargetWidget({ report }: { report: Record<string, unknown> |
   }
 
   const isArtifact = boolOf(bt, "is_null_space_artifact");
-  const resolvable = bt.is_resolvable_depth === true;
   const conf = strOf(bt, "confidence_level");
   const depth = numOf(bt, "depth_m", "y_m");
+  // C2: confianza de PROFUNDIDAD desacoplada de la horizontal (backend: la gravedad-sola
+  // NO resuelve z = null-space). Se renderiza tal cual la emite el backend, sin recalcular.
+  const depthConf = strOf(bt, "depth_confidence");
+  const depthNote = strOf(bt, "depth_note");
+  const depthLow = String(depthConf || "").toUpperCase() === "LOW";
   const demoted = asRec(bt.floor_saturated_demoted);
   const nFloor = numOf(bt, "n_floor_saturated_cells");
   const note = strOf(bt, "selection_note");
@@ -151,20 +155,27 @@ export function BestTargetWidget({ report }: { report: Record<string, unknown> |
 
       <div className="grid grid-cols-3 gap-1.5">
         <StatCard
-          label="Profundidad blanco"
+          label="Profundidad"
           value={fmtNum(depth, 0)}
           unit="m"
-          tone={resolvable ? "good" : "warn"}
-          hint={resolvable ? "profundidad resoluble" : "bajo el horizonte resoluble"}
+          tone={levelTone(depthConf)}
+          hint={depthLow ? "indicativa · gravedad no resuelve z" : "constreñida por sondaje"}
         />
         <StatCard label="Densidad" value={fmtNum(numOf(bt, "density"), 2)} unit="t/m³" />
         <StatCard
-          label="Confianza"
+          label="Confianza (horiz.)"
           value={String(conf || "—").toUpperCase()}
           tone={levelTone(conf)}
-          hint="capada por el veredicto único"
+          hint="targeting horizontal · capada por veredicto"
         />
       </div>
+
+      {/* C2: caveat de profundidad no-resuelta (gravedad-sola) — texto del backend. */}
+      {depthLow && depthNote && (
+        <div className="rounded-md border border-amber-500/25 bg-amber-500/5 px-2.5 py-1.5">
+          <p className="text-[8px] font-mono text-amber-300/80 leading-tight">⚑ {depthNote}</p>
+        </div>
+      )}
 
       <p className="text-[8px] font-mono text-white/55 leading-tight">
         X {fmtNum(numOf(bt, "x_m"), 1)} · Y {fmtNum(numOf(bt, "y_m"), 1)} · Z{" "}
