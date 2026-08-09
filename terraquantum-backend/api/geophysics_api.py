@@ -232,6 +232,27 @@ async def invert_geophysics_v2(
     project_id = params.project_id or "default"
     run_id = params.run_id or _uuid.uuid4().hex[:16]
 
+    # ── FASE 1 (H-37b): estrategia declarada que nadie ejecuta ────────────────
+    # 'lcurve' se aceptaba y caía en la MISMA rama que 'chi2' (auto_lambda): el
+    # usuario pedía la esquina de la L-curve y recibía el operating point/Morozov.
+    # `select_lambda_lcurve` existe en la librería pero no tiene ningún llamador de
+    # producción. Cablearla cambiaría el lambda de toda inversión — física en el
+    # camino crítico, del alcance de la Fase 4 — así que aquí se rechaza en voz alta.
+    if params.lambda_strategy == "lcurve":
+        from core.errors import TerraquantumError as _TQError
+
+        _err = _TQError(
+            "LAMBDA_STRATEGY_UNAVAILABLE",
+            strategy=params.lambda_strategy,
+            technical_details={
+                "requested_strategy": params.lambda_strategy,
+                "dispatched_strategies": ["fixed", "chi2"],
+                "reason": "select_lambda_lcurve no tiene llamadores de producción.",
+            },
+        )
+        _log.warning("lambda_strategy_rejected", strategy=params.lambda_strategy)
+        raise HTTPException(status_code=422, detail=_err.to_dict())
+
     # Aplicar lambda_strategy al campo legacy auto_lambda + lambda_mag
     if params.lambda_strategy == "fixed":
         params = params.model_copy(update={
@@ -240,7 +261,7 @@ async def invert_geophysics_v2(
             "project_id": project_id,
             "run_id": run_id,
         })
-    elif params.lambda_strategy in ("chi2", "lcurve"):
+    elif params.lambda_strategy == "chi2":
         params = params.model_copy(update={
             "auto_lambda": True,
             "project_id": project_id,

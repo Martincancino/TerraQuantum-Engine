@@ -354,6 +354,35 @@ _SPECS = [
         "Para escala regional, restringe la interpretación a tendencias generales o "
         "subdivide el área en bloques locales; no uses el resultado para perforar.",
     ),
+    ErrorSpec(
+        # FASE 1 (H-37): un modo declarado en el contrato que el motor NO despacha
+        # debe RECHAZARSE, nunca ejecutarse como otro modo distinto. Aceptar y
+        # reportar una física que no se corrió corrompe la procedencia del resultado.
+        "INVERSION_MODE_UNAVAILABLE", SEVERITY_ERROR,
+        "El modo de inversión magnética «{mode}» no está disponible en esta versión: "
+        "el motor no lo ejecuta y correr otro modo en su lugar produciría un reporte "
+        "que declara una física distinta de la realmente aplicada. Se detiene la "
+        "corrida en vez de entregar un resultado con procedencia equivocada.",
+        "Vuelve a generar el paquete eligiendo «Solo inducida» (sin remanencia) o "
+        "«Campo total (J_ind + Q·J_rem)» si conoces la dirección de la remanencia; "
+        "para remanencia de dirección desconocida usa el modelo de magnetización "
+        "vectorial (MVI), que recupera la dirección desde los datos.",
+    ),
+    ErrorSpec(
+        # FASE 1 (H-37b): hallado por el test de cobertura de Literales que exige
+        # la fase. `lambda_strategy="lcurve"` se aceptaba y se ejecutaba como el
+        # camino automático (operating point / Morozov): el usuario pedía una
+        # estrategia y recibía otra, sin aviso.
+        "LAMBDA_STRATEGY_UNAVAILABLE", SEVERITY_ERROR,
+        "La estrategia de regularización «{strategy}» no está disponible en esta "
+        "versión: el selector correspondiente existe en la librería pero ningún "
+        "camino de producción lo ejecuta, así que aceptarla equivaldría a correr una "
+        "estrategia distinta de la que pediste sin decírtelo. La elección de lambda "
+        "cambia el resultado de la inversión, de modo que la corrida se detiene.",
+        "Usa 'chi2' (selección automática por nivel de ruido declarado, la "
+        "recomendada) o 'fixed' junto con lambda_fixed si quieres fijar el valor a "
+        "mano y controlar tú la regularización.",
+    ),
     # ── Sondajes (Fase 20) ───────────────────────────────────────────────────
     ErrorSpec(
         "BOREHOLE_CONFLICT", SEVERITY_WARNING,

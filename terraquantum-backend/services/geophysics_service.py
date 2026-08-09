@@ -286,6 +286,87 @@ def validate_geophysics_input(params: GeophysicsInvertInput):
         )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FASE 1 (H-37) — Modos declarados en el contrato que el motor NO despacha
+# ─────────────────────────────────────────────────────────────────────────────
+# El esquema acepta `remanence.inversion_mode="amplitude"` y el reporte lo
+# transcribe, pero NINGÚN solver de producción lo ejecuta: el despacho sólo tiene
+# rama para "total_field" (el resto cae en la TMI inducida estándar). El resultado
+# era un reporte que declara una física distinta de la aplicada — corrupción de la
+# PROCEDENCIA, la clase de fallo que docs/05 Parte C define como enemigo #1.
+#
+# Por qué se RECHAZA en vez de cablearse (decisión medida, no pereza):
+# `MagnetometryInversion.solve_amplitude_inversion_lsqr` existe y tiene tests, pero
+# su contrato de entrada es la AMPLITUD |B|=√(Bx²+By²+Bz²) del campo anómalo (≥0,
+# y valida `d_observed < 0` con ValueError). Producción sólo transporta TMI, que es
+# una proyección con signo: convertir TMI→|B| exige una transformación de
+# componentes (dominio de Fourier / señal analítica) que NO existe en el repositorio.
+# Cablear el solver alimentándolo con TMI sería exactamente el mismo pecado con otro
+# disfraz. La conversión es física nueva en el camino crítico y exige el rigor de
+# medición de la Fase 4; hasta entonces el modo se rechaza en voz alta.
+_UNAVAILABLE_INVERSION_MODES = frozenset({"amplitude"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FASE 1 (H-27) — La degradación a topografía PLANA tiene que llegar al usuario
+# ─────────────────────────────────────────────────────────────────────────────
+# La topografía no es decoración: fija la máscara de celdas activas (aire vs roca)
+# y la profundidad verdadera de cada celda. Si la interpolación de superficie falla
+# y la corrida sigue con topografía plana, el modelo resultante es válido en
+# apariencia pero está calculado sobre OTRA geometría — y hasta ahora eso sólo
+# quedaba en el log estructurado, que en una instalación de escritorio nadie lee.
+# El canal `warnings[]` ya viaja al frontend; esta constante es el texto que viaja.
+TOPOGRAPHY_FLAT_FALLBACK_WARNING = (
+    "Topografía degradada a PLANA: la interpolación de la superficie desde las "
+    "elevaciones de los sensores falló y la inversión se resolvió asumiendo terreno "
+    "horizontal. En terreno de relieve marcado esto cambia qué celdas son aire y la "
+    "profundidad real de cada celda, así que la geometría del modelo puede no "
+    "corresponder al terreno. Revisa la columna de elevación del CSV antes de usar "
+    "este resultado para decidir dónde perforar."
+)
+
+
+def topography_run_warnings(topography_used: str) -> list:
+    """Avisos de nivel de corrida derivados del estado de la topografía.
+
+    Devuelve lista vacía salvo en el fallback silencioso (`flat_fallback`), que es
+    la degradación que el usuario no puede detectar por su cuenta. El caso "flat"
+    (el survey no trae elevaciones) NO genera aviso: es una entrada declarada por
+    el usuario, no una degradación inesperada del motor.
+    """
+    if str(topography_used) == "flat_fallback":
+        return [TOPOGRAPHY_FLAT_FALLBACK_WARNING]
+    return []
+
+
+def reject_unavailable_inversion_modes(params) -> None:
+    """Detiene la corrida si se pidió un modo de inversión que el motor no ejecuta.
+
+    Se invoca ANTES de cualquier cómputo, en el único punto de entrada de la
+    inversión y también en el motor magnético (por si se le llama directo).
+    """
+    from core.errors import TerraquantumError
+
+    _rem = getattr(params, "remanence", None)
+    _mode = getattr(_rem, "inversion_mode", None) if _rem is not None else None
+    if _mode in _UNAVAILABLE_INVERSION_MODES:
+        _log.warning("inversion_mode_rejected", mode=_mode, reason="not_dispatched_by_engine")
+        raise TerraquantumError(
+            "INVERSION_MODE_UNAVAILABLE",
+            mode=_mode,
+            technical_details={
+                "requested_inversion_mode": _mode,
+                "dispatched_modes": ["induced_only", "total_field"],
+                "alternative": "magnetization_model='vector' (MVI)",
+                "reason": (
+                    "solve_amplitude_inversion_lsqr requiere el dato de AMPLITUD |B| "
+                    "(≥0); producción sólo transporta TMI con signo y no existe la "
+                    "transformación TMI→|B| en el pipeline."
+                ),
+            },
+        )
+
+
 def build_fit_diagnostics(
     g_observed: np.ndarray,
     kernel_sparse,
@@ -1845,6 +1926,10 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     from exploration.magnetometry import MagnetometryForward, MagnetometryInversion
     from exploration.geophysics_weights import apparent_susceptibility, true_susceptibility
 
+    # FASE 1 (H-37): idempotente respecto al guard del orquestador; protege también
+    # a quien llame a este motor directamente (arneses de validación, tests).
+    reject_unavailable_inversion_modes(params)
+
     project_id = params.project_id
     run_id = params.run_id
 
@@ -2022,11 +2107,16 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
         _litho_bounds_m[:, 5] = [apparent_susceptibility(v, _demag_N) for v in _litho_bounds_m[:, 5]]
 
     # ── FASE 12: Remanencia — construir kernel total J_ind + Q·J_rem si aplica ──
+    # FASE 1 (H-37): la condición lista EXACTAMENTE los modos que este motor
+    # despacha. Antes incluía "amplitude", que no tiene rama de construcción de
+    # kernel: la corrida caía a la TMI inducida y el reporte declaraba "amplitude".
+    # Un modo sin rama debe rechazarse arriba (reject_unavailable_inversion_modes),
+    # nunca colarse en esta lista.
     _rem = getattr(params, "remanence", None)
     _use_remanence = (
         _rem is not None
         and _rem.enabled
-        and _rem.inversion_mode in ("total_field", "amplitude")
+        and _rem.inversion_mode == "total_field"
         and _rem.q_ratio > 0.0
     )
     _override_kernel = None
@@ -2274,6 +2364,10 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             "padding_kappa": solver_meta.get("padding_kappa"),
             "topography": _topo_used_mag,
         },
+        # ── FASE 1 (H-27): honestidad de la topografía en el canal del usuario ──
+        "topography_used": _topo_used_mag,
+        "topography_degraded": _topo_used_mag == "flat_fallback",
+        "warnings": topography_run_warnings(_topo_used_mag),
         "observation_count": int(len(mag)),
         "tmi_min_nt": float(np.min(mag)),
         "tmi_max_nt": float(np.max(mag)),
@@ -2474,6 +2568,10 @@ def _attach_multimodal_plan(result: dict, params, coverage_pct: float = 1.0) -> 
 def run_geophysics_inversion(params: GeophysicsInvertInput):
     project_id = params.project_id
     run_id = params.run_id
+
+    # ── FASE 1 (H-37): rechazo temprano de modos no despachados ───────────────
+    # Antes del ruteo: cubre gravedad, magnetometría aislada y joint por igual.
+    reject_unavailable_inversion_modes(params)
 
     # ── FASE 9A / 9C-2: ruteo a motor magnético o a inversión conjunta ────────
     # Si el input trae magnetic_nt:
@@ -4058,6 +4156,14 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     uncertainty_diagnostics = build_uncertainty_diagnostics(qaqc_report, fit_diagnostics, technical_summary)
     sensor_quality_flags = build_sensor_quality_flags(fit_diagnostics)
 
+    # ── FASE 1 (H-27): avisos de nivel de corrida hacia el usuario ────────────
+    # `technical_summary["warnings"]` ya se renderiza en el detalle de la corrida;
+    # el array de nivel superior es el que consume la vista de resultados. Ambos
+    # llevan el mismo texto para que no haya dos versiones de la verdad.
+    _run_warnings = topography_run_warnings(_topography_used)
+    if _run_warnings:
+        technical_summary["warnings"] = list(technical_summary.get("warnings", [])) + _run_warnings
+
     # B1 (null-space honesto): el blanco se elige sobre el CAMPO ACTIVO COMPLETO (df_full),
     # no sólo las anomalías de alta densidad, para que el cuerpo de baja densidad a
     # profundidad resoluble pueda surfacear y el artefacto bound-saturado del piso se degrade.
@@ -4304,6 +4410,11 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         },
         # ── HITO 5: Topografía y solver bound-constrained ─────────────────────────
         "topography_used": _topography_used,
+        # FASE 1 (H-27): la degradación silenciosa a topografía plana viaja ahora
+        # por `warnings[]` (canal que el frontend ya renderiza) y como bandera
+        # estructurada, no sólo en el log estructurado que nadie lee.
+        "topography_degraded": _topography_used == "flat_fallback",
+        "warnings": _run_warnings,
         "bounded_solver_active": os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false",
         # ── R-06: Auditoría de impacto físico del padding saturado ───────────────
         "r06_padding_saturation_audit": r06_padding_saturation_audit,
