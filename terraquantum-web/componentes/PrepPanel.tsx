@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useRef, useEffect } from "react";
-import { previewGravityCsv, GravityCsvInvertPayload, getExplorationBlockModelForRunWithArrow, CoordinateTransformData, SpatialReadiness, RegionalScalePreflight, GravityCorrectionReport, exportCleanCsv } from "../lib/terraquantum/frontendApi";
+import { previewGravityCsv, GravityCsvInvertPayload, getExplorationBlockModelForRunWithArrow, CoordinateTransformData, SpatialReadiness, RegionalScalePreflight, GravityCorrectionReport, exportCleanCsv, type GravityImportPreviewResponse } from "../lib/terraquantum/frontendApi";
 import WarningBanner from "./WarningBanner";
 import ErrorModal from "./ErrorModal";
 import { TQErrorView, errorViewFromString } from "../lib/terraquantum/errorContract";
@@ -421,16 +421,28 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   // Fase 14: client-side CSV validation
   const [csvValidation, setCsvValidation] = useState<CsvValidationResult | null>(null);
 
-  // Ejecutar validación local cuando cambia el archivo activo
+  // FASE 1 (H-29): la validación local cubre TODOS los archivos que entrarán al
+  // paquete, no sólo el activo. El botón de generar paquete se apoya en
+  // `csvValidation.can_invert`: si sólo miraba el archivo en pantalla, un CSV
+  // inválido del otro tipo entraba al paquete con el gate en verde. Se muestra el
+  // peor diagnóstico — el paquete vale lo que su archivo más flojo.
   useEffect(() => {
     const activeFile = dataType === "magnetic" ? fileMagnetometry : (correctedFile ?? file);
-    if (!activeFile) { setCsvValidation(null); return; }
+    const otherFile = dataType === "magnetic" ? (correctedFile ?? file) : fileMagnetometry;
+    const files = [activeFile, otherFile].filter((f): f is File => !!f);
+    if (files.length === 0) { setCsvValidation(null); return; }
     let cancelled = false;
-    activeFile.text().then((text) => {
-      if (!cancelled) setCsvValidation(parseCsvForValidation(text));
-    }).catch(() => {
-      if (!cancelled) setCsvValidation(null);
-    });
+    Promise.all(files.map((f) => f.text()))
+      .then((texts) => {
+        if (cancelled) return;
+        const parsed = texts.map(parseCsvForValidation);
+        // El primero es el activo; sólo lo desplaza uno que NO permita invertir.
+        const blocking = parsed.find((p) => p.can_invert === false);
+        setCsvValidation(blocking ?? parsed[0]);
+      })
+      .catch(() => {
+        if (!cancelled) setCsvValidation(null);
+      });
     return () => { cancelled = true; };
   }, [file, fileMagnetometry, correctedFile, dataType]);
 
@@ -530,22 +542,36 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
     return null;
   };
 
+  // ── FASE 1 (H-29): limpieza COMÚN a cualquier cambio de archivo ─────────────
+  // El gate razonaba sobre "el archivo actual" mientras el paquete razona sobre
+  // "todos los archivos": el manejador de magnetometría no reseteaba los
+  // reconocimientos de riesgo, así que una casilla marcada entendiendo el riesgo
+  // del archivo A viajaba al backend como si el usuario hubiera aceptado el de la
+  // configuración nueva. Una sola función para los dos manejadores elimina la
+  // posibilidad de que vuelvan a divergir.
+  const resetOnFileChange = () => {
+    setResult(null);
+    setErrorMsg(null);
+    clearPackageError();
+    setPackageMessage(null);
+    setGeoError(null);
+    // Puertas de seguridad: un reconocimiento SIEMPRE se refiere a un conjunto de
+    // archivos concreto. Si el conjunto cambia, el reconocimiento caduca.
+    setAcknowledgeSpatialRisk(false);
+    setAcknowledgeRegionalScale(false);
+    setCorrectedFile(null);
+    setCorrectionReport(null);
+    setShowCorrectionWizard(false);
+    // H-28: invalida también modelo/vista 3D (la limpieza vive en el store).
+    clearActiveRun();
+  };
+
   const handleFileGravimetryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       setFileGravimetry(e.target.files[0]);
       setDataType("gravity");
-      setResult(null);
-      setErrorMsg(null);
-      clearPackageError();
-      setPackageMessage(null);
-      setGeoError(null);
       setUtmZone("");
-      setAcknowledgeSpatialRisk(false);
-      setAcknowledgeRegionalScale(false);
-      setCorrectedFile(null);
-      setCorrectionReport(null);
-      setShowCorrectionWizard(false);
-      clearActiveRun();
+      resetOnFileChange();
     }
   };
 
@@ -553,48 +579,82 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
     if (e.target.files && e.target.files.length > 0) {
       setFileMagnetometry(e.target.files[0]);
       setDataType("magnetic");
-      setResult(null);
-      setErrorMsg(null);
-      clearPackageError();
-      setPackageMessage(null);
-      setGeoError(null);
-      setCorrectedFile(null);
-      setCorrectionReport(null);
-      setShowCorrectionWizard(false);
-      clearActiveRun();
+      resetOnFileChange();
     }
   };
 
+  // FASE 1 (H-29, segundo agujero): el gate valida TODOS los archivos que van a
+  // entrar al paquete, no sólo el último tocado. Antes `handleValidate` miraba el
+  // archivo de `dataType` mientras `handleGeneratePackage` armaba el paquete con
+  // ambos: si el último validado era el bueno, el problemático entraba sin pasar
+  // por el gate. La severidad mostrada es la PEOR de las validaciones, porque el
+  // paquete es tan válido como su archivo más flojo.
+  const validationSeverity = (data: GravityImportPreviewResponse | null): number => {
+    if (!data) return 0;
+    if (data.status === "error") return 4;
+    if ((data.spatial_readiness?.level ?? "").toUpperCase() === "NO_SPATIAL_DATA") return 3;
+    if (data.regional_scale_preflight?.can_run_single_inversion === false) return 3;
+    if (data.spatial_readiness?.requires_user_acknowledgement === true) return 2;
+    if (data.regional_scale_preflight?.requires_user_acknowledgement === true) return 2;
+    return 1;
+  };
+
   const handleValidate = async () => {
-    const isMagnetic = dataType === "magnetic";
-    const valFile = isMagnetic ? fileMagnetometry : file;
-    if (!valFile) {
+    const gravFile = correctedFile ?? file;
+    const targets: { kind: "gravity" | "magnetic"; file: File }[] = [];
+    if (gravFile) targets.push({ kind: "gravity", file: gravFile });
+    if (fileMagnetometry) targets.push({ kind: "magnetic", file: fileMagnetometry });
+
+    if (targets.length === 0) {
       setErrorMsg(
-        isMagnetic ? "Debes seleccionar un CSV de magnetometría." : "Debes seleccionar un archivo CSV.",
+        dataType === "magnetic"
+          ? "Debes seleccionar un CSV de magnetometría."
+          : "Debes seleccionar un archivo CSV.",
       );
       return;
     }
+
     setLoading(true);
     setErrorMsg(null);
     setResult(null);
     clearPackageError();
     setPackageMessage(null);
 
-    const effectiveFile = isMagnetic ? valFile : (correctedFile ?? file ?? valFile);
-    const res = await previewGravityCsv(effectiveFile, {
-      strict: isMagnetic ? false : strict,
-      allowGRaw: isMagnetic ? false : (allowGRaw || correctedFile !== null),
-      previewLimit,
-      dataType: isMagnetic ? "magnetic" : "gravity",
-    });
-    setLoading(false);
+    let worst: GravityImportPreviewResponse | null = null;
+    let worstScore = -1;
+    let transportError: string | null = null;
 
-    if (!res.ok) {
-      setErrorMsg(res.error || "Error al comunicarse con el backend.");
-      return;
+    for (const target of targets) {
+      const isMagnetic = target.kind === "magnetic";
+      const res = await previewGravityCsv(target.file, {
+        strict: isMagnetic ? false : strict,
+        allowGRaw: isMagnetic ? false : (allowGRaw || correctedFile !== null),
+        previewLimit,
+        dataType: isMagnetic ? "magnetic" : "gravity",
+      });
+      if (!res.ok || !res.data) {
+        transportError =
+          (targets.length > 1 ? `[${isMagnetic ? "magnetometría" : "gravimetría"}] ` : "") +
+          (res.error || "Error al comunicarse con el backend.");
+        break;
+      }
+      // Empate → gana el archivo del tipo activo (el que el usuario está mirando).
+      const score = validationSeverity(res.data) * 2 + (target.kind === dataType ? 1 : 0);
+      if (score > worstScore) {
+        worstScore = score;
+        worst = res.data;
+      }
     }
 
-    setResult(res.data);
+    setLoading(false);
+
+    if (transportError) {
+      setErrorMsg(transportError);
+      return;
+    }
+    if (!worst) return;
+
+    setResult(worst);
     setAcknowledgeSpatialRisk(false);
     setAcknowledgeRegionalScale(false);
   };
@@ -897,6 +957,40 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
     setPackageErrorView(errorViewFromString(msg, "No se pudo generar el paquete CSV."));
     setPackageModalOpen(true);
   };
+
+  // ── FASE 1 (§9H.2): invalidación "stale" ───────────────────────────────────
+  // Misma familia que H-28 ("mostrar algo que ya no corresponde"), un escalón más
+  // sutil: el modelo SÍ es de esta corrida, pero el usuario movió parámetros de
+  // preparación después de invertir. La pantalla mostraba la configuración nueva
+  // junto al resultado viejo sin distinguirlos. No se borra el resultado —sigue
+  // siendo un dato real— se MARCA como desactualizado.
+  const inversionParamsFingerprint = useMemo(
+    () =>
+      JSON.stringify([
+        densityMin, densityMax, lambdaMode, lambdaCustom, gravimeterType,
+        paddingKappaLog, anchorKappaLog, autoKappa, enableDepthPrior,
+        inclinationDeg, declinationDeg, fieldIntensityNt, suscMin, suscMax,
+        utmZone, strict, allowGRaw,
+        latNorth, latSouth, lonEast, lonWest,
+        pgiParams, remanenceParams,
+      ]),
+    [
+      densityMin, densityMax, lambdaMode, lambdaCustom, gravimeterType,
+      paddingKappaLog, anchorKappaLog, autoKappa, enableDepthPrior,
+      inclinationDeg, declinationDeg, fieldIntensityNt, suscMin, suscMax,
+      utmZone, strict, allowGRaw,
+      latNorth, latSouth, lonEast, lonWest,
+      pgiParams, remanenceParams,
+    ],
+  );
+  const markResultStale = useAppStore((s) => s.markResultStale);
+  const prevParamsFingerprintRef = useRef(inversionParamsFingerprint);
+  useEffect(() => {
+    if (prevParamsFingerprintRef.current === inversionParamsFingerprint) return;
+    prevParamsFingerprintRef.current = inversionParamsFingerprint;
+    // markResultStale sólo marca si hay un modelo de una corrida en pantalla.
+    markResultStale();
+  }, [inversionParamsFingerprint, markResultStale]);
 
   const handleGeneratePackage = async () => {
     clearPackageError();
@@ -1897,7 +1991,10 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
               <button
                 onClick={handleGeneratePackage}
                 disabled={
-                  !(dataType === "magnetic" ? fileMagnetometry : file) ||
+                  // H-29: el paquete se arma con TODOS los archivos presentes, así
+                  // que la condición de presencia mira los mismos que él, no sólo
+                  // el del tipo activo.
+                  !(file || fileMagnetometry) ||
                   csvValidation?.can_invert === false ||
                   result.spatial_readiness?.level === "NO_SPATIAL_DATA" ||
                   (result.spatial_readiness?.requires_user_acknowledgement === true && !acknowledgeSpatialRisk) ||

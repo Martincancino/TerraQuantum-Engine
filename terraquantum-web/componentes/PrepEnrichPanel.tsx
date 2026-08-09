@@ -15,6 +15,7 @@ import {
   type SniffReport,
 } from "../lib/terraquantum/frontendApi";
 import MapRoomPanel from "./MapRoomPanel";
+import { useAppStore } from "../store/useAppStore";
 
 /**
  * PrepEnrichPanel — flujo SIMPLE de Preparación con enriquecimiento.
@@ -98,6 +99,23 @@ type Props = {
 export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
   const [gravFile, setGravFile] = useState<File | null>(null);
   const [magFile, setMagFile] = useState<File | null>(null);
+
+  // ── FASE 1 (H-28) — este es el flujo PRINCIPAL de preparación ──────────────
+  // La auditoría midió el bug en PrepPanel (el flujo clásico, hoy colapsado bajo
+  // «Avanzado»), pero aquí ocurría lo mismo y es por donde entra el usuario: al
+  // elegir otro CSV, el modelo 3D de la corrida anterior seguía en el visor. Los
+  // archivos vivían en estado local y nadie avisaba al store. Cambiar el dato de
+  // entrada invalida la corrida activa — y con ella el modelo, por invariante.
+  const clearActiveRun = useAppStore((s) => s.clearActiveRun);
+  const onSourceFileChange = (
+    setter: (f: File | null) => void,
+    current: File | null,
+  ) => (next: File | null) => {
+    setter(next);
+    const changed = (current?.name ?? null) !== (next?.name ?? null) ||
+      (current?.size ?? null) !== (next?.size ?? null);
+    if (changed) clearActiveRun();
+  };
 
   const [utmZone, setUtmZone] = useState("");
   const [gravimeterType, setGravimeterType] = useState("unknown");
@@ -322,13 +340,13 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
           label="Gravimetría"
           hint="CSV gravimétrico (crudo o corregido)."
           file={gravFile}
-          onChange={setGravFile}
+          onChange={onSourceFileChange(setGravFile, gravFile)}
         />
         <UploadZone
           label="Magnetometría"
           hint="CSV magnético (TMI nT). Co-localizado → inversión conjunta."
           file={magFile}
-          onChange={setMagFile}
+          onChange={onSourceFileChange(setMagFile, magFile)}
         />
         <div className="rounded-xl border border-neutral-800 bg-black/40 p-4">
           <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-2">

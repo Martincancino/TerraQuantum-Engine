@@ -21,6 +21,8 @@ import BoreholeControls from "../viewport/BoreholeControls";
 import DoiOverlayControls from "../viewport/DoiOverlayControls";
 import ExportPanel from "../viewport/ExportPanel";
 import CanvasExportBridge from "../../lib/render/CanvasExportBridge";
+import WarningBanner from "../WarningBanner";
+import { fetchRunWarnings, warningViewsFromTexts } from "../../lib/terraquantum/runWarnings";
 
 import { GravityObservation } from "../../lib/terraquantum/geophysicsSurvey";
 import {
@@ -37,7 +39,7 @@ import {
   getProjectRunDetail,
   exportRunUrl,
 } from "../../lib/terraquantum/frontendApi";
-import { AppState, VoxelInfo } from "../../store/useAppStore";
+import { AppState, VoxelInfo, runKeyOf } from "../../store/useAppStore";
 import type { BlockModelDataMode } from "../../store/useAppStore";
 import type { VoxelData } from "../../lib/terraQuantumGeology";
 
@@ -194,10 +196,6 @@ export default function Exploration3DView() {
     show3D,
     setShow3D,
     requestCameraReset,
-    setReport,
-    setHeatmapData,
-    setBestTarget,
-    setBestVoxel,
     inputDepth,
     inputGrav,
     inputNIR,
@@ -237,6 +235,18 @@ export default function Exploration3DView() {
 
   const hasElevation =
     hasElevationData || hasValidElevationRange(blockModelElevationRange);
+
+  // ── FASE 1 (H-28/H-36): el visor sólo pinta datos DE LA CORRIDA ACTIVA ──────
+  // El modelo lleva sellada la identidad de la evaluación que lo produjo. Si no
+  // coincide con la corrida activa, no se dibuja: mostrar el modelo del survey
+  // equivocado sin avisar es el peor error posible en una herramienta cuyo único
+  // propósito es decidir dónde perforar. La invalidación central del store hace
+  // que esto casi nunca ocurra; esta comprobación es la que lo vuelve imposible.
+  const modelRunKey = useAppStore((s) => s.modelRunKey);
+  const resultIsStale = useAppStore((s) => s.resultIsStale);
+  const modelBelongsToActiveRun = modelRunKey === runKeyOf(activeRun);
+  const showModel = show3D && !!model && modelBelongsToActiveRun;
+  const modelIsForeign = !!model && !modelBelongsToActiveRun;
 
   const blockModelReloadRequestRef = React.useRef(0);
   const previousBlockModelDataModeRef =
@@ -321,16 +331,31 @@ export default function Exploration3DView() {
     return value === null ? "n/d" : value.toFixed(2);
   }
 
-  const resetExplorationState = () => {
-    if (activeRun.source === "history" && activeRun.status === "ready") return;
-    setReport(null);
-    setModel(null);
-    setShow3D(false);
-    setHeatmapData([]);
-    setBestTarget(null);
-    setBestVoxel(null);
-    setTerrainData(null);
-  };
+  // ── FASE 1 (H-34): la leyenda usa la MISMA escala que el visor ──────────────
+  // Los stops replican los colormaps de terraQuantumGeology.ts: Viridis para
+  // densidad/contraste, Plasma para susceptibilidad, Inferno para incertidumbre.
+  // Si divergen, la leyenda estaría describiendo colores que nadie pintó.
+  const isSusceptibilityLayer = viewMode === "susceptibility";
+  const LEGEND_GRADIENTS = {
+    density:
+      "linear-gradient(to right, rgb(68,1,84) 0%, rgb(72,36,117) 12.5%, rgb(65,68,135) 25%, rgb(53,95,141) 37.5%, rgb(42,120,142) 50%, rgb(33,145,140) 62.5%, rgb(34,168,132) 75%, rgb(122,209,81) 87.5%, rgb(253,231,37) 100%)",
+    susceptibility:
+      "linear-gradient(to right, rgb(13,8,135) 0%, rgb(75,3,161) 12.5%, rgb(120,0,168) 25%, rgb(160,33,150) 37.5%, rgb(193,70,124) 50%, rgb(221,106,98) 62.5%, rgb(241,146,71) 75%, rgb(252,193,40) 87.5%, rgb(240,249,33) 100%)",
+    uncertainty:
+      "linear-gradient(to right, rgb(0,0,4) 0%, rgb(31,12,42) 14.3%, rgb(94,21,83) 28.6%, rgb(148,18,76) 42.9%, rgb(199,61,57) 57.1%, rgb(239,126,31) 71.4%, rgb(252,191,90) 85.7%, rgb(252,255,164) 100%)",
+  } as const;
+  const activeLegendGradient = isSusceptibilityLayer
+    ? LEGEND_GRADIENTS.susceptibility
+    : visualLayer === "uncertainty"
+    ? LEGEND_GRADIENTS.uncertainty
+    : LEGEND_GRADIENTS.density;
+
+  // FASE 1 (H-28): `resetExplorationState` vivía aquí y NUNCA se llamaba desde
+  // ningún sitio — era la limpieza correcta esperando a que alguien se acordara.
+  // Su trabajo (modelo, show3D, reporte, heatmap, target/vóxel, terreno) lo hace
+  // ahora el store al cambiar o limpiar la identidad de la corrida, que es el
+  // punto por el que pasan TODOS los caminos. Convertido en invariante, borrado
+  // como función muerta.
 
   // Fase 10 v0.4.0 — Zarr progressive chunk loader.
   // Returns assembled BackendVoxelModel when Zarr store exists, null otherwise.
@@ -416,6 +441,31 @@ export default function Exploration3DView() {
       isMounted = false;
     };
   }, [activeRun.projectId, activeRun.status, setTerrainData]);
+
+  // ── FASE 1 (H-27): avisos de la corrida en la vista donde se decide ─────────
+  // El backend ya declara sus degradaciones (topografía plana, ajuste débil…) en
+  // `warnings[]`. Antes sólo se veían en el detalle de Historial; aquí llegan a la
+  // pantalla donde el usuario mira el modelo y elige dónde perforar.
+  const [runWarnings, setRunWarnings] = React.useState<string[]>([]);
+  useEffect(() => {
+    let isMounted = true;
+    if (!activeRun.projectId || !activeRun.runId || activeRun.status !== "ready") {
+      setRunWarnings([]);
+      return () => {
+        isMounted = false;
+      };
+    }
+    fetchRunWarnings(activeRun.projectId, activeRun.runId)
+      .then((warnings) => {
+        if (isMounted) setRunWarnings(warnings);
+      })
+      .catch(() => {
+        if (isMounted) setRunWarnings([]);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [activeRun.projectId, activeRun.runId, activeRun.status]);
 
   useEffect(() => {
     const previousMode = previousBlockModelDataModeRef.current;
@@ -542,15 +592,15 @@ export default function Exploration3DView() {
                 <span className="flex items-center gap-1.5">
                   <span
                     className={`h-1.5 w-1.5 rounded-full ${
-                      show3D && model ? "bg-accent" : "bg-white/25"
+                      showModel ? "bg-accent" : "bg-white/25"
                     }`}
                   />
-                  {show3D && model ? "Modelo cargado" : "Sin modelo"}
+                  {showModel ? "Modelo cargado" : "Sin modelo"}
                 </span>
                 {activeRun.runId && (
                   <span className="truncate max-w-[180px]">Run: {activeRun.runId}</span>
                 )}
-                {model && <span>{loadedVoxelCount.toLocaleString()} vóxeles</span>}
+                {showModel && <span>{loadedVoxelCount.toLocaleString()} vóxeles</span>}
               </div>
             }
             actions={[
@@ -568,7 +618,7 @@ export default function Exploration3DView() {
                     : "Nativa"
                 }`,
                 active: displayResolutionFactor > 1,
-                disabled: !model || !show3D,
+                disabled: !showModel,
                 // Cicla Nativa(1) → Alta(4, ~500k) → Máxima(6, ~1.7M). Es solo
                 // densificado de display (interpolación trilineal); la inversión
                 // no cambia. Al cambiar, el panel recarga el modelo al factor nuevo.
@@ -579,7 +629,7 @@ export default function Exploration3DView() {
               {
                 id: "reset",
                 label: "Reset Cámara",
-                disabled: !model || !show3D,
+                disabled: !showModel,
                 onClick: () => requestCameraReset(),
               },
               {
@@ -604,22 +654,22 @@ export default function Exploration3DView() {
             <SidebarSection title="Modelo 3D">
               <LoadPanel />
             </SidebarSection>
-            {show3D && model && (
+            {showModel && (
               <SidebarSection title="Isosuperficies">
                 <IsosurfaceControls />
               </SidebarSection>
             )}
-            {show3D && model && (
+            {showModel && (
               <SidebarSection title="Sondajes">
                 <BoreholeControls />
               </SidebarSection>
             )}
-            {show3D && model && (
+            {showModel && (
               <SidebarSection title="Horizonte DOI">
                 <DoiOverlayControls />
               </SidebarSection>
             )}
-            {show3D && model && (
+            {showModel && (
               <SidebarSection title="Corte caja A-A' / B-B'">
                 <BoxClipControls />
               </SidebarSection>
@@ -634,12 +684,32 @@ export default function Exploration3DView() {
         viewport={
           <div className="h-full min-h-0 border border-white/10 rounded-3xl overflow-hidden bg-[#050505] relative shadow-[0_0_50px_rgba(0,0,0,0.5)] flex flex-col tq-grid-bg">
             <div className="flex-grow relative min-w-0 min-h-0 overflow-hidden">
-              {!show3D || !model ? (
-                <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-neutral-600 text-[10px] tracking-[0.28em] uppercase text-center">
-                  <span className="break-words">Esperando inversión gravimétrica</span>
-                  <span className="mt-3 max-w-[320px] text-[9px] tracking-[0.12em] text-neutral-700 normal-case">
-                    Sube un CSV, valida datos y carga el modelo 3D generado.
-                  </span>
+              {!showModel ? (
+                <div
+                  data-testid="viewport-empty-state"
+                  className="absolute inset-0 flex flex-col items-center justify-center px-6 text-neutral-600 text-[10px] tracking-[0.28em] uppercase text-center"
+                >
+                  {modelIsForeign ? (
+                    // FASE 1 (H-28): hay un modelo en memoria pero pertenece a OTRA
+                    // corrida. No se pinta y se dice por qué: el silencio es lo que
+                    // hacía que el usuario creyera estar viendo sus datos nuevos.
+                    <>
+                      <span className="break-words text-amber-400/80">
+                        Modelo no válido para los datos actuales
+                      </span>
+                      <span className="mt-3 max-w-[340px] text-[9px] tracking-[0.12em] text-neutral-500 normal-case">
+                        El modelo cargado corresponde a otra corrida. Genera el paquete
+                        con los datos actuales y vuelve a cargar el modelo 3D.
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="break-words">Esperando inversión gravimétrica</span>
+                      <span className="mt-3 max-w-[320px] text-[9px] tracking-[0.12em] text-neutral-700 normal-case">
+                        Sube un CSV, valida datos y carga el modelo 3D generado.
+                      </span>
+                    </>
+                  )}
                 </div>
               ) : (
                 <Canvas
@@ -678,7 +748,7 @@ export default function Exploration3DView() {
               {/* ── HITO 6: overlay no-bloqueante mientras el WebWorker construye ──
                    la geometría masiva (150k–500k vóxeles). pointer-events-none:
                    la cámara/OrbitControls siguen interactivos por debajo. */}
-              {show3D && model && isWorkerProcessing && (
+              {showModel && isWorkerProcessing && (
                 <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
                   <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
                   <div className="relative flex flex-col items-center gap-4 px-8 py-6 rounded-2xl border border-cyan-400/25 bg-[#05070a]/85 shadow-[0_8px_40px_rgba(0,0,0,0.6)]">
@@ -715,9 +785,22 @@ export default function Exploration3DView() {
                   </div>
                 </div>
               )}
+              {/* ── FASE 1 (§9H.2): resultado DESACTUALIZADO ────────────────────── */}
+              {/* El modelo sigue siendo real, pero los parámetros de preparación
+                  cambiaron después de esta inversión: lo que se ve ya no es lo que
+                  la interfaz declara. Se marca en pantalla en vez de borrarlo. */}
+              {showModel && resultIsStale && (
+                <div
+                  data-testid="stale-result-badge"
+                  className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/80 border border-amber-500/70 text-amber-300 text-[10px] font-mono px-3 py-1 rounded-full pointer-events-none"
+                >
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  Resultado desactualizado: cambiaste parámetros tras esta inversión
+                </div>
+              )}
               {/* ── Fase 12: Panel Multi-Física (overlay sobre el Canvas) ────────── */}
               {/* Badge: datos magnéticos no disponibles para la corrida actual */}
-              {show3D && model && viewMode === 'susceptibility' && !susceptibilityDataAvailable && (
+              {showModel && !resultIsStale && viewMode === 'susceptibility' && !susceptibilityDataAvailable && (
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/75 border border-yellow-500/60 text-yellow-400 text-[10px] font-mono px-3 py-1 rounded-full pointer-events-none">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400" />
                   Datos magnéticos no disponibles para este modelo
@@ -725,7 +808,7 @@ export default function Exploration3DView() {
               )}
             </div>
 
-            {show3D && model && (
+            {showModel && (
               <div className="h-auto shrink-0 bg-black/70 border-t border-white/10 px-3 py-2 flex items-center justify-center overflow-hidden">
                 {/* BottomControls eliminado: ahora moved to Sidebar (Fase C) */}
               </div>
@@ -733,8 +816,27 @@ export default function Exploration3DView() {
           </div>
         }
         analytics={
-          show3D && model ? (
+          showModel ? (
             <>
+              {/* FASE 1 (H-27): lo que el backend degradó, dicho aquí. */}
+              {runWarnings.length > 0 && (
+                <div data-testid="run-warnings" className="mb-3">
+                  <WarningBanner
+                    warnings={warningViewsFromTexts(runWarnings)}
+                    showAction={false}
+                  />
+                </div>
+              )}
+              {resultIsStale && (
+                <div className="mb-3 rounded border border-amber-500/50 bg-amber-950/20 px-3 py-2">
+                  <p className="text-[10px] leading-relaxed text-amber-300">
+                    Cambiaste parámetros de preparación después de esta inversión. El
+                    modelo mostrado sigue siendo el de la corrida anterior: vuelve a
+                    generar el paquete y a invertir para ver el resultado de los
+                    parámetros actuales.
+                  </p>
+                </div>
+              )}
               <Panel title="Estado del Modelo" subtitle="Modelo geofísico preliminar">
                 <p className="text-[8px] text-white/55 mb-3 leading-relaxed">
                   Los colores representan contraste relativo del modelo. No confirman
@@ -801,21 +903,28 @@ export default function Exploration3DView() {
                       {layerPercentiles.label}
                       {layerPercentiles.unit ? ` (${layerPercentiles.unit})` : ""}
                     </p>
+                    {/* FASE 1 (H-34): la barra de la leyenda refleja la escala QUE
+                        SE ESTÁ PINTANDO. Antes era Viridis fija incluso en la capa
+                        de susceptibilidad — la leyenda mentía sobre el color. */}
                     <div
                       className="h-2 w-full rounded-sm"
-                      style={{
-                        // Viridis (perceptualmente uniforme) — coincide con
-                        // terraQuantumGeology.ts::DENSITY_VIRIDIS_STOPS.
-                        background:
-                          "linear-gradient(to right, rgb(68,1,84) 0%, rgb(72,36,117) 12.5%, rgb(65,68,135) 25%, rgb(53,95,141) 37.5%, rgb(42,120,142) 50%, rgb(33,145,140) 62.5%, rgb(34,168,132) 75%, rgb(122,209,81) 87.5%, rgb(253,231,37) 100%)",
-                      }}
+                      style={{ background: activeLegendGradient }}
                     />
                     <div className="mt-1 flex justify-between text-[7px] font-mono text-white/45">
-                      <span>Menos denso</span>
-                      <span>Roca fondo</span>
-                      <span>Más denso</span>
+                      {isSusceptibilityLayer ? (
+                        <>
+                          <span>Menos susceptible</span>
+                          <span>Más susceptible</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Menos denso</span>
+                          <span>Roca fondo</span>
+                          <span>Más denso</span>
+                        </>
+                      )}
                     </div>
-                    {(() => {
+                    {!isSusceptibilityLayer && (() => {
                       const dMin = (model as { densityMin?: number })?.densityMin;
                       const dMax = (model as { densityMax?: number })?.densityMax;
                       return Number.isFinite(dMin) && Number.isFinite(dMax) ? (
@@ -826,9 +935,16 @@ export default function Exploration3DView() {
                         </div>
                       ) : null;
                     })()}
-                    <p className="text-[7px] font-mono text-white/30 mt-1 leading-tight">
-                      Contraste vs. fondo {formatLegendPercentile(layerPercentiles.p95)} t/m³ (P95)
-                    </p>
+                    {!isSusceptibilityLayer && (
+                      <p className="text-[7px] font-mono text-white/30 mt-1 leading-tight">
+                        Contraste vs. fondo {formatLegendPercentile(layerPercentiles.p95)} t/m³ (P95)
+                      </p>
+                    )}
+                    {isSusceptibilityLayer && (
+                      <p className="text-[7px] font-mono text-white/30 mt-1 leading-tight">
+                        Susceptibilidad magnética (SI), escala logarítmica
+                      </p>
+                    )}
                     {percentileStats && !percentileStats.is_degenerate && (
                       <p className="text-[7px] font-mono text-white/30 mt-1 leading-tight">
                         Percentiles sobre modelo completo

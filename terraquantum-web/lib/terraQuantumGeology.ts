@@ -175,16 +175,27 @@ const INFERNO_STOPS: ColorStop[] = [
   [1.000, [0.988, 1.000, 0.643]],
 ];
 
-// Turbo (Google) — para susceptibilidad magnética
-const TURBO_STOPS: ColorStop[] = [
-  [0.000, [0.188, 0.071, 0.231]],
-  [0.143, [0.153, 0.392, 0.945]],
-  [0.286, [0.090, 0.745, 0.812]],
-  [0.429, [0.188, 0.933, 0.353]],
-  [0.571, [0.686, 0.980, 0.082]],
-  [0.714, [0.996, 0.776, 0.082]],
-  [0.857, [0.957, 0.365, 0.004]],
-  [1.000, [0.478, 0.027, 0.000]],
+// ── FASE 1 (H-34): susceptibilidad magnética en PLASMA, no en Turbo ──────────
+// Turbo no es Jet —Google lo diseñó para corregir sus peores defectos— pero sigue
+// siendo de la familia arcoíris: su luminancia NO es monótona, así que fabrica
+// fronteras percibidas donde el dato es continuo, no sobrevive a la impresión en
+// gris ni al daltonismo. La migración a mapas perceptuales cubrió densidad
+// (Viridis) y dejó magnetometría en Turbo: el mismo visor comunicaba dos físicas
+// con escalas de calidad perceptual distinta, y un consultor que comparara ambas
+// capas leería estructura donde no la hay.
+// Plasma (matplotlib) es secuencial y perceptualmente uniforme, y se distingue de
+// un vistazo de Viridis (densidad) y de Inferno (incertidumbre): tres físicas,
+// tres escalas honestas y mutuamente reconocibles.
+const SUSCEPTIBILITY_PLASMA_STOPS: ColorStop[] = [
+  [0.000, [0.051, 0.030, 0.528]],
+  [0.125, [0.294, 0.011, 0.631]],
+  [0.250, [0.472, 0.000, 0.658]],
+  [0.375, [0.627, 0.128, 0.588]],
+  [0.500, [0.757, 0.276, 0.486]],
+  [0.625, [0.865, 0.417, 0.383]],
+  [0.750, [0.945, 0.573, 0.278]],
+  [0.875, [0.988, 0.757, 0.157]],
+  [1.000, [0.940, 0.975, 0.131]],
 ];
 
 // Viridis (matplotlib) — densidad por CONTRASTE respecto al fondo. Mapa SECUENCIAL
@@ -566,7 +577,7 @@ export function updateInstancedBuffers({
         const epsilon = 1e-9;
         const chiLog = Math.log10(Math.max(chiRaw, 0) + epsilon);
         const chiNorm = clamp01((chiLog - dynChiMin) / _dynChiRange);
-        [_r, _g, _b] = sampleColormap(TURBO_STOPS, chiNorm);
+        [_r, _g, _b] = sampleColormap(SUSCEPTIBILITY_PLASMA_STOPS, chiNorm);
       }
 
     } else if (viewMode === 'joint') {

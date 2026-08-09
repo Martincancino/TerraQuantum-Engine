@@ -165,6 +165,23 @@ export interface AppState {
   model: VoxelMineralModel | null;
   setModel: (m: VoxelMineralModel | null) => void;
 
+  // ── FASE 1 (H-28/H-36): el modelo 3D es un DATO EVALUADO ───────────────────
+  // Identidad de la corrida que produjo el `model` actual, sellada en setModel.
+  // El modelo no es un objeto libre que vive por su cuenta: PERTENECE a una
+  // evaluación. Si la corrida activa cambia de identidad (otro CSV, otro run) el
+  // modelo deja de ser válido por construcción y la vista 3D se niega a pintarlo,
+  // en vez de depender de que alguien se acuerde de llamar a una limpieza.
+  modelRunKey: string | null;
+  /** true = hay modelo cargado y corresponde a la corrida activa. */
+  isModelForActiveRun: () => boolean;
+
+  // ── FASE 1 (§9H.2): invalidación "stale" ───────────────────────────────────
+  // El usuario cambió parámetros de preparación DESPUÉS de esta inversión: el
+  // resultado en pantalla sigue siendo real, pero ya no corresponde a lo que la
+  // interfaz muestra como configuración. Se marca; no se borra.
+  resultIsStale: boolean;
+  markResultStale: () => void;
+
   // ── Fase F4.2: Isosuperficies del backend (mallas suaves) ──────────────────
   /** Mallas de /v2/isosurface (ya en espacio visual). null = no cargadas. */
   isosurfaceData: IsosurfaceData | null;
@@ -425,7 +442,15 @@ export interface AppState {
   setCapturePngSnapshot: (fn: ((targetWidthPx: number) => string) | null) => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
+/** Identidad estable de una corrida — clave de procedencia del modelo 3D (H-28).
+ *  Una corrida sin identidad ("∅") nunca coincide con otra: un modelo cargado sin
+ *  corrida activa no puede reclamar pertenecer a la siguiente que aparezca. */
+export function runKeyOf(run: Pick<ActiveRunState, "projectId" | "runId">): string {
+  if (!run.projectId || !run.runId) return "∅";
+  return `${run.projectId}::${run.runId}`;
+}
+
+export const useAppStore = create<AppState>((set, get) => ({
   // 1. CORE & VISTAS
   activeRun: {
     projectId: null,
@@ -459,6 +484,21 @@ export const useAppStore = create<AppState>((set) => ({
               boreholeData: null,
               sectionData: null,
               doiOverlayData: null,
+              // FASE 1 (H-28): el modelo pertenece a la evaluación anterior; con
+              // otra identidad de corrida deja de ser un dato válido. Se cae
+              // aquí, en el único sitio por el que pasa todo cambio de corrida,
+              // y no en cada manejador que recuerde limpiarlo.
+              model: null,
+              modelRunKey: null,
+              show3D: false,
+              report: null,
+              resultIsStale: false,
+              // Derivados de la corrida anterior que también dejarían de
+              // corresponder (los limpiaba `resetExplorationState`, que nadie
+              // llamaba nunca: ahora la limpieza vive donde sí ocurre siempre).
+              heatmapData: [],
+              bestTarget: null,
+              bestVoxel: null,
             }
           : {}),
       };
@@ -476,6 +516,21 @@ export const useAppStore = create<AppState>((set) => ({
         reportSummary: null,
         focusing: null,
       },
+      // FASE 1 (H-28): sin corrida activa no hay modelo que mostrar. Antes el
+      // modelo y show3D vivían fuera de esta limpieza, así que el visor 3D seguía
+      // pintando el resultado del CSV anterior tras cargar uno nuevo.
+      model: null,
+      modelRunKey: null,
+      show3D: false,
+      report: null,
+      resultIsStale: false,
+      heatmapData: [],
+      bestTarget: null,
+      bestVoxel: null,
+      isosurfaceData: null,
+      boreholeData: null,
+      sectionData: null,
+      doiOverlayData: null,
       terrainData: null,
       favorabilityResult: null,
       favorabilityScore: null,
@@ -494,9 +549,33 @@ export const useAppStore = create<AppState>((set) => ({
   view: "inicio",
   setView: (v) => set({ view: v }),
   model: null,
+  // ── FASE 1 (H-28/H-36) — identidad de la evaluación que produjo el modelo ───
+  modelRunKey: null,
+  isModelForActiveRun: () => {
+    const s = get();
+    if (!s.model) return false;
+    return s.modelRunKey === runKeyOf(s.activeRun);
+  },
+  resultIsStale: false,
+  markResultStale: () => {
+    // Sólo tiene sentido marcar como desactualizado algo que se está mostrando.
+    const s = get();
+    if (s.model && s.activeRun.runId) set({ resultIsStale: true });
+  },
   setModel: (m) => {
     set({
       model: m,
+      // Sello de procedencia: el modelo queda atado a la corrida vigente en el
+      // momento de cargarlo. Quien llame a setModel debe haber fijado ya la
+      // identidad de la corrida (setActiveRun) — el orden importa y está
+      // verificado en los recorridos E2E de la Fase 1.
+      modelRunKey: m === null ? null : runKeyOf(get().activeRun),
+      // Recargar el MISMO run (p.ej. cambio de resolución de display) no vuelve
+      // fresco un resultado que ya estaba marcado: sólo lo hace una corrida nueva.
+      resultIsStale:
+        m !== null && get().modelRunKey === runKeyOf(get().activeRun)
+          ? get().resultIsStale
+          : false,
       selectedVoxel: null,
       minDensityRaw: null,
       maxDensityRaw: null,

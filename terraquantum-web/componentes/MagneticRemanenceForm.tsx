@@ -2,7 +2,14 @@
 
 import { useState } from "react";
 
-export type InversionMode = "induced_only" | "total_field" | "amplitude";
+// FASE 1 (H-37): el modo "amplitude" se RETIRA de la interfaz. El esquema del
+// backend todavía lo declara —y ahora lo rechaza con un error del catálogo— pero
+// ningún solver de producción lo ejecutaba: elegirlo corría la TMI inducida
+// estándar y el reporte declaraba "amplitude". Ofrecer en un desplegable una
+// física que el motor no aplica es corrupción de procedencia, no una carencia.
+// Para remanencia de dirección desconocida el camino real es MVI (magnetización
+// vectorial), que recupera la dirección desde los datos.
+export type InversionMode = "induced_only" | "total_field";
 
 export interface MagneticRemanenceParamsUI {
   enabled: boolean;
@@ -27,20 +34,24 @@ interface MagneticRemanenceFormProps {
 const MODE_LABELS: Record<InversionMode, string> = {
   induced_only: "Solo inducida (default)",
   total_field: "Campo total (J_ind + Q·J_rem)",
-  amplitude: "Amplitud |J_total| — dir.-independiente",
 };
 
 export function MagneticRemanenceForm({ initialParams, onSubmit, onCancel }: MagneticRemanenceFormProps) {
-  const [params, setParams] = useState<MagneticRemanenceParamsUI>(
-    initialParams ?? {
+  const [params, setParams] = useState<MagneticRemanenceParamsUI>(() => {
+    const base = initialParams ?? {
       enabled: false,
       q_ratio: 1.0,
       remanence_inc_deg: -45.0,
       remanence_dec_deg: 0.0,
-      inversion_mode: "induced_only",
+      inversion_mode: "induced_only" as InversionMode,
       do_q_sweep: false,
-    }
-  );
+    };
+    // Un modo retirado que llegara de un estado previo cae al default en vez de
+    // quedar seleccionado y ser rechazado más tarde por el backend.
+    return base.inversion_mode in MODE_LABELS
+      ? base
+      : { ...base, inversion_mode: "induced_only" as InversionMode };
+  });
 
   function set<K extends keyof MagneticRemanenceParamsUI>(field: K, value: MagneticRemanenceParamsUI[K]) {
     setParams((prev) => ({ ...prev, [field]: value }));
@@ -81,6 +92,10 @@ export function MagneticRemanenceForm({ initialParams, onSubmit, onCancel }: Mag
                 <option key={m} value={m}>{MODE_LABELS[m]}</option>
               ))}
             </select>
+            <p className="text-[9px] text-neutral-600 mt-1">
+              ¿Remanencia de dirección desconocida? Usa magnetización vectorial (MVI):
+              recupera la dirección desde los datos en vez de asumirla.
+            </p>
           </div>
 
           {params.inversion_mode !== "induced_only" && (

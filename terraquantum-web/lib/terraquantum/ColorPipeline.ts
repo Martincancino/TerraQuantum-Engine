@@ -1,6 +1,6 @@
 /**
  * Unified color pipeline for voxel visualization.
- * Consolidates spectral/turbo/inferno colormaps, DOI attenuation, and visibility gating.
+ * Consolidates spectral/susceptibility/inferno colormaps, DOI attenuation, and visibility gating.
  * Self-contained: no imports from terraQuantumGeology to avoid circular deps.
  */
 
@@ -20,15 +20,20 @@ const SPECTRAL_STOPS: ColorStop[] = [
   [1.00, [1.000, 0.500, 0.900]],
 ];
 
-const TURBO_STOPS: ColorStop[] = [
-  [0.000, [0.188, 0.071, 0.231]],
-  [0.143, [0.153, 0.392, 0.945]],
-  [0.286, [0.090, 0.745, 0.812]],
-  [0.429, [0.188, 0.933, 0.353]],
-  [0.571, [0.686, 0.980, 0.082]],
-  [0.714, [0.996, 0.776, 0.082]],
-  [0.857, [0.957, 0.365, 0.004]],
-  [1.000, [0.478, 0.027, 0.000]],
+// FASE 1 (H-34): susceptibilidad magnética en PLASMA (secuencial, perceptualmente
+// uniforme) en vez de Turbo (familia arcoíris: luminancia no monótona → fabrica
+// fronteras visuales donde el dato es continuo). Debe coincidir con
+// terraQuantumGeology.ts::SUSCEPTIBILITY_PLASMA_STOPS.
+const SUSCEPTIBILITY_PLASMA_STOPS: ColorStop[] = [
+  [0.000, [0.051, 0.030, 0.528]],
+  [0.125, [0.294, 0.011, 0.631]],
+  [0.250, [0.472, 0.000, 0.658]],
+  [0.375, [0.627, 0.128, 0.588]],
+  [0.500, [0.757, 0.276, 0.486]],
+  [0.625, [0.865, 0.417, 0.383]],
+  [0.750, [0.945, 0.573, 0.278]],
+  [0.875, [0.988, 0.757, 0.157]],
+  [1.000, [0.940, 0.975, 0.131]],
 ];
 
 const INFERNO_STOPS: ColorStop[] = [
@@ -63,7 +68,7 @@ export interface ColorPipelineConfig {
   /** DOI threshold (0.0–1.0): voxels below threshold get attenuated alpha. */
   doiThreshold: number;
   /** Colormap for the active physical layer. */
-  colormapMode: 'spectral' | 'turbo' | 'inferno';
+  colormapMode: 'spectral' | 'susceptibility' | 'inferno';
   /** When true, voxels below doiThreshold are fully hidden (alpha=0) instead of attenuated. */
   gateByDoi: boolean;
   /** Applies a 30% desaturation toward gray. */
@@ -93,7 +98,7 @@ export class ColorPipeline {
 
   computeVoxelColor(voxel: VoxelColorInput): VoxelColorResult {
     const stops =
-      this.config.colormapMode === 'turbo' ? TURBO_STOPS :
+      this.config.colormapMode === 'susceptibility' ? SUSCEPTIBILITY_PLASMA_STOPS :
       this.config.colormapMode === 'inferno' ? INFERNO_STOPS :
       SPECTRAL_STOPS;
 
@@ -130,7 +135,7 @@ export class ColorPipeline {
 
   /** Derive the correct colormap from a viewMode string. */
   static colormapForMode(viewMode: string): ColorPipelineConfig['colormapMode'] {
-    if (viewMode === 'susceptibility') return 'turbo';
+    if (viewMode === 'susceptibility') return 'susceptibility';
     if (viewMode === 'uncertainty') return 'inferno';
     return 'spectral';
   }

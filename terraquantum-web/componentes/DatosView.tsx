@@ -22,6 +22,8 @@ import {
   getProjectRunDetail,
 } from "../lib/terraquantum/frontendApi";
 import type { FavorabilityResult } from "./datos/favorability_types";
+import WarningBanner from "./WarningBanner";
+import { runWarningViews } from "../lib/terraquantum/runWarnings";
 import GeophysicalInterpretationSection, {
   type GeminiInterpretation,
 } from "@/componentes/interpretation/GeophysicalInterpretationSection";
@@ -338,6 +340,20 @@ export default function DatosView() {
             isExportingPDF={isExportingPDF}
           />
         </div>
+
+        {/* ── FASE 1 (H-27): avisos declarados por el backend para esta corrida ──
+             Topografía degradada a plana, ajuste débil, residuales anómalos… El
+             backend ya los emite en warnings[]; el reporte del usuario tiene que
+             mostrarlos, no dejarlos en el log. */}
+        {(() => {
+          const views = runWarningViews(report);
+          if (views.length === 0) return null;
+          return (
+            <div data-testid="datos-run-warnings">
+              <WarningBanner warnings={views} showAction={false} />
+            </div>
+          );
+        })()}
 
         {/* ── Banner: modelo degenerado (DV-02) ── */}
         {report?.isDegraded && (

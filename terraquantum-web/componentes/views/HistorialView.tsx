@@ -201,13 +201,16 @@ export default function HistorialView() {
       return;
     }
 
-    setModel(model);
-    setShow3D(true);
+    // FASE 1 (H-28): la identidad de la corrida se fija ANTES de cargar el modelo.
+    // El modelo se sella con la corrida vigente en setModel; al revés quedaría
+    // sellado con la corrida anterior y el visor se negaría a pintarlo.
     setActiveRun({
       projectId, runId, source: "history", status: "ready",
       error: null, importMetadata: null, observationsSummary: null,
       reportSummary: null, focusing: null,
     });
+    setModel(model);
+    setShow3D(true);
     setView("figura 3d");
     setLoadingRunKey(null);
     setIsBlockModelLoading(false);
