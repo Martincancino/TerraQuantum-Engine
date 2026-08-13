@@ -1,0 +1,18 @@
+{
+  "project_id": "val_ldm",
+  "run_id": "ldm_v2_lam3p0",
+  "depth": 5022,
+  "nir": 0,
+  "fe": 0,
+  "region": "field_data",
+  "lat": null,
+  "lon": null,
+  "nx": 27,
+  "ny": 10,
+  "nz": 29,
+  "block_size": 520,
+  "cutoff_radius": 12000.0,
+  "lambda_mag": 3.0,
+  "alpha_spatial": 1.0,
+  "enable_focusing": true
+}

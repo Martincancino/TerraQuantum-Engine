@@ -1,0 +1,58 @@
+{
+  "api": {
+    "files": 22,
+    "loc": 6102,
+    "func_loc_max": 927,
+    "func_loc_max_where": "api/gravity_import_api.py:1975 invert_gravity_csv",
+    "cc_max": 165,
+    "cc_max_where": "api/gravity_import_api.py:1975 invert_gravity_csv"
+  },
+  "core": {
+    "files": 11,
+    "loc": 1774,
+    "func_loc_max": 67,
+    "func_loc_max_where": "core/license_service.py:136 verify_license",
+    "cc_max": 19,
+    "cc_max_where": "core/errors.py:621 __init__"
+  },
+  "exploration": {
+    "files": 15,
+    "loc": 10777,
+    "func_loc_max": 1039,
+    "func_loc_max_where": "exploration/gravimetry.py:1728 solve_inversion_lsqr",
+    "cc_max": 143,
+    "cc_max_where": "exploration/gravimetry.py:1728 solve_inversion_lsqr"
+  },
+  "middleware": {
+    "files": 2,
+    "loc": 53,
+    "func_loc_max": 28,
+    "func_loc_max_where": "middleware/api_key_middleware.py:26 dispatch",
+    "cc_max": 8,
+    "cc_max_where": "middleware/api_key_middleware.py:26 dispatch"
+  },
+  "reporting": {
+    "files": 2,
+    "loc": 1771,
+    "func_loc_max": 488,
+    "func_loc_max_where": "reporting/report_generator.py:155 generate_technical_report_html",
+    "cc_max": 32,
+    "cc_max_where": "reporting/report_generator.py:1101 _georef_section_html"
+  },
+  "schemas": {
+    "files": 9,
+    "loc": 2278,
+    "func_loc_max": 19,
+    "func_loc_max_where": "schemas/geophysics_schema.py:893 _validate_grid_bounds",
+    "cc_max": 7,
+    "cc_max_where": "schemas/geophysics_schema.py:35 _validate_box"
+  },
+  "services": {
+    "files": 54,
+    "loc": 27592,
+    "func_loc_max": 2013,
+    "func_loc_max_where": "services/geophysics_service.py:2568 run_geophysics_inversion",
+    "cc_max": 183,
+    "cc_max_where": "services/geophysics_service.py:2568 run_geophysics_inversion"
+  }
+}

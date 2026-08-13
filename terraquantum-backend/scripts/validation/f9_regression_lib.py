@@ -51,6 +51,47 @@ TOL = {
 SAN_NICOLAS_STATION_STRIDE = 4
 
 
+def _resolve_field_run(pid: str, rid: str):
+    """Dónde están las observaciones de una corrida canónica de campo.
+
+    Fase 3. Se prefiere la corrida VIVA (`data/projects/`), para que en la
+    máquina de desarrollo se siga midiendo exactamente el artefacto canónico. Si
+    no está —el caso de un checkout limpio, es decir la CI— se cae a las
+    fixtures versionadas: las MISMAS observaciones, copiadas a un sitio que git
+    sí rastrea (122 KB entre San Nicolás y LdM). Sin esto la CI no podía evaluar
+    esos dos casos y el gate defendía 4 de 6.
+
+    Si no hay ninguna de las dos, se lanza `DatosNoVersionados`: eso NO es una
+    regresión física y el gate no puede contarlo como tal.
+    """
+    candidatos = (
+        BACKEND / "data" / "projects" / pid / "runs" / rid,
+        BACKEND / "tests" / "fixtures" / "f9" / pid / rid,
+    )
+    for base in candidatos:
+        if (base / "observations.json").is_file() and (base / "inputs.json").is_file():
+            return base
+    raise DatosNoVersionados(
+        f"faltan las observaciones de {pid}/{rid}; se buscó en "
+        + " y en ".join(str(c) for c in candidatos)
+    )
+
+
+class DatosNoVersionados(RuntimeError):
+    """El caso no se puede evaluar porque su dataset no vive en el repositorio.
+
+    No es un fallo de física: es ausencia de dato. Se separa a propósito para que
+    el veredicto del gate no mienta en ninguna de las dos direcciones — ni
+    llamando FALLO a lo que no se midió, ni llamando PASS a una suite incompleta.
+    """
+
+
+#: Casos cuyos datos NO están versionados (viven bajo `data/projects/`, excluido
+#: por .gitignore). Sólo estos pueden quedar sin evaluar; si cualquier OTRO caso
+#: se queda sin datos, es una rotura del repositorio y el gate debe fallar.
+CASOS_SIN_DATOS_EN_REPO = {"case_san_nicolas", "case_ldm"}
+
+
 def _case(key, title, dataset, metric, value, unit, tolerance_str, passed, *,
           kind="regression", secondary=None, note=None, elapsed_s=None) -> Dict[str, Any]:
     return {
@@ -196,7 +237,7 @@ def _field_rerun(pid: str, rid: str, *, auto_lambda: bool, station_stride: int =
     from schemas.geophysics_schema import GeophysicsInvertInput, GravityObservation
     from services.geophysics_service import run_geophysics_inversion
 
-    base = BACKEND / "data" / "projects" / pid / "runs" / rid
+    base = _resolve_field_run(pid, rid)
     obs_raw = json.loads((base / "observations.json").read_text(encoding="utf-8"))
     cfg = json.loads((base / "inputs.json").read_text(encoding="utf-8"))
     if station_stride > 1:
@@ -287,6 +328,20 @@ def run_all(generated_utc: Optional[str] = None) -> Dict[str, Any]:
             estado = "LÍMITE ✓" if (c["kind"] == "documented_limit" and c["passed"]) \
                 else "PASS" if c["passed"] else "FALLO"
             print(f"      -> {estado}  {c['metric']}={c['value']}  ({c['elapsed_s']}s)", flush=True)
+        except DatosNoVersionados as exc:
+            # Sólo los casos declarados pueden quedarse sin evaluar. Que falte el
+            # dato de DO-27 o Raglan (que SÍ están en el repositorio) significa
+            # que el repositorio está roto, y eso sí es un fallo.
+            permitido = fn.__name__ in CASOS_SIN_DATOS_EN_REPO
+            caso = _case(
+                fn.__name__, fn.__name__, "—", "no evaluado", None, "", "—",
+                permitido,
+                note=f"NO EVALUADO: {exc}",
+            )
+            caso["skipped"] = permitido
+            cases.append(caso)
+            etiqueta = "NO EVALUADO" if permitido else "FALLO (datos que deberían estar)"
+            print(f"      -> {etiqueta}: {exc}", flush=True)
         except Exception as exc:  # noqa: BLE001
             import traceback
             cases.append(_case(
@@ -294,13 +349,20 @@ def run_all(generated_utc: Optional[str] = None) -> Dict[str, Any]:
                 note=f"ERROR: {exc}", secondary=[{"label": "traceback", "value": traceback.format_exc()[-400:]}],
             ))
             print(f"      -> ERROR: {exc}", flush=True)
-    n_pass = sum(1 for c in cases if c["passed"])
+
+    evaluados = [c for c in cases if not c.get("skipped")]
+    no_evaluados = [c for c in cases if c.get("skipped")]
+    n_pass = sum(1 for c in evaluados if c["passed"])
     return {
         "suite": "F9",
         "title": "F9 — Validación física como regresión automática",
         "generated_utc": generated_utc or "—",
-        "verdict": "PASS" if n_pass == len(cases) else "FALLO",
-        "n_pass": n_pass, "n_total": len(cases),
+        # El veredicto habla SÓLO de lo que se evaluó, y el reporte dice cuántos
+        # casos no se evaluaron para que "PASS" nunca se lea como "6 de 6".
+        "verdict": "PASS" if n_pass == len(evaluados) else "FALLO",
+        "n_pass": n_pass, "n_total": len(evaluados),
+        "n_skipped": len(no_evaluados),
+        "skipped_keys": [c["key"] for c in no_evaluados],
         "elapsed_s": round(time.time() - t0, 1),
         "cases": cases,
     }

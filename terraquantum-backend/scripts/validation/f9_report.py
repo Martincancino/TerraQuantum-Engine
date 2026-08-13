@@ -76,6 +76,10 @@ def _fmt(v: Any) -> str:
 
 
 def _kind_tag(case: Dict[str, Any]) -> str:
+    # Fase 3: un caso que no se pudo evaluar NO es un fallo de física, y decir
+    # "FALLO" cuando lo que falta es el dato entrena a ignorar el reporte.
+    if case.get("skipped"):
+        return '<span class="tag limit">NO EVALUADO</span>'
     if case.get("kind") == "documented_limit":
         return '<span class="tag limit">LÍMITE ✓</span>' if case.get("passed") \
             else '<span class="tag fail">LÍMITE ✗</span>'
@@ -84,6 +88,8 @@ def _kind_tag(case: Dict[str, Any]) -> str:
 
 
 def _card_class(case: Dict[str, Any]) -> str:
+    if case.get("skipped"):
+        return "limit"
     if not case.get("passed"):
         return "fail"
     return "limit" if case.get("kind") == "documented_limit" else "pass"

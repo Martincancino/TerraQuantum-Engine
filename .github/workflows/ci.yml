@@ -5,6 +5,12 @@ on:
     branches: ["*"]
   pull_request:
     branches: ["main"]
+  schedule:
+    # 04:30 UTC = 00:30 en Chile continental (invierno). La regresión física
+    # completa cuesta entre 33 min y 6,9 h MEDIDOS en dos corridas del propio
+    # gate, así que no cabe en un PR: va de noche.
+    - cron: "30 4 * * *"
+  workflow_dispatch:
 
 jobs:
   backend:
@@ -17,7 +23,13 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # Fase 3: el intérprete NO se escribe a mano aquí. Se lee del mismo
+          # archivo que declara el que se empaqueta en el instalador. Antes la
+          # CI fijaba 3.11 y, como `zarr==3.2.1` exige >=3.12, pip resolvía un
+          # MAJOR DISTINTO de zarr: la CI validaba un árbol de dependencias que
+          # nunca llega al cliente. Si la versión no existe en el runner, este
+          # paso falla ruidosamente — que es lo correcto.
+          python-version-file: terraquantum-backend/.python-version
           cache: pip
           cache-dependency-path: terraquantum-backend/requirements.txt
 
@@ -25,13 +37,44 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile check (syntax errors)
-        run: python -m compileall api services exploration schemas Camiones core middleware workers
+        # Fase 3 (H-5): antes esta línea compilaba `Camiones` y `workers`, que no
+        # existen. `compileall` avisa por stdout y devuelve 0, así que la CI pasaba
+        # en verde compilando seis paquetes de los ocho que decía compilar.
+        # El script contrasta los paquetes declarados con los que hay en disco.
+        run: python scripts/ci/compile_check.py
 
-      - name: Full pytest suite (excluding slow tests, ~900 tests, ~25 min)
-        # Ejecuta todos los tests EXCEPTO los marcados como @pytest.mark.slow.
-        # Incluye unit + integration + benchmark + todos los demás.
-        # Los tests lentos (>10s) se ejecutan localmente pero no en CI para mantener tiempo <30min.
-        run: pytest tests/ -m "not slow" -v --tb=short -x
+      - name: Guardas de arquitectura (capas, complejidad, inventario de gates)
+        # Las tres puertas de la Fase 3 que no dependen de correr física:
+        #  · presupuestos AST: la Fase 8 no puede deshacerse sola con el tiempo.
+        #  · inventario: cada script de validation/ declara si decide o sólo mide (H-22).
+        #  · tests: dirección de dependencias, guardas de CI y contabilidad del gate F9.
+        run: |
+          python scripts/ci/ast_budgets.py
+          python scripts/ci/validation_inventory.py
+          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py -q
+
+      - name: Canario de física (regresión W_z sobre esfera sintética)
+        # H-4: la regresión física NUNCA corría automáticamente. Y el arreglo no
+        # era "poner TQ_RUN_VALIDATION=1 en el paso de tests": MEDIDO, los 8
+        # tests `validation` llevan TAMBIÉN el marcador `slow`, así que
+        # `-m "not slow"` los deselecciona antes de que el skip de conftest
+        # entre en juego. Hay que invocarlos por nodeid y sin ese filtro.
+        # Se elige el sintético porque es el único caso sin datos externos y con
+        # coste acotado (2,5 s declarados; 38 s medidos en una máquina cargada).
+        # El resto de la suite física va en el job nocturno.
+        env:
+          TQ_RUN_VALIDATION: "1"
+        timeout-minutes: 15
+        run: pytest tests/test_f9_physics_regression.py::test_synthetic_sphere_recovery -q
+
+      - name: Suite de tests
+        # MEDIDO 2026-08-11: `-m "not slow"` selecciona 2256 de 2290 tests (sólo
+        # 34 quedan fuera), y la suite completa tarda ~60 min en una máquina de
+        # desarrollo. El comentario anterior decía "~900 tests, ~25 min": la
+        # marca `slow` dejó de separar nada hace tiempo. Se mantiene el filtro
+        # porque lo que excluye (soak, matriz E2E, presupuestos de rendimiento)
+        # sí es caro, pero el coste real de este paso es del orden de la hora.
+        run: pytest tests/ -m "not slow" --tb=short -q
 
   frontend:
     runs-on: ubuntu-latest
@@ -53,5 +96,72 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: El navegador no conoce la URL del backend (Fase 2, H-21)
+        # Guarda estática: si alguien vuelve a llamar al backend directo desde
+        # código de cliente, la única puerta deja de ser el proxy — y con puertos
+        # alternativos, esa llamada apuntaría a otro proceso.
+        run: node scripts/check_client_backend_calls.mjs
+
       - name: Build
         run: npm run build
+
+  # ── Regresión física completa: sólo de noche o a mano ───────────────────────
+  # H-4 cerrado del todo. Este job es el que "congela la física", y su honestidad
+  # depende de dos cosas que hay que leer juntas:
+  #
+  #   1. COSTE MEDIDO. Los dos reportes guardados del propio gate dan 1.972 s
+  #      (33 min) y 24.852 s (6,9 h) para el MISMO veredicto PASS: DO-27 domina y
+  #      su coste no es reproducible. Los runners alojados de GitHub matan un job
+  #      a las 6 h, así que en su régimen lento este job morirá por timeout. Eso
+  #      es información, no ruido: dirá que el caso caro se salió de presupuesto.
+  #   2. DATOS. DO-27 y Raglan ya estaban versionados. San Nicolás y LdM vivían
+  #      sólo bajo data/projects/ (excluido por .gitignore), así que en un
+  #      checkout limpio no existían: se copiaron sus observaciones —122 KB, y
+  #      un test comprueba que son IDÉNTICAS a la corrida canónica— a
+  #      tests/fixtures/f9/. Con eso el nocturno evalúa los 6 casos. El gate
+  #      sigue sabiendo distinguir "no evaluado" de "regresión" por si alguna
+  #      fixture desaparece.
+  physics-regression-nightly:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330   # por debajo del tope de 6 h de los runners alojados
+    defaults:
+      run:
+        working-directory: terraquantum-backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: terraquantum-backend/.python-version
+          cache: pip
+          cache-dependency-path: terraquantum-backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ingesta generativa a fondo (N grande)
+        # CORRECCIÓN MEDIDA a la auditoría: decía que el generativo estaba "fuera
+        # de la CI por tiempo". No lo está — `test_ingesta_generativa.py` no
+        # lleva marca `slow`, así que la selección `-m "not slow"` del job de PR
+        # ya lo ejecuta con su default de 400 casos. Lo que faltaba era la pasada
+        # LARGA, que es esto. `TQ_GEN_N` ya existía como perilla.
+        env:
+          TQ_GEN_N: "5000"
+        timeout-minutes: 60
+        run: pytest tests/test_ingesta_generativa.py -q
+
+      - name: Gate F9 (re-invierte el motor real sobre los datasets canónicos)
+        env:
+          TQ_RUN_VALIDATION: "1"
+        run: python scripts/validation/f9_gate_regression.py
+
+      - name: Publicar el reporte aunque el gate falle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: f9-regression-report
+          path: |
+            terraquantum-backend/scripts/validation/f9_gate_report.json
+            terraquantum-backend/scripts/validation/f9_validation_report.html
+          if-no-files-found: warn

@@ -1,0 +1,18 @@
+{
+  "project_id": "val_san_nicolas",
+  "run_id": "a407c45e6d",
+  "depth": 1000,
+  "nir": 0,
+  "fe": 0,
+  "region": "field_data",
+  "lat": null,
+  "lon": null,
+  "nx": 31,
+  "ny": 20,
+  "nz": 31,
+  "block_size": 50,
+  "cutoff_radius": 2500.0,
+  "lambda_mag": 0.1,
+  "alpha_spatial": 1.0,
+  "enable_focusing": true
+}

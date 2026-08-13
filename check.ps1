@@ -7,10 +7,20 @@ $ErrorActionPreference = "Stop"
 $fail = $false
 $root = $PSScriptRoot
 
-Write-Host "[1/4] compileall backend..." -ForegroundColor Cyan
+Write-Host "[1/4] compile check backend..." -ForegroundColor Cyan
 Push-Location "$root\terraquantum-backend"
-python -m compileall -q api services exploration core schemas scripts
-if ($LASTEXITCODE -ne 0) { $fail = $true; Write-Host "  FALLO compileall" -ForegroundColor Red }
+# Fase 3: el mismo comprobador que usa la CI. Antes esta linea llevaba su PROPIA
+# lista de paquetes (sin middleware ni reporting) y la CI llevaba otra (con dos
+# directorios inexistentes). Dos listas a mano, ambas mal, de formas distintas.
+python scripts/ci/compile_check.py
+if ($LASTEXITCODE -ne 0) { $fail = $true; Write-Host "  FALLO compile check" -ForegroundColor Red }
+# Fase 3: las guardas baratas van en el check local, no solo en la CI. Cuestan
+# segundos y evitan descubrir en el PR que crecio una funcion o que un script
+# nuevo de validation/ no declaro si decide o solo mide.
+python scripts/ci/ast_budgets.py
+if ($LASTEXITCODE -ne 0) { $fail = $true; Write-Host "  FALLO presupuestos AST" -ForegroundColor Red }
+python scripts/ci/validation_inventory.py
+if ($LASTEXITCODE -ne 0) { $fail = $true; Write-Host "  FALLO inventario de validacion" -ForegroundColor Red }
 Pop-Location
 
 Write-Host "[2/4] tsc --noEmit frontend..." -ForegroundColor Cyan

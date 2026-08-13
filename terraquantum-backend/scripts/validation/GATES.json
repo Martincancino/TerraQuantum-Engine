@@ -1,0 +1,331 @@
+{
+  "_doc": "Fase 3 / H-22: cada script de scripts/validation/ declara si es una PUERTA (gate: decide, exit != 0), un INSTRUMENTO (diagnostico: mide e imprime), una BIBLIOTECA o una coleccion de TESTS. Lo verifica scripts/ci/validation_inventory.py. Pon \"tipo_manual\": true para que --update respete tu clasificacion.",
+  "scripts": {
+    "c1_silent_corruption.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PARTE C-C1 — Caza de corrupción silenciosa (red-team de ingesta física)."
+    },
+    "conftest.py": {
+      "tipo": "biblioteca",
+      "decide": false,
+      "que_hace": "conftest.py para scripts/validation/ — Fase 6"
+    },
+    "depth_prior_endtoend.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PARTE B · Punto 2 — Cadena COMPLETA con componentes de producción, sobre verdad conocida:"
+    },
+    "depth_prior_experiment.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PARTE B — ¿Un prior de profundidad (mag/Euler) arregla la profundidad de la gravedad?"
+    },
+    "depth_prior_headtohead.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PUNTO 1 REFORMULADO — Head-to-head del PRIOR de profundidad en CONFIG DE PRODUCCIÓN."
+    },
+    "depth_source_comparison.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PARTE B · Punto 1 — ¿Qué método da una profundidad CONFIABLE para el régimen profundo?"
+    },
+    "do27_depth_experiment.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "DO-27 — Experimento de PROFUNDIDAD: ¿cuánto de la borrosidad en z es física"
+    },
+    "do27_depth_experiment_deep.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "DO-27 — Experimento de profundidad EN RÉGIMEN AMBIGUO (malla profunda tipo LdM)"
+    },
+    "do27_depth_experiment_sparse.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "DO-27 — Experimento de profundidad CON COBERTURA DISPERSA (régimen LdM con verdad)"
+    },
+    "do27_harness.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "DO-27 (Tli Kwi Cho) — Harness de validación contra benchmark PUBLICADO"
+    },
+    "error_budget.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PARTE A — Presupuesto de error: ¿cuánto nos equivocamos HOY, y DÓNDE?"
+    },
+    "error_budget_html.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "Renderiza el reporte del presupuesto de error (Parte A) a HTML imprimible."
+    },
+    "euler_depth_prior_loop.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PARTE B — Cadena COMPLETA con componentes de producción:"
+    },
+    "f2b_gate_cabinet.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "GATE F2B — El gabinete del consultor de punta a punta, con datos REALES."
+    },
+    "f3_budget_calibration.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "F3 → F8 — Calibración del presupuesto de vóxeles (semilla de la matriz F8)."
+    },
+    "f3_gate_joint96k.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "GATE F3 — El caso que mató al proxy: joint ~96k vóxeles, de punta a punta."
+    },
+    "f5_b2_doi_calibration.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "F5 / B2 — Recalibración del horizonte DOI de `build_depth_resolution`."
+    },
+    "f6_gate_copilot.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "F6 GATE — Copiloto IA: 20 preguntas de consultor ancladas a una corrida REAL."
+    },
+    "f7_gate_packaging.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "F7 — Gate del empaque local-first + licencias."
+    },
+    "f8_gate_storm.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "GATE F8 — Tormenta de pruebas: validación TRANSVERSAL del producto entero."
+    },
+    "f9_degradation_check.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "F9 — Prueba de SENSIBILIDAD del gate: una degradación de la física lo hace FALLAR."
+    },
+    "f9_gate_regression.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "GATE F9 — Validación física como regresión automática."
+    },
+    "f9_regression_lib.py": {
+      "tipo": "biblioteca",
+      "decide": false,
+      "que_hace": "F9 — Librería de regresión física (congela la física ya validada)."
+    },
+    "f9_report.py": {
+      "tipo": "biblioteca",
+      "decide": false,
+      "que_hace": "Renderiza el informe HTML de la suite F9; la importa f9_gate_regression.py.",
+      "tipo_manual": true
+    },
+    "field_validation_harness.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "FASE 25 — Harness de Validación de Campo (reproducible)"
+    },
+    "honesty_probe.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PARTE C-C2 (probe) — ¿el REPORTE de producción avisa cuando la profundidad es basura?"
+    },
+    "honesty_test.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PARTE C-C2 — ¿los campos de honestidad DISCRIMINAN recuperado vs fallido?"
+    },
+    "ingest_do27.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "DO-27 (Tli Kwi Cho) — Adaptador de ingestión → formato TerraQuantum"
+    },
+    "ingest_raglan.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "Raglan (Ni-Cu, Quebec) — Adaptador de ingestión → formato TerraQuantum"
+    },
+    "morozov_depth_recovery.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PUNTO 4 — ¿la profundidad NO se recupera (LEY), o es un ARTEFACTO del λ fijo?"
+    },
+    "morozov_prod_hardened.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PUNTO 4 — Morozov ENDURECIDO en CONFIG DE PRODUCCIÓN (paso 2 del hardening)."
+    },
+    "morozov_stability_diag.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PUNTO 4 — DIAGNÓSTICO de la inestabilidad de Morozov (paso #1, antes de todo)."
+    },
+    "multiphysics_gain.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PARTE B — ¿Cuánto GANAMOS combinando gravimetría + magnetometría + sondajes?"
+    },
+    "raglan_harness.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "Raglan (Ni-Cu, Quebec) — Harness de validación contra benchmark de DATO REAL"
+    },
+    "run_api_integration_test.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "H-A5: API End-to-End Integration Test"
+    },
+    "synthetic_cases.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "scripts/validation/synthetic_cases.py"
+    },
+    "synthetic_depth_ambiguity.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "SINTÉTICO — Cuantificar el valor del ANCLA cuando z SÍ está mal (régimen LdM)"
+    },
+    "tanda_a_part0_offanchor.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "TANDA A — PARTE 0: clavar el número OFF-ANCHOR del sintético de ambigüedad-z."
+    },
+    "tanda_a_part1_regional.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "TANDA A — PARTE 1: ¿la remoción regional cura el sink de profundidad de LdM?"
+    },
+    "tanda_a_part1b_shallow_vs_smear.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "TANDA A — PARTE 1B: ¿es ROBUSTO el cuerpo SOMERO de LdM, o lo profundo es null-space?"
+    },
+    "test_focusing_module.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "test_focusing_module.py — Fase 3M.1.1"
+    },
+    "test_geophysics_anomaly_mask_semantics.py": {
+      "tipo": "tests",
+      "decide": false,
+      "que_hace": "Fase 6 — Test semántico: anomaly mask no depende de `grade`."
+    },
+    "test_geophysics_fit_diagnostics.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "test_geophysics_fit_diagnostics.py"
+    },
+    "test_geophysics_focusing_integration.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "test_geophysics_focusing_integration.py — Fase 3M.5"
+    },
+    "test_geophysics_input_validation.py": {
+      "tipo": "tests",
+      "decide": false,
+      "que_hace": "Fase 6 — Tests de validación de entrada geofísica."
+    },
+    "test_geophysics_qaqc.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": ""
+    },
+    "test_geophysics_residual_map.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "test_geophysics_residual_map.py"
+    },
+    "test_geophysics_semantic_fields.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": ""
+    },
+    "test_geophysics_sensitivity_api.py": {
+      "tipo": "tests",
+      "decide": false,
+      "que_hace": ""
+    },
+    "test_geophysics_sensitivity_sweep.py": {
+      "tipo": "tests",
+      "decide": false,
+      "que_hace": ""
+    },
+    "test_geophysics_sensor_flags.py": {
+      "tipo": "tests",
+      "decide": false,
+      "que_hace": ""
+    },
+    "test_geophysics_technical_summary.py": {
+      "tipo": "tests",
+      "decide": false,
+      "que_hace": ""
+    },
+    "test_geophysics_uncertainty_diagnostics.py": {
+      "tipo": "tests",
+      "decide": false,
+      "que_hace": ""
+    },
+    "test_gravity_csv_v1.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": ""
+    },
+    "test_gravity_import_api.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": ""
+    },
+    "test_gravity_import_invert_api.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": ""
+    },
+    "test_gravity_import_persistence.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": ""
+    },
+    "test_gravity_import_trace_export.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": ""
+    },
+    "test_project_run_flow.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": ""
+    },
+    "test_vtk_export.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "FASE 10 — Test de Exportación VTK Industrial"
+    },
+    "validate_bushveld_regional_octree.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "Validate TreeMesh on real Bushveld data: ~350km domain, 441 sensors, regional scale."
+    },
+    "validate_output.py": {
+      "tipo": "gate",
+      "decide": true,
+      "que_hace": "scripts/validation/validate_output.py"
+    },
+    "wz_lever_probe.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PUNTO 4 — sonda de PALANCAS: ¿qué mueve la profundidad recuperada (los 62.5 m clavados)?"
+    },
+    "wz_smallness_liveness.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PUNTO 4 (docs/05 Parte B) — AGREGADO 1: ¿la perilla del W_z-fix está VIVA?"
+    },
+    "wz_tradeoff.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "PUNTO 4 — trade-off PROFUNDIDAD ↔ χ² (agregado 3) y ¿el depth-weight agrega valor?"
+    }
+  }
+}

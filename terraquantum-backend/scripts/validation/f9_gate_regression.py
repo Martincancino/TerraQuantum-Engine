@@ -57,9 +57,16 @@ def main() -> int:
             print(f"    ↳ {c['note']}")
 
     verdict = report["verdict"]
+    n_skipped = report.get("n_skipped", 0)
     print("\n" + "=" * 74)
-    print(f"GATE F9: {verdict}   ({report['n_pass']}/{report['n_total']} casos en verde · "
+    print(f"GATE F9: {verdict}   ({report['n_pass']}/{report['n_total']} casos evaluados en verde · "
           f"{report['elapsed_s']}s)")
+    if n_skipped:
+        # Fase 3: un PASS parcial se dice en voz alta. La CI corre sobre un
+        # checkout limpio y ahí San Nicolás y LdM no existen — quien lea este
+        # veredicto tiene que saber qué NO se comprobó.
+        print(f"  NO EVALUADOS ({n_skipped}): {', '.join(report.get('skipped_keys', []))}"
+              "  — sus datos no están versionados (data/projects/ está en .gitignore)")
     print("=" * 74)
 
     out_json = BACKEND / "scripts" / "validation" / "f9_gate_report.json"

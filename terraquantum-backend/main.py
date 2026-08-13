@@ -56,7 +56,7 @@ from core.config import (
     TQ_AUTH_ENABLED,
     ensure_runtime_dirs,
 )
-from core.gee_client import init_gee
+from services.gee_client import init_gee
 from core.metrics import PrometheusMiddleware
 from core.observability import init_tracing, instrument_app
 from core.rate_limit import limiter
@@ -94,6 +94,21 @@ if not TQ_AUTH_ENABLED:
         "MODO SIN AUTENTICACIÓN: TQ_AUTH_ENABLED=false. "
         "Todas las rutas son accesibles sin API key. "
         "En producción establece TQ_AUTH_ENABLED=true y configura TQ_MASTER_KEY."
+    )
+
+# Fase 3: la combinación PELIGROSA no es cada mitad, es el producto de las dos.
+# La Fase 2 invirtió el default de escucha a loopback, pero un `.env.local` con
+# `TERRAQUANTUM_HOST=0.0.0.0` (herencia de cuando ese era el default) sigue
+# mandando en la máquina de desarrollo — y ahí el motor de inversión queda
+# expuesto a toda la red sin autenticación. Dentro de un contenedor es correcto
+# y esperado; fuera, hay que decirlo en voz alta cada vez que arranca.
+if BACKEND_HOST not in ("127.0.0.1", "localhost", "::1") and not TQ_AUTH_ENABLED:
+    _startup_log.warning(
+        "EXPUESTO A LA RED SIN AUTENTICACIÓN: escuchando en %s con "
+        "TQ_AUTH_ENABLED=false. Cualquier equipo que llegue a esta máquina "
+        "puede usar el motor y leer los proyectos. Si no estás dentro de un "
+        "contenedor, pon TERRAQUANTUM_HOST=127.0.0.1 (revisa también .env.local).",
+        BACKEND_HOST,
     )
 
 app = FastAPI(
