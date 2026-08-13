@@ -1,0 +1,57 @@
+{
+  "case": {
+    "depth_m": 600.0,
+    "radius_m": 150.0,
+    "delta_rho": 0.6,
+    "span_m": 1500.0,
+    "n_side": 12,
+    "noise_mgal": 0.02
+  },
+  "rows": [
+    {
+      "beta": 0.0,
+      "recovered_peak_depth_m": 62.5,
+      "recovered_centroid_m": 62.5,
+      "depth_err_centroid_m": 537.5,
+      "depth_err_peak_m": 537.5,
+      "horizontal_m": 88.4,
+      "misfit_pct": 8.796,
+      "chi2_final": 0.09753973481447113,
+      "smallness_over_smoothness": 0.06822183065730425,
+      "smallness_block_fro": 0.283542263577074,
+      "smoothness_block_fro": 4.156180812581526,
+      "s": 89.6
+    },
+    {
+      "beta": 2.0,
+      "recovered_peak_depth_m": 62.5,
+      "recovered_centroid_m": 62.5,
+      "depth_err_centroid_m": 537.5,
+      "depth_err_peak_m": 537.5,
+      "horizontal_m": 88.7,
+      "misfit_pct": 8.796,
+      "chi2_final": 0.09753967227239482,
+      "smallness_over_smoothness": 0.07760013410669864,
+      "smallness_block_fro": 0.3225201884280141,
+      "smoothness_block_fro": 4.156180812581526,
+      "s": 103.7
+    },
+    {
+      "beta": -2.0,
+      "recovered_peak_depth_m": 62.5,
+      "recovered_centroid_m": 62.5,
+      "depth_err_centroid_m": 537.5,
+      "depth_err_peak_m": 537.5,
+      "horizontal_m": 83.1,
+      "misfit_pct": 8.796,
+      "chi2_final": 0.097542518696081,
+      "smallness_over_smoothness": 0.09703410798360565,
+      "smallness_block_fro": 0.4032912977674256,
+      "smoothness_block_fro": 4.156180812581526,
+      "s": 79.1
+    }
+  ],
+  "knob_alive": false,
+  "delta_depth_beta_pos_m": 0.0,
+  "delta_depth_beta_neg_m": 0.0
+}

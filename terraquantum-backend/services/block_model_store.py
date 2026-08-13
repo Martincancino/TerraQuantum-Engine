@@ -1,12 +1,12 @@
 import json
 import os
-import re
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core.utils import clean_trace_id
 from core.config import (
     BASE_DIR,
     DATA_DIR,
@@ -23,7 +23,6 @@ from core.logging import get_logger
 _log = get_logger(__name__)
 
 
-TRACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 RUN_INPUTS_FILENAME = "inputs.json"
 TERRAIN_METADATA_FILENAME = "terrain_metadata.json"
 TERRAIN_DEM_MATRIX_FILENAME = "terrain_dem_matrix.json"
@@ -74,22 +73,6 @@ class BlockModelReference:
             "blockModelPath": str(self.path),
             "storageMode": "legacy" if self.is_legacy else "project_run",
         }
-
-
-def clean_trace_id(value: Optional[str], field_name: str) -> Optional[str]:
-    if value is None:
-        return None
-
-    clean_value = str(value).strip()
-    if clean_value == "":
-        return None
-
-    if clean_value in {".", ".."} or not TRACE_ID_PATTERN.match(clean_value):
-        raise ValueError(
-            f"{field_name} invalido. Use letras, numeros, guion, punto o underscore."
-        )
-
-    return clean_value
 
 
 def clean_trace_context(
@@ -798,43 +781,6 @@ def write_run_manifest(run_dir: Path, manifest: dict) -> Path:
     return path
 
 
-def resolve_mine_design_block_model_reference(
-    file_name: Optional[str] = None,
-    project_id: Optional[str] = None,
-    run_id: Optional[str] = None,
-) -> BlockModelReference:
-    clean_project_id, clean_run_id = clean_trace_context(project_id, run_id)
+# Fase 6 (H-13): aquí vivía `resolve_mine_design_block_model_reference`, vestigio del
+# módulo de diseño minero eliminado el 2026-06-10. Cero llamadores.
 
-    if clean_project_id and clean_run_id:
-        filename = Path(str(file_name or RUN_BLOCK_MODEL_FILENAME)).name
-        if filename == DEFAULT_BLOCK_MODEL_FILENAME:
-            filename = RUN_BLOCK_MODEL_FILENAME
-        return get_run_block_model_reference(clean_project_id, clean_run_id, filename)
-
-    if not file_name:
-        raise ValueError(
-            "Debe proveer project_id/run_id o file explícito. No existe fallback silencioso a modelo legacy."
-        )
-
-    raw = str(file_name).strip()
-    if not raw:
-        raise ValueError(
-            "Debe proveer project_id/run_id o file explícito. No existe fallback silencioso a modelo legacy."
-        )
-    candidate = Path(raw)
-
-    possible_paths = []
-
-    if candidate.is_absolute():
-        possible_paths.append(candidate)
-    else:
-        possible_paths.append(BASE_DIR / raw)
-        possible_paths.append(BASE_DIR / candidate.name)
-        possible_paths.append(DATA_DIR / raw)
-        possible_paths.append(DATA_DIR / candidate.name)
-
-    for path in possible_paths:
-        if path.exists():
-            return BlockModelReference(path=path)
-
-    return BlockModelReference(path=possible_paths[-1])

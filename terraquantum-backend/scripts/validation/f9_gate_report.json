@@ -1,11 +1,11 @@
 {
   "suite": "F9",
   "title": "F9 — Validación física como regresión automática",
-  "generated_utc": "2026-07-24T01:49:16Z",
+  "generated_utc": "2026-07-29T21:54:02Z",
   "verdict": "PASS",
   "n_pass": 6,
   "n_total": 6,
-  "elapsed_s": 1972.3,
+  "elapsed_s": 24851.6,
   "cases": [
     {
       "key": "synthetic_sphere",
@@ -32,7 +32,7 @@
         }
       ],
       "note": "La correlación cae si el depth-weighting (W_z) se degrada → canario directo de regresión (umbral 0.70 = el propio CI del benchmark para W_z formal).",
-      "elapsed_s": 2.5
+      "elapsed_s": 2.2
     },
     {
       "key": "depth_ambiguity",
@@ -59,7 +59,7 @@
         }
       ],
       "note": "La gravedad-sola NO resuelve profundidad (null-space). Se DOCUMENTA como límite esperado; el producto vende targeting horizontal, jamás profundidad sin restricciones.",
-      "elapsed_s": 563.7
+      "elapsed_s": 482.1
     },
     {
       "key": "do27",
@@ -82,7 +82,7 @@
         }
       ],
       "note": "Targeting horizontal validado contra benchmark publicado.",
-      "elapsed_s": 1348.0
+      "elapsed_s": 24238.5
     },
     {
       "key": "san_nicolas",
@@ -105,7 +105,7 @@
         }
       ],
       "note": "El motor reproduce el dato real a ~1.5% de misfit. Geometría del cuerpo aprobada con campo real (techo ~125 m vs 150–220 publicado). Estaciones submuestreadas por la guardia de memoria (8 GB); el número se congela con este submuestreo.",
-      "elapsed_s": 48.5
+      "elapsed_s": 92.1
     },
     {
       "key": "ldm",
@@ -132,7 +132,7 @@
         }
       ],
       "note": "El motor ajusta el dato real al nivel de ruido (χ²≈1 medido = 0.99) y acierta el targeting somero (~2 km, coincide con la literatura).",
-      "elapsed_s": 9.6
+      "elapsed_s": 21.3
     },
     {
       "key": "raglan",
@@ -159,7 +159,7 @@
         }
       ],
       "note": "Magnetometría escalar con padding (BC física). El pico GLOBAL cae en artefacto de borde; el blanco geológico es el cuerpo INTERIOR.",
-      "elapsed_s": 7.3
+      "elapsed_s": 15.4
     }
   ]
 }

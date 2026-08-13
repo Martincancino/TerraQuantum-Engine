@@ -29,7 +29,7 @@ _FOOTPRINT_WITH_COORDS = {
 
 @pytest.fixture
 def projects_dir(tmp_path, monkeypatch):
-    import core.block_model_store as store
+    import services.block_model_store as store
 
     projects_path = tmp_path / "projects"
     monkeypatch.setattr(store, "PROJECTS_DIR", projects_path)

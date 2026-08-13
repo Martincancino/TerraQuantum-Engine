@@ -8,7 +8,9 @@ const _dummy    = new THREE.Object3D();
 const _tmpColor = new THREE.Color();
 // ────────────────────────────────────────────────────────────────────────────
 
-// Exported so engine-physics.ts (demo procedural model) can type its voxel array.
+// Se exporta para tipar arreglos de vóxeles fuera de este módulo (p. ej. Exploration3DView).
+// Fase 6: antes este comentario citaba `engine-physics.ts`, un modelo procedural de
+// demostración que se borró por ser física sintética en TypeScript sin consumidores.
 export interface VoxelData {
   x?: number;
   y?: number;

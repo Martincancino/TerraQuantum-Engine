@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from core import block_model_store as store
+from services import block_model_store as store
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

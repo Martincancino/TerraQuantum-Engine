@@ -1,0 +1,119 @@
+{
+  "rows": [
+    {
+      "true_depth_m": 150.0,
+      "recovered_depth_m": 187.5,
+      "depth_err_m": 37.5,
+      "confidence_level": "MEDIUM",
+      "depth_confidence": "LOW",
+      "model_reliability_level": "MEDIUM_RELIABILITY",
+      "overall_verdict_level": "MEDIUM",
+      "overall_limiting": [
+        "priority_class",
+        "checkerboard_resolution"
+      ],
+      "risk_level": "LOW",
+      "is_null_space_artifact": false,
+      "deep_mass_fraction": 0.0,
+      "resolvable_body_depth_m": 187.5,
+      "checkerboard_status": "FAIL",
+      "checkerboard_pearson": 0.1178,
+      "chi2_final": 1.95746220055095,
+      "misfit_pct": 9.88,
+      "lambda_used": 0.31623,
+      "label": "150m MOROZOV (recuperado)"
+    },
+    {
+      "true_depth_m": 300.0,
+      "recovered_depth_m": 312.5,
+      "depth_err_m": 12.5,
+      "confidence_level": "MEDIUM",
+      "depth_confidence": "LOW",
+      "model_reliability_level": "MEDIUM_RELIABILITY",
+      "overall_verdict_level": "MEDIUM",
+      "overall_limiting": [
+        "priority_class",
+        "checkerboard_resolution"
+      ],
+      "risk_level": "LOW",
+      "is_null_space_artifact": false,
+      "deep_mass_fraction": 0.0,
+      "resolvable_body_depth_m": 312.5,
+      "checkerboard_status": "FAIL",
+      "checkerboard_pearson": 0.1178,
+      "chi2_final": 0.5836180018678941,
+      "misfit_pct": 10.42,
+      "lambda_used": 0.31623,
+      "label": "300m MOROZOV (recuperado)"
+    },
+    {
+      "true_depth_m": 600.0,
+      "recovered_depth_m": 62.5,
+      "depth_err_m": 537.5,
+      "confidence_level": "MEDIUM",
+      "depth_confidence": "LOW",
+      "model_reliability_level": "MEDIUM_RELIABILITY",
+      "overall_verdict_level": "MEDIUM",
+      "overall_limiting": [
+        "priority_class",
+        "checkerboard_resolution"
+      ],
+      "risk_level": "HIGH",
+      "is_null_space_artifact": false,
+      "deep_mass_fraction": 0.0,
+      "resolvable_body_depth_m": 62.5,
+      "checkerboard_status": "FAIL",
+      "checkerboard_pearson": 0.1178,
+      "chi2_final": 1.1732432852393397,
+      "misfit_pct": 30.43,
+      "lambda_used": 0.7498969825249333,
+      "label": "600m MOROZOV (frágil)"
+    },
+    {
+      "true_depth_m": 900.0,
+      "recovered_depth_m": 62.5,
+      "depth_err_m": 837.5,
+      "confidence_level": "MEDIUM",
+      "depth_confidence": "LOW",
+      "model_reliability_level": "MEDIUM_RELIABILITY",
+      "overall_verdict_level": "MEDIUM",
+      "overall_limiting": [
+        "priority_class",
+        "checkerboard_resolution"
+      ],
+      "risk_level": "HIGH",
+      "is_null_space_artifact": false,
+      "deep_mass_fraction": 0.0,
+      "resolvable_body_depth_m": 62.5,
+      "checkerboard_status": "FAIL",
+      "checkerboard_pearson": 0.1178,
+      "chi2_final": 1.0092314348144649,
+      "misfit_pct": 42.97,
+      "lambda_used": 1.77828,
+      "label": "900m MOROZOV (falla)"
+    },
+    {
+      "true_depth_m": 300.0,
+      "recovered_depth_m": 62.5,
+      "depth_err_m": 237.5,
+      "confidence_level": "MEDIUM",
+      "depth_confidence": "LOW",
+      "model_reliability_level": "MEDIUM_RELIABILITY",
+      "overall_verdict_level": "MEDIUM",
+      "overall_limiting": [
+        "priority_class",
+        "checkerboard_resolution"
+      ],
+      "risk_level": "LOW",
+      "is_null_space_artifact": false,
+      "deep_mass_fraction": 0.0,
+      "resolvable_body_depth_m": 62.5,
+      "checkerboard_status": "FAIL",
+      "checkerboard_pearson": 0.1178,
+      "chi2_final": 10.212797560901762,
+      "misfit_pct": 24.53,
+      "lambda_used": 0.1,
+      "label": "300m OPER sin-σ (se hunde)"
+    }
+  ]
+}

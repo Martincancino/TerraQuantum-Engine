@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from core.rate_limit import limiter
 from core.logging import get_logger
 from core.utils import sanitize_nan
-from core.block_model_store import (
+from services.block_model_store import (
     get_run_dir,
     get_run_report_path,
     get_run_schedule_path,

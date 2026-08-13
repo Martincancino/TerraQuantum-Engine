@@ -24,13 +24,6 @@ import CanvasExportBridge from "../../lib/render/CanvasExportBridge";
 import WarningBanner from "../WarningBanner";
 import { fetchRunWarnings, warningViewsFromTexts } from "../../lib/terraquantum/runWarnings";
 
-import { GravityObservation } from "../../lib/terraquantum/geophysicsSurvey";
-import {
-  buildGeophysicsPayload,
-  buildGridConfig,
-  buildHeatmapFromBlockModel,
-  buildReportForFrontend,
-} from "../../lib/terraquantum/geophysicsModel";
 import {
   getExplorationBlockModelForRunWithArrow,
   getTerrainData,

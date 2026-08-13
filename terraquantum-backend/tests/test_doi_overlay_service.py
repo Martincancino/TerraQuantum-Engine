@@ -11,7 +11,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from core import block_model_store as store
+from services import block_model_store as store
 from services.doi_overlay_service import build_doi_overlay_response
 
 N = 10

@@ -4,20 +4,20 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from core.geo_utils import compute_bbox
+from services.geo_utils import compute_bbox
 from services.satellite_service import DEFAULT_EXTENT_M, DEM_COLS, DEM_ROWS
 
 
 @pytest.fixture(autouse=True)
 def disable_gee(monkeypatch):
     """Force GEE unavailable for all tests in this module so they test mock behavior."""
-    import core.gee_client as gee_module
+    import services.gee_client as gee_module
     monkeypatch.setattr(gee_module, "_gee_available", False)
 
 
 @pytest.fixture
 def projects_dir(tmp_path, monkeypatch):
-    import core.block_model_store as store
+    import services.block_model_store as store
 
     projects_path = tmp_path / "projects"
     monkeypatch.setattr(store, "PROJECTS_DIR", projects_path)

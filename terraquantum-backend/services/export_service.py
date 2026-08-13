@@ -296,96 +296,11 @@ def export_core_to_vtr(
 # FASE 11 — GSLIB Export (interoperabilidad con software minero industrial)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def export_block_model_to_gslib(
-    output_path: str,
-    x_c: np.ndarray,
-    y_c: np.ndarray,
-    z_c: np.ndarray,
-    density: np.ndarray,
-    density_contrast: np.ndarray,
-    sensitivity: np.ndarray,
-    is_active: np.ndarray,
-    project_id: str = "unknown",
-    run_id: str = "unknown",
-) -> str:
-    """
-    FASE 11 — Exporta el Block Model a formato GSLIB (ASCII).
-
-    El formato GSLIB es un estándar de texto plano legible por:
-      - SGeMS, GSLIB (Stanford Geostatistical Library)
-      - Leapfrog, Surpac, Minesight, Datamine
-      - Cualquier parser de texto simple
-
-    Estructura del archivo:
-        Línea 1  : título descriptivo
-        Línea 2  : número de variables (N)
-        Líneas 3..N+2 : nombre de cada variable
-        Líneas N+3... : valores numéricos, una fila por vóxel, espacio separado
-
-    Los vóxeles de aire (is_active=0) se exportan con NODATA_VALUE=-9999.0.
-
-    Parámetros
-    ----------
-    output_path      : ruta completa del archivo de salida (.gslib o .dat)
-    x_c, y_c, z_c   : coordenadas de centros de vóxeles (1D arrays)
-    density          : densidad absoluta (t/m³) — NaN para aire
-    density_contrast : densidad - base_density
-    sensitivity      : DOI proxy normalizado [0, 1]
-    is_active        : 1=roca, 0=aire
-
-    Retorna
-    -------
-    str : ruta del archivo generado
-    """
-    NODATA = -9999.0
-    VARIABLES = ["X", "Y", "Z", "Density_gcm3", "Density_Contrast_gcm3",
-                 "Sensitivity_Proxy", "Is_Active"]
-    N_VARS = len(VARIABLES)
-
-    from datetime import datetime, timezone
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    x_arr  = np.asarray(x_c,            dtype=np.float64)
-    y_arr  = np.asarray(y_c,            dtype=np.float64)
-    z_arr  = np.asarray(z_c,            dtype=np.float64)
-    d_arr  = np.where(np.isfinite(np.asarray(density,          dtype=np.float64)),
-                      np.asarray(density,          dtype=np.float64), NODATA)
-    dc_arr = np.where(np.isfinite(np.asarray(density_contrast, dtype=np.float64)),
-                      np.asarray(density_contrast, dtype=np.float64), NODATA)
-    s_arr  = np.where(np.isfinite(np.asarray(sensitivity,      dtype=np.float64)),
-                      np.asarray(sensitivity,      dtype=np.float64), 0.0)
-    a_arr  = np.asarray(is_active, dtype=np.int32)
-
-    n_voxels = len(x_arr)
-
-    out_path = Path(output_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with out_path.open("w", encoding="ascii") as f:
-        # Header GSLIB
-        f.write(
-            f"TerraQuantum Block Model | project={project_id} run={run_id} "
-            f"| {ts} | NODATA={NODATA}\n"
-        )
-        f.write(f"{N_VARS}\n")
-        for var in VARIABLES:
-            f.write(f"{var}\n")
-
-        # Data rows
-        for i in range(n_voxels):
-            f.write(
-                f"{x_arr[i]:.4f} {y_arr[i]:.4f} {z_arr[i]:.4f} "
-                f"{d_arr[i]:.6f} {dc_arr[i]:.6f} "
-                f"{s_arr[i]:.6f} {a_arr[i]}\n"
-            )
-
-    size_kb = out_path.stat().st_size / 1024
-    logger.info(
-        "[FASE 11] GSLIB exportado | path=%s | vóxeles=%d | size=%.1f KB",
-        str(out_path), n_voxels, size_kb,
-    )
-    return str(out_path)
-
+# Fase 6 (H-13): aquí vivían `export_core_to_gslib` y `export_block_model_to_gslib`,
+# un par muerto: al segundo sólo lo llamaba el primero, y al primero no lo llamaba
+# nadie. El GSLIB que el producto SÍ entrega lo genera `_gslib_text()` dentro del
+# bundle ZIP industrial (más abajo, vía export_api), así que borrar este par no quita
+# ninguna funcionalidad prometida en README_BACKEND ni en la UI.
 
 # ═════════════════════════════════════════════════════════════════════════════
 # FASE 11 — UBC-mesh Export (estándar UBC-GIF)
@@ -532,61 +447,11 @@ def export_block_model_to_ubc(
     }
 
 
-def export_core_to_gslib(
-    output_dir: str,
-    run_prefix: str,
-    nx: int,
-    ny: int,
-    nz: int,
-    dx: float,
-    est_density: np.ndarray,
-    sensitivity: np.ndarray,
-    is_active_flat: Optional[np.ndarray] = None,
-    project_id: str = "unknown",
-    run_id: str = "unknown",
-) -> Optional[str]:
-    """
-    Pipeline de alto nivel: construye coordenadas de centros y exporta a GSLIB.
-
-    Retorna la ruta del archivo generado, o None si ocurre un error.
-    """
-    try:
-        n_core = nx * ny * nz
-        density_arr = np.asarray(est_density, dtype=np.float64)
-        sens_arr    = np.asarray(sensitivity,  dtype=np.float64)
-
-        if is_active_flat is None:
-            is_active = np.isfinite(density_arr)
-        else:
-            is_active = np.asarray(is_active_flat, dtype=bool)
-
-        # Centros de vóxeles (Fortran order)
-        ix_g, iy_g, iz_g = np.mgrid[0:nx, 0:ny, 0:nz]
-        x_c = (ix_g.ravel(order="F") * dx + dx / 2.0).astype(np.float64)
-        y_c = (iy_g.ravel(order="F") * dx + dx / 2.0).astype(np.float64)
-        z_c = (iz_g.ravel(order="F") * dx + dx / 2.0).astype(np.float64)
-
-        density_contrast = np.where(
-            is_active,
-            density_arr - VTK_BASE_DENSITY,
-            np.nan,
-        )
-
-        out_path = str(Path(output_dir) / f"{run_prefix}.gslib")
-        return export_block_model_to_gslib(
-            output_path=out_path,
-            x_c=x_c, y_c=y_c, z_c=z_c,
-            density=density_arr,
-            density_contrast=density_contrast,
-            sensitivity=sens_arr,
-            is_active=is_active.astype(np.int32),
-            project_id=project_id,
-            run_id=run_id,
-        )
-    except Exception as exc:
-        logger.warning("[FASE 11] Error en exportación GSLIB (non-fatal): %s", exc)
-        return None
-
+# Fase 6 (H-13): aquí vivían `export_core_to_gslib` y `export_block_model_to_gslib`,
+# un par muerto: al segundo sólo lo llamaba el primero, y al primero no lo llamaba
+# nadie. El GSLIB que el producto SÍ entrega lo genera `_gslib_text()` dentro del
+# bundle ZIP industrial (más abajo, vía export_api), así que borrar este par no quita
+# ninguna funcionalidad prometida en README_BACKEND ni en la UI.
 
 def export_core_to_ubc(
     output_dir: str,
@@ -644,7 +509,7 @@ def export_block_model_to_csv(project_id: str, run_id: str) -> Optional[str]:
     """
     try:
         import pandas as pd
-        from core.block_model_store import RUN_BLOCK_MODEL_FILENAME, get_run_dir
+        from services.block_model_store import RUN_BLOCK_MODEL_FILENAME, get_run_dir
 
         run_dir = get_run_dir(project_id, run_id)
         bm_path = run_dir / RUN_BLOCK_MODEL_FILENAME
@@ -705,7 +570,7 @@ import zipfile
 from datetime import datetime, timezone
 from typing import Any
 
-from core.block_model_store import (
+from services.block_model_store import (
     RUN_BLOCK_MODEL_FILENAME,
     RUN_MANIFEST_FILENAME,
     RUN_SOURCE_GRAVITY_FILENAME,

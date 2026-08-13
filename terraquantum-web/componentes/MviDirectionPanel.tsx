@@ -65,8 +65,8 @@ export default function MviDirectionPanel({ model, report }: Props) {
     return best;
   }, [model]);
 
-  // ── El report puede llegar plano (path magnético) o anidado bajo backendReport
-  // (buildReportForFrontend curado). Buscamos en ambos sin asumir la forma. ──
+  // ── El report puede llegar plano (path magnético) o anidado bajo backendReport.
+  // Buscamos en ambos sin asumir la forma. ──
   const rawReport: Record<string, unknown> | null = isRecord(report?.["backendReport"])
     ? (report!["backendReport"] as Record<string, unknown>)
     : (isRecord(report) ? (report as Record<string, unknown>) : null);

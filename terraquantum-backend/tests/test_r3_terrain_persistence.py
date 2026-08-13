@@ -8,7 +8,7 @@ redirect PROJECTS_DIR so no real project data is touched.
 import json
 import pytest
 
-from core import block_model_store as store
+from services import block_model_store as store
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ def test_saved_metadata_includes_dem_matrix_path(patched_projects_dir):
 def test_get_terrain_data_persists_metadata_and_matrix(
     patched_projects_dir, monkeypatch
 ):
-    from core import gee_client
+    from services import gee_client
     from services.satellite_service import get_terrain_data
 
     project_id = "persist_test_001"
@@ -166,7 +166,7 @@ def test_get_terrain_data_persists_metadata_and_matrix(
 def test_get_terrain_data_persists_latlon_import_bbox_extent(
     patched_projects_dir, monkeypatch
 ):
-    from core import gee_client
+    from services import gee_client
     from services.satellite_service import DEFAULT_EXTENT_M, get_terrain_data
 
     project_id = "latlon_extent_001"
@@ -208,7 +208,7 @@ def test_get_terrain_data_persists_latlon_import_bbox_extent(
 def test_get_terrain_data_keeps_utm_footprint_extent(
     patched_projects_dir, monkeypatch
 ):
-    from core import gee_client
+    from services import gee_client
     from services.satellite_service import get_terrain_data
 
     project_id = "utm_extent_001"
@@ -247,7 +247,7 @@ def test_get_terrain_data_keeps_utm_footprint_extent(
 # ---------------------------------------------------------------------------
 
 def test_get_terrain_data_persist_failure_no_crash(patched_projects_dir, monkeypatch):
-    from core import gee_client
+    from services import gee_client
     from services.satellite_service import get_terrain_data
 
     project_id = "persist_fail_001"

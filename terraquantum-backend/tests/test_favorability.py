@@ -2,7 +2,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from core.block_model_store import get_run_favorability_path
+from services.block_model_store import get_run_favorability_path
 from services.favorability_service import (
     _depth_score,
     _factor_anomaly_intensity,

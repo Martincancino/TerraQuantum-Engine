@@ -55,10 +55,14 @@ terraquantum-web/
 │
 ├─ lib/
 │  ├─ terraquantum/
-│  │  ├─ frontendApi.ts
-│  │  ├─ geophysicsModel.ts
-│  │  └─ geophysicsSurvey.ts
+│  │  ├─ frontendApi.ts        (contrato HTTP + tipos del backend)
+│  │  ├─ errorContract.ts
+│  │  ├─ packageInversion.ts
+│  │  ├─ runWarnings.ts
+│  │  └─ qaStatus.ts
 │  │
+│  ├─ render/                  (capas del visor 3D: sondajes, isosuperficies,
+│  │                            raymarch, DOI, cortes, AO, export de canvas)
 │  └─ terraQuantumGeology.ts
 │
 ├─ scripts/

@@ -128,7 +128,7 @@ def _gravity_input(*, with_elevations=True, run_id="fase1_topo") -> GeophysicsIn
 @pytest.fixture
 def broken_surface_interpolation(monkeypatch):
     """Fuerza el fallback: la interpolación de superficie levanta excepción."""
-    import core.geo_utils as geo_utils
+    import services.geo_utils as geo_utils
 
     def _boom(*_args, **_kwargs):
         raise RuntimeError("fallo sintético de interpolación de superficie")

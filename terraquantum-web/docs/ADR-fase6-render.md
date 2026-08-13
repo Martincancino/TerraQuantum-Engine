@@ -104,7 +104,8 @@ ADR. Ninguna ruta de render posterior debe asumir capacidad: debe leer
    en Scene3D + panel «Render Volumétrico». **Alineación arreglada**: el raymarch
    se OCULTA en modo elevación (el retículo regular no puede alinear con la Y
    deformada por vóxel) + hint en el panel. Sin elevación alinea por construcción.
-3. **(engine hecho — slice 3)** LOD instanciado + frustum culling para sondajes
+3. **(⛔ BORRADO 2026-08-09 — ver «Cierre de los slices 3 y 4» al final del documento)**
+   LOD instanciado + frustum culling para sondajes
    (1M+ segmentos): `lib/render/segmentLOD.ts` (puro: cull por esfera + budget
    nearest-first + radial-LOD por conteo) + `lib/render/InstancedSegmentsLayer.tsx`
    (InstancedMesh de cilindros, culling throttled por frame, oculta por matriz
@@ -114,7 +115,8 @@ ADR. Ninguna ruta de render posterior debe asumir capacidad: debe leer
    sus coords UTM/local NO tienen transform al frame re-centrado del modelo. El
    adapter deja el motor a UN paso (suministrar `toScene` + QA visual de
    ubicación); no se inventa ese transform para no colocar geometría mal.
-4. **(IMPLEMENTADO — slice 4)** Culling por compute WebGPU. **Corrección del ADR
+4. **(⛔ BORRADO 2026-08-09 — ver «Cierre de los slices 3 y 4» al final del documento)**
+   Culling por compute WebGPU. **Corrección del ADR
    previo**: NO requiere cambiar el `WebGPURenderer` de Three. El culling es una
    *computación*, no render → se crea un device WebGPU STANDALONE vía
    `navigator.gpu` y el resultado (máscara de visibilidad) alimenta el render
@@ -158,3 +160,41 @@ probeGpuCapabilities().then(r => console.log(summarizeGpuReport(r)));
 
 No debe lanzar excepción en SSR (sin `window`/`document`) ni en navegadores sin
 WebGPU; en ese caso reporta `backend: 'webgl2'` o `'none'` con su razón.
+
+---
+
+## Cierre de los slices 3 y 4 — borrados el 2026-08-09 (Fase 6 del plan técnico)
+
+**Qué se borró:** `lib/render/InstancedSegmentsLayer.tsx`, `lib/render/segmentLOD.ts`
+y `lib/render/webgpuCull.ts` (630 líneas). También `lib/render/reactiveUpdateGraph.ts`
+(render graph reactivo, 238 líneas) y `lib/engine/engine-physics.ts` (58 líneas).
+
+**Por qué, y por qué no se cableó en vez de borrarse.** La auditoría
+(`docs/06_AUDITORIA_TECNICA_INTEGRAL.md`, H-6) pedía **decidir explícitamente**:
+cablear o borrar, pero no dejar en limbo. Se midió antes de decidir:
+
+1. **El bloqueo que este ADR declaraba ya no existe, y se resolvió por otro camino.**
+   Los slices 3 y 4 quedaron sin montar porque *"las coords UTM/local NO tienen
+   transform al frame re-centrado del modelo"*. Ese problema se resolvió en el
+   **backend**: `GET /borehole/view` entrega hoy los intervalos ya en coordenadas
+   del visor (`cx`, `cz`, `cy_top`, `cy_bot`).
+2. **Y el consumidor de ese endpoint es OTRA capa, que sí está viva y montada:**
+   `lib/render/BoreholeLayer.tsx`, montada en `componentes/Scene3D.tsx`. Es decir,
+   los sondajes **ya se dibujan**. `InstancedSegmentsLayer` no era la pieza que
+   faltaba: era un segundo motor de sondajes, superado por el que se entrega.
+3. **El LOD y el culling GPU resuelven un problema que el producto no tiene.**
+   Están dimensionados para 1M+ segmentos; el rango declarado es 30k–100k vóxeles.
+   La propia auditoría concluye que para ese rango construir SVO + render graph
+   sería sobreingeniería.
+
+Cablearlo habría significado **sustituir una capa que funciona por una que nunca
+se ejecutó** (el WGSL de `webgpuCull` jamás corrió en una GPU real: este ADR lo
+admitía como caveat). El coste de mantener el par A/B CPU/GPU se pagaba cada vez
+que alguien tocaba el visor, sin usuario al otro lado.
+
+**Lo que NO se borró:** `gpuCapabilities.ts` (sondeo de capacidades, con
+consumidores), y todo lo de los slices 1, 2, 2b y 5, que sigue montado.
+
+**Si algún día hacen falta**: están en la historia de git, en el commit anterior a
+este cierre. Reconstruirlos con el `toScene` real será más barato que haber
+mantenido tres años una implementación que nadie ejecutó.

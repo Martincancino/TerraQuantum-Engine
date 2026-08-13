@@ -7,7 +7,7 @@ geophysics_service.py importa desde aquí y re-exporta para compatibilidad.
 """
 import threading
 
-from core.block_model_store import update_run_status
+from services.block_model_store import update_run_status
 from core.logging import get_logger
 
 _log = get_logger(__name__)

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.block_model_store import (
+from services.block_model_store import (
     get_run_dir,
     get_run_favorability_path,
     get_run_gravity_import_metadata_path,

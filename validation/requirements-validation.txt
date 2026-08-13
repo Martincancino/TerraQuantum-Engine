@@ -1,0 +1,8 @@
+# Dependencias SOLO de validación. NO entran en terraquantum-backend/requirements.txt
+# ni en el sidecar de PyInstaller: este framework no se distribuye con el producto.
+#
+# choclo = kernels de modelado directo del proyecto Fatiando a Terra.
+# Se usa como ORÁCULO INDEPENDIENTE para generar las observaciones sintéticas:
+# que el dato lo produzca código de otros autores convierte el anti-inverse-crime
+# de procedimiento en estructura (docs/07 §P4, D5).
+choclo>=0.3.2

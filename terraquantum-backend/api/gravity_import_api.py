@@ -13,7 +13,7 @@ from core.config import CSV_MAX_BYTES, TMP_DIR
 from core.logging import get_logger
 from core.utils import sanitize_nan, model_to_dict
 from core.rate_limit import limiter
-from core.block_model_store import (
+from services.block_model_store import (
     get_project_meta_path,
     get_run_source_gravity_csv_path,
     get_run_gravity_import_metadata_path,
@@ -24,7 +24,7 @@ from core.block_model_store import (
 )
 from services.satellite_service import get_terrain_data
 from services.elevation_enrichment_service import enrich_block_model_with_elevation
-from core.geo_utils import compute_footprint_from_center, extract_utm_zone_safe
+from services.geo_utils import compute_footprint_from_center, extract_utm_zone_safe
 from schemas.geophysics_schema import GeophysicsInvertInput
 from schemas.gravity_import_schema import SpatialReadiness, RegionalScalePreflight
 from schemas.response_schema import GravityImportPreviewResponse, GravityImportInvertResponse
@@ -66,7 +66,7 @@ _log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# R3.5-K — UTM zone extraction (consolidada en core.geo_utils)
+# R3.5-K — UTM zone extraction (consolidada en services.geo_utils)
 # ---------------------------------------------------------------------------
 
 def _effective_utm_zone(form_utm_zone: "str | None", import_result) -> "str | None":
@@ -1756,7 +1756,7 @@ async def load_package(
             # F4.4: persistir los sondajes por corrida para el visor 3D. Aislado en
             # try/except → nunca rompe el load (si falla, el visor solo no los muestra).
             try:
-                from core.block_model_store import get_run_dir as _get_run_dir
+                from services.block_model_store import get_run_dir as _get_run_dir
                 _bh_dir = _get_run_dir(project_id, run_id)
                 _bh_dir.mkdir(parents=True, exist_ok=True)
                 (_bh_dir / "boreholes.json").write_text(

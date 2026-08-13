@@ -323,78 +323,12 @@ def solve_inversion_pgd_fista(
     return x, info
 
 
-def solve_inversion_lsmr_wavelet(
-    G_dense: np.ndarray,
-    d_obs_weighted: np.ndarray,
-    Wd: sp.dia_matrix,
-    reg_blocks: list[sp.csr_matrix],
-    reg_rhs: list[np.ndarray],
-    lb: np.ndarray,
-    ub: np.ndarray,
-    wavelet: str = "db4",
-    level: int = 4,
-    threshold_frac: float = 0.01,
-    maxiter: int = 1000,
-    tol: float = 1e-8,
-) -> tuple[np.ndarray, float, dict]:
-    """
-    LSMR con compresión wavelet del Jacobiano (Fase 10 — ruta grande).
-
-    Para n_active > 200K donde G_dense > 400 MB. Comprime G antes de
-    construir G_aug, reduciendo el footprint de memoria ~85-90%.
-
-    Args:
-        G_dense: kernel de sensibilidad sin comprimir, (n_sensors, n_active).
-        d_obs_weighted: Wd @ d_obs, shape (n_sensors,).
-        Wd: matriz de pesos de datos diagonal.
-        reg_blocks: lista de bloques de regularización (ya escalados).
-        reg_rhs: lista de RHS de regularización.
-        lb, ub: bounds del box petrofísico.
-        wavelet, level, threshold_frac: parámetros wavelet.
-
-    Returns:
-        (m_tilde, conda, compression_stats)
-    """
-    from exploration.jacobian_wavelet import build_compressed_kernel, wavelet_forward_error
-
-    n_sensors, n_active = G_dense.shape
-    size_gb = n_sensors * n_active * 8 / 1e9
-    print(
-        f"[WAVELET+LSMR] G_dense={n_sensors}×{n_active} ({size_gb:.2f} GB) "
-        f"— iniciando compresión wavelet..."
-    )
-
-    G_csr = build_compressed_kernel(G_dense, wavelet, level, threshold_frac)
-
-    # Verificar error de compresión
-    err_stats = wavelet_forward_error(G_dense, G_csr, n_test=10)
-    print(
-        f"[WAVELET+LSMR] Error forward: mean={err_stats['error_mean']*100:.3f}% "
-        f"max={err_stats['error_max']*100:.3f}%"
-    )
-    if err_stats["error_mean"] > 0.005:
-        print(
-            f"[WAVELET+LSMR] WARN: error forward {err_stats['error_mean']*100:.2f}% > 0.5%. "
-            f"Considerar reducir threshold_frac."
-        )
-
-    # Construir G_aug con kernel comprimido
-    G_data = Wd @ G_csr
-    blocks = [G_data] + reg_blocks
-    G_aug = sp.vstack(blocks).tocsr()
-    d_rhs = [d_obs_weighted] + reg_rhs
-    d_aug = np.concatenate(d_rhs)
-
-    m_tilde, conda = solve_inversion_lsmr(G_aug, d_aug, lb, ub, maxiter, tol)
-
-    compression_stats = {
-        "original_nnz": n_sensors * n_active,
-        "compressed_nnz": G_csr.nnz,
-        "compression_ratio": 1.0 - G_csr.nnz / (n_sensors * n_active),
-        **err_stats,
-    }
-    return m_tilde, conda, compression_stats
-
+# Fase 6 (H-13): aquí vivía `solve_inversion_lsmr_wavelet` (72 líneas), con cero
+# llamadores. Los building blocks siguen VIVOS y con tests en
+# `exploration/jacobian_wavelet.py` (test_fase10_solver): lo que se borró fue el
+# envoltorio que nadie cableó nunca, junto con las dos perillas de config que lo
+# prometían. Cablearlo es física nueva en el camino crítico — exige medición, no
+# un import.
 
 # ── Zarr Out-of-Core (Fase 10 §10.4) ─────────────────────────────────────────
 

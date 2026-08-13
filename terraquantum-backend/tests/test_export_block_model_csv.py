@@ -13,7 +13,7 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from core import block_model_store as store
+from services import block_model_store as store
 from services.export_service import export_block_model_to_csv
 
 N = 6

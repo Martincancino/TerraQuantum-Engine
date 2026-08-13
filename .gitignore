@@ -13,6 +13,14 @@ service-account*.json
 *service_account*.json
 *gcp*.json
 *gee*.json
+# Fase 6 (H-7): las reglas de arriba exigen que el nombre TERMINE en .json, así que
+# no cubren el patrón "renombrar para neutralizar" — `credenciales_gee.json.REVOKED_…`
+# no coincide con `*gee*.json`, y por eso una clave privada real acabó committeada.
+# Cualquier sufijo detrás del .json queda ahora cubierto.
+*gcp*.json.*
+*gee*.json.*
+*service_account*.json.*
+credenciales*
 *.secret
 secrets/
 credentials/

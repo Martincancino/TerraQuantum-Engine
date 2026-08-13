@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 
 def _gee_available() -> bool:
     try:
-        from core import gee_client
+        from services import gee_client
         return bool(gee_client.is_available())
     except Exception:  # noqa: BLE001
         return False

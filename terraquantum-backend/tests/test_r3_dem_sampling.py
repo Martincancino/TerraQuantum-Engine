@@ -17,7 +17,7 @@ META_NO_MARGIN: 100 m × 100 m bbox at the equator → bbox == model extent
 """
 import pytest
 
-from core.geo_utils import METERS_PER_DEG_LAT, sample_dem_elevation
+from services.geo_utils import METERS_PER_DEG_LAT, sample_dem_elevation
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

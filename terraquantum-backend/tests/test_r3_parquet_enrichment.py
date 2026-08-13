@@ -10,7 +10,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from core import block_model_store as store
+from services import block_model_store as store
 from services.elevation_enrichment_service import (
     R3_COLUMNS,
     enrich_block_model_with_elevation,

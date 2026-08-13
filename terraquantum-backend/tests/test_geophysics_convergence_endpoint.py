@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from core import block_model_store as store
+from services import block_model_store as store
 from api.geophysics_api import get_geophysics_convergence
 
 

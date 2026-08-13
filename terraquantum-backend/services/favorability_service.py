@@ -7,7 +7,7 @@ import polars as pl
 from scipy.ndimage import label
 
 from core.utils import utc_now_iso, safe_float
-from core.block_model_store import (
+from services.block_model_store import (
     get_run_block_model_reference,
     get_run_focusing_reference,
     get_run_inputs_path,

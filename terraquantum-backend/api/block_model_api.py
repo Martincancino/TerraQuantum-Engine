@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
-from core.block_model_store import get_run_dir
+from services.block_model_store import get_run_dir
 from schemas.response_schema import BlockModelResponse
 from services.block_model_service import (
     build_block_model_response,

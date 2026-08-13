@@ -12,7 +12,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from core import block_model_store as store
+from services import block_model_store as store
 from services.section_service import build_section_response
 
 N = 21           # celdas por eje (impar → centro exacto)

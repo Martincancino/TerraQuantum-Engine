@@ -1,10 +1,37 @@
 """Core utility functions shared across services and APIs."""
 
 import math
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from core.block_model_store import clean_trace_id
+# Fase 6 (H-35): `TRACE_ID_PATTERN` y `clean_trace_id` vivían en el almacén de
+# modelos de bloques, y este módulo del Core los importaba HACIA ARRIBA. Saneárun
+# identificador para que sea seguro como nombre de carpeta es infraestructura, no
+# dominio minero: su sitio es el Core. Mover el almacén fuera de `core/` sin esto
+# habría creado una arista core/ → services/, justo la que la Fase 3 va a prohibir.
+TRACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def clean_trace_id(value: Optional[str], field_name: str) -> Optional[str]:
+    """Valida un project_id/run_id como identificador seguro para rutas.
+
+    Devuelve None si viene vacío; lanza ValueError si trae caracteres que
+    permitirían escapar del directorio de datos ('.', '..', separadores).
+    """
+    if value is None:
+        return None
+
+    clean_value = str(value).strip()
+    if clean_value == "":
+        return None
+
+    if clean_value in {".", ".."} or not TRACE_ID_PATTERN.match(clean_value):
+        raise ValueError(
+            f"{field_name} invalido. Use letras, numeros, guion, punto o underscore."
+        )
+
+    return clean_value
 
 
 def sanitize_nan_value(value: Any) -> Any:

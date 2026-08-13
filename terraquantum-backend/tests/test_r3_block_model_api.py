@@ -19,7 +19,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from core import block_model_store as store
+from services import block_model_store as store
 from services.block_model_service import build_block_model_response
 
 

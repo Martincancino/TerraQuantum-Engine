@@ -25,7 +25,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from core.block_model_store import get_run_report_path, get_run_inputs_path
+from services.block_model_store import get_run_report_path, get_run_inputs_path
 from core.logging import get_logger
 from core.config import GEMINI_CHAT_MODEL, GEMINI_REPORT_MODEL
 

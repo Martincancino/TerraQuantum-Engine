@@ -41,7 +41,7 @@ def build_observations():
 
 
 def main():
-    from core.block_model_store import (
+    from services.block_model_store import (
         compare_project_runs,
         export_project_run_zip,
         get_project_run_detail,

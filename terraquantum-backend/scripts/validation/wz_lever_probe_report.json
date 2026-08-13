@@ -1,0 +1,60 @@
+{
+  "true_depth_m": 600.0,
+  "rows": [
+    {
+      "recovered_peak_depth_m": 62.5,
+      "recovered_centroid_m": 62.5,
+      "misfit_pct": 8.796,
+      "chi2_final": 0.0975,
+      "smallness_over_smoothness": 0.0682,
+      "label": "baseline (lam=1e-3, alpha=1, compact)",
+      "s": 151.5
+    },
+    {
+      "recovered_peak_depth_m": 62.5,
+      "recovered_centroid_m": 112.5,
+      "misfit_pct": 12.538,
+      "chi2_final": 0.1982,
+      "smallness_over_smoothness": 6.8218,
+      "label": "smallness x100 (lam=1e-1)",
+      "s": 138.5
+    },
+    {
+      "recovered_peak_depth_m": 562.5,
+      "recovered_centroid_m": 781.9,
+      "misfit_pct": 31.196,
+      "chi2_final": 1.227,
+      "smallness_over_smoothness": 68.2126,
+      "label": "smallness x1000 (lam=1.0)",
+      "s": 45.4
+    },
+    {
+      "recovered_peak_depth_m": 62.5,
+      "recovered_centroid_m": 62.5,
+      "misfit_pct": 8.796,
+      "chi2_final": 0.0975,
+      "smallness_over_smoothness": 0.6822,
+      "label": "smoothness /10 (alpha=0.1)",
+      "s": 112.8
+    },
+    {
+      "recovered_peak_depth_m": 62.5,
+      "recovered_centroid_m": 62.5,
+      "misfit_pct": 8.796,
+      "chi2_final": 0.0975,
+      "smallness_over_smoothness": 0.0068,
+      "label": "smoothness x10 (alpha=10)",
+      "s": 93.5
+    },
+    {
+      "recovered_peak_depth_m": 62.5,
+      "recovered_centroid_m": 62.5,
+      "misfit_pct": 8.796,
+      "chi2_final": 0.0975,
+      "smallness_over_smoothness": 0.0682,
+      "label": "norma L2 (lam=1e-3, alpha=1)",
+      "s": 49.9
+    }
+  ],
+  "any_lever_moves": true
+}

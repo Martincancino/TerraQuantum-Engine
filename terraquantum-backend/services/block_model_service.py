@@ -4,7 +4,7 @@ import math
 
 import polars as pl
 
-from core.block_model_store import resolve_block_model_reference
+from services.block_model_store import resolve_block_model_reference
 from core.config import RUN_ANOMALY_FILENAME
 from core.utils import sanitize_nan_value, sanitize_nan
 

@@ -24,7 +24,7 @@ import logging
 import numpy as np
 import polars as pl
 
-from core.block_model_store import resolve_block_model_reference
+from services.block_model_store import resolve_block_model_reference
 from services.isosurface_service import _axis_coords
 
 logger = logging.getLogger(__name__)

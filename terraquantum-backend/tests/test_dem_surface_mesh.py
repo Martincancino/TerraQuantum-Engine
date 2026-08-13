@@ -17,7 +17,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.geo_utils import interpolate_surface_depths
+from services.geo_utils import interpolate_surface_depths
 
 
 def _true_relief(x, z):

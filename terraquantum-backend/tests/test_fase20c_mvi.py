@@ -323,7 +323,7 @@ def test_mvi_parquet_direction_columns_valid(tmp_path):
     cumpliendo el contrato de schema (run_type='magnetic'). Las columnas required no
     cambian; las de dirección son adicionales."""
     import polars as pl
-    from core.block_model_store import validate_parquet_schema
+    from services.block_model_store import validate_parquet_schema
 
     n = 5
     df = pl.DataFrame({

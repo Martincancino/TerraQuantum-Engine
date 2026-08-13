@@ -8,10 +8,10 @@ from typing import Any, Optional
 
 import numpy as np
 
-from core import gee_client
-from core.block_model_store import clean_trace_id, load_project_meta
+from services import gee_client
+from services.block_model_store import clean_trace_id, load_project_meta
 from core.config import PROJECTS_DIR
-from core.geo_utils import compute_bbox
+from services.geo_utils import compute_bbox
 from core.logging import get_logger
 from core.utils import utc_now_iso, clean_project_id, safe_float
 from schemas.spectral_schema import (

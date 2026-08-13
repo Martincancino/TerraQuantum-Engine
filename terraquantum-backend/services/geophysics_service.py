@@ -9,7 +9,7 @@ from enum import Enum
 import numpy as np
 import polars as pl
 
-from core.block_model_store import (
+from services.block_model_store import (
     RUN_MAGNETIC_BLOCK_MODEL_FILENAME,
     RUN_SOURCE_GRAVITY_FILENAME,
     get_run_anomaly_reference,
@@ -2013,7 +2013,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     _sensor_elevs_mag = getattr(params, "sensor_elevations_masl", None)
     if _sensor_elevs_mag is not None and len(_sensor_elevs_mag) == len(obs):
         try:
-            from core.geo_utils import interpolate_surface_depths as _interp_surface_mag
+            from services.geo_utils import interpolate_surface_depths as _interp_surface_mag
             _elev_arr_mag = np.asarray(_sensor_elevs_mag, dtype=np.float64)
             _max_elev_mag = float(np.max(_elev_arr_mag))
             _surface_depths_mag = _max_elev_mag - _elev_arr_mag  # prof desde el punto más alto
@@ -2857,7 +2857,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     _sensor_elevs = getattr(params, "sensor_elevations_masl", None)
     if _sensor_elevs is not None and len(_sensor_elevs) == len(params.observations):
         try:
-            from core.geo_utils import interpolate_surface_depths as _interp_surface
+            from services.geo_utils import interpolate_surface_depths as _interp_surface
             _elev_arr = np.asarray(_sensor_elevs, dtype=np.float64)
             _max_elev = float(np.max(_elev_arr))
             _surface_depths = _max_elev - _elev_arr  # profundidad desde el punto más alto

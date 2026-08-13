@@ -1,0 +1,54 @@
+{
+  "rows": [
+    {
+      "case": "señal_constante (sin anomalía)",
+      "outcome": "CLEAR_ERROR(ValueError)",
+      "error": "Rango de datos cero: todas las observaciones son idénticas. Verifica que el CSV contenga variación lateral de gravedad."
+    },
+    {
+      "case": "unidades mGal↔m/s² (×1e5)",
+      "outcome": "OK_MODEL(degradado)",
+      "confidence": "LOW",
+      "verdict": "LOW",
+      "misfit_pct": 99.58,
+      "risk": "LOW",
+      "target_depth_confidence": "LOW",
+      "null_space_flag": false,
+      "saturation": null
+    },
+    {
+      "case": "outlier gigante (100×pico)",
+      "outcome": "OK_MODEL(degradado)",
+      "confidence": "MEDIUM",
+      "verdict": "MEDIUM",
+      "misfit_pct": 77.75,
+      "risk": "LOW",
+      "target_depth_confidence": "LOW",
+      "null_space_flag": false,
+      "saturation": null
+    },
+    {
+      "case": "signo invertido (déficit masa)",
+      "outcome": "OK_MODEL(degradado)",
+      "confidence": "MEDIUM",
+      "verdict": "MEDIUM",
+      "misfit_pct": 10.42,
+      "risk": "HIGH",
+      "target_depth_confidence": "LOW",
+      "null_space_flag": false,
+      "saturation": null
+    },
+    {
+      "case": "SNR<1 (ruido 5× señal)",
+      "outcome": "OK_MODEL(degradado)",
+      "confidence": "MEDIUM",
+      "verdict": "MEDIUM",
+      "misfit_pct": 30.46,
+      "risk": "LOW",
+      "target_depth_confidence": "LOW",
+      "null_space_flag": false,
+      "saturation": null
+    }
+  ],
+  "n_flagged": 0
+}

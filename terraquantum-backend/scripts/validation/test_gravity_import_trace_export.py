@@ -11,7 +11,7 @@ sys.path.insert(0, str(backend_dir))
 
 from main import app
 from core.config import PROJECTS_DIR
-from core.block_model_store import get_project_run_detail, export_project_run_zip
+from services.block_model_store import get_project_run_detail, export_project_run_zip
 
 client = TestClient(app)
 

@@ -175,7 +175,7 @@ def test_async_package_e2E_completes_with_progress(monkeypatch):
     assert run["started_at"] and run["finished_at"]
 
     # El block model quedó persistido (re-abrible sin re-invertir).
-    from core.block_model_store import get_run_dir
+    from services.block_model_store import get_run_dir
     run_dir = get_run_dir("pytest_async", "run_e2e_done")
     assert any(run_dir.glob("*.parquet")), list(run_dir.iterdir())
 

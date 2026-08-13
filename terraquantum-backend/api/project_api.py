@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 
 from core.utils import model_to_dict, utc_now_iso
-from core.block_model_store import (
+from services.block_model_store import (
     clean_trace_id,
     get_project_meta_path,
     list_project_runs,

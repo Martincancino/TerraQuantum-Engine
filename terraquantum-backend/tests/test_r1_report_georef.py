@@ -125,7 +125,7 @@ def _setup_run(tmp_path, project_id, run_id, georef_confidence, footprint_data):
 
 
 def _generate(tmp_path, monkeypatch, project_id, run_id) -> str:
-    import core.block_model_store as store
+    import services.block_model_store as store
     monkeypatch.setattr(store, "PROJECTS_DIR", tmp_path / "projects")
 
     from reporting.report_generator import generate_technical_report_html

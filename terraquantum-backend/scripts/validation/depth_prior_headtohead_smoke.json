@@ -1,0 +1,37 @@
+{
+  "rows": [
+    {
+      "true_depth_m": 600.0,
+      "seed": 11,
+      "z_spectrum_m": 376.7,
+      "floor_m": 303.2,
+      "floor_err_m": -296.8,
+      "morozov": {
+        "lambda": 0.31623,
+        "peak_err_m": 162.5,
+        "horizontal_m": 34.5,
+        "chi2": 0.7442
+      },
+      "morozov_prior": {
+        "lambda": 0.31623,
+        "peak_err_m": 162.5,
+        "horizontal_m": 17.3,
+        "chi2": 0.9331
+      },
+      "operating": {
+        "lambda": 0.1,
+        "peak_err_m": 537.5,
+        "horizontal_m": 249.3,
+        "chi2": 0.3088
+      },
+      "operating_prior": {
+        "lambda": 0.1,
+        "peak_err_m": 1087.5,
+        "horizontal_m": 167.5,
+        "chi2": 0.759
+      },
+      "s": 129.9
+    }
+  ],
+  "elapsed_s": 129.9
+}

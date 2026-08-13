@@ -152,16 +152,9 @@ def build_gradient_operators(
     return Dx, Dy, Dz
 
 
-def build_gradient_operators_from_mesh(
-    mesh: Dict[str, Any],
-) -> Tuple[sp.csr_matrix, sp.csr_matrix, sp.csr_matrix]:
-    """Conveniencia: construye (Dx, Dy, Dz) desde un dict de malla con claves
-    ``nx``, ``ny``, ``nz`` y, opcionalmente, ``hx``, ``hy``, ``hz``."""
-    return build_gradient_operators(
-        mesh["nx"], mesh["ny"], mesh["nz"],
-        mesh.get("hx"), mesh.get("hy"), mesh.get("hz"),
-    )
-
+# Fase 6 (H-13): aquí vivía `build_gradient_operators_from_mesh`, azúcar de 9 líneas
+# sobre `build_gradient_operators` (que SÍ se usa: joint_inversion, do27_harness,
+# tests). El envoltorio nunca tuvo un solo llamador.
 
 # --------------------------------------------------------------------------- #
 # Self-test independiente                                                      #

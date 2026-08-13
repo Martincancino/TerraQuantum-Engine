@@ -1,0 +1,101 @@
+{
+  "config": {
+    "nx_total": 28,
+    "ny_total": 24,
+    "nz_total": 28,
+    "irls": 8,
+    "n_pad": 5,
+    "padding_kappa": 100000.0
+  },
+  "rows": [
+    {
+      "true_depth_m": 600.0,
+      "seed": 11,
+      "fijo_1e-3": {
+        "lambda": 0.001,
+        "peak_depth_m": 1687.5,
+        "peak_err_m": 1087.5,
+        "centroid_err_m": 870.6,
+        "horizontal_m": 755.5,
+        "misfit_pct": 44.644,
+        "chi2": 2.6194
+      },
+      "operating_0.1": {
+        "lambda": 0.1,
+        "peak_depth_m": 62.5,
+        "peak_err_m": 537.5,
+        "centroid_err_m": 537.5,
+        "horizontal_m": 249.3,
+        "misfit_pct": 15.329,
+        "chi2": 0.3088
+      },
+      "morozov": {
+        "lambda": 0.31623,
+        "peak_depth_m": 437.5,
+        "peak_err_m": 162.5,
+        "centroid_err_m": 16.0,
+        "horizontal_m": 34.5,
+        "misfit_pct": 23.797,
+        "chi2": 0.7442
+      },
+      "morozov_scan": [
+        {
+          "lambda": 0.01,
+          "peak_depth_m": 1437.5,
+          "peak_err_m": 837.5,
+          "centroid_err_m": 738.6,
+          "horizontal_m": 440.4,
+          "misfit_pct": 128.792,
+          "chi2": 21.7999
+        },
+        {
+          "lambda": 0.05623,
+          "peak_depth_m": 1687.5,
+          "peak_err_m": 1087.5,
+          "centroid_err_m": 1053.8,
+          "horizontal_m": 1074.7,
+          "misfit_pct": 90.557,
+          "chi2": 10.7776
+        },
+        {
+          "lambda": 0.31623,
+          "peak_depth_m": 437.5,
+          "peak_err_m": 162.5,
+          "centroid_err_m": 16.0,
+          "horizontal_m": 34.5,
+          "misfit_pct": 23.797,
+          "chi2": 0.7442
+        },
+        {
+          "lambda": 1.77828,
+          "peak_depth_m": 1687.5,
+          "peak_err_m": 1087.5,
+          "centroid_err_m": 918.6,
+          "horizontal_m": 104.2,
+          "misfit_pct": 42.126,
+          "chi2": 2.3323
+        },
+        {
+          "lambda": 10.0,
+          "peak_depth_m": 1687.5,
+          "peak_err_m": 1087.5,
+          "centroid_err_m": 925.8,
+          "horizontal_m": 20.2,
+          "misfit_pct": 76.07,
+          "chi2": 7.6052
+        },
+        {
+          "lambda": 0.13334771426612457,
+          "peak_depth_m": 62.5,
+          "peak_err_m": 537.5,
+          "centroid_err_m": 361.7,
+          "horizontal_m": 206.8,
+          "misfit_pct": 17.687,
+          "chi2": 0.4111
+        }
+      ],
+      "s": 80.5
+    }
+  ],
+  "elapsed_s": 80.5
+}

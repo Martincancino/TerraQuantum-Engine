@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, HTTPException
 
-from core.block_model_store import get_run_favorability_path
+from services.block_model_store import get_run_favorability_path
 from schemas.favorability_schema import FavorabilityResult
 from services.favorability_service import compute_favorability_score_from_disk
 

@@ -6,9 +6,9 @@ from pathlib import Path
 import numpy as np
 import scipy.ndimage
 
-from core import block_model_store as store
-from core import gee_client
-from core.geo_utils import METERS_PER_DEG_LAT, _derive_extent_from_csv, compute_bbox
+from services import block_model_store as store
+from services import gee_client
+from services.geo_utils import METERS_PER_DEG_LAT, _derive_extent_from_csv, compute_bbox
 from core.logging import get_logger
 from core.utils import clean_project_id
 from schemas.terrain_schema import BBoxData, TerrainMetadata, TerrainResponse

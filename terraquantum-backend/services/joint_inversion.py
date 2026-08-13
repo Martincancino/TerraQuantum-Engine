@@ -40,7 +40,7 @@ import scipy.sparse as sp
 from fastapi import HTTPException
 
 from core.config import ensure_runtime_dirs, RUN_BLOCK_MODEL_FILENAME
-from core.block_model_store import (
+from services.block_model_store import (
     RUN_SOURCE_GRAVITY_FILENAME,
     get_run_block_model_reference,
     sha256_file,

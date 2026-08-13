@@ -118,7 +118,7 @@ def _worker_entry(payload: dict, project_id: str, run_id: str) -> None:
     y en el historial SQLite antes de morir — el contrato nunca-sin-feedback.
     """
     # Imports adentro: el bootstrap de spawn ejecuta este módulo en frío.
-    from core.block_model_store import get_run_dir, update_run_status
+    from services.block_model_store import get_run_dir, update_run_status
     from schemas.geophysics_schema import GeophysicsInvertInput
     from services import project_store
     from services.geophysics_service import run_geophysics_inversion
@@ -201,7 +201,7 @@ def _spawn(payload: dict, project_id: str, run_id: str) -> None:
 
 
 def _watcher_loop() -> None:
-    from core.block_model_store import get_run_schedule_path
+    from services.block_model_store import get_run_schedule_path
     from services import project_store
 
     import json
@@ -226,7 +226,7 @@ def _watcher_loop() -> None:
                 if not terminal:
                     reason = "El proceso de inversión terminó sin estado final."
                     try:
-                        from core.block_model_store import update_run_status
+                        from services.block_model_store import update_run_status
 
                         update_run_status(
                             project_id=project_id, run_id=run_id,
@@ -262,7 +262,7 @@ def submit_package_inversion(
     `payload` = GeophysicsInvertInput.model_dump() (picklable para spawn).
     El estado inicial queda en schedule.json (queued) y en el historial.
     """
-    from core.block_model_store import get_run_dir, update_run_status
+    from services.block_model_store import get_run_dir, update_run_status
     from services import project_store
 
     # Limpia una bandera de cancelación previa (re-encolar tras cancelar).
@@ -301,7 +301,7 @@ def cancel_run(project_id: str, run_id: str) -> Dict[str, Any]:
     tocar el motor). El watcher y esta función dejan estado terminal
     'cancelled' en schedule.json + historial.
     """
-    from core.block_model_store import get_run_dir, update_run_status
+    from services.block_model_store import get_run_dir, update_run_status
     from services import project_store
 
     try:

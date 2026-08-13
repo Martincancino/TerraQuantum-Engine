@@ -286,7 +286,7 @@ def _validate_block_model(client, project_id: str, run_id: str, inversion: dict)
         reasons.append(f"chi2 no coherente: {chi!r}")
 
     try:
-        from core.block_model_store import get_run_dir
+        from services.block_model_store import get_run_dir
         run_dir = get_run_dir(project_id, run_id)
     except Exception as exc:  # noqa: BLE001
         reasons.append(f"no se pudo resolver run_dir: {exc}")

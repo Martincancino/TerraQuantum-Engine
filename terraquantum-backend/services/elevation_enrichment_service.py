@@ -20,14 +20,14 @@ from typing import Optional
 
 import polars as pl
 
-from core.block_model_store import (
+from services.block_model_store import (
     get_run_block_model_reference,
     get_run_gravity_import_metadata_path,
     load_project_meta,
     load_terrain_dem_matrix,
     load_terrain_metadata,
 )
-from core.geo_utils import sample_dem_elevation
+from services.geo_utils import sample_dem_elevation
 from services.coordinate_transform_real import transform_utm_to_wgs84
 
 

@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from core.geo_utils import METERS_PER_DEG_LAT, compute_bbox, compute_footprint_from_center
+from services.geo_utils import METERS_PER_DEG_LAT, compute_bbox, compute_footprint_from_center
 
 
 def _bbox_size(bbox):

@@ -2084,7 +2084,7 @@ async def run_field_data_inversion_with_corrections(
         )
 
     # ── 3. Persistir CSV corregido en el run dir ──────────────────────────────
-    from core.block_model_store import get_run_source_gravity_csv_path
+    from services.block_model_store import get_run_source_gravity_csv_path
     source_csv_path = get_run_source_gravity_csv_path(project_id, run_id)
     run_dir = source_csv_path.parent
     run_dir.mkdir(parents=True, exist_ok=True)

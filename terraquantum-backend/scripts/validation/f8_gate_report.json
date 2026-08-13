@@ -1,0 +1,44 @@
+{
+  "gate": "F8",
+  "verdict": "PASS",
+  "sections": [
+    {
+      "section": "matrix",
+      "passed": true,
+      "n": 4,
+      "counts": {
+        "valid_3d_model": 4
+      },
+      "bugs": [],
+      "seconds": 18.8,
+      "full": false
+    },
+    {
+      "section": "soak",
+      "passed": true,
+      "n": 3,
+      "ok_runs": 3,
+      "rss_growth_mb_per_iter": 1.505,
+      "tracemalloc_peak_mb": 3.0,
+      "history_ok": true,
+      "seconds": 107.2
+    },
+    {
+      "section": "budgets",
+      "passed": true,
+      "ingest_seconds": 1.41,
+      "ingest_budget": 60.0,
+      "ingest_ok": true,
+      "invert_seconds": 114.1,
+      "invert_voxels": 216,
+      "invert_budget": 180.0,
+      "invert_ok": true,
+      "render_fps": "deferred_playwright"
+    },
+    {
+      "section": "fuzz",
+      "passed": true,
+      "skipped": true
+    }
+  ]
+}

@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-import core.block_model_store as store
+import services.block_model_store as store
 from api.gravity_import_api import router
 from core.rate_limit import limiter
 

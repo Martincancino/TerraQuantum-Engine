@@ -97,7 +97,7 @@ def main() -> int:
           f"(estimado: {budget['estimated_minutes']} min)")
     assert final["status"] == "done", f"terminó en {final['status']}: {final.get('error')}"
 
-    from core.block_model_store import get_run_dir
+    from services.block_model_store import get_run_dir
     run_dir = get_run_dir(PROJECT_ID, RUN_ID)
     parquets = list(run_dir.glob("*.parquet"))
     assert parquets, f"sin parquet en {run_dir}"

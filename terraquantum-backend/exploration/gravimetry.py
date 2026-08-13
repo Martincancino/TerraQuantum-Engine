@@ -2510,24 +2510,13 @@ class GravimetryInversion:
                 _acond = float('nan')
                 logger.info(f"[SOLVER] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
             else:
-                from core.config import USE_SPARSE_DIRECT as _USE_SPARSE
-                if _USE_SPARSE:
-                    # SPRINT 5A: solver DIRECTO (SuperLU sobre ecuaciones normales).
-                    # Misma estrategia de bounds que LSQR+clip: solución sin bounds y
-                    # luego clip al box petrofísico. Reemplaza SOLO el path n>8000;
-                    # el path TRF bounded (n≤8000) queda intacto.
-                    m_tilde_raw, _sp_info = solve_sparse_normal_equations(
-                        _G_aug_sm, _d_aug_sm
-                    )
-                    m_tilde = np.clip(m_tilde_raw, _lb_tilde, _ub_tilde)
-                    _acond = float('nan')   # SuperLU no expone estimador de cond(A)
-                    logger.info(
-                        f"[SOLVER] SuperLU directo (ecuaciones normales) en "
-                        f"{time.perf_counter()-_t_solve:.1f}s. "
-                        f"residual={_sp_info['residual_norm']:.3e} "
-                        f"fill_nnz={_sp_info['fill_nnz']:,}"
-                    )
-                elif _use_lsmr:
+                # Fase 6 (H-2): aquí vivía el path `USE_SPARSE_DIRECT` (SuperLU sobre
+                # ecuaciones normales, Sprint 5A). Llamaba a `solve_sparse_normal_equations`,
+                # un símbolo que NO existe en el repositorio: con el flag en true la
+                # inversión abortaba con NameError después de construir el kernel.
+                # Se borró en vez de repararse: formar A^T A eleva cond(A) al cuadrado
+                # (la "lección Sprint 5A" que el propio comentario de LSMR cita más abajo).
+                if _use_lsmr:
                     # Fase 10: LSMR para n_active > 50K.
                     # Fong & Saunders (2011): residuo ||r|| monotónicamente decreciente,
                     # mejor estabilidad numérica que LSQR para sistemas mal condicionados.
