@@ -1455,6 +1455,8 @@ Ordenado por **valor estratégico**, no por facilidad. Esfuerzo en S/M/L/XL.
 
 **∥ = paralelizable** con lo anterior: son frontend o backend aislado y no tocan el motor, así que su posición en la lista marca prioridad, no bloqueo.
 
+**Estado de ejecución.** ✅ **Fase 1** (2026-08-08) · ✅ **Fase 2** (2026-08-10) · ✅ **Fase 3** (2026-08-12) · ✅ **Fase 6** (2026-08-09). Cada una lleva su registro `### ✅ EJECUTADA` al final de su sección, con lo que se midió y lo que se dejó fuera a propósito. **Siguiente: Fase 4** (resolver el depth-weighting inerte, 🔴 P0).
+
 **Un cambio de orden respecto a la tabla original, y su motivo:** la Fase 4 (depth-weighting) sube por delante de la 5 (superficie de configuración). Antes iban al revés porque la 5 es más barata; pero la 4 es **P0** y la 5 es **P2**, y una fase barata no justifica retrasar la única pregunta abierta sobre qué producto se tiene. El resto del orden es el que ya fijaba la tabla de la 1ª entrega.
 
 **Las Fases 3, 5 y 6 pueden empezar hoy mismo**: son baratas, de riesgo casi nulo, y son las que impiden que los hallazgos vuelvan.
@@ -1570,6 +1572,81 @@ FASE 6 (limpieza)  FASE 9 (UI de F7)  FASE 12 (OMF)  FASE 10 (contratos) ─► 
 
 **Riesgo de regresión.** Bajo sobre la física (no la toca). Medio sobre el arranque mismo — por eso la matriz adversa es el gate, no un smoke test.
 
+### ✅ EJECUTADA — 2026-08-10
+
+*Tres iteraciones separadas (backend, shell de escritorio, frontend), regla de oro del repo. Riesgo cumplido: no se tocó física ni el motor — cero cambios en `exploration/`.*
+
+#### Iteración 1 — Backend
+
+`core/config.py`, `api/system_api.py`, `.env.example`, `requirements.txt`, `requirements-build.txt` (nuevo), `.python-version` (nuevo), `tests/test_fase2_arranque.py` (nuevo):
+
+| Ítem | Qué se hizo | Evidencia |
+|---|---|---|
+| **H-15** | Default de `TERRAQUANTUM_HOST` invertido a **`127.0.0.1`**. La API corre sin autenticación por defecto, así que el binding es la única barrera real; ahora lo es por construcción y no porque tres lanzadores se acuerden. Docker sigue pidiendo `0.0.0.0` **explícito** (compose + `CMD` del Dockerfile), y el test lo verifica leyendo esos archivos: si alguien borra esa línea, el contenedor dejaría de responder y la suite lo dice antes que el usuario. | `test_default_host_is_loopback`, `test_docker_declares_its_exposure_explicitly`, `test_desktop_launchers_pin_loopback` |
+| **H-19 (mitad backend)** | `/health` publica **identidad**: `pid` siempre, e `instance_token` cuando el proceso padre lo declara por entorno. Sin token declarado **no se inventa uno** — el chequeo se degrada, no miente. | `test_health_echoes_instance_token`, `test_health_publishes_pid_and_no_token_when_unclaimed` |
+| **H-23** | `pyinstaller==6.21.0` pineado en un `requirements-build.txt` aparte (no debe viajar al contenedor ni al entorno del usuario); `.python-version` = 3.14.4; techo de major en las 6 dependencias que usaban `>=` sin él, con la versión medida anotada. | `test_no_requirement_is_unbounded`, `test_build_toolchain_is_pinned_exactly`, `test_numeric_core_stays_pinned_exact` |
+
+`TERRAQUANTUM_HOST` era una de las 29 variables que **ningún test ejercitaba** (H-11): a partir de aquí una regresión del default se ve. **12/12 tests nuevos verdes.**
+
+#### Iteración 2 — Shell de escritorio (Rust + splash)
+
+`src-tauri/src/lib.rs` (reescrito, 1.195 líneas), `src-tauri/splash/index.html`, `tauri.conf.json`, `capabilities/default.json`:
+
+| Ítem | Qué se hizo |
+|---|---|
+| **H-17** | El splash recibe eventos (`tq://boot`) y muestra el paso en curso; si algo falla, **la barra se detiene** (seguir animando era la mentira) y aparece la causa en español + **[Reintentar]** + **[Ver registros]** + [Cerrar]. Siete errores catalogados, cada uno con acción: `BACKEND_MISSING`, `BACKEND_SPAWN_FAILED`, `BACKEND_DEAD`, `BACKEND_TIMEOUT`, `FRONTEND_*`, `PORT_HIJACKED`, `PORTS_EXHAUSTED`. |
+| **H-18** | Job Object de Windows con `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, por **FFI directa a kernel32 y sin dependencias nuevas**. Si matan la app desde el Administrador de Tareas, el SO mata a los sidecars. Si el SO no lo permite, se registra el aviso y queda `taskkill` — degradación declarada, no silenciosa. |
+| **H-19** | El shell genera un token por arranque, se lo pasa al backend y **compara contra `/health`**. El frontend se valida por `/api/backend-health`: esa respuesta demuestra a la vez que el sidecar Node es el nuestro **y** que está emparejado con nuestro backend. Sonda HTTP mínima escrita a mano (HTTP/1.0 sobre `TcpStream`) para no añadir dependencias por un GET a loopback. |
+| **H-20** | Menú **Ayuda → «Buscar actualizaciones…»**, conducido desde Rust. Manual a propósito: un producto local-first no debe llamar a la red al arrancar. |
+| **H-21 (shell)** | Puertos elegidos **antes** de spawnear; si el preferido está ocupado se usa el siguiente libre del tramo y se explica quién lo ocupaba. El puerto elegido viaja al sidecar Node por entorno. |
+| Registros | Botón en el splash y menú **Ayuda → Ver registros / Abrir carpeta de datos**. |
+
+**La decisión que hace auditable la fase: el diario de arranque.** Todo lo que se muestra en el splash se escribe a `%APPDATA%\TerraQuantum\logs\boot.jsonl` desde la **misma** función (`publish`), así que no pueden divergir. Sin eso, la matriz adversa exigiría pilotar una interfaz gráfica; con eso, el gate lee un archivo y **decide**.
+
+**Higiene de permisos.** `withGlobalTauri` se activó para que el splash pueda escuchar eventos sin bundler. Es seguro porque la capability **no declara `remote`**: la aplicación servida en `http://localhost:3000` recibe el objeto pero la ACL rechaza cualquier llamada. Y se **retiró** `updater:default` de la capability: el updater ya no se invoca desde la interfaz, así que su superficie desde el webview sobra.
+
+**9/9 tests unitarios de Rust** sobre lo que decide: parseo HTTP, veredicto de identidad (incluido el caso «un zombi de TerraQuantum responde igual de bien: sin token no vale»), elección de puerto y forma del evento que lee el gate. `cargo check`: 0 errores, 0 avisos propios.
+
+> **Un test flaky, cazado y corregido dentro de la fase.** La primera versión de los tests de puerto pedía un puerto efímero al sistema y afirmaba cosas sobre sus vecinos; pasó en la primera corrida y **falló en la segunda** — apareció justo porque el gate se corrió dos veces antes de declarar la fase cerrada. La decisión de qué puerto elegir se separó del sistema operativo (`choose_port_where` recibe el predicado de "libre"), y ahora hay dos tests: uno **determinista** sobre la lógica y otro con un socket real que sólo afirma lo que siempre es cierto — *nunca devuelve el puerto ocupado*. Un test que pasa «casi siempre» es peor que no tenerlo: enseña a ignorar la suite.
+
+#### Iteración 3 — Frontend
+
+3 rutas nuevas (`app/api/export-bundle`, `app/api/delete-run`, `app/api/project-footprint`), `app/api/terrain-texture/route.ts`, `app/api/_lib/backend.ts`, `lib/terraquantum/frontendApi.ts`, 10 proxies con la precedencia de entorno invertida, `scripts/check_client_backend_calls.mjs` (nuevo):
+
+**H-21 se cerró enrutando, no documentando la excepción** — y la razón no es sólo de seguridad, es de **corrección medida**: desde esta fase el backend puede arrancar en un puerto alternativo, y `NEXT_PUBLIC_TERRAQUANTUM_BACKEND_URL` **se hornea en el bundle del navegador en tiempo de build**. Una llamada directa apuntaría entonces a *otro proceso* — el mismo fallo de identidad de H-19, pero servido al usuario como una descarga. `BACKEND_PUBLIC_URL` **desapareció**: el navegador ya no sabe dónde escucha el motor.
+
+**Un segundo agujero de la misma familia, encontrado al medir:** diez proxies *de servidor* leían `NEXT_PUBLIC_TERRAQUANTUM_BACKEND_URL` **antes** que la variable de ejecución. En el build actual eso no muerde (se comprobó en los chunks compilados: la constante quedó como `process.env.TERRAQUANTUM_BACKEND_URL||"http://127.0.0.1:8010"`, es decir, la lectura de runtime sobrevivió porque no había `.env.local` al construir). Pero `start-frontend.bat` **crea** ese `.env.local`; construir después de usarlo habría clavado los diez proxies al 8010. Se invirtió la precedencia.
+
+El guard `check_client_backend_calls.mjs` **decide** (exit 1) y está auto-verificado: sus reglas encuentran **7 ocurrencias** en la versión anterior de `frontendApi.ts` y **0** en la actual. `eslint` 0, `tsc --noEmit` 0, `npm run build` OK con las tres rutas nuevas presentes en el standalone.
+
+#### Hallazgo nuevo de esta fase (no introducido por ella)
+
+**El borrado de corridas apunta a un endpoint que no existe.** `deleteRun` llamaba a `DELETE /projects/{id}/runs/{run_id}`; **no hay ninguna ruta de borrado en `api/`** (verificado enumerando los decoradores de `project_api.py` e `history_api.py`). Devolvía 404 antes y devuelve 404 ahora: lo único que cambia es que ya no sale del navegador. **No se implementó** porque crear un endpoint de borrado es funcionalidad nueva fuera del alcance de esta fase, y porque borrar corridas de un cliente merece su propia decisión de diseño (¿papelera?, ¿confirmación doble?, ¿qué pasa con la corrida activa?). Queda anotado como deuda con nombre.
+
+#### Verificación
+
+**El gate: `scripts/f2_gate_boot_matrix.ps1` — PASA 6/6**, corrido tres veces a lo largo de la fase (la última sobre el binario que queda), medido contra la app **real** (`cargo build --release` con los sidecars recién reconstruidos: backend PyInstaller de 242,3 MB con el token de identidad, frontend standalone con las tres rutas nuevas). Diez arranques completos de la aplicación (cinco casos adversos + un segundo arranque tras cada uno):
+
+| Caso | Qué se montó | Qué se comprobó |
+|---|---|---|
+| **0** | — | Guard estático: cero llamadas directas navegador→backend |
+| **a** | Un listener real ocupando el 8010 | Aviso `BACKEND_PORT_FALLBACK` («el motor usará el 8011») **y llega a LISTO** — que llegue prueba el emparejamiento, porque la sonda del frontend exige el token del backend a través del proxy |
+| **b** | Un listener real ocupando el 3000 | Aviso `FRONTEND_PORT_FALLBACK` y la ventana navega a `http://localhost:3001` |
+| **c** | Backend renombrado (cuarentena de antivirus) | `BACKEND_MISSING` en español, con acción («Reinstala TerraQuantum y revisa la cuarentena del antivirus»), **sin espera infinita** |
+| **d** | `Stop-Process -Force` del shell **a mitad** del arranque | Cero huérfanos — el Job Object cumplió |
+| **e** | `Stop-Process -Force` con tráfico real en vuelo por ambos sidecars | Cero huérfanos |
+| **f** | Un segundo arranque **después de cada caso** | Vuelve a LISTO las cinco veces |
+
+En los cinco casos con arranque se compara el censo de `terraquantum-backend.exe`/`node.exe` antes y después: **cero procesos huérfanos**. Un gate que no ejecuta ningún caso (o que corre con `-Only`) **falla**: «verde por vacío» es la forma más común de que una puerta deje de proteger.
+
+**El resto de la evidencia:** suite completa de backend **2.277 passed / 14 skipped / 0 failed** (59 min) · 12/12 tests nuevos de backend · 9/9 tests unitarios de Rust · **12/12 recorridos E2E de Playwright** contra el build de producción (incluye `HistorialView`, que es quien consume el proxy de footprint nuevo) · `cargo check` sin avisos propios · `eslint` 0 · `tsc --noEmit` 0 · `npm run build` OK · guard estático auto-verificado (7 ocurrencias en la versión anterior de `frontendApi.ts`, 0 en la actual).
+
+**Lo que NO se hizo, y por qué.**
+- **El botón de instalar la actualización.** La comprobación está cableada y es honesta cuando no hay red; la **instalación** no, porque no existe ningún release publicado contra el que probarla. Cablear un camino que no se puede ejercitar sería exactamente el patrón que H-20 denunció.
+- **El cronómetro de instalación en VM Windows limpia** (pendiente heredado de F7) sigue pendiente: exige una máquina virgen, no esta. Lo que sí se puede afirmar ahora es lo que antes no: que en los modos de fallo que la matriz cubre el producto **dice** lo que pasa, en vez de animar una barra para siempre.
+- **Los botones del splash no los pulsa nadie automáticamente.** El gate demuestra que se **llega** al estado de error y que ese estado lleva mensaje y acción; que al hacer clic en [Ver registros] se abra el explorador y que [Reintentar] rearranque no lo cubre ninguna prueba, porque haría falta un piloto de interfaz gráfica sobre la ventana nativa. Lo que sí está cubierto por construcción es que splash y diario **no pueden divergir**: salen de la misma función.
+- **El caso (e) es una aproximación declarada.** El criterio decía «matar durante una inversión»; el gate mata con tráfico real en vuelo por ambos sidecars, no con una inversión completa (que exigiría un paquete de datos y minutos de cómputo). Lo que se prueba —el ciclo de vida de los procesos— no depende de qué esté calculando el backend. Está anotado en el propio script.
+
 ---
 
 ---
@@ -1593,6 +1670,64 @@ FASE 6 (limpieza)  FASE 9 (UI de F7)  FASE 12 (OMF)  FASE 10 (contratos) ─► 
 **Criterios de aceptación.** CI roja si: la física regresiona, un flag documentado rompe, o una función supera los umbrales.
 
 **Riesgo.** Bajo. Coste: minutos de CI.
+
+### ✅ EJECUTADA — 2026-08-12
+
+*Iteración de backend + infraestructura de CI. Cero cambios en `exploration/` y cero en el frontend de la aplicación (lo único que se tocó de `terraquantum-web` es una línea del job de CI que invoca la guarda estática de la Fase 2).*
+
+**Lo que ahora defiende la CI**
+
+| Pieza | Qué impide | Evidencia |
+|---|---|---|
+| `scripts/ci/compile_check.py` | Que la lista de paquetes se mantenga a mano y se pudra (**H-5**) | 4 tests; reproducido el fallo original |
+| `tests/test_fase3_capas.py` | Que la dirección de dependencias se rompa (§9I) | 8 tests, grafo medido con AST |
+| `scripts/ci/ast_budgets.py` + `ast_baseline.json` | Que la Fase 8 se deshaga sola | 7 tests; línea base medida |
+| `scripts/ci/validation_inventory.py` + `GATES.json` | Que un diagnóstico se llame gate (**H-22**) | 65 scripts clasificados |
+| `tests/test_fase3_config_matrix.py` | Que un flag documentado rompa el arranque (**H-11**) | 29 tests, 22 variables |
+| Job `physics-regression-nightly` + canario en PR | Que la física regresione en silencio (**H-4**) | 6 tests de contabilidad |
+| `core/config.py::_env_int` | Que un valor basura muera sin decir qué variable es | 4 tests |
+
+**Cinco correcciones medidas a la propia auditoría** (el trabajo de la fase fue tanto medir como construir):
+
+1. **El arreglo que la fase prescribía para H-4 no habría funcionado.** El texto decía «añadir job con `TQ_RUN_VALIDATION=1`». Medido: los 8 tests `validation` llevan **también** el marcador `slow`, así que `-m "not slow"` los deselecciona *antes* de que el skip de `conftest` entre en juego (`pytest -m "not slow and validation" --collect-only` → **0 tests**). Hay que invocarlos por nodeid y sin ese filtro. El canario del PR lo hace así.
+2. **El generativo de ingesta YA corría en la CI.** La auditoría lo daba «fuera de la CI por tiempo»; `test_ingesta_generativa.py` no lleva marca `slow` y su default es `TQ_GEN_N=400`, así que cada PR ya lo ejecutaba. Lo que faltaba era la pasada larga: va en el nocturno con N=5.000.
+3. **La CI resolvía un *major* distinto de una dependencia científica.** `ci.yml` fijaba Python 3.11 a mano; `zarr==3.2.1` exige `>=3.12`, así que pip resolvía zarr 2.x. La CI validaba un árbol de dependencias que no llega al cliente. Ahora lee `terraquantum-backend/.python-version`, el mismo archivo que declara el intérprete que se empaqueta.
+4. **La marca `slow` dejó de separar nada.** Medido: `-m "not slow"` selecciona **2.256 de 2.290** tests. El comentario de la CI prometía «~900 tests, ~25 min» cuando la suite completa tarda ~60 min. Corregido en el propio archivo.
+5. **El coste del gate de física no es reproducible.** Los dos reportes guardados del propio gate declaran **1.972 s** y **24.852 s** para el mismo `PASS 6/6`, con DO-27 dominando en ambos. Por eso el job nocturno lleva `timeout-minutes: 330` (bajo el tope de 6 h de los runners alojados) y publica el reporte **aunque falle**.
+
+**El hallazgo que más importa, y no es de CI.** `.env.local` de esta máquina fijaba `TERRAQUANTUM_HOST=0.0.0.0` — herencia de cuando ese era el default del código. La Fase 2 hizo seguro el **default**, y el producto empaquetado nunca se vio afectado (el orquestador fija la variable explícitamente y `main.py` sólo rellena claves *ausentes*), pero en la máquina de desarrollo el motor escuchaba en toda la red **sin autenticación**. Dos respuestas, no una: el archivo se corrigió a `127.0.0.1` (con autorización), **y** el backend ahora lo **dice en voz alta en cada arranque** cuando escucha fuera de loopback con `TQ_AUTH_ENABLED=false` — porque el próximo `.env.local` de la próxima máquina no lo va a arreglar nadie.
+
+**H-7, cerrado de paso.** `credenciales_gee.json.REVOKED_2026-06-03` seguía **rastreado por git** con un bloque `BEGIN PRIVATE KEY` real de la cuenta de servicio `terraquantum-satelite@…`. Está revocada, pero viajaba en cada clon. Se sacó del índice y del árbol de trabajo, y se corrigió la causa: `.gitignore` cubría el nombre **exacto** `credenciales_gee.json`, de modo que cualquier renombrado volvía a ser rastreable. Ahora cubre `credenciales_gee.json.*` y `credenciales_gee*.json`. **Pendiente y de decisión humana:** purgar el blob de la *historia* exige reescribirla y forzar el push, lo que rompe todo clon existente. Con la clave ya revocada el riesgo residual es de higiene, no de acceso.
+
+**Segundo hallazgo de paso:** `MAGNETIC_SUSCEPTIBILITY_PRESETS` (`core/config.py:129`) es una tabla de dominio dentro del Core **sin ningún consumidor de producción** — su única referencia fuera de la definición es un test. Queda anotada como deuda, no se borra aquí (borrar código de dominio es Fase 6, ya cerrada, y toca un test ajeno).
+
+**La foto de complejidad que congela esta fase** (medida con AST, línea base commiteada):
+
+| Paquete | Archivos | LOC | Función más larga | CC máx |
+|---|---:|---:|---:|---:|
+| services | 54 | 27.592 | 2.013 | **183** |
+| exploration | 15 | 10.777 | 1.039 | 143 |
+| api | 22 | 6.102 | 927 | 165 |
+| schemas | 9 | 2.278 | 19 | 7 |
+| core | 11 | 1.774 | 67 | 19 |
+| reporting | 2 | 1.771 | 488 | 32 |
+| middleware | 2 | 53 | 28 | 8 |
+
+`run_geophysics_inversion` — **2.013 líneas, complejidad 183** — es la espina dorsal que la Fase 8 va a partir. A partir de ahora no puede crecer más de un 5% sin que la CI lo diga.
+
+**H-22, cerrado sin reescribir 43 scripts.** Los 65 archivos de `scripts/validation/` están clasificados en `GATES.json`: **22 gates** (deciden, con salida ≠ 0 verificada por AST), **33 diagnósticos**, **3 bibliotecas**, **7 colecciones de tests**. El gate falla si aparece un script sin clasificar, si algo declarado `gate` no puede fallar, o si la documentación llama «gate» a un diagnóstico. Construyéndolo saltó un caso real que resultó ser falso positivo —`docs/01:439` nombra `f9_gate_regression.py` y `f9_report.py` en la misma frase— y el detector se afinó para no acusar cuando la palabra ya tiene dueño en la línea.
+
+**El gate de física ya no confunde «no hay dato» con «la física regresionó».** DO-27 (110,8 MB) y Raglan (7,8 MB) ya estaban versionados; San Nicolás y LdM vivían sólo bajo `data/projects/`, que `.gitignore` excluye, así que en un checkout limpio daban **FALLO por ausencia de datos** — y un gate rojo por costumbre deja de leerse. Dos arreglos, en este orden:
+
+1. El veredicto habla **sólo de lo evaluado** y el reporte dice qué no se evaluó. Un dataset **versionado** que desaparezca sigue siendo FALLO: no hay puerta trasera para apagar el gate borrando archivos.
+2. Se versionaron las observaciones de San Nicolás y LdM como fixtures (`tests/fixtures/f9/`, **122 KB**), con un test que comprueba que son **idénticas** a la corrida canónica. La resolución prefiere la corrida viva de `data/projects/` cuando existe —para que en la máquina de desarrollo se siga midiendo el artefacto original— y cae a la fixture en un checkout limpio.
+
+**Resultado: el nocturno evalúa los 6 casos, no 4.** Y no por construcción sino **medido**: se corrieron los dos casos por ambas rutas, con el motor real, y dan el mismo número — LdM χ² = **0,98694914119** por la corrida viva y por la fixture (13,7 s), San Nicolás misfit **1,51 %** por ambas (56,7 s). Si la fixture se desviara de la corrida canónica, el gate se convertiría en una regresión contra sí mismo; por eso además hay un test que compara los dos archivos.
+
+**Lo que NO se hizo, y por qué.**
+- **No puedo afirmar que la CI pase.** No hay `gh` CLI en esta máquina y `origin/main` está muy por detrás del árbol local: nada de este trabajo ha pasado por un runner. Lo que sí está medido es que **cada gate corre y decide localmente**. El primer push lo dirá.
+- **La matriz de configuración prueba que los flags ARRANCAN, no que hagan lo que prometen.** `USE_BOUNDED_SOLVER`, `USE_PROJECTED_SOLVER` y `USE_LSMR_LARGE` podrían estar tan inertes como lo estuvieron las perillas wavelet, y esta sonda no lo vería: eso exige una inversión medida y va con la Fase 5.
+- **El gate de arranque de la Fase 2 no está en la CI**: necesita Windows, la app compilada y ~1 GB de sidecars. Sigue siendo un gate de máquina de desarrollo, y así está declarado.
 
 ---
 
@@ -1673,6 +1808,45 @@ FASE 6 (limpieza)  FASE 9 (UI de F7)  FASE 12 (OMF)  FASE 10 (contratos) ─► 
 **Criterios de aceptación.** Cada borrado con su grep de cero consumidores en el mensaje de commit. `tsc --noEmit` y `eslint` limpios. Suite verde. Tamaño del instalador medido antes y después.
 
 **Riesgo.** Muy bajo. **[OPINIÓN] Es la fase con mejor relación valor/riesgo de todo el plan** y puede hacerse en paralelo a cualquier otra.
+
+### ✅ EJECUTADA — 2026-08-09
+
+*Dos iteraciones separadas (backend y frontend, regla de oro del repo).*
+
+**Contabilidad honesta de las líneas** (separando lo borrado de lo movido, que no es lo mismo):
+
+| | Líneas |
+|---|---:|
+| **Código muerto BORRADO** — 9 archivos que desaparecen (1.644) + 7 símbolos recortados de archivos que sobreviven (476) | **≈ 2.120** |
+| Código **MOVIDO** fuera de `core/` (sigue existiendo, en `services/`) | 1.306 |
+| Añadido: test anti-regresión de la fase | +293 |
+| Añadido: comentarios que explican cada borrado en su sitio | +169 |
+
+**Gate cumplido:** backend `compileall` OK · **2.308 tests colectan** sin error de import · **321 passed** en los 28 archivos que importan los módulos movidos · **57 passed** en los módulos podados · **26 tests nuevos** de la propia fase. Frontend `tsc --noEmit` **0** · `eslint` de fuentes **0 errores** · `next build` **OK**.
+
+| Hallazgo | Qué se hizo | Evidencia de cero consumidores |
+|---|---|---|
+| **H-2** | Borrado el bloque `USE_SPARSE_DIRECT` (`gravimetry.py`) **y su flag**. `elif _use_lsmr` pasó a `if`. | El símbolo `solve_sparse_normal_equations` no existe en el repo (grep global); la flag sólo la leía ese bloque |
+| **H-12** | Borrado `core/storage.py` (168 LOC). | 0 importadores; la única mención era un **comentario** en `config.py:127`, también retirado |
+| **H-13** | Borrados 7 símbolos (**−557 LOC**): `solve_inversion_lsmr_wavelet`, `remove_regional_scale`, `build_gradient_operators_from_mesh`, `export_core_to_gslib` + `export_block_model_to_gslib`, `configure_logging`, `resolve_mine_design_block_model_reference`. | Cada uno: 1 sola aparición en todo el repo = su propia definición |
+| **H-14** | `shapely` y `distributed` fuera de `requirements.txt`. | `shapely`: única aparición en el repo = la propia línea del requirements. `distributed`: **ni siquiera está instalada** en la máquina donde el backend corre y sus tests pasan |
+| **H-35** | `block_model_store`, `geo_utils` y `gee_client` movidos a `services/` (56 archivos de imports reescritos). **`core/` pasa de 3.176 a 1.759 LOC (−45%) y su fracción de dominio de 41% a 0%.** | `exploration/` (la física) **no importaba ninguno de los tres**: el motor no se toca |
+| **H-6 / H-31** | Frontend: borrados 8 archivos (**−1.492 LOC**) — `reactiveUpdateGraph`, la cadena `InstancedSegmentsLayer`+`segmentLOD`+`webgpuCull`, `engine-physics`, `geophysicsModel`, `ColorPipeline` y `geophysicsSurvey`. | 0 importadores reales; ver decisión de la cadena abajo |
+| **H-7** | **NO ejecutado a propósito** — ver abajo. | — |
+
+**Tres cosas que la auditoría no había medido bien, y ahora sí:**
+
+1. **Quitar `shapely` y `distributed` NO reduce el instalador ni un byte.** La auditoría infería una "reducción gratuita de tamaño" por ser dependencias pesadas. Medido en el TOC de PyInstaller del build real: `shapely` **0 entradas**, `distributed` **0**, `pywt` **0** — frente a `scipy` 3.034 y `dask` 172. El análisis estático ya las excluía por inalcanzables. El instalador sigue en **321,5 MB** y el sidecar en **198,8 MB**. La ganancia real es otra: el manifiesto deja de mentir sobre lo que el producto necesita.
+2. **Mover `block_model_store` habría creado la arista `core/ → services/`** que la Fase 3 va a prohibir. `core/utils.py` importaba `clean_trace_id` **hacia arriba**, desde el almacén de modelos de bloques. La auditoría decía "no hay dependencias ascendentes que romper" — cierto para las que existían, pero el movimiento **fabricaba una**. Se resolvió antes de mover: sanear un identificador para usarlo como nombre de carpeta es infraestructura, así que `clean_trace_id` bajó a `core/utils.py` y el almacén lo reexporta (sus importadores no cambian).
+3. **Las dos perillas de wavelet eran el mismo pecado que H-2.** `USE_WAVELET_COMPRESSION` y `WAVELET_THRESHOLD_N_ACTIVE` prometían activar la compresión del Jacobiano y **ningún código las leía**: su único consumidor posible era `solve_inversion_lsmr_wavelet`, que nunca se cableó. Se borraron con él. Los building blocks siguen vivos y con tests en `exploration/jacobian_wavelet.py`. Tras la poda, **cero constantes de `core/config.py` quedan sin lector** (medido).
+
+**La decisión que la fase pedía tomar explícitamente ("borrar o cablear, no dejar en limbo"): BORRAR la cadena de sondajes.** El ADR del render declaraba que los slices 3 y 4 no se montaban porque las coordenadas de sondaje no tenían transform al frame re-centrado. Ese problema **ya se resolvió por otro camino**: `GET /borehole/view` entrega hoy los intervalos en coordenadas del visor, y quien los consume es `BoreholeLayer.tsx`, **montada y viva** en `Scene3D.tsx`. Es decir: los sondajes ya se dibujan, y `InstancedSegmentsLayer` era un **segundo motor superado por el que se entrega**. Además su LOD y su culling GPU están dimensionados para 1M+ segmentos, cuando el producto declara 30k–100k vóxeles — la propia auditoría llama sobreingeniería a eso. Cablearlo habría significado sustituir una capa que funciona por una cuyo WGSL **nunca corrió en una GPU real**. Queda registrado en `terraquantum-web/docs/ADR-fase6-render.md`, no borrado en silencio.
+
+**Lo que NO se hizo, y por qué.**
+- **H-7 (la clave privada revocada) queda para Martín.** `CLAUDE.md` prohíbe explícitamente tocar credenciales, y el archivo lo es. Lo que sí se hizo es **cerrar la causa raíz**: `.gitignore` exigía que el nombre *terminara* en `.json`, así que `*gee*.json` **no cubría** `credenciales_gee.json.REVOKED_2026-06-03` — **el renombrado que pretendía neutralizar el archivo es justo lo que lo dejó fuera del ignore y permitió committearlo**. Ahora se cubre cualquier sufijo. El borrado del árbol es un comando de dos líneas y la purga de la historia sólo hace falta si el repo sale de la máquina.
+- **`PUBLIC_DIR` y `GEMINI_MODEL_NAME` se revisaron y NO son código muerto**: no tienen lectores externos, pero sí uso interno dentro de `config.py`. Se dejan.
+
+**Red que impide que vuelva:** `tests/test_fase6_limpieza_verificada.py` (26 tests). Convierte cada borrado en un invariante ejecutable: los símbolos y flags borrados no pueden reaparecer, las deps muertas no pueden volver a `requirements.txt` ni como import, **`core/` tiene lista blanca de módulos** (uno nuevo sin declarar rompe la suite), **`core/` no puede importar hacia arriba** (anticipo del test de capas de la Fase 3), y ninguna constante de `config.py` puede quedarse sin lector. Incluye contraprueba de que la poda no se llevó nada vivo.
 
 ---
 

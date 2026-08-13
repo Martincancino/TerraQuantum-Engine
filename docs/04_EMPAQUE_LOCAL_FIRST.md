@@ -22,7 +22,7 @@ En vez del `output:'export'` que sugería el plan, la app usa **dos sidecars** e
 
 El frontend **no se tocó** (respeta "iteraciones separadas"): el `next.config.ts` ya era `output:'standalone'`, perfecto para el sidecar Node.
 
-**Verificado E2E** desde el `app.exe` construido: backend `:8010/health` OK, frontend `:3000` sirve `<title>TerraQuantum</title>`, y el proxy `/api/backend-health` del frontend llega correctamente al backend Python. Instalador NSIS producido: `TerraQuantum_0.2.0_x64-setup.exe` (~253 MB).
+**Verificado E2E** desde el `app.exe` construido: backend `:8010/health` OK, frontend `:3000` sirve `<title>TerraQuantum</title>`, y el proxy `/api/backend-health` del frontend llega correctamente al backend Python. Instalador NSIS producido: `TerraQuantum_0.2.0_x64-setup.exe` — **321,5 MB medidos** (este documento decía 253 MB; era una cifra estimada que envejeció, corregida en la Fase 2 tras medir el artefacto real).
 
 **GOTCHA medido (no re-aprender):** al lanzar el sidecar de Node desde Rust, pasar la ruta ABSOLUTA de `server.js` fallaba con `EISDIR: lstat 'C:'` — el resolvedor de recursos devuelve rutas verbatim (`\\?\C:\...`) y la resolución de módulos de Node las mutila. Fix: pasar `server.js` **relativo** (con `current_dir` al dir del frontend) y limpiar el prefijo verbatim de todos los recursos.
 
@@ -31,6 +31,12 @@ El frontend **no se tocó** (respeta "iteraciones separadas"): el `next.config.t
 
 ### Pipeline de build repetible
 `scripts/build_desktop.ps1`: (1) PyInstaller del backend → exe; (2) `next build` standalone; (3) staging de `backend.exe` + `node.exe` + frontend a `src-tauri/resources/`; (4) `tauri build` → instalador NSIS firmado.
+
+**Reproducibilidad (Fase 2, H-23).** El determinismo numérico ya estaba cubierto —`numpy`, `scipy`, `pyproj` y `polars` con pin exacto— pero la cadena de build no. Ahora:
+- `terraquantum-backend/requirements-build.txt` fija **`pyinstaller==6.21.0`**, la herramienta que produce el ejecutable que se firma y distribuye. Va en un archivo aparte a propósito: PyInstaller no debe viajar dentro del contenedor Docker ni del entorno del usuario.
+- `terraquantum-backend/.python-version` declara el intérprete verificado (3.14.4).
+- Las 6 dependencias que usaban `>=` sin techo (`pyarrow`, `zarr`, `dask`, `PyWavelets`, `scikit-learn`, `scikit-image`) llevan **techo de major**, con la versión medida anotada al lado.
+- `tests/test_fase2_arranque.py::test_no_requirement_is_unbounded` convierte eso en invariante: una dependencia nueva sin techo rompe la suite.
 
 ---
 
@@ -95,6 +101,9 @@ Ninguna llamada de red está en la ruta crítica de inversión.
 ## 6. Actualizaciones firmadas y release
 
 - **Updater Tauri 2 configurado y firmado:** `tauri-plugin-updater` registrado; `bundle.createUpdaterArtifacts: true`; clave pública minisign en `plugins.updater.pubkey`; la **clave privada vive fuera del repo** (`~/.tauri/terraquantum_updater.key`) y firma los artefactos en el build (`TAURI_SIGNING_PRIVATE_KEY`). El manifiesto `latest.json` se publica en GitHub Releases = cero servidores que operar.
+- **Camino de consumo, cableado en la Fase 2 (H-20).** Hasta entonces el plugin estaba registrado pero **nadie llamaba a `check()`**: la firma funcionaba y el usuario no veía jamás un aviso. Ahora el menú **Ayuda → «Buscar actualizaciones…»** lo invoca desde Rust y muestra el resultado en una ventana de estado. Es **manual a propósito**: un producto cuya promesa es que los datos no salen de la máquina no debe hacer llamadas de red silenciosas al arrancar; la ventana lo dice explícitamente ("es la única función que usa internet").
+  - **Lo que está verificado:** que la comprobación se ejecuta y que un endpoint inalcanzable produce un mensaje honesto en español ("si no tienes internet es lo esperable"), no un silencio.
+  - **Lo que NO está verificado (y por qué):** la instalación de una actualización real, porque **todavía no existe ningún release publicado** en el endpoint. El botón de descarga no se cableó: prometer un camino que no se puede probar sería repetir el patrón que H-20 denunció. Queda como trabajo del primer release público.
 - **Para publicar una versión:** subir la versión en `tauri.conf.json` + `Cargo.toml`, correr `scripts/build_desktop.ps1` con la clave privada en el entorno, y publicar el instalador + su `.sig` + `latest.json` en el endpoint. Reemplazar el placeholder `endpoints` (`github.com/TerraQuantum/terraquantum/...`) por el repo real.
 - **Datos preservados:** actualizar reemplaza la instalación; los datos viven en `%APPDATA%\TerraQuantum` y sobreviven intactos (portabilidad testeada).
 - **Versionado:** SemVer. Checklist de release: suites F8 + F9 verdes → firmar → publicar manifiesto.
@@ -105,8 +114,32 @@ Ninguna llamada de red está en la ruta crítica de inversión.
 
 **Núcleo agnóstico al empaque (backend, sin deps nuevas, física intacta):** data dir portable; licenciamiento Ed25519 (verificar/firmar/activar/tiers) + CLI de emisión; exportar-diagnóstico sin datos; honestidad offline; wiring en `main.py`; 29 tests F7 verdes; gate `scripts/validation/f7_gate_packaging.py` PASS 30/30.
 
-**Instalador nativo Tauri 2 (CONSTRUIDO y verificado E2E):** `terraquantum-web/src-tauri/` con shell Rust que orquesta 2 sidecars (backend PyInstaller + frontend Node standalone), splash + navegación tras health, cleanup de procesos al salir, logging de sidecars. Instalador `TerraQuantum_0.2.0_x64-setup.exe` (~253 MB) producido por `tauri build` + `scripts/build_desktop.ps1`. Updater firmado configurado. Frontend intacto (cero duplicación de proxies).
+**Instalador nativo Tauri 2 (CONSTRUIDO y verificado E2E):** `terraquantum-web/src-tauri/` con shell Rust que orquesta 2 sidecars (backend PyInstaller + frontend Node standalone), splash + navegación tras health, cleanup de procesos al salir, logging de sidecars. Instalador `TerraQuantum_0.2.0_x64-setup.exe` (**321,5 MB medidos**) producido por `tauri build` + `scripts/build_desktop.ps1`. Updater firmado configurado. Frontend intacto (cero duplicación de proxies).
 
 **Plan B:** launcher `run_terraquantum_desktop.ps1` (para máquinas con Python+Node ya instalados).
 
+> **Corrección de la Fase 2:** este documento decía ~253 MB en dos sitios; el artefacto real mide **321,5 MB**. Corregido tras medirlo. La lección vale más que el número: la documentación envejece más rápido que el artefacto, y una cifra sin fecha de medición es una promesa sin respaldo.
+
 **Pendiente (no bloquea el gate):** correr el instalador en una VM Windows LIMPIA (sin Python/Node) para el cronómetro formal del "tercero instala en <15 min" — la app ya se verificó levantando ambos sidecars y sirviendo el camino dorado desde el bundle en esta máquina; instalador firmado real requiere publicar el `latest.json` en el repo de releases. Iconos: placeholders del scaffold (reemplazar por la marca antes del lanzamiento público).
+
+---
+
+## 8. Arranque que falla en voz alta (Fase 2)
+
+El principio de producto —*"ningún input produce crash ni basura silenciosa; siempre un error en español que dice qué hacer"* (`02_PRODUCTO.md` §4.1)— se aplicaba con rigor al pipeline de datos y **no llegaba al arranque**, que es justo donde no hay un desarrollador presente. La Fase 2 lo extiende al proceso de arranque. Cinco mecanismos, todos en `terraquantum-web/src-tauri/src/lib.rs`:
+
+| Mecanismo | Qué cambia | Hallazgo |
+|---|---|---|
+| **Splash con estados** | El splash era una barra que giraba **para siempre**. Ahora recibe eventos (`tq://boot`) y, si algo falla, muestra causa en español + **[Reintentar]** + **[Ver registros]** + [Cerrar]. La barra **se detiene** al fallar: seguir animando era la mentira. | H-17 |
+| **Job Object de Windows** | `CreateJobObject` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (FFI directa a kernel32, **sin dependencias nuevas**). Si matan la app desde el Administrador de Tareas, el SO mata a los sidecars. `taskkill` en `RunEvent::Exit` sólo cubría el cierre ordenado. | H-18 |
+| **Chequeo de IDENTIDAD** | Ya no basta con que alguien responda en el puerto: el backend recibe un **token de instancia** por entorno y lo publica en `/health`; el shell compara. El frontend se valida por `/api/backend-health`, que además demuestra que el sidecar Node está emparejado con **nuestro** backend. | H-19 |
+| **Puertos elegidos antes de spawnear** | Si 8010/3000 están ocupados se usa el siguiente libre del tramo (12 puertos) y **se dice por qué** ("lo ocupa otra instancia de TerraQuantum" / "otra aplicación"). El puerto elegido viaja al sidecar Node por entorno. | H-21 |
+| **Registros visibles** | Botón en el splash y menú **Ayuda → Ver registros de arranque / Abrir carpeta de datos**. | H-17 |
+
+**El diario de arranque.** Todo lo que se muestra en el splash se escribe además a `%APPDATA%\TerraQuantum\logs\boot.jsonl` (una línea JSON por estado; el arranque anterior se conserva en `boot.prev.jsonl`). Sirve para dos cosas: soporte —el usuario manda un archivo en vez de describir una animación— y **auditoría automática**: es lo que lee el gate. Splash y diario salen de la **misma** función (`publish`), así que no pueden divergir.
+
+**El gate: matriz de arranque adverso.** `scripts/f2_gate_boot_matrix.ps1` **decide** (exit 0/1) sobre los 6 casos del criterio de aceptación: (a) puerto 8010 ocupado, (b) puerto 3000 ocupado, (c) backend en cuarentena, (d) cierre violento a mitad del arranque, (e) cierre violento con la app en uso, (f) segundo arranque tras cada caso. En cada uno comprueba también **cero procesos huérfanos** comparando el censo de `terraquantum-backend.exe`/`node.exe` antes y después. Requiere la app compilada (`cd terraquantum-web/src-tauri ; cargo build --release`).
+
+> **Honestidad sobre el caso (e).** El criterio original decía "matar durante una inversión". El gate mata con **tráfico real en vuelo por ambos sidecars**, no durante una inversión completa (que exigiría un paquete de datos y minutos de cómputo). Es una aproximación deliberada y está anotada en el propio script: lo que se prueba es el ciclo de vida de los procesos, que no depende de qué esté calculando el backend.
+
+**Seguridad del arranque.** El default de `TERRAQUANTUM_HOST` pasó de `0.0.0.0` a `127.0.0.1` (H-15): la API corre sin autenticación por defecto, así que el binding a loopback es la única barrera real, y ahora lo es **por construcción** y no porque tres lanzadores se acuerden de fijarlo. Docker sigue pidiendo `0.0.0.0` explícito, que es lo correcto dentro de un contenedor. Y el navegador **dejó de conocer la URL del backend** (H-21): las tres llamadas directas que quedaban se enrutaron por proxies nuevos (`/api/export-bundle`, `/api/delete-run`, `/api/project-footprint`), con un gate estático —`terraquantum-web/scripts/check_client_backend_calls.mjs`— que falla si alguna vuelve.
