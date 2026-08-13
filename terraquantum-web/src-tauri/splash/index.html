@@ -4,26 +4,219 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>TerraQuantum</title>
+  <!--
+    Fase 2 (H-17). Este archivo era una barra de progreso que giraba para
+    siempre: si un sidecar no arrancaba, el usuario veía una animación elegante
+    indefinidamente, indistinguible de "es lento". Ahora escucha los eventos de
+    arranque del shell Rust (`tq://boot`) y, si algo falla, muestra la causa en
+    español con [Reintentar] y [Ver registros]. No inventa nada: todo lo que se
+    ve aquí lo emitió el orquestador, y queda además en boot.jsonl.
+  -->
   <style>
+    :root { color-scheme: dark; }
     html, body { margin: 0; height: 100%; background: #0b1020; color: #e6ecff;
       font-family: -apple-system, Segoe UI, Roboto, sans-serif; overflow: hidden; }
     .wrap { height: 100%; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 1.4rem; }
+      align-items: center; justify-content: center; gap: 1.1rem; padding: 1.5rem;
+      box-sizing: border-box; text-align: center; }
     .logo { font-size: 2rem; font-weight: 700; letter-spacing: .04em; }
     .logo span { color: #5eead4; }
-    .msg { color: #9fb0d0; font-size: .95rem; }
+    .msg { color: #9fb0d0; font-size: .95rem; max-width: 34rem; line-height: 1.45; }
     .bar { width: 220px; height: 4px; border-radius: 4px; background: #1b2440; overflow: hidden; }
     .bar > i { display: block; height: 100%; width: 40%; border-radius: 4px;
       background: linear-gradient(90deg, #5eead4, #6366f1);
       animation: slide 1.2s ease-in-out infinite; }
     @keyframes slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+
+    .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column;
+      gap: .45rem; font-size: .88rem; color: #7f90b0; min-width: 17rem; }
+    .steps li { display: flex; align-items: center; gap: .55rem; }
+    .steps .dot { width: .55rem; height: .55rem; border-radius: 50%; background: #1b2440; flex: none; }
+    .steps li[data-state="run"] { color: #cbd7f0; }
+    .steps li[data-state="run"] .dot { background: #6366f1; }
+    .steps li[data-state="ok"] { color: #5eead4; }
+    .steps li[data-state="ok"] .dot { background: #5eead4; }
+    .steps li[data-state="warn"] .dot,
+    .steps li[data-state="warn"] { color: #fbbf24; background: none; }
+    .steps li[data-state="warn"] .dot { background: #fbbf24; }
+    .steps li[data-state="fail"] { color: #fca5a5; }
+    .steps li[data-state="fail"] .dot { background: #ef4444; }
+
+    .panel { display: none; max-width: 38rem; background: #141b33; border: 1px solid #2a3358;
+      border-radius: 10px; padding: 1.1rem 1.25rem; text-align: left; }
+    .panel.show { display: block; }
+    .panel h2 { margin: 0 0 .5rem; font-size: 1.02rem; color: #fca5a5; }
+    .panel.info h2 { color: #5eead4; }
+    .panel p { margin: .35rem 0; font-size: .88rem; color: #b9c6e4; line-height: 1.5; }
+    .panel .detail { color: #7f90b0; font-family: Consolas, monospace; font-size: .78rem;
+      word-break: break-word; }
+    .panel .code { color: #64748b; font-size: .72rem; letter-spacing: .06em; }
+    .actions { margin-top: .9rem; display: flex; gap: .6rem; flex-wrap: wrap; }
+    button { font: inherit; font-size: .86rem; padding: .5rem .9rem; border-radius: 7px;
+      border: 1px solid #2a3358; background: #1b2440; color: #e6ecff; cursor: pointer; }
+    button:hover { border-color: #5eead4; }
+    button.primary { background: #5eead4; color: #06231d; border-color: #5eead4; font-weight: 600; }
+    .warnings { max-width: 38rem; font-size: .82rem; color: #fbbf24; line-height: 1.45; }
+    .warnings p { margin: .2rem 0; }
+    .hidden { display: none !important; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="logo">Terra<span>Quantum</span></div>
-    <div class="bar"><i></i></div>
-    <div class="msg">Iniciando el motor local… tus datos no salen de esta máquina.</div>
+
+    <div id="progress">
+      <div class="bar"><i></i></div>
+    </div>
+
+    <ul class="steps" id="steps">
+      <li data-step="backend" data-state="idle"><span class="dot"></span><span>Motor de cálculo</span></li>
+      <li data-step="frontend" data-state="idle"><span class="dot"></span><span>Interfaz</span></li>
+    </ul>
+
+    <div class="msg" id="msg">Iniciando el motor local… tus datos no salen de esta máquina.</div>
+
+    <div class="warnings" id="warnings"></div>
+
+    <div class="panel" id="panel">
+      <h2 id="panel-title"></h2>
+      <p id="panel-detail" class="detail"></p>
+      <p id="panel-hint"></p>
+      <p id="panel-code" class="code"></p>
+      <div class="actions" id="panel-actions"></div>
+    </div>
   </div>
+
+  <script>
+    (function () {
+      var api = window.__TAURI__;
+      var els = {
+        progress: document.getElementById("progress"),
+        steps: document.getElementById("steps"),
+        msg: document.getElementById("msg"),
+        warnings: document.getElementById("warnings"),
+        panel: document.getElementById("panel"),
+        title: document.getElementById("panel-title"),
+        detail: document.getElementById("panel-detail"),
+        hint: document.getElementById("panel-hint"),
+        code: document.getElementById("panel-code"),
+        actions: document.getElementById("panel-actions")
+      };
+
+      function step(name, state) {
+        var li = els.steps.querySelector('[data-step="' + name + '"]');
+        if (li) li.setAttribute("data-state", state);
+      }
+
+      function send(action) {
+        if (api && api.event && api.event.emit) api.event.emit("tq://action", { action: action });
+      }
+
+      function closeThisWindow() {
+        if (api && api.window && api.window.getCurrentWindow) {
+          api.window.getCurrentWindow().close();
+        }
+      }
+
+      function button(spec) {
+        var b = document.createElement("button");
+        b.textContent = spec.label;
+        if (spec.primary) b.className = "primary";
+        b.addEventListener("click", function () {
+          if (spec.local) spec.local();
+          else send(spec.action);
+        });
+        return b;
+      }
+
+      function showPanel(opts) {
+        els.panel.className = "panel show" + (opts.info ? " info" : "");
+        els.title.textContent = opts.title || "";
+        els.detail.textContent = opts.detail || "";
+        els.detail.className = opts.detail ? "detail" : "detail hidden";
+        els.hint.textContent = opts.hint || "";
+        els.hint.className = opts.hint ? "" : "hidden";
+        els.code.textContent = opts.code ? "código " + opts.code : "";
+        els.actions.innerHTML = "";
+        (opts.actions || []).forEach(function (a) {
+          els.actions.appendChild(button(a));
+        });
+      }
+
+      function onBoot(payload) {
+        if (!payload || !payload.stage) return;
+
+        if (payload.stage === "backend" || payload.stage === "frontend") {
+          if (payload.state === "start" || payload.state === "waiting") {
+            step(payload.stage, "run");
+          } else if (payload.state === "warn") {
+            step(payload.stage, "warn");
+            var w = document.createElement("p");
+            w.textContent = "⚠ " + payload.message;
+            els.warnings.appendChild(w);
+          }
+          if (payload.state !== "warn") els.msg.textContent = payload.message;
+          return;
+        }
+
+        if (payload.stage === "ready") {
+          step("backend", "ok");
+          step("frontend", "ok");
+          els.msg.textContent = payload.message;
+          return;
+        }
+
+        if (payload.stage === "error") {
+          // El arranque se detuvo: la barra deja de girar, porque seguir girando
+          // sería exactamente la mentira que esta fase corrige.
+          els.progress.classList.add("hidden");
+          els.msg.textContent = "El arranque no pudo completarse.";
+          var pending = els.steps.querySelectorAll('[data-state="run"]');
+          for (var i = 0; i < pending.length; i++) pending[i].setAttribute("data-state", "fail");
+          showPanel({
+            title: payload.message,
+            detail: payload.detail,
+            hint: payload.hint,
+            code: payload.code,
+            actions: [
+              { label: "Reintentar", action: "retry", primary: true },
+              { label: "Ver registros", action: "logs" },
+              { label: "Cerrar", action: "quit" }
+            ]
+          });
+        }
+      }
+
+      function onUpdate(payload) {
+        if (!payload) return;
+        els.progress.classList.add("hidden");
+        els.steps.classList.add("hidden");
+        els.warnings.classList.add("hidden");
+        els.msg.textContent = "";
+        showPanel({
+          info: payload.state !== "error",
+          title: payload.message,
+          detail: payload.detail,
+          actions: payload.state === "checking"
+            ? []
+            : [{ label: "Cerrar", local: closeThisWindow }]
+        });
+      }
+
+      if (!api || !api.event) {
+        // Sin puente disponible no se puede prometer progreso: se dice.
+        els.progress.classList.add("hidden");
+        showPanel({
+          title: "No se pudo conectar la ventana de arranque con la aplicación.",
+          hint: "Cierra TerraQuantum y vuelve a abrirlo. Si persiste, reinstala.",
+          code: "SPLASH_SIN_PUENTE"
+        });
+        return;
+      }
+
+      api.event.listen("tq://boot", function (e) { onBoot(e.payload); });
+      api.event.listen("tq://update", function (e) { onUpdate(e.payload); });
+    })();
+  </script>
 </body>
 </html>

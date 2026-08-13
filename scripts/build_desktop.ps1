@@ -13,7 +13,8 @@
   viven en %APPDATA%\TerraQuantum\data. Nada sale de la máquina.
 
   Requisitos (una vez): Rust (rustup), VS Build Tools con "Desktop development with C++",
-  Node.js, y las deps del backend + pyinstaller en el entorno Python.
+  Node.js, y las deps del backend + la cadena de build pineada:
+      python -m pip install -r terraquantum-backend/requirements-build.txt
 
   Uso:
       powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
@@ -40,6 +41,18 @@ if (-not $SkipBackend) {
     Section "1/4  Empaquetando backend con PyInstaller"
     Push-Location $Backend
     try {
+        # Fase 2 (H-23): el pin de PyInstaller solo sirve si alguien lo comprueba.
+        # Una version distinta produce un binario distinto del mismo codigo, y este
+        # binario se firma y se distribuye. Se avisa, no se bloquea: el build sigue
+        # siendo posible, pero deja de ser reproducible en silencio.
+        $pinned = (Select-String -Path "requirements-build.txt" -Pattern "^pyinstaller==(.+)$").Matches.Groups[1].Value
+        $installed = (python -c "import PyInstaller; print(PyInstaller.__version__)").Trim()
+        if ($pinned -and $installed -ne $pinned) {
+            Write-Host "  AVISO: pyinstaller instalado $installed, pineado $pinned -> el binario puede diferir." -ForegroundColor Yellow
+            Write-Host "         python -m pip install -r requirements-build.txt" -ForegroundColor Yellow
+        } else {
+            Write-Host "  pyinstaller $installed (coincide con el pin)" -ForegroundColor DarkGray
+        }
         python -m PyInstaller terraquantum_backend.spec --noconfirm --log-level WARN
         if (-not (Test-Path "dist/terraquantum-backend.exe")) { throw "PyInstaller no produjo el exe." }
     } finally { Pop-Location }

@@ -1,12 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "Permisos de las ventanas LOCALES del shell (splash de arranque y ventana de estado). NO se declara `remote`, así que la aplicación servida en http://localhost:3000 no recibe ningún permiso aunque `withGlobalTauri` exponga el objeto: cualquier llamada desde ahí la rechaza la ACL. El updater ya no aparece porque desde la Fase 2 lo conduce Rust desde el menú, no la interfaz.",
   "windows": [
-    "main"
+    "main",
+    "estado"
   ],
   "permissions": [
-    "core:default",
-    "updater:default"
+    "core:default"
   ]
 }
