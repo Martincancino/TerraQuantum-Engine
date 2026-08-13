@@ -6,9 +6,13 @@ import https from "node:https";
 // sniffer decide el encoding (latin-1 con ñ ya no llega mojibake). Proxy
 // fino, mismo patrón que gravity-import/parse-rows.
 
+// Fase 2 (H-21): primero la variable de EJECUCIÓN. Next hornea NEXT_PUBLIC_*
+// en tiempo de build, así que si existía un .env.local al construir, este
+// proxy quedaría clavado a ese puerto e ignoraría el que fija el orquestador
+// de escritorio cuando el 8010 está ocupado.
 const BACKEND_URL =
-  process.env.NEXT_PUBLIC_TERRAQUANTUM_BACKEND_URL ||
   process.env.TERRAQUANTUM_BACKEND_URL ||
+  process.env.NEXT_PUBLIC_TERRAQUANTUM_BACKEND_URL ||
   "http://127.0.0.1:8010";
 
 async function buildMultipartBody(

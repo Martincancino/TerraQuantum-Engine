@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildBackendUrl } from "../_lib/backend";
 
 const ALLOWED_TEXTURE_HOSTS = new Set([
   "127.0.0.1",
@@ -55,7 +56,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ detail: "url requerida" }, { status: 400 });
   }
 
-  const textureUrl = parseAllowedUrl(rawUrl);
+  // Fase 2 (H-21): una ruta RELATIVA es un asset del backend y se resuelve
+  // AQUÍ, en el servidor, contra el backend vigente. Antes llegaba ya absoluta
+  // desde el navegador con el puerto horneado en tiempo de build.
+  const absoluteUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : buildBackendUrl(rawUrl);
+  const textureUrl = parseAllowedUrl(absoluteUrl);
 
   if (!textureUrl) {
     return NextResponse.json(

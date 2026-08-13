@@ -25,8 +25,10 @@ export function buildBackendUrl(path: string) {
 }
 
 export async function fetchBackendJson(options: {
+  // DELETE se añadió en la Fase 2 (H-21) para poder enrutar por proxy la única
+  // llamada de borrado, que hasta entonces salía DIRECTA desde el navegador.
   path: string;
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "DELETE";
   body?: unknown;
   timeoutMs?: number;
 }): Promise<BackendJsonResult> {

@@ -1,13 +1,114 @@
-import { BackendInvertResponse } from "./geophysicsModel";
 import type { TerrainResponse } from "../terraQuantumGeology";
 import type { FavorabilityResult } from "../../componentes/datos/favorability_types";
 import { useAppStore } from "../../store/useAppStore";
 import type { BlockModelDataMode } from "../../store/useAppStore";
 
-export const BACKEND_PUBLIC_URL =
-  process.env.NEXT_PUBLIC_TERRAQUANTUM_BACKEND_URL ||
-  process.env.TERRAQUANTUM_BACKEND_URL ||
-  "http://127.0.0.1:8010";
+// ─────────────────────────────────────────────────────────────────────────────
+// Contrato de /api/geophysics-invert
+//
+// Fase 6 (H-31): estos dos tipos vivían en `lib/terraquantum/geophysicsModel.ts`,
+// que se borró por fabricar coordenadas geográficas con un factor de 0,02° en vez
+// de una transformación geodésica. De los 10 símbolos de aquel módulo, éste era el
+// ÚNICO con un consumidor real — y sólo en posición de tipo, aquí abajo. Se movió
+// TAL CUAL: describe lo que el backend devuelve (incluida la trilogía honesta
+// B1/B3/B2), así que reescribirlo sería inventar un contrato.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Un vóxel tal como lo emite el backend. Las claves opcionales conviven porque
+ *  el motor cambió de nombres entre versiones; no se normalizan en el cliente. */
+export interface GeoVoxel {
+  cx?: number; x?: number;
+  cy?: number; y?: number;
+  cz?: number; z?: number;
+  density?: number;
+  rho?: number;
+  probability?: number;
+  visual_score?: number;
+  sensitivity_proxy?: number;
+  density_proxy_index?: number;
+  modeled_rock_mass_tonnes?: number;
+  density_zone_flag?: number;
+  is_demo_grade?: boolean;
+  provenance?: { grade_source: string; assay_supported: boolean; economically_validated: boolean };
+  [key: string]: number | boolean | { grade_source: string; assay_supported: boolean; economically_validated: boolean } | undefined;
+}
+
+export type BackendInvertResponse = {
+  voxels: GeoVoxel[];
+  best_target: {
+    x_m: number;
+    y_m: number;
+    z_m: number;
+    density: number;
+    density_proxy_index: number;
+    is_demo_grade: boolean;
+    provenance: { grade_source: string; assay_supported: boolean; economically_validated: boolean };
+    probability: number;
+    // B1 (null-space honesto): blanco resoluble + transparencia del artefacto de piso.
+    depth_m?: number;
+    is_resolvable_depth?: boolean | null;
+    confidence_level?: string;          // capado por el veredicto reconciliado (B3)
+    is_null_space_artifact?: boolean;
+    n_floor_saturated_cells?: number;
+    anomaly_magnitude?: number;
+    floor_saturated_demoted?: {
+      x_m: number; y_m: number; z_m: number; density: number; depth_m: number; reason: string;
+    } | null;
+    selection_note?: string;
+  } | null;
+  report: {
+    status: string;
+    priority_class?: string;
+    // B3 — veredicto único reconciliado (eslabón más débil).
+    overall_verdict?: {
+      level: string;
+      limiting_factors?: string[];
+      components?: Record<string, unknown>;
+      headline?: string;
+      recommended_action?: string;
+    };
+    // B2 — resolución de profundidad por-eje (cola null-space; sin posterior σ).
+    depthResolution?: {
+      computed: boolean;
+      resolvable_depth_max_m?: number;
+      resolvable_depth_horizon_method?: string;
+      geometric_observable_depth_max_m?: number;
+      resolvable_body_depth_m?: number | null;
+      deep_mass_fraction?: number;
+      horizontal_extent_m?: number | null;
+      per_axis?: {
+        horizontal?: { determined: boolean; compactness: string; extent_m: number | null };
+        vertical?: { quality: string; deep_mass_fraction: number };
+      };
+      statement?: string;
+    };
+    preliminary_signal?: string;
+    risk_level: string;
+    min_density?: number;
+    avg_density?: number;
+    max_density?: number;
+    estimated_total_tonnage?: number;
+    estimated_anomaly_tonnage?: number;
+    avg_grade?: number;
+    avg_density_proxy_index?: number;
+    is_demo_grade?: boolean;
+    provenance?: { grade_source: string; assay_supported: boolean; economically_validated: boolean };
+    anomaly_score?: number;
+    max_probability?: number;
+    cutoff_density?: number;
+    total_voxels?: number;
+    returned_voxels?: number;
+    parquet_path?: string;
+  };
+};
+
+// Fase 2 (H-21): aquí vivía `BACKEND_PUBLIC_URL`, construida con
+// `NEXT_PUBLIC_TERRAQUANTUM_BACKEND_URL`. El prefijo `NEXT_PUBLIC_` la horneaba
+// en el bundle del NAVEGADOR en tiempo de build, así que tres llamadas de
+// cliente salían directas al backend saltándose los proxies. Se eliminó entera:
+// el navegador ya no sabe —ni necesita saber— dónde escucha el motor. Todo pasa
+// por `/api/*`, que resuelve el backend en tiempo de ejecución y por tanto
+// sigue al puerto alternativo cuando el 8010 está ocupado.
 
 // Tipo seguro para valores JSON arbitrarios
 export type JsonValue =
@@ -617,29 +718,15 @@ async function fetchInternalJson<T>(options: {
   }
 }
 
-export function buildBackendAssetUrl(path: string, cacheBust = true) {
-  if (!path) return "";
-
-  const baseUrl = path.startsWith("http")
-    ? path
-    : `${BACKEND_PUBLIC_URL}${path.startsWith("/") ? path : `/${path}`}`;
-
-  if (!cacheBust) return baseUrl;
-
-  const separator = baseUrl.includes("?") ? "&" : "?";
-
-  return `${baseUrl}${separator}t=${Date.now()}`;
-}
-
 export function buildTerrainTextureProxyUrl(rawUrl: string) {
   const cleanUrl = rawUrl.trim();
   if (!cleanUrl) return "";
 
-  const targetUrl = cleanUrl.startsWith("http")
-    ? cleanUrl
-    : buildBackendAssetUrl(cleanUrl, false);
-
-  return `/api/terrain-texture?url=${encodeURIComponent(targetUrl)}`;
+  // Las rutas RELATIVAS viajan tal cual: es el proxy —que corre en el servidor—
+  // quien las resuelve contra el backend vigente. Antes se convertían aquí a
+  // absolutas con la URL horneada en el bundle, lo que las clavaba al 8010
+  // aunque el motor hubiera arrancado en otro puerto (Fase 2, H-21).
+  return `/api/terrain-texture?url=${encodeURIComponent(cleanUrl)}`;
 }
 
 // ─── H-C3: Obs vs Calc misfit types ─────────────────────────────────────────
@@ -835,14 +922,18 @@ export function exportRunUrl(projectId: string, runId: string) {
 }
 
 export function exportBundleUrl(projectId: string, runId: string) {
-  return `${BACKEND_PUBLIC_URL}/export/bundle/${encodeURIComponent(projectId)}/${encodeURIComponent(runId)}`;
+  return `/api/export-bundle?project_id=${encodeURIComponent(
+    projectId
+  )}&run_id=${encodeURIComponent(runId)}`;
 }
 
 export async function deleteRun(
   projectId: string,
   runId: string
 ): Promise<{ ok: boolean; error: string | null }> {
-  const url = `${BACKEND_PUBLIC_URL}/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`;
+  const url = `/api/delete-run?project_id=${encodeURIComponent(
+    projectId
+  )}&run_id=${encodeURIComponent(runId)}`;
   try {
     const res = await fetch(url, {
       method: "DELETE",
@@ -1952,7 +2043,7 @@ export async function getHistoryRuns(projectId?: string) {
 export async function fetchProjectFootprint(
   projectId: string
 ): Promise<FrontendApiResult<ProjectFootprintResponse>> {
-  const url = `${BACKEND_PUBLIC_URL}/projects/${encodeURIComponent(projectId)}/footprint`;
+  const url = `/api/project-footprint?project_id=${encodeURIComponent(projectId)}`;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 15_000);
 

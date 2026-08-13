@@ -4,9 +4,13 @@ import { NextRequest, NextResponse } from "next/server";
 // que respeta el content-type del backend: JSON (grillas para mapas) o
 // text/csv (descarga por estación). Cero lógica aquí.
 
+// Fase 2 (H-21): primero la variable de EJECUCIÓN. Next hornea NEXT_PUBLIC_*
+// en tiempo de build, así que si existía un .env.local al construir, este
+// proxy quedaría clavado a ese puerto e ignoraría el que fija el orquestador
+// de escritorio cuando el 8010 está ocupado.
 const BACKEND_URL =
-  process.env.NEXT_PUBLIC_TERRAQUANTUM_BACKEND_URL ||
   process.env.TERRAQUANTUM_BACKEND_URL ||
+  process.env.NEXT_PUBLIC_TERRAQUANTUM_BACKEND_URL ||
   "http://127.0.0.1:8010";
 
 export async function POST(req: NextRequest) {
