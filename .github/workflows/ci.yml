@@ -2,7 +2,11 @@ name: TerraQuantum CI
 
 on:
   push:
-    branches: ["*"]
+    # `**`, no `*`. En los filtros de GitHub Actions `*` NO cruza la barra: con
+    # `["*"]`, un push a `fix/lo-que-sea` o `feature/x` no disparaba NADA y sólo
+    # se enteraba uno al abrir el PR. Una red de seguridad que no cubre el nombre
+    # de rama que más se usa no es una red de seguridad.
+    branches: ["**"]
   pull_request:
     branches: ["main"]
   schedule:
@@ -43,15 +47,22 @@ jobs:
         # El script contrasta los paquetes declarados con los que hay en disco.
         run: python scripts/ci/compile_check.py
 
-      - name: Guardas de arquitectura (capas, complejidad, inventario de gates)
-        # Las tres puertas de la Fase 3 que no dependen de correr física:
+      - name: Guardas de arquitectura (capas, complejidad, inventario, dependencias)
+        # Las puertas de la Fase 3 que no dependen de correr física:
         #  · presupuestos AST: la Fase 8 no puede deshacerse sola con el tiempo.
         #  · inventario: cada script de validation/ declara si decide o sólo mide (H-22).
-        #  · tests: dirección de dependencias, guardas de CI y contabilidad del gate F9.
+        #  · cierre de dependencias: el código no importa nada que este job no instale.
+        #    Se añadió al CERRAR la fase, después de medir que `psutil` había dejado de
+        #    ser instalable (se caía de rebote con `distributed`, que la Fase 6 quitó) y
+        #    que eso ponía 6 tests en rojo en un runner limpio. Aquí es casi un no-op
+        #    —lo instalado ES el cierre—; su trabajo lo hace en la máquina de desarrollo
+        #    vía check.ps1, ANTES del push.
+        #  · tests: capas, guardas de CI, contabilidad del gate F9 y calibración absoluta.
         run: |
           python scripts/ci/ast_budgets.py
           python scripts/ci/validation_inventory.py
-          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py -q
+          python scripts/ci/deps_closure.py
+          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py -q
 
       - name: Canario de física (regresión W_z sobre esfera sintética)
         # H-4: la regresión física NUNCA corría automáticamente. Y el arreglo no
@@ -62,6 +73,16 @@ jobs:
         # Se elige el sintético porque es el único caso sin datos externos y con
         # coste acotado (2,5 s declarados; 38 s medidos en una máquina cargada).
         # El resto de la suite física va en el job nocturno.
+        #
+        # LÍMITE MEDIDO de este canario (2026-08-13, al cerrar la fase). Sólo ve
+        # regresiones de FORMA. Se mutó el motor y se midió el veredicto:
+        #   · lambda_spatial × 500  → FALLA  (lo ve)
+        #   · G a 7.00000e-11 (+4,9%) → PASA (ciego: el benchmark genera el dato
+        #     sintético con la misma constante con la que invierte, así que se cancela)
+        #   · W_z apagado            → PASA  (ciego; y es justo lo que su nota decía
+        #     vigilar — `depth_beta` resultó inerte, medido en el Punto 4)
+        # Por eso las regresiones de ESCALA las cubre `test_fase3_calibracion_absoluta.py`
+        # en el paso anterior, contra verdad analítica y sin inversión.
         env:
           TQ_RUN_VALIDATION: "1"
         timeout-minutes: 15
@@ -150,6 +171,21 @@ jobs:
           TQ_GEN_N: "5000"
         timeout-minutes: 60
         run: pytest tests/test_ingesta_generativa.py -q
+
+      - name: Tests `validation` que ningún otro job ejecuta
+        # El diseño de la fase pedía `pytest -m validation` entero. No estaba: los 8
+        # tests `validation` llevan también `slow`, así que el job de PR los deselecciona
+        # y el gate F9 de abajo es main()-only —no invoca pytest—, de modo que de los 8
+        # sólo corría UNO (el canario, por nodeid). Los 5 de `test_f9_physics_regression`
+        # los cubre en sustancia el gate (mismos datasets, mismo motor); los 2 de
+        # `test_depth_prior_service` no los cubría NADA.
+        # MEDIDO 2026-08-13: 8 min 09 s, ambos pasan.
+        # `tests/test_fase3_ci_guards.py` vigila que esta lista no se quede corta cuando
+        # alguien añada un test `validation` nuevo.
+        env:
+          TQ_RUN_VALIDATION: "1"
+        timeout-minutes: 45
+        run: pytest tests/test_depth_prior_service.py -m validation -q
 
       - name: Gate F9 (re-invierte el motor real sobre los datasets canónicos)
         env:

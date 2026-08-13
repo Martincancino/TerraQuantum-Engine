@@ -1455,7 +1455,7 @@ Ordenado por **valor estratégico**, no por facilidad. Esfuerzo en S/M/L/XL.
 
 **∥ = paralelizable** con lo anterior: son frontend o backend aislado y no tocan el motor, así que su posición en la lista marca prioridad, no bloqueo.
 
-**Estado de ejecución.** ✅ **Fase 1** (2026-08-08) · ✅ **Fase 2** (2026-08-10) · ✅ **Fase 3** (2026-08-12) · ✅ **Fase 6** (2026-08-09). Cada una lleva su registro `### ✅ EJECUTADA` al final de su sección, con lo que se midió y lo que se dejó fuera a propósito. **Siguiente: Fase 4** (resolver el depth-weighting inerte, 🔴 P0).
+**Estado de ejecución.** ✅ **Fase 1** (2026-08-08) · ✅ **Fase 2** (2026-08-10) · ✅ **Fase 3** (2026-08-12, **cerrada del todo el 2026-08-13**: la CI estaba en rojo por dos causas medidas y el criterio «CI roja si la física regresiona» no se cumplía) · ✅ **Fase 6** (2026-08-09). Cada una lleva su registro `### ✅ EJECUTADA` al final de su sección, con lo que se midió y lo que se dejó fuera a propósito. **Siguiente: Fase 4** (resolver el depth-weighting inerte, 🔴 P0).
 
 **Un cambio de orden respecto a la tabla original, y su motivo:** la Fase 4 (depth-weighting) sube por delante de la 5 (superficie de configuración). Antes iban al revés porque la 5 es más barata; pero la 4 es **P0** y la 5 es **P2**, y una fase barata no justifica retrasar la única pregunta abierta sobre qué producto se tiene. El resto del orden es el que ya fijaba la tabla de la 1ª entrega.
 
@@ -1725,9 +1725,60 @@ En los cinco casos con arranque se compara el censo de `terraquantum-backend.exe
 **Resultado: el nocturno evalúa los 6 casos, no 4.** Y no por construcción sino **medido**: se corrieron los dos casos por ambas rutas, con el motor real, y dan el mismo número — LdM χ² = **0,98694914119** por la corrida viva y por la fixture (13,7 s), San Nicolás misfit **1,51 %** por ambas (56,7 s). Si la fixture se desviara de la corrida canónica, el gate se convertiría en una regresión contra sí mismo; por eso además hay un test que compara los dos archivos.
 
 **Lo que NO se hizo, y por qué.**
-- **No puedo afirmar que la CI pase.** No hay `gh` CLI en esta máquina y `origin/main` está muy por detrás del árbol local: nada de este trabajo ha pasado por un runner. Lo que sí está medido es que **cada gate corre y decide localmente**. El primer push lo dirá.
+- ~~**No puedo afirmar que la CI pase.**~~ → **Resuelto el 2026-08-13. La respuesta era NO: la CI estaba en rojo.** Ver el cierre más abajo.
 - **La matriz de configuración prueba que los flags ARRANCAN, no que hagan lo que prometen.** `USE_BOUNDED_SOLVER`, `USE_PROJECTED_SOLVER` y `USE_LSMR_LARGE` podrían estar tan inertes como lo estuvieron las perillas wavelet, y esta sonda no lo vería: eso exige una inversión medida y va con la Fase 5.
 - **El gate de arranque de la Fase 2 no está en la CI**: necesita Windows, la app compilada y ~1 GB de sidecars. Sigue siendo un gate de máquina de desarrollo, y así está declarado.
+
+---
+
+### ✅ CERRADA DEL TODO — 2026-08-13
+
+*La entrega del 08-12 dejó una frase abierta: «no puedo afirmar que la CI pase». Esta iteración la responde midiendo, y la respuesta obliga a corregir la anterior: **la CI no pasaba**. Backend + CI otra vez; cero cambios en el frontend de la aplicación.*
+
+**Cómo se midió sin runner y sin `gh`.** Se reprodujo el checkout del runner con un `git clone` de la rama en HEAD —sólo archivos versionados, sin `.env.local`, sin `data/projects/`— y se ejecutó cada paso de `ci.yml` sobre él. Lo que un clon en Windows no puede ver (el sistema operativo y, sobre todo, **el conjunto de paquetes instalados**) se cubrió aparte: el manifiesto de `actions/setup-python` para saber si el intérprete existe, la API de PyPI para saber si las ruedas existen, y dos simulaciones del entorno del runner.
+
+**Lo que salió bien y ya no hay que volver a preguntarse:**
+- `python-version-file` apunta a **3.14.4**, y 3.14.4 **existe** en el manifiesto de `actions/setup-python` para linux x64 (22.04 y 24.04). El paso no va a fallar.
+- Las **30 dependencias** de `requirements.txt` tienen rueda linux-cp314 (o `py3-none-any`) en PyPI. `opentelemetry-instrumentation-fastapi==0.63b1` es una prerelease publicada y válida, no un pin roto.
+- Job `frontend` **verde de verdad**: `npm ci`, `npm run lint` (0 errores, 23 avisos), la guarda cliente→backend de la Fase 2 y `npm run build`, con los códigos de salida leídos bien.
+- Sobre el clon prístino pasan `compile_check`, `ast_budgets`, `validation_inventory`, los cuatro ficheros de guardas (32 passed / 2 skipped) y el canario de física (7,7 s). **Ningún test depende de datos gitignorados**: la hipótesis de que el checkout limpio rompería la suite era falsa.
+
+**DOS CAUSAS MEDIDAS DE CI EN ROJO, invisibles en esta máquina.** Las dos son la misma enfermedad que la fase ya había diagnosticado para el intérprete —la CI instala un árbol distinto del que hay en desarrollo— y que el arreglo del 08-12 sólo curó a medias: fijó la **versión de Python** y dejó suelto el **conjunto de paquetes**.
+
+1. **`psutil` no estaba declarada.** Llegaba de rebote como transitiva de `distributed`, que la Fase 6/H-14 eliminó con razón el 08-09. El código la sigue importando. Simulando un runner sin ella (bloqueando el módulo en `sys.meta_path`): **6 tests de `test_kernel_sparsity_memory.py` mueren con `ModuleNotFoundError` → job `backend` en rojo**. Y hay un segundo daño, peor y silencioso: el `except Exception` de `exploration/gravimetry.py` deja `available = None` y **la red de seguridad de memoria del kernel (`SOLVER_KERNEL_TOO_DENSE`) se apaga sin decir nada** — un fallback que finge, que es la causa #1 del propio informe industrial del proyecto. Declarada con techo de major (H-23).
+2. **`PyWavelets` está declarada y NO instalada aquí.** O sea: la CI la instala y ejecuta dos tests que **en esta máquina no se han corrido nunca**. Medido con pywt 1.9.0 y el numpy del propio entorno: `test_wavelet_compression_ratio` retiene **98,2%** donde exige <15%, y `test_wavelet_forward_error` da **0,615%** donde exige <0,5%. El bloque wavelet de la Fase 10 no cumple su propio criterio §10.6.1. No se arregla aquí (no tiene llamadores de producción, Fase 6/H-13, y tocar el algoritmo es física) pero tampoco se esconde: van como `xfail(strict=True)` con el número medido, así que la CI queda verde con el fallo **registrado** y un futuro arreglo produce XPASS y obliga a actualizar la promesa. De paso: estaban escritos como `if not _PYWT: print(...); return`, que reportaba **PASSED sin ejecutar nada**; ahora son `skipif` y se ven SKIPPED.
+
+**El criterio de aceptación, puesto a prueba por mutación.** «CI roja si: la física regresiona, un flag documentado rompe, o una función supera los umbrales.» Nadie lo había comprobado — los tests existentes verifican que los gates **corren**, que no es lo mismo. Seis mutaciones reversibles sobre el clon, con su código de salida:
+
+| mutación | gate | veredicto |
+|---|---|---|
+| `G` 6,67430e-11 → 7,00000e-11 (+4,9%) | canario de física | **PASA** ❌ |
+| variable de entorno nueva sin declarar | matriz de configuración | FALLA ✔ |
+| `CSV_MAX_BYTES` renombrada | matriz de configuración | FALLA ✔ |
+| +300 ramas en `services/` | presupuestos AST | FALLA ✔ |
+| `core/` importa `services/` | test de capas | FALLA ✔ |
+| script nuevo sin clasificar | inventario de gates | FALLA ✔ |
+| desaparece un paquete declarado | compile check | FALLA ✔ |
+
+**Seis de siete defienden. El que no, es el de física** — y es el primero de los tres criterios.
+
+**Por qué el canario es ciego, que no es lo que yo creía.** La explicación fácil («Pearson es invariante al escalado») es incompleta. Se midió el mecanismo: con `G` mutada, la señal sintética sube exactamente un +4,88%… y la inversión usa **ese mismo kernel**, así que la constante se cancela y **ningún** número se mueve — ni `pearson_r` (0,7259), ni el misfit (0,654%), ni χ². El benchmark lleva el cartel «ANTI-INVERSE CRIME: mallas y operadores distintos», y es cierto para la malla; pero las **constantes son las mismas a ambos lados**. En ese eje el crimen inverso sigue ahí. Se comprobó además que el canario **sí** ve una regresión de forma (λ_spatial×500 → falla), así que la frontera queda clara: ve forma, no ve escala.
+
+**Y un tercer hallazgo que sale del mismo experimento:** con **W_z apagado** (exponente 0) el canario tampoco se mueve — 0,7259 idéntico. Es coherente con lo que el Punto 4 ya midió (`depth_beta` es inerte, `Ws` lo absorbe), pero nadie lo había propagado hasta aquí: **la nota del propio canario decía que servía para vigilar la degradación de W_z**. Corregida con el número.
+
+**Lo construido para cerrarlo** (todo decide, exit≠0):
+- **`tests/test_fase3_calibracion_absoluta.py`** — contrasta el operador forward de producción contra la masa puntual analítica (fórmula escrita en el test, con la G de CODATA independiente del motor) en cuatro geometrías y tres profundidades. Verificado: coinciden a **8 cifras**, así que la tolerancia de 1e-4 es ~500 veces más estrecha que la mutación que el canario deja pasar. **Con la mutación de `G`, este archivo se pone rojo (5 de 6 tests).** Caza de un golpe la clase entera: constante equivocada, conversión t/m³↔kg/m³ perdida, factor 1e-5 de mGal colado, eje/componente cambiado. No es teórico: el proyecto ya se descalibró así **dos veces** (mGal×1e-5 en DO-27, doble Bouguer en `9045719`), y ninguna de las dos habría puesto roja la CI.
+- **`scripts/ci/deps_closure.py`** — el arreglo de la CLASE, no del caso. Calcula el cierre transitivo de `requirements.txt` y falla si el código importa algo que ese cierre no cubre. Probado por mutación: quitando `psutil` del manifiesto, el gate lo señala y **dice por qué no se ve en local** («instalada AQUI … por eso no lo ves fallar»). Los imports opcionales bajo guarda (`pyopenvdb`, `simpeg`, `discretize`) se declaran con su motivo, al estilo del inventario de H-22: uno nuevo sin declarar rompe el gate a propósito. Corre en `ci.yml` y en `check.ps1` — y es en `check.ps1` donde de verdad trabaja, porque en el runner lo instalado *es* el cierre.
+- **`branches: ["*"]` → `["**"]`** en el disparador de push. En los filtros de GitHub Actions `*` **no cruza la barra**: un push a `fix/algo` o `feature/x` no disparaba ningún job. La red existía y no cubría el nombre de rama más común del oficio.
+- **Paso nocturno para los tests `validation` que no corría nadie.** El diseño pedía `pytest -m validation` entero. Medido: los 8 llevan también `slow` (el job de PR los deselecciona) y el gate F9 es *main()-only* —no invoca pytest—, así que de los 8 sólo se ejecutaba **uno**, el canario por nodeid. Los 5 de `test_f9_physics_regression` los cubre en sustancia el gate (mismos datasets, mismo motor; duplicarlos costaría entre 33 min y 6,9 h); los **2 de `test_depth_prior_service` no los cubría nada** y ahora corren en el nocturno (**8 min 09 s medidos, ambos pasan**). Un test nuevo con marca `validation` que quede huérfano rompe `test_fase3_ci_guards.py`.
+
+**Dos cosas que parecen huecos y no lo son, para que nadie las persiga otra vez:**
+- En un checkout limpio, `test_fase3_f9_no_evaluado.py` deja **2 skipped**: son los que comparan la fixture contra la corrida viva, y en un runner no hay corrida viva que comparar. Es el diseño del 08-12 funcionando —esa comparación es un gate de la máquina de Martín— y los otros 8 sí corren.
+- Los avisos de `npm run lint` (23) no rompen nada: el job exige **0 errores**, y hay 0.
+
+**Riesgo residual medido, no cerrado.** Los rangos con techo de major (H-23) hacen que la CI instale versiones distintas de las de esta máquina: **zarr 3.2.1 aquí → 3.3.0 en la CI**, **dask 2026.3.0 → 2026.7.1**, y **PyWavelets 1.9.0 en la CI donde aquí no hay ninguna**. Los rangos son deliberados y no se tocan; pero eso significa que el primer runner ejecuta código contra minors que aquí nadie ha probado. Es exactamente por donde salió la causa nº 2.
+
+**Lo que sigue sin poder afirmarse, dicho claro.** Todo esto se midió reproduciendo el runner, no en el runner: no hay `gh` en esta máquina y **el push sigue pendiente de decisión humana**, porque la historia se reescribió el 08-12 para purgar el blob de H-7 y publicarla exige `--force`, que rompe cualquier clon existente. Lo que ya no está en el aire es lo que se preguntaba el 08-12: las dos causas de rojo estaban **dentro** del árbol, no en el runner, y se corrigieron con el número delante.
 
 ---
 

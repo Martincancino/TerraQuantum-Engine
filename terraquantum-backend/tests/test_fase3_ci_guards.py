@@ -138,8 +138,10 @@ def test_ci_runs_every_gate_of_this_phase():
     for gate in (
         "scripts/ci/ast_budgets.py",
         "scripts/ci/validation_inventory.py",
+        "scripts/ci/deps_closure.py",
         "tests/test_fase3_capas.py",
         "tests/test_fase3_f9_no_evaluado.py",
+        "tests/test_fase3_calibracion_absoluta.py",
     ):
         assert gate in ci, f"la CI no invoca {gate}"
 
@@ -155,8 +157,80 @@ def test_ci_runs_every_gate_of_this_phase():
 
 def test_local_check_runs_the_cheap_gates():
     check = _executable_lines(CHECK_PS1.read_text(encoding="utf-8")).replace("\\", "/")
-    for gate in ("scripts/ci/ast_budgets.py", "scripts/ci/validation_inventory.py"):
+    for gate in ("scripts/ci/ast_budgets.py", "scripts/ci/validation_inventory.py",
+                 "scripts/ci/deps_closure.py"):
         assert gate in check, f"check.ps1 no corre {gate}"
+
+
+# ── Lo que se descubrió AL CERRAR la fase ─────────────────────────────────────
+
+def test_ci_covers_branches_with_a_slash():
+    """`*` no cruza la barra en los filtros de GitHub Actions.
+
+    Con `branches: ["*"]`, un push a `fix/algo` no disparaba ningún job. La CI
+    existía y no cubría el nombre de rama más común del oficio.
+    """
+    ci = CI_FILE.read_text(encoding="utf-8")
+    assert 'branches: ["*"]' not in ci, (
+        'volvió `branches: ["*"]`: no cubre ramas con barra (fix/…, feature/…). '
+        'Debe ser ["**"].'
+    )
+    assert 'branches: ["**"]' in ci, "el disparador de push debe cubrir ramas con barra"
+
+
+def _archivos_con_tests_validation() -> set[str]:
+    """Ficheros de tests/ que contienen algún test marcado `validation`.
+
+    Se hace con AST (sin importar nada) y cubre las dos formas de marcar: el
+    `pytestmark` de módulo y el decorador por test.
+    """
+    import ast
+
+    encontrados: set[str] = set()
+    for archivo in sorted((BACKEND_ROOT / "tests").glob("test_*.py")):
+        try:
+            arbol = ast.parse(archivo.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        for nodo in ast.walk(arbol):
+            # Sólo `<algo>.mark.validation`, no cualquier atributo que se llame
+            # `validation`: una guarda que acusa en falso se acaba desactivando.
+            if (isinstance(nodo, ast.Attribute) and nodo.attr == "validation"
+                    and isinstance(nodo.value, ast.Attribute) and nodo.value.attr == "mark"):
+                encontrados.add(archivo.name)
+                break
+    return encontrados
+
+
+# Ficheros cuyos tests `validation` NO se invocan desde ci.yml porque el gate
+# nocturno `f9_gate_regression.py` ya re-invierte esos MISMOS datasets con el
+# MISMO motor: correrlos además por pytest duplicaría entre 33 min y 6,9 h.
+# Es una excepción declarada, no un olvido.
+CUBIERTOS_POR_EL_GATE_F9 = {
+    "test_f9_physics_regression.py",
+}
+
+
+def test_every_validation_test_runs_somewhere():
+    """H-4, la mitad que quedaba abierta.
+
+    El diseño de la fase pedía `pytest -m validation` completo. Medido al cerrar:
+    los 8 tests `validation` llevan también `slow` (los deselecciona el job de PR)
+    y el gate F9 es main()-only —no invoca pytest—, así que sólo UNO corría de
+    verdad. Un test de regresión física que no corre es exactamente el hallazgo
+    H-4 en pequeño.
+    """
+    ci = _executable_lines(CI_FILE.read_text(encoding="utf-8"))
+    huerfanos = [
+        nombre for nombre in sorted(_archivos_con_tests_validation())
+        if nombre not in CUBIERTOS_POR_EL_GATE_F9 and nombre not in ci
+    ]
+    assert not huerfanos, (
+        "estos ficheros tienen tests marcados `validation` que no corren en NINGÚN "
+        f"job: {huerfanos}. Añádelos a un paso del nocturno (sin el filtro "
+        '`-m "not slow"`, que los deselecciona antes del skip de conftest) o '
+        "decláralos en CUBIERTOS_POR_EL_GATE_F9 con su motivo."
+    )
 
 
 def test_ci_pins_the_same_interpreter_that_ships():

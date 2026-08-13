@@ -145,8 +145,13 @@ def case_synthetic_sphere() -> Dict[str, Any]:
             {"label": "misfit", "value": f"{m['misfit_pct']}%"},
             {"label": "χ² reducido", "value": m["chi_squared"]},
         ],
-        note="La correlación cae si el depth-weighting (W_z) se degrada → canario directo de regresión "
-             "(umbral 0.70 = el propio CI del benchmark para W_z formal).",
+        note="Canario de FORMA: la correlación cae si la regularización se degrada (medido: "
+             "λ_spatial×500 → FALLA). NO es canario de escala ni de W_z — medido 2026-08-13, "
+             "con G a +4,9% y con W_z apagado el veredicto no se mueve (r=0.7259 en los tres "
+             "casos): el benchmark usa las mismas constantes para generar el dato y para "
+             "invertir, así que un error de calibración se cancela, y `depth_beta` resultó "
+             "inerte (Punto 4). Las regresiones de escala las cubre "
+             "tests/test_fase3_calibracion_absoluta.py. Umbral 0.70 = el CI del propio benchmark.",
     )
 
 

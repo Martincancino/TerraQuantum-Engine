@@ -21,6 +21,12 @@ python scripts/ci/ast_budgets.py
 if ($LASTEXITCODE -ne 0) { $fail = $true; Write-Host "  FALLO presupuestos AST" -ForegroundColor Red }
 python scripts/ci/validation_inventory.py
 if ($LASTEXITCODE -ne 0) { $fail = $true; Write-Host "  FALLO inventario de validacion" -ForegroundColor Red }
+# Fase 3 (cierre): este es el unico sitio donde el cierre de dependencias puede
+# fallar de verdad. En el runner lo instalado ES el cierre, asi que alli no dice
+# nada; aqui detecta que el codigo importa algo que `pip install -r requirements.txt`
+# no instalaria - que es como `psutil` se volvio invisible al caer `distributed`.
+python scripts/ci/deps_closure.py
+if ($LASTEXITCODE -ne 0) { $fail = $true; Write-Host "  FALLO cierre de dependencias" -ForegroundColor Red }
 Pop-Location
 
 Write-Host "[2/4] tsc --noEmit frontend..." -ForegroundColor Cyan
