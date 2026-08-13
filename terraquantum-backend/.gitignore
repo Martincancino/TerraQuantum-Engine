@@ -21,6 +21,11 @@ Thumbs.db
 
 # Credenciales locales / secretos
 credenciales_gee.json
+# Fase 3 (H-7): el patrón exacto dejaba pasar los renombrados. Así fue como
+# `credenciales_gee.json.REVOKED_2026-06-03` quedó RASTREADO por git con un
+# bloque `BEGIN PRIVATE KEY` real dentro — revocado, pero viajando en cada clon.
+credenciales_gee.json.*
+credenciales_gee*.json
 *.service-account.json
 *.credentials.json
 .env
