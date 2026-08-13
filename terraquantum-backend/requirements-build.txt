@@ -1,0 +1,12 @@
+# TerraQuantum — dependencias de BUILD del sidecar de escritorio (Fase 2, H-23).
+#
+# Separadas de requirements.txt a propósito: PyInstaller no se ejecuta nunca en
+# tiempo de servicio, así que no debe viajar dentro del contenedor Docker ni del
+# entorno del usuario. Pero SÍ debe estar pineado: es la herramienta que produce
+# el ejecutable de ~200 MB que se firma y se distribuye, y una versión distinta
+# produce un binario distinto a partir del mismo código.
+#
+# Uso:  python -m pip install -r requirements-build.txt
+# Luego: powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
+
+pyinstaller==6.21.0   # verificado: con esta versión se construyó 0.2.0

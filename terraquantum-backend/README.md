@@ -38,8 +38,9 @@ pytest tests/ -v
 
 ## Variables principales
 
-- `TERRAQUANTUM_HOST`
+- `TERRAQUANTUM_HOST` — default `127.0.0.1` (solo esta maquina). Poner `0.0.0.0` SOLO dentro de un contenedor: la API corre sin autenticacion por defecto.
 - `TERRAQUANTUM_PORT`
+- `TERRAQUANTUM_INSTANCE_TOKEN` — identidad del proceso; la fija el launcher de escritorio y la publica `/health` para distinguir este backend de un zombi que ocupe el puerto. No hace falta fijarla a mano.
 - `CORS_ALLOWED_ORIGINS`
 - `CSV_MAX_BYTES`
 - `GEE_CREDENTIALS_PATH`

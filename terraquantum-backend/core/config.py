@@ -2,6 +2,29 @@ import os
 from pathlib import Path
 
 
+def _env_int(name: str, default: int) -> int:
+    """Lee un entero de entorno diciendo QUÉ variable está mal si lo está.
+
+    Fase 3. Antes esto era `int(os.getenv("CSV_MAX_BYTES", "10485760"))`, y un
+    valor basura mataba el arranque con `ValueError: invalid literal for int()
+    with base 10: 'abc'` — un mensaje que no nombra la variable. Quien lo recibe
+    en la máquina de un cliente no tiene forma de saber cuál de las veintitantas
+    es. El proceso sigue muriendo (un puerto inválido no admite continuación),
+    pero ahora muere diciendo dónde mirar.
+    """
+    crudo = os.getenv(name)
+    if crudo is None or crudo.strip() == "":
+        return default
+    try:
+        return int(crudo.strip())
+    except ValueError as exc:
+        raise ValueError(
+            f"La variable de entorno {name} debe ser un número entero; "
+            f"llegó {crudo!r}. Corrígela (o bórrala para usar el valor por "
+            f"defecto, {default})."
+        ) from exc
+
+
 APP_NAME = "terraquantum-backend"
 APP_TITLE = "TerraQuantum Backend"
 APP_VERSION = "0.2.0"
@@ -44,8 +67,23 @@ RUN_FOCUSING_FILENAME     = "block_model_focusing.parquet"
 
 MODELS_ROUTE_PREFIX = "/models"
 
-BACKEND_HOST = os.getenv("TERRAQUANTUM_HOST", "0.0.0.0")
-BACKEND_PORT = int(os.getenv("TERRAQUANTUM_PORT", "8010"))
+# Fase 2 (H-15/H-21): el default es LOOPBACK, no todas las interfaces.
+# El producto real es local-first y la API corre sin autenticación por defecto
+# (TQ_AUTH_ENABLED=false), así que el binding a 127.0.0.1 es la única barrera
+# real entre el motor de inversión y la red del sitio minero. El único camino
+# que necesita exponerse —Docker— lo pide EXPLÍCITO (docker-compose.yml y el
+# CMD del Dockerfile fijan 0.0.0.0), por lo que invertir el default no rompe
+# nada y hace seguro por construcción cualquier lanzador futuro.
+BACKEND_HOST = os.getenv("TERRAQUANTUM_HOST", "127.0.0.1")
+BACKEND_PORT = _env_int("TERRAQUANTUM_PORT", 8010)
+
+# Fase 2 (H-19): identidad del proceso. El orquestador de escritorio genera un
+# token al arrancar y se lo pasa a ESTE proceso; luego pregunta por /health y
+# compara. Así distingue "mi sidecar" de "un zombi de un arranque anterior o de
+# otra aplicación que ocupa el puerto" — un fallo de identidad, no de
+# disponibilidad. Vacío = nadie declaró identidad (desarrollo, Docker): /health
+# no publica el campo y el chequeo se degrada a "responde y es TerraQuantum".
+INSTANCE_TOKEN: str = os.getenv("TERRAQUANTUM_INSTANCE_TOKEN", "").strip()
 
 _cors_raw = os.getenv(
     "CORS_ALLOWED_ORIGINS",
@@ -53,7 +91,7 @@ _cors_raw = os.getenv(
 )
 CORS_ORIGINS: list[str] = [origin.strip() for origin in _cors_raw.split(",") if origin.strip()]
 
-CSV_MAX_BYTES: int = int(os.getenv("CSV_MAX_BYTES", "10485760"))
+CSV_MAX_BYTES: int = _env_int("CSV_MAX_BYTES", 10485760)
 
 GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash")
 
@@ -108,24 +146,30 @@ USE_BOUNDED_SOLVER: bool = os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "f
 # exacto al comportamiento clip.
 USE_PROJECTED_SOLVER: bool = os.getenv("USE_PROJECTED_SOLVER", "true").lower() != "false"
 
-# Sprint 5A: solver directo SuperLU para n_active > 8000. Default OFF (LSQR).
-USE_SPARSE_DIRECT: bool = os.getenv("USE_SPARSE_DIRECT", "false").lower() == "true"
+# Fase 6 (H-2): USE_SPARSE_DIRECT ELIMINADA. Prometía un solver directo SuperLU
+# para n_active > 8000, pero la función a la que llamaba no existía: activarla
+# rompía la inversión con NameError. No se repara — formar las ecuaciones normales
+# eleva cond(A) al cuadrado; LSMR (abajo) es la respuesta correcta para n grande.
 
 # Fase 10: LSMR para n_active > LSMR_THRESHOLD_N_ACTIVE (default 50K).
 # LSMR tiene mejor convergencia que LSQR para sistemas mal condicionados.
 # Default ON. Rollback: USE_LSMR_LARGE=false.
 USE_LSMR_LARGE: bool = os.getenv("USE_LSMR_LARGE", "true").lower() != "false"
-LSMR_THRESHOLD_N_ACTIVE: int = int(os.getenv("LSMR_THRESHOLD_N_ACTIVE", "50000"))
+LSMR_THRESHOLD_N_ACTIVE: int = _env_int("LSMR_THRESHOLD_N_ACTIVE", 50000)
 
-# Fase 10: Compresión wavelet del Jacobiano G (Farquharson & Oldenburg 2003).
-# Default OFF — activar solo para surveys con n_active > WAVELET_THRESHOLD_N_ACTIVE.
-# Requiere PyWavelets>=1.6.0 en requirements.txt.
-USE_WAVELET_COMPRESSION: bool = os.getenv("USE_WAVELET_COMPRESSION", "false").lower() == "true"
-WAVELET_THRESHOLD_N_ACTIVE: int = int(os.getenv("WAVELET_THRESHOLD_N_ACTIVE", "200000"))
+# Fase 6 (H-13): USE_WAVELET_COMPRESSION y WAVELET_THRESHOLD_N_ACTIVE ELIMINADAS.
+# Prometían activar la compresión wavelet del Jacobiano (Farquharson & Oldenburg
+# 2003) por encima de cierto n_active, pero NINGÚN código las leía: el único
+# consumidor posible era `solve_inversion_lsmr_wavelet`, que nunca se cableó y se
+# borró en esta misma fase. Mismo pecado que USE_SPARSE_DIRECT: una perilla que
+# promete un comportamiento y no despacha a ninguna parte.
+# Los building blocks siguen vivos y con tests en `exploration/jacobian_wavelet.py`.
 
-# HITO 7: Cloud storage abstraction.
-# STORAGE_BACKEND env var is read by core/storage.py at import time.
-# Valid values: "local" (default), "s3", "gcs".
+# Fase 6 (H-12): la abstracción de cloud storage (HITO 7) fue ELIMINADA junto con
+# core/storage.py y la env var STORAGE_BACKEND. Tenía cero importadores: era una
+# jerarquía de tres backends (local/S3/GCS, los dos últimos NotImplementedError)
+# para una nube que el producto rechazó por estrategia (docs/02 §6: "NO es una
+# plataforma cloud multi-tenant"). El almacenamiento local-first usa pathlib directo.
 
 # F3: la configuración Celery/Redis (HITO 7) fue ELIMINADA — la vía asíncrona
 # del producto es nativa (services/run_queue_service, workers de proceso,
@@ -171,7 +215,7 @@ TQ_LICENSE_PUBLIC_KEY_HEX: str = os.getenv("TQ_LICENSE_PUBLIC_KEY_HEX", "")
 TQ_TIER_LIMITS: dict = {
     "local": {"max_voxels": None, "watermark": False},
     "pro":   {"max_voxels": None, "watermark": False},
-    "free":  {"max_voxels": int(os.getenv("TQ_FREE_MAX_VOXELS", "40000")), "watermark": True},
+    "free":  {"max_voxels": _env_int("TQ_FREE_MAX_VOXELS", 40000), "watermark": True},
 }
 
 

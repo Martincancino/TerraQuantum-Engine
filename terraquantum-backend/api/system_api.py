@@ -1,8 +1,10 @@
+import os
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+from core import config as app_config
 from core.config import (
     APP_NAME,
     APP_VERSION,
@@ -14,7 +16,7 @@ from core.config import (
     MODELS_DIR,
     DEFAULT_BLOCK_MODEL_PATH,
 )
-from core.block_model_store import (
+from services.block_model_store import (
     compare_project_runs,
     export_project_run_zip,
     get_project_run_detail,
@@ -28,11 +30,26 @@ router = APIRouter()
 
 @router.get("/health")
 async def health():
-    return {
+    """Latido + IDENTIDAD del proceso (Fase 2, H-19).
+
+    Un `TcpStream::connect` sólo prueba que ALGUIEN escucha en el puerto. El
+    orquestador de escritorio necesita saber que quien escucha es EL sidecar
+    que él lanzó, no un zombi de un arranque anterior ni otra aplicación. Para
+    eso publica dos marcas: el token de instancia que recibió por entorno y su
+    PID. Ambas se omiten si no aplican, nunca se inventan.
+    """
+    payload = {
         "status": "ok",
         "service": APP_NAME,
         "version": APP_VERSION,
+        "pid": os.getpid(),
     }
+    # Se lee del módulo (no del from-import) para que el valor sea el vigente:
+    # el token lo fija el proceso padre por entorno antes de arrancar.
+    token = getattr(app_config, "INSTANCE_TOKEN", "")
+    if token:
+        payload["instance_token"] = token
+    return payload
 
 
 @router.get("/system-status")
