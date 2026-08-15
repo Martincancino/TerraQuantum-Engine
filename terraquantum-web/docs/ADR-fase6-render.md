@@ -198,3 +198,43 @@ consumidores), y todo lo de los slices 1, 2, 2b y 5, que sigue montado.
 **Si algún día hacen falta**: están en la historia de git, en el commit anterior a
 este cierre. Reconstruirlos con el `toScene` real será más barato que haber
 mantenido tres años una implementación que nadie ejecutó.
+
+---
+
+## Cierre de la Fase 6 — `PostFX` borrado el 2026-08-14
+
+**Qué se borró.** `componentes/viewport/PostFX.tsx` (55 LOC) y, con él, la perilla
+`postprocessingEnabled` / `setPostprocessingEnabled` del store.
+
+**Cómo apareció.** Al cerrar la Fase 6 se midieron los 129 módulos TS/TSX
+versionados buscando cuáles no tienen ningún importador — el mismo criterio que en
+el backend. `PostFX` salió en esa lista.
+
+**Por qué BORRAR y no cablear.** Es el mismo patrón que `InstancedSegmentsLayer`,
+y esta vez lo dice el sucesor por escrito. `PostFX` monta N8AO con un `aoRadius`
+en **unidades de mundo**, escalado a mano por `cellSize`. El que sí se entrega,
+`lib/render/SubsurfaceAOEffect.tsx` (montado en `Scene3D.tsx:1921`), documenta en
+su propia cabecera por qué eso se abandonó:
+
+> *"a fixed WORLD-space AO radius would over/under-occlude per model. We use
+> N8AO's `screenSpaceRadius`, which interprets `aoRadius` in PIXELS — making the
+> effect scale-invariant and removing the per-scene tuning the previous
+> world-radius version required."*
+
+`PostFX` **es** esa «previous world-radius version». Cablearlo sería reponer el
+problema que el slice 5 resolvió, en escenas que van de decenas a miles de
+unidades de mundo.
+
+**El daño real no era el componente, era la perilla.** `postprocessingEnabled`
+venía en `true` por defecto y su único lector era este componente sin montar: una
+opción que decía «postprocesado activado» y no despachaba a ninguna parte —
+exactamente el pecado que la Fase 6 cerró en el backend con `USE_SPARSE_DIRECT` y
+las perillas de wavelet. El toggle que el usuario sí controla es
+`subsurfaceAoEnabled`, con su interruptor en `VolumeRenderControls`.
+
+**Lo que NO se borró, y va a la Fase 9.** Otras tres superficies sin montar
+—`SliceControls`, `MultiPhysicsControls`, `MultimodalComboPanel`— **no** son
+código muerto: son funciones terminadas a las que les falta el último cable, y dos
+de ellas dejan varada una capacidad del backend que ya responde (`/api/section`,
+`/api/multimodal/plan`). Borrarlas destruiría la única UI escrita para eso.
+Quedan registradas en `docs/06_AUDITORIA_TECNICA_INTEGRAL.md`, en la Fase 9.

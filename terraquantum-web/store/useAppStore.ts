@@ -225,10 +225,11 @@ export interface AppState {
   // (CameraRig) en lugar de remontar el <Canvas> y perder el contexto WebGL.
   cameraResetNonce: number;
   requestCameraReset: () => void;
-  // Postprocessing cinemático (Fase C): N8AO + Bloom + SMAA + Vignette.
-  // Toggle para poder volver al render directo (rendimiento / debug).
-  postprocessingEnabled: boolean;
-  setPostprocessingEnabled: (val: boolean) => void;
+  // Fase 6 (cierre): aquí vivían `postprocessingEnabled` y `setPostprocessingEnabled`,
+  // borrados con `viewport/PostFX.tsx`, su ÚNICO lector. La perilla venía en `true` por
+  // defecto y no despachaba a ninguna parte: el mismo pecado que USE_SPARSE_DIRECT en el
+  // backend, pero en el store. El postprocesado que SÍ se entrega es `subsurfaceAoEnabled`
+  // (abajo), que Scene3D monta y `VolumeRenderControls` conmuta de verdad.
   // Picking de vóxel (Fase E): vóxel seleccionado por raycast para el tooltip científico.
   selectedVoxel: SelectedVoxel | null;
   setSelectedVoxel: (v: SelectedVoxel | null) => void;
@@ -645,8 +646,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   cameraResetNonce: 0,
   requestCameraReset: () =>
     set((state) => ({ cameraResetNonce: state.cameraResetNonce + 1 })),
-  postprocessingEnabled: true,
-  setPostprocessingEnabled: (val) => set({ postprocessingEnabled: val }),
   selectedVoxel: null,
   setSelectedVoxel: (v) => set({ selectedVoxel: v }),
   showFloor: true,
