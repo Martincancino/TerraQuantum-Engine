@@ -399,8 +399,13 @@ def _resolve_coordinate_columns(
     }
 
 
-def normalize_unit(unit: str) -> str:
-    return unit.strip()
+# Fase 6 (cierre, H-13): aquí vivía `normalize_unit(unit) -> unit.strip()`. Cero
+# llamadores — y peligrosa justamente por eso: por el nombre parece la función de
+# normalización de unidades, pero sólo quita espacios. Quien la hubiera cableado por
+# error habría saltado `canonicalize_unit` (arriba), que es la que traduce los alias
+# reales ("milligal", "mgal", "nanotesla", "gamma"…) a la unidad canónica. Un CSV en
+# "milligal" habría entrado como si fuera m/s²: corrupción silenciosa, la clase de bug
+# que el blindaje de ingesta existe para impedir.
 
 def convert_to_ms2(value: float, unit: str) -> float:
     u = canonicalize_unit(unit)
@@ -479,8 +484,13 @@ MAGNETIC_COLUMN_PRIORITY = [
     "magnetic",
     "nt",
 ]
-# Unidades magnéticas aceptadas (no se convierte: nT es la unidad del pipeline TMI).
-ALLOWED_MAGNETIC_UNITS = {"nt", "ntesla", "nanotesla", "nanoteslas", "gamma", "gammas"}
+# Fase 6 (cierre, H-13): aquí vivía `ALLOWED_MAGNETIC_UNITS`, un conjunto con esos
+# mismos seis alias — copia literal y muerta de las claves magnéticas del mapa de
+# `canonicalize_unit` (arriba), que sí está vivo. Cero llamadores: no validaba nada.
+# Dos listas de alias que deben coincidir y sólo una en uso es una divergencia
+# esperando ocurrir. DEUDA REGISTRADA, no cerrada aquí: el pipeline magnético
+# CANONICALIZA la unidad pero no RECHAZA una desconocida — validar eso cambia qué
+# CSVs se aceptan, o sea comportamiento de ingesta, no limpieza.
 
 
 def choose_magnetic_column(headers: list[str]) -> str | None:
@@ -1663,159 +1673,18 @@ def _import_gravity_csv_v1_impl(
         errors_list.append(f"File parsing error: {str(e)}")
         return _build_error_result(path.name, errors_list, warnings_list)
 
-def calculate_optimal_block_size(
-    x_m: list[float],
-    z_m: list[float],
-    nx: int = 32,
-    nz: int = 32,
-    min_block_size: float = 25.0,
-) -> float:
-    """
-    Calcula blockSize para que la malla nx×nz cubra la extensión completa del dataset.
-    Evita que perfiles con blockSize sintético (ej. 25 m) subestimulen datasets regionales.
-    """
-    x_extent = max(x_m) - min(x_m)
-    z_extent = max(z_m) - min(z_m)
-
-    if x_extent <= 0 or z_extent <= 0:
-        return min_block_size
-
-    block_size_x = x_extent / nx
-    block_size_z = z_extent / nz
-
-    optimal = max(block_size_x, block_size_z)
-    return max(optimal, min_block_size)
-
-
-def auto_compute_grid_params(
-    x_m: list[float],
-    z_m: list[float],
-    depth_m: float,
-    frontend_nx: int,
-    frontend_ny: int,
-    frontend_nz: int,
-    frontend_block_size: int | float,
-    max_voxels: int = 100_000,
-) -> dict:
-    """
-    Legacy A1.0 grid helper. A1.3 flow uses services.grid_calculator_service.compute_auto_grid.
-
-    Calcula nx, ny, nz y block_size para cubrir automáticamente el extent real del CSV.
-    Preserva la grilla pedida por frontend cuando ya cubre el área y no excede el límite.
-    """
-    def clamp(value: int, min_value: int, max_value: int) -> int:
-        return max(min_value, min(max_value, value))
-
-    def build_result(
-        nx: int,
-        ny: int,
-        nz: int,
-        block_size: int | float,
-        auto_adapted: bool,
-        reason: str,
-        extent_x_m: float | None,
-        extent_z_m: float | None,
-    ) -> dict:
-        effective_nx = clamp(int(nx), 4, 80)
-        effective_ny = clamp(int(ny), 4, 80)
-        effective_nz = clamp(int(nz), 4, 80)
-        effective_block_size = int(max(25, min(10_000, math.ceil(float(block_size)))))
-
-        return {
-            "nx": effective_nx,
-            "ny": effective_ny,
-            "nz": effective_nz,
-            "block_size": effective_block_size,
-            "auto_adapted": auto_adapted,
-            "reason": reason,
-            "extent_x_m": extent_x_m,
-            "extent_z_m": extent_z_m,
-            "total_voxels": effective_nx * effective_ny * effective_nz,
-        }
-
-    if not x_m or not z_m:
-        return build_result(
-            frontend_nx,
-            frontend_ny,
-            frontend_nz,
-            frontend_block_size,
-            False,
-            "empty_observations",
-            None,
-            None,
-        )
-
-    extent_x = max(x_m) - min(x_m)
-    extent_z = max(z_m) - min(z_m)
-
-    if extent_x < 1.0 or extent_z < 1.0:
-        return build_result(
-            frontend_nx,
-            frontend_ny,
-            frontend_nz,
-            frontend_block_size,
-            False,
-            "degenerate_extent",
-            extent_x,
-            extent_z,
-        )
-
-    frontend_bs = float(frontend_block_size)
-    frontend_total = frontend_nx * frontend_ny * frontend_nz
-    covers_x = frontend_bs > 0 and (frontend_nx * frontend_bs) >= extent_x
-    covers_z = frontend_bs > 0 and (frontend_nz * frontend_bs) >= extent_z
-    voxels_ok = frontend_total <= max_voxels
-
-    if covers_x and covers_z and voxels_ok:
-        return build_result(
-            frontend_nx,
-            frontend_ny,
-            frontend_nz,
-            frontend_block_size,
-            False,
-            "frontend_grid_covers_dataset",
-            extent_x,
-            extent_z,
-        )
-
-    max_extent = max(extent_x, extent_z)
-    depth_safe = max(float(depth_m), 1.0)
-    block_size = max_extent / 40.0
-    block_size = max(block_size, depth_safe / 80.0)
-    block_size = int(max(25.0, min(10_000.0, math.ceil(block_size))))
-
-    nx = clamp(math.ceil(extent_x / block_size), 4, 80)
-    ny = clamp(math.ceil(depth_safe / block_size), 4, 80)
-    nz = clamp(math.ceil(extent_z / block_size), 4, 80)
-
-    while nx * ny * nz > max_voxels and block_size < 10_000:
-        block_size = min(10_000, int(block_size * 1.1) + 1)
-        nx = clamp(math.ceil(extent_x / block_size), 4, 80)
-        ny = clamp(math.ceil(depth_safe / block_size), 4, 80)
-        nz = clamp(math.ceil(extent_z / block_size), 4, 80)
-
-    if ny * block_size < depth_safe:
-        block_size = int(max(25.0, min(10_000.0, math.ceil(depth_safe / ny))))
-        nx = clamp(math.ceil(extent_x / block_size), 4, 80)
-        nz = clamp(math.ceil(extent_z / block_size), 4, 80)
-
-    reason_parts = []
-    if not covers_x or not covers_z:
-        reason_parts.append("frontend_grid_does_not_cover_dataset")
-    if not voxels_ok:
-        reason_parts.append("frontend_grid_exceeds_voxel_budget")
-    reason = ", ".join(reason_parts) if reason_parts else "auto_grid_recomputed"
-
-    return build_result(
-        nx,
-        ny,
-        nz,
-        block_size,
-        True,
-        reason,
-        extent_x,
-        extent_z,
-    )
+# Fase 6 (cierre, H-13): aquí vivían `calculate_optimal_block_size` y
+# `auto_compute_grid_params` (153 líneas juntas), el cálculo de grilla automática de la
+# etapa A1.0. Cero llamadores en código, tests y scripts — y no hacía falta buscar la
+# razón, porque el propio docstring la declaraba: «Legacy A1.0 grid helper. A1.3 flow
+# uses services.grid_calculator_service.compute_auto_grid».
+#
+# El sucesor está VIVO y probado: `compute_auto_grid` se importa y se llama en este
+# mismo archivo y tiene su suite en `tests/test_grid_calculator.py`. Lo que se borra es
+# la primera versión, que quedó al lado de la segunda con reglas propias (clamps 4..80,
+# block_size mínimo 25 m, presupuesto de 100k vóxeles) que ya no son las del producto.
+# Dos calculadoras de grilla en el mismo módulo, una muerta, es la manera exacta de que
+# alguien arregle un bug de mallado en la que nadie ejecuta.
 
 
 def _build_error_result(

@@ -218,7 +218,9 @@ Cambio mínimo, guardado, **default OFF = byte-idéntico**:
 
 # HALLAZGOS ENDURECIDOS — config de PRODUCCIÓN (2026-07-29)
 
-*Todo lo de abajo se MIDIÓ con verdad conocida (esfera analítica anti-inverse-crime) en **config de PRODUCCIÓN real** (malla con padding n_pad=5, IRLS=8, los 3 modos de λ de producción) y **≥5 semillas**. Corrige/endurece las "primeras pasadas" de arriba, que usaron λ **FIJO=1e-3** (la config de DO-27 somero) y malla chica — NO representativa de producción. Harness: `scripts/validation/{wz_lever_probe, wz_tradeoff, morozov_depth_recovery, morozov_stability_diag, morozov_prod_hardened, depth_prior_headtohead, honesty_test}.py`.*
+*Todo lo de abajo se MIDIÓ con verdad conocida (esfera analítica anti-inverse-crime) en **config de PRODUCCIÓN real** (malla con padding n_pad=5, IRLS=8, los 3 modos de λ de producción) y **≥5 semillas**. Corrige/endurece las "primeras pasadas" de arriba, que usaron λ **FIJO=1e-3** (la config de DO-27 somero) y malla chica — NO representativa de producción. Harness: `scripts/validation/{wz_lever_probe, morozov_depth_recovery, morozov_stability_diag, morozov_prod_hardened, depth_prior_headtohead, honesty_test}.py`.*
+
+> **Procedencia de `wz_tradeoff` (Fase 6, cierre 2026-08-14).** Este párrafo citaba también `wz_tradeoff.py`, **borrado** junto con `wz_smallness_liveness.py`: desde que el W_z-fix se revirtió pasaban `smallness_depth_beta=` a un solver que ya no acepta ese argumento, así que **ejecutarlos daba `TypeError`** — un instrumento roto citado como si midiera es la trampa de `docs/06` §9D.2. Lo que sostiene los números **no se ha tocado**: sus reportes siguen en el mismo directorio (`wz_tradeoff_report.json`, `wz_smallness_liveness_report.json`) y el código que los produjo está íntegro en el commit `cc2e7ab`. El sucesor vivo es `wz_separation_probe.py` (Fase 4), que mide lo mismo y se valida contra el motor antes de creerse un número.
 
 ## A′ — El "profundidad NO se recupera" era, en parte, ARTEFACTO del λ fijo del harness
 

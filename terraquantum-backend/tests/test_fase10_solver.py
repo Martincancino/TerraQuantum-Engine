@@ -24,16 +24,8 @@ from exploration.solver_preconditioned import (
     estimate_kernel_memory_gb,
 )
 
-# PyWavelets es opcional — skip si no está instalado
-try:
-    from exploration.jacobian_wavelet import (
-        build_compressed_kernel,
-        wavelet_forward_error,
-        is_available as _wavelet_available,
-    )
-    _PYWT = _wavelet_available()
-except ImportError:
-    _PYWT = False
+# Fase 6 (cierre): el bloque wavelet de esta suite se BORRÓ con su módulo.
+# Ver la lápida al final del archivo.
 
 
 # ── Fixtures sintéticos ───────────────────────────────────────────────────────
@@ -132,80 +124,25 @@ def test_lsmr_bounds_clipped():
     assert np.all(x <= ub_tight + 1e-12), "Solución viola bound superior"
 
 
-# ── Tests wavelet (skip si PyWavelets no instalado) ──────────────────────────
+# Fase 6 (cierre, H-13): aquí vivían los tres tests wavelet, borrados junto con
+# `exploration/jacobian_wavelet.py`. La cadena completa de por qué, porque es el mejor
+# ejemplo de "no dejar en limbo" que dio el plan:
 #
-# Fase 3 (cierre) — DOS correcciones a cómo estaban escritos estos tests:
-#
-#  1. `if not _PYWT: print(...); return` reportaba **PASSED** sin ejecutar nada.
-#     Un test que no corre no puede decir "verde". Ahora es `skipif`: se ve SKIPPED.
-#  2. En esta máquina PyWavelets NO está instalado, pero SÍ está en requirements.txt,
-#     así que la CI lo instala y estos dos tests corren **por primera vez en un
-#     runner**. MEDIDO 2026-08-13 con pywt 1.9.0 y numpy 2.4.4 del propio entorno:
-#         · compresión: 98,2% retenido   (el test exige < 15%)
-#         · error forward: 0,615%        (el test exige < 0,5%)
-#     Es decir: el bloque wavelet de la Fase 10 NO cumple lo que su propio criterio
-#     §10.6.1 promete. No se arregla aquí —`jacobian_wavelet.py` no tiene llamadores
-#     de producción (Fase 6/H-13) y tocar el algoritmo es física, no CI— pero tampoco
-#     se esconde: van como `xfail(strict=True)`, de modo que la CI queda verde con el
-#     fallo REGISTRADO y, si alguien lo arregla, el XPASS obliga a actualizar la
-#     promesa en vez de dejarla mintiendo.
-
-_XFAIL_WAVELET = "MEDIDO 2026-08-13: 98,2% retenido (exige <15%) y 0,615% de error forward (exige <0,5%). Ver docs/06 §FASE 3."
-
-
-@pytest.mark.skipif(not _PYWT, reason="PyWavelets no instalado")
-@pytest.mark.xfail(strict=True, reason=_XFAIL_WAVELET)
-def test_wavelet_compression_ratio():
-    """build_compressed_kernel retiene < 15% de elementos (criterio §10.6.1)."""
-    rng = np.random.default_rng(0)
-    n_s, n_a = 20, 512  # n_a potencia de 2 para wavelet exacta
-    # Simular sensibilidades: decaimiento suave con distancia
-    x = np.linspace(0, 1, n_a)
-    G = np.array([
-        np.exp(-10 * (x - cx) ** 2)
-        for cx in np.linspace(0.1, 0.9, n_s)
-    ])
-
-    G_csr = build_compressed_kernel(G, threshold_frac=0.01)
-
-    total = n_s * n_a
-    retained_frac = G_csr.nnz / total
-    print(f"[TEST] Wavelet: {retained_frac*100:.1f}% retenido (objetivo <15%)")
-    assert retained_frac < 0.15, f"Compresión insuficiente: {retained_frac*100:.1f}% retenido"
-
-
-@pytest.mark.skipif(not _PYWT, reason="PyWavelets no instalado")
-@pytest.mark.xfail(strict=True, reason=_XFAIL_WAVELET)
-def test_wavelet_forward_error():
-    """Error forward < 0.5% para señales suaves (criterio §10.6.1)."""
-    n_s, n_a = 20, 512
-    x = np.linspace(0, 1, n_a)
-    G = np.array([
-        np.exp(-10 * (x - cx) ** 2)
-        for cx in np.linspace(0.1, 0.9, n_s)
-    ])
-
-    G_csr = build_compressed_kernel(G, threshold_frac=0.01)
-    err = wavelet_forward_error(G, G_csr, n_test=20)
-
-    print(
-        f"[TEST] Wavelet forward error: mean={err['error_mean']*100:.3f}% "
-        f"max={err['error_max']*100:.3f}%"
-    )
-    assert err["error_mean"] < 0.005, (
-        f"Error forward {err['error_mean']*100:.3f}% > 0.5%"
-    )
-
-
-@pytest.mark.skipif(not _PYWT, reason="PyWavelets no instalado")
-def test_wavelet_noisy_input():
-    """Wavelet comprime señales ruidosas sin producir NaN."""
-    rng = np.random.default_rng(99)
-    G = rng.standard_normal((10, 128))
-    G_csr = build_compressed_kernel(G, threshold_frac=0.05)
-
-    assert G_csr.shape == G.shape
-    assert np.isfinite(G_csr.data).all(), "NaN en kernel comprimido"
+#  · La Fase 6 (08-09) borró `solve_inversion_lsmr_wavelet` y las dos perillas
+#    `USE_WAVELET_COMPRESSION`/`WAVELET_THRESHOLD_N_ACTIVE` por no tener consumidor, y
+#    dejó los building blocks "vivos y con tests". Con el llamador muerto, esos tests
+#    eran lo ÚNICO que importaba el módulo: física sin ruta al producto.
+#  · La Fase 3 (08-13) los ejecutó por primera vez en un runner con PyWavelets instalado
+#    y midió que el algoritmo NO cumple su propio criterio §10.6.1:
+#        · compresión: 98,2% retenido   (exigía < 15%)
+#        · error forward: 0,615%        (exigía < 0,5%)
+#    Quedaron como `xfail(strict=True)`: honesto, pero es una promesa incumplida en
+#    mantenimiento indefinido.
+#  · Cerrar la Fase 6 obliga a decidir. CABLEARLO no es una opción de una fase de
+#    limpieza: el algoritmo falla su criterio, así que cablearlo exige rehacerlo, y eso
+#    es física. Se BORRA — módulo, tests y la dependencia `PyWavelets`, que sólo existía
+#    para esto. `git log` conserva las 203 líneas si alguien retoma Farquharson &
+#    Oldenburg (2003) con un criterio que sí se pueda cumplir.
 
 
 # ── Tests Zarr out-of-core (§10.4) ───────────────────────────────────────────
@@ -322,9 +259,6 @@ if __name__ == "__main__":
         test_lsmr_vs_lsqr_equivalence,
         test_lsmr_convergence_medium,
         test_lsmr_bounds_clipped,
-        test_wavelet_compression_ratio,
-        test_wavelet_forward_error,
-        test_wavelet_noisy_input,
         test_zarr_linear_operator_matvec,
         test_zarr_lsmr_convergence,
         test_estimate_kernel_memory,

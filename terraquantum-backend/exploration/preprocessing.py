@@ -207,158 +207,21 @@ def residual_mgal_to_si(residual_mgal):
     return np.asarray(residual_mgal, dtype=np.float64) * MGAL_TO_SI
 
 
-def upward_continue_gravity_fft(
-    x_pts,
-    z_pts,
-    g_data,
-    height_m: float = 3000.0,
-    grid_step: Optional[float] = None,
-):
-    """
-    Continuación hacia arriba (upward continuation) vía FFT 2D.
-
-    Traslada el campo gravimétrico ``g_data`` a una altura virtual ``height_m``
-    sobre el plano de observación. En el dominio de ondas el operador es:
-
-        G_up(kx, kz) = G(kx, kz) · exp(−|k| · h)
-
-    donde |k| = 2π · sqrt(fx² + fz²) es el número de onda angular [rad/m] y
-    h = ``height_m``.  La exponencial es de decaimiento puro (≤ 1 para todo k),
-    por lo que la operación es estable y actúa como paso-bajo espacial: atenúa
-    anomalías de corta longitud de onda (fuentes superficiales/poco profundas) y
-    preserva el campo regional de larga longitud de onda.
-
-    Uso típico en el pipeline Bushveld::
-
-        residual, _, _ = remove_regional_trend(x, z, g_raw, order=2)
-        residual_uc    = upward_continue_gravity_fft(x, z, residual, height_m=3000.0)
-        g_si           = residual_mgal_to_si(residual_uc)
-
-    Parameters
-    ----------
-    x_pts, z_pts : array-like, shape (n,)
-        Coordenadas horizontales de los sensores [metros].
-    g_data : array-like, shape (n,)
-        Anomalía gravimétrica a continuar [cualquier unidad lineal, p.ej. mGal].
-    height_m : float
-        Altura de continuación en metros. Valores típicos: 2 000–5 000 m.
-        Mayor altura → mayor suavizado / remoción de señal superficial.
-    grid_step : float, opcional
-        Tamaño de celda de la grilla FFT intermedia [metros]. Por defecto se usa
-        el percentil-10 de las separaciones entre estaciones vecinas (proxy de
-        paso de muestreo), limitado a ≥ 500 m para evitar grillas excesivamente
-        densas.
-
-    Returns
-    -------
-    g_continued : ndarray, shape (n,)
-        Campo upward-continued en las posiciones originales ``(x_pts, z_pts)``.
-        Comparte unidades con ``g_data``.
-
-    Notes
-    -----
-    *Interpolación bidireccional* — los datos dispersos se llevan a una grilla
-    regular por *cubic griddata* (con *fill_value* = media de los datos para
-    extrapolar fuera de la envolvente convexa); el resultado del filtro se
-    devuelve a los sensores originales por interpolación bilineal.
-
-    *Zero-padding* — la grilla se rellena hasta la próxima potencia de 2 en cada
-    dimensión para maximizar la velocidad de la FFT y reducir el aliasing
-    circular (wrapping).
-    """
-    from scipy.fft import fft2, ifft2, fftfreq
-    from scipy.interpolate import griddata
-
-    x_pts = np.asarray(x_pts, dtype=np.float64)
-    z_pts = np.asarray(z_pts, dtype=np.float64)
-    g_data = np.asarray(g_data, dtype=np.float64)
-
-    if x_pts.shape != z_pts.shape or x_pts.shape != g_data.shape:
-        raise ValueError("x_pts, z_pts y g_data deben tener la misma forma.")
-    if x_pts.size < 4:
-        raise ValueError("Se necesitan al menos 4 estaciones para upward continuation.")
-    if height_m <= 0:
-        raise ValueError("height_m debe ser positivo.")
-
-    # ── 1. Determinar paso de grilla ─────────────────────────────────────────
-    if grid_step is None:
-        # Estimación robusta: percentil-10 de distancias a vecino más cercano
-        from scipy.spatial import cKDTree
-        tree = cKDTree(np.column_stack([x_pts, z_pts]))
-        dists, _ = tree.query(np.column_stack([x_pts, z_pts]), k=2)
-        nn_dists = dists[:, 1]  # distancia al vecino más cercano
-        grid_step = float(max(np.percentile(nn_dists, 10), 500.0))
-
-    # ── 2. Grilla regular dentro del convex hull de los datos ────────────────
-    x_min, x_max = x_pts.min(), x_pts.max()
-    z_min, z_max = z_pts.min(), z_pts.max()
-    x_grid = np.arange(x_min, x_max + grid_step, grid_step)
-    z_grid = np.arange(z_min, z_max + grid_step, grid_step)
-    Xg, Zg = np.meshgrid(x_grid, z_grid)
-
-    g_mean = float(np.nanmean(g_data))
-    g_grid = griddata(
-        (x_pts, z_pts), g_data, (Xg, Zg),
-        method="cubic", fill_value=g_mean,
-    )
-    g_grid = np.nan_to_num(g_grid, nan=g_mean)
-
-    # ── 3. Zero-pad a próxima potencia de 2 ─────────────────────────────────
-    ny0, nx0 = g_grid.shape
-
-    def _next_pow2(n):
-        p = 1
-        while p < n:
-            p <<= 1
-        return p
-
-    ny_pad = _next_pow2(2 * ny0)
-    nx_pad = _next_pow2(2 * nx0)
-    g_padded = np.pad(g_grid, ((0, ny_pad - ny0), (0, nx_pad - nx0)), mode="edge")
-
-    # ── 4. FFT 2D ────────────────────────────────────────────────────────────
-    G_fft = fft2(g_padded)
-
-    # Número de onda angular [rad/m]: k = 2π · f  (fftfreq devuelve ciclos/m)
-    kx = 2.0 * np.pi * fftfreq(nx_pad, d=grid_step)
-    kz = 2.0 * np.pi * fftfreq(ny_pad, d=grid_step)
-    Kx, Kz = np.meshgrid(kx, kz)
-    K = np.sqrt(Kx ** 2 + Kz ** 2)  # |k| [rad/m]
-
-    # ── 5. Filtro upward continuation ────────────────────────────────────────
-    # exp(-|k| · h): k=0 → factor=1 (DC intacto), k↑ → atenuación creciente
-    filter_uc = np.exp(-K * height_m)
-    G_uc = G_fft * filter_uc
-
-    # ── 6. IFFT → recortar padding ───────────────────────────────────────────
-    g_uc_padded = np.real(ifft2(G_uc))
-    g_uc_grid = g_uc_padded[:ny0, :nx0]
-
-    # ── 7. Interpolar de vuelta a las posiciones originales ──────────────────
-    g_continued = griddata(
-        (Xg.ravel(), Zg.ravel()), g_uc_grid.ravel(),
-        (x_pts, z_pts), method="linear",
-    )
-    # Fallback nearest para puntos fuera del bounding box de la grilla
-    mask_nan = ~np.isfinite(g_continued)
-    if mask_nan.any():
-        g_fallback = griddata(
-            (Xg.ravel(), Zg.ravel()), g_uc_grid.ravel(),
-            (x_pts[mask_nan], z_pts[mask_nan]), method="nearest",
-        )
-        g_continued[mask_nan] = g_fallback
-
-    logger.info(
-        "[PREPROC] Upward continuation h=%.0f m | grid_step=%.0f m | "
-        "grilla %dx%d → pad %dx%d | "
-        "residual antes: media=%.3f std=%.3f | "
-        "residual después: media=%.3f std=%.3f",
-        height_m, grid_step, nx0, ny0, nx_pad, ny_pad,
-        float(np.mean(g_data)), float(np.std(g_data)),
-        float(np.mean(g_continued)), float(np.std(g_continued)),
-    )
-    return g_continued
-
+# Fase 6 (cierre, H-13): aquí vivía `upward_continue_gravity_fft` (151 líneas),
+# continuación hacia arriba por FFT 2D. Cero llamadores de producción y cero tests
+# en todo el repositorio: medido el 2026-08-14 con el cruce de referencias AST sobre
+# código + tests + scripts, su única aparición era su propia definición.
+#
+# Es el mismo cadáver de experimento que `remove_regional_scale` (abajo) y de la misma
+# familia: ambos servían al pipeline regional de Bushveld, que este proyecto midió y
+# descartó (`docs/06` §9 y la conclusión H-A6/H-A7: el caso regional es depth-ambiguo
+# e irresoluble sin geología). Su docstring seguía enseñando ese pipeline como «uso
+# típico», así que documentaba una ruta que el producto no toma.
+#
+# Por qué BORRAR y no congelar (regla de la Fase 6): un operador FFT correcto pero sin
+# un solo test, sentado en el módulo de preprocesamiento, es una invitación a cablear
+# física no validada al camino crítico — exactamente el pecado que la Fase 1 rechazó
+# con el modo `amplitude`. Si vuelve a hacer falta, `git log` lo tiene íntegro.
 
 # Fase 6 (H-13): aquí vivía `remove_regional_scale` (169 líneas), con cero llamadores
 # en todo el repositorio desde que se escribió.

@@ -5,14 +5,21 @@ Exposed at GET /metrics (scraped by Prometheus).
 
 Cardinality rules:
   - HTTP paths are normalized (route templates, not raw URIs) to avoid label explosion.
-  - run_type labels: "gravity" | "magnetic" | "joint" | "unknown".
-  - Status labels: "completed" | "error" | "queued".
 
-Usage in services (optional instrumentation):
-    from core.metrics import INVERSIONS_TOTAL, INVERSION_DURATION
-    with INVERSION_DURATION.labels(run_type="gravity").time():
-        run_geophysics_inversion(params)
-    INVERSIONS_TOTAL.labels(run_type="gravity", status="completed").inc()
+Fase 6 (cierre, H-13): las tres métricas de INVERSIÓN fueron ELIMINADAS
+(`INVERSIONS_TOTAL`, `INVERSION_DURATION`, `ACTIVE_INVERSIONS`). Estaban definidas
+y **ningún código las incrementaba**: el docstring de arriba enseñaba a instrumentar
+una llamada que nunca se escribió. Con `ACTIVE_INVERSIONS` el daño era peor que
+código muerto — un Gauge sin etiquetas SÍ se emite, así que `GET /metrics`
+publicaba `terraquantum_active_inversions 0.0` **también mientras una inversión
+estaba corriendo**: una lectura falsa, no una ausencia.
+
+Lo que queda aquí (instrumentación HTTP) está VIVO: `PrometheusMiddleware` se monta
+en `main.py` y mide cada request de verdad.
+
+Si algún día se quiere telemetría de corridas, la fuente de verdad ya existe y no
+es un contador paralelo: `services/run_queue_service` conoce activas y pendientes,
+y `services/project_store` conoce estado y duración de cada corrida.
 """
 import re
 import time
@@ -21,7 +28,6 @@ from fastapi import Request, Response
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
-    Gauge,
     Histogram,
     generate_latest,
 )
@@ -40,24 +46,6 @@ HTTP_REQUEST_DURATION = Histogram(
     "HTTP request duration in seconds",
     ["method", "path_template"],
     buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0],
-)
-
-INVERSIONS_TOTAL = Counter(
-    "terraquantum_inversions_total",
-    "Total inversion runs by type and outcome",
-    ["run_type", "status"],
-)
-
-INVERSION_DURATION = Histogram(
-    "terraquantum_inversion_duration_seconds",
-    "Inversion wall-clock duration in seconds",
-    ["run_type"],
-    buckets=[5, 15, 30, 60, 120, 300, 600, 1800],
-)
-
-ACTIVE_INVERSIONS = Gauge(
-    "terraquantum_active_inversions",
-    "Number of inversions currently running (BackgroundTask or process worker)",
 )
 
 

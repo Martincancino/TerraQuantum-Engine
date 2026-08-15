@@ -1,0 +1,50 @@
+{
+  "kind": "wz_beta_liveness_two_gravimetry_solvers",
+  "config": {
+    "mesh": [
+      6,
+      6,
+      6
+    ],
+    "block_m": 100.0,
+    "betas": [
+      0.0,
+      1.0,
+      2.0,
+      4.0
+    ],
+    "ref_beta": 2.0,
+    "n_sensors": 36
+  },
+  "rows": [
+    {
+      "beta": 0.0,
+      "lsqr_trf_rel_diff": 2.4387853479762005e-05,
+      "lsqr_gpcg_rel_diff": 2.733746122483368e-06,
+      "treemesh_rel_diff": 0.9272796455064157
+    },
+    {
+      "beta": 1.0,
+      "lsqr_trf_rel_diff": 0.00025171269256922237,
+      "lsqr_gpcg_rel_diff": 8.819277867524848e-09,
+      "treemesh_rel_diff": 0.5981144959824628
+    },
+    {
+      "beta": 4.0,
+      "lsqr_trf_rel_diff": 0.00020316076318789008,
+      "lsqr_gpcg_rel_diff": 5.220649822707947e-06,
+      "treemesh_rel_diff": 2.0451989054792232
+    }
+  ],
+  "max_rel_diff": {
+    "solve_inversion_lsqr_trf": 0.00025171269256922237,
+    "solve_inversion_lsqr_gpcg": 5.220649822707947e-06,
+    "solve_inversion_treemesh": 2.0451989054792232
+  },
+  "ratio_treemesh_over_lsqr": 8125.132207692634,
+  "verdict": {
+    "solve_inversion_lsqr_inert_as_physics": true,
+    "residual_is_early_stopping": true,
+    "solve_inversion_treemesh_alive": true
+  }
+}

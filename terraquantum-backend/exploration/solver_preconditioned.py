@@ -324,11 +324,14 @@ def solve_inversion_pgd_fista(
 
 
 # Fase 6 (H-13): aquí vivía `solve_inversion_lsmr_wavelet` (72 líneas), con cero
-# llamadores. Los building blocks siguen VIVOS y con tests en
-# `exploration/jacobian_wavelet.py` (test_fase10_solver): lo que se borró fue el
-# envoltorio que nadie cableó nunca, junto con las dos perillas de config que lo
-# prometían. Cablearlo es física nueva en el camino crítico — exige medición, no
-# un import.
+# llamadores — el envoltorio que nadie cableó nunca, junto con las dos perillas de
+# config que lo prometían.
+#
+# CIERRE 2026-08-14: `exploration/jacobian_wavelet.py` se borró también. Aquella pasada
+# dejó los building blocks "vivos y con tests", pero sin llamador sus únicos
+# importadores eran esos tests, y la Fase 3 midió en el runner que el algoritmo NO
+# cumple su criterio §10.6.1 (98,2% retenido, exigiendo <15%). Retomar Farquharson &
+# Oldenburg (2003) es física nueva en el camino crítico: exige medición, no un import.
 
 # ── Zarr Out-of-Core (Fase 10 §10.4) ─────────────────────────────────────────
 

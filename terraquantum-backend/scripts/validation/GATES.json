@@ -312,20 +312,28 @@
       "decide": true,
       "que_hace": "scripts/validation/validate_output.py"
     },
+    "wz_beta_liveness_gravimetry.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "que_hace": "FASE 4 - mide cuanto mueve la solucion `depth_beta` en los DOS solvers gravimetricos: inerte en solve_inversion_lsqr (residuo de parada temprana, dependiente del solver) y VIVO en solve_inversion_treemesh.",
+      "tipo_manual": true
+    },
     "wz_lever_probe.py": {
       "tipo": "diagnostico",
       "decide": false,
       "que_hace": "PUNTO 4 — sonda de PALANCAS: ¿qué mueve la profundidad recuperada (los 62.5 m clavados)?"
     },
-    "wz_smallness_liveness.py": {
+    "wz_separation_probe.py": {
       "tipo": "diagnostico",
       "decide": false,
-      "que_hace": "PUNTO 4 (docs/05 Parte B) — AGREGADO 1: ¿la perilla del W_z-fix está VIVA?"
+      "que_hace": "FASE 4 (H-1) - sonda de separacion Ws/W_z: mide si separar el precondicionador del peso de modelo recupera profundidad. Controles C1/C2/C3 + barrido beta x profundidad x semillas con Morozov re-eligiendo lambda en cada brazo. Mide, no decide.",
+      "tipo_manual": true
     },
-    "wz_tradeoff.py": {
+    "wz_separation_verdict.py": {
       "tipo": "diagnostico",
       "decide": false,
-      "que_hace": "PUNTO 4 — trade-off PROFUNDIDAD ↔ χ² (agregado 3) y ¿el depth-weight agrega valor?"
+      "que_hace": "FASE 4 - lee los barridos de wz_separation_probe.py y aplica la regla de decision declarada antes de mirar los numeros (D1-D4) para responder cablear-o-cerrar. No es una puerta de regresion: la puerta de la Fase 4 es tests/test_fase4_depth_weighting.py.",
+      "tipo_manual": true
     }
   }
 }

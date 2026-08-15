@@ -178,7 +178,7 @@ def invert(sensors, g_obs, sigma_g, *, ny, regularization_norm,
         noise_floor=sigma_g, noise_pct=0.02,
         auto_kappa=True, prune_observable_domain=True,
         regularization_norm=regularization_norm, compact_max_irls=COMPACT_IRLS,
-        depth_beta=DEPTH_BETA,
+        # Fase 4: `depth_beta` se elimino de solve_inversion_lsqr (era inerte: Ws lo cancelaba).
         boreholes=boreholes, anchor_mode=anchor_mode,
         solver_meta=meta,
     )

@@ -201,7 +201,7 @@ def main():
                     z_c=z_c,
                     noise_floor=noise,
                     noise_pct=0.0,
-                    depth_beta=DEPTH_BETA,
+                    # Fase 4: `depth_beta` eliminado de solve_inversion_lsqr (era inerte).
                 )
 
             contrast = np.nan_to_num(ed - inv.base_density, nan=0.0)

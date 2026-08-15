@@ -94,12 +94,10 @@ def test_custom_bounds_respected():
     )
 
 
-def test_lithology_presets_sane():
-    from core.config import MAGNETIC_SUSCEPTIBILITY_PRESETS as P
-    assert "magnetite_massive" in P and "sediment_barren" in P and "unknown" in P
-    # magnetita masiva: χ alta; estéril ≈ 0
-    assert P["magnetite_massive"][0] >= 0.5
-    assert P["sediment_barren"][0] <= 0.01
-    # cada preset (típica, max) con max >= típica y ambos finitos ≥ 0
-    for k, (typ, mx) in P.items():
-        assert 0.0 <= typ <= mx, f"preset {k} inconsistente: typ={typ}, max={mx}"
+# Fase 6 (cierre, H-13): aquí vivía `test_lithology_presets_sane`, borrado con la tabla
+# `MAGNETIC_SUSCEPTIBILITY_PRESETS` que era su único objeto. Comprobaba la coherencia
+# interna de la tabla (χ_max ≥ χ_típica, magnetita alta, estéril ≈ 0) — un test que no
+# podía fallar nunca por una regresión del producto, porque ningún código de producción
+# leía la tabla. Lo que sí defiende el bound magnético de verdad se queda:
+# `test_custom_bounds_respected`, arriba, que invierte y verifica que la susceptibilidad
+# recuperada respeta el `susc_max` que pide el usuario.

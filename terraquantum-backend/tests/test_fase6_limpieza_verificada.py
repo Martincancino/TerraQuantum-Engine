@@ -101,6 +101,7 @@ def test_h12_la_abstraccion_de_cloud_storage_sigue_borrada():
 # --------------------------------------------------------------------------- #
 
 SIMBOLOS_BORRADOS = [
+    # Primera pasada (2026-08-09): los 7 que la auditoría había nombrado.
     ("exploration.solver_preconditioned", "solve_inversion_lsmr_wavelet"),
     ("exploration.preprocessing", "remove_regional_scale"),
     ("exploration.geophysics_math", "build_gradient_operators_from_mesh"),
@@ -108,6 +109,22 @@ SIMBOLOS_BORRADOS = [
     ("services.export_service", "export_block_model_to_gslib"),
     ("core.logging", "configure_logging"),
     ("services.block_model_store", "resolve_mine_design_block_model_reference"),
+    # Cierre (2026-08-14): H-13 pedía revisar los 16 "uno a uno" y la primera pasada
+    # resolvió los 6 que la auditoría había listado como "destacables" (§9B.5) — los
+    # otros nunca se enumeraron. Al volver a medirlos con el cruce de referencias AST
+    # aparecieron estos 11, cada uno con su lápida en el sitio donde vivía.
+    ("core.metrics", "INVERSIONS_TOTAL"),
+    ("core.metrics", "INVERSION_DURATION"),
+    ("core.metrics", "ACTIVE_INVERSIONS"),
+    ("exploration.preprocessing", "upward_continue_gravity_fft"),
+    ("services.geophysics_service", "normalize_array"),
+    ("services.gravity_corrections_service", "compute_free_air_correction_simple"),
+    ("services.gravity_import_service", "normalize_unit"),
+    ("services.gravity_import_service", "ALLOWED_MAGNETIC_UNITS"),
+    ("services.gravity_import_service", "calculate_optimal_block_size"),
+    ("services.gravity_import_service", "auto_compute_grid_params"),
+    ("services.run_queue_service", "queue_snapshot"),
+    ("core.config", "MAGNETIC_SUSCEPTIBILITY_PRESETS"),
 ]
 
 
@@ -125,9 +142,15 @@ SUPERVIVIENTES = [
     # Lo que NO se borró, y que un borrado descuidado se llevaría por delante.
     ("exploration.geophysics_math", "build_gradient_operators"),   # joint_inversion lo usa
     ("exploration.preprocessing", "remove_regional_trend"),        # producción vía gravity_preprocessing_service
-    ("exploration.jacobian_wavelet", "build_compressed_kernel"),   # tiene tests (test_fase10_solver)
     ("core.logging", "get_logger"),
     ("core.utils", "clean_trace_id"),
+    # Cierre 2026-08-14: cada borrado del cierre tiene al lado el vivo que se le parece
+    # y que un borrado por nombre se llevaría por delante.
+    ("core.metrics", "PrometheusMiddleware"),                      # la instrumentación HTTP SÍ mide
+    ("core.metrics", "HTTP_REQUESTS_TOTAL"),
+    ("services.gravity_import_service", "canonicalize_unit"),      # el normalizador de unidades de verdad
+    ("services.grid_calculator_service", "compute_auto_grid"),     # la calculadora de grilla A1.3, viva
+    ("services.gravity_corrections_service", "compute_free_air_correction"),  # la FAC con latitud
 ]
 
 
@@ -151,11 +174,53 @@ def test_h13_el_gslib_que_el_producto_entrega_sigue_en_pie():
     assert "GSLIB" in texto or texto.strip(), "El exportador GSLIB vivo dejó de producir texto."
 
 
+def test_h13_el_modulo_wavelet_sigue_borrado():
+    """`exploration/jacobian_wavelet.py`: el limbo que dejó la primera pasada.
+
+    La Fase 6 borró su único llamador posible (`solve_inversion_lsmr_wavelet`) y dejó
+    el módulo "vivo y con tests". Sin llamador, esos tests eran sus únicos importadores
+    — y la Fase 3 los ejecutó en un runner con PyWavelets y midió que el algoritmo NO
+    cumple su criterio §10.6.1 (98,2% retenido exigiendo <15%). Cablearlo exigía
+    rehacerlo, que es física; así que al cerrar la fase se borró.
+    """
+    assert not (BACKEND / "exploration" / "jacobian_wavelet.py").exists(), (
+        "jacobian_wavelet.py volvió. Si alguien retoma Farquharson & Oldenburg (2003), "
+        "que vuelva CON su llamador de producción y con un criterio de compresión que "
+        "el algoritmo cumpla de verdad — no con dos tests en xfail."
+    )
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("exploration.jacobian_wavelet")
+
+
+SCRIPTS_VALIDACION_BORRADOS = ["wz_smallness_liveness.py", "wz_tradeoff.py"]
+
+
+@pytest.mark.parametrize("script", SCRIPTS_VALIDACION_BORRADOS)
+def test_h13_los_instrumentos_rotos_no_vuelven(script):
+    """Un instrumento que no puede correr y que la documentación cita como si midiera.
+
+    Ambos pasaban `smallness_depth_beta=` a `solve_inversion_lsqr` después de que el
+    W_z-fix se revirtiera: ejecutarlos daba `TypeError`. La Fase 4 los marcó y dejó el
+    borrado a esta fase. Su EVIDENCIA no se tocó: los report JSON siguen al lado.
+    """
+    val = BACKEND / "scripts" / "validation"
+    assert not (val / script).exists(), (
+        f"{script} volvió. Daba TypeError contra el solver actual. El sucesor vivo es "
+        "wz_separation_probe.py."
+    )
+    reporte = val / script.replace(".py", "_report.json")
+    assert reporte.exists(), (
+        f"Se borró {reporte.name}, que es justamente lo que NO había que borrar: es la "
+        "medición que docs/05 cita. El script era el instrumento roto; el reporte es la "
+        "evidencia."
+    )
+
+
 # --------------------------------------------------------------------------- #
 # H-14 — dependencias declaradas y no importadas                               #
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.parametrize("dep", ["shapely", "distributed"])
+@pytest.mark.parametrize("dep", ["shapely", "distributed", "PyWavelets"])
 def test_h14_las_dependencias_muertas_no_vuelven_a_requirements(dep):
     req = _read(BACKEND / "requirements.txt")
     declaradas = [
@@ -169,7 +234,7 @@ def test_h14_las_dependencias_muertas_no_vuelven_a_requirements(dep):
     )
 
 
-@pytest.mark.parametrize("dep", ["shapely", "distributed"])
+@pytest.mark.parametrize("dep", ["shapely", "distributed", "pywt"])
 def test_h14_y_tampoco_vuelven_como_import(dep):
     patron = re.compile(rf"^\s*(?:import\s+{dep}\b|from\s+{dep}[.\s])", re.M)
     culpables = [
@@ -290,4 +355,121 @@ def test_ninguna_constante_de_config_queda_sin_lector():
         f"Constantes de core/config.py que no lee nadie: {sin_lector}. O se cablean, o "
         "se borran. Dejarlas es cómo sobrevivieron USE_SPARSE_DIRECT (rota) y las dos "
         "perillas de wavelet (inertes) hasta la auditoría."
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Guardia general: H-13 no puede volver a acumularse en silencio               #
+# --------------------------------------------------------------------------- #
+#
+# Los tests de arriba defienden borrados CONCRETOS: nombran los símbolos que se fueron.
+# Eso no impide que aparezcan OTROS. Y es justo lo que pasó: la auditoría contó 16
+# símbolos huérfanos, la primera pasada resolvió los 6 que estaban listados por nombre
+# en §9B.5, y los demás siguieron ahí — invisibles, porque nadie volvió a MEDIR.
+#
+# Este test mide. Un símbolo público de producción cuya única aparición en todo el
+# repositorio (código + tests + scripts) es su propia definición rompe la suite.
+
+# Excepciones DECLARADAS, con su motivo y su fase dueña. No son código muerto: son
+# CONTRATOS escritos que hoy nadie ENFORZA — que es un problema distinto y con otra cura.
+# Borrarlos tiraría la única descripción escrita de la forma de esas respuestas; el
+# arreglo (cablear `response_model=` o generar los tipos del frontend desde OpenAPI)
+# cambia la serialización en runtime, o sea comportamiento, y eso es la Fase 10 (H-16).
+HUERFANOS_TOLERADOS = {
+    "GeophysicsInvertResponse": "schemas/geophysics_schema.py — describe la respuesta de la inversión, pero el endpoint declara GeophysicsInversionStartResponse. Contrato sin enforcar → Fase 10.",
+    "GeorefSummary": "schemas/project_schema.py — el frontend lo replica A MANO en lib/terraquantum/frontendApi.ts (H-16: 40 tipos duplicados). Generarlo desde OpenAPI → Fase 10.",
+    "BlockModelArrowMetadata": "schemas/response_schema.py — documenta las cabeceras X-TQ-* del stream Arrow, que se escriben a mano. Contrato sin enforcar → Fase 10.",
+}
+
+
+def _simbolos_publicos_de_produccion() -> dict[str, tuple[str, int, list[str]]]:
+    """nombre → (archivo, línea, decoradores) de cada def/class/CONSTANTE pública."""
+    encontrados: dict[str, list[tuple[str, int, list[str]]]] = {}
+    for p in _py_files(PROD_DIRS):
+        rel = str(p.relative_to(BACKEND)).replace("\\", "/")
+        for node in ast.parse(_read(p)).body:
+            nombre = None
+            decoradores: list[str] = []
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                nombre = node.name
+                decoradores = [ast.unparse(d) for d in node.decorator_list]
+            elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name) and target.id.isupper():
+                    nombre = target.id
+            if nombre and not nombre.startswith("_"):
+                encontrados.setdefault(nombre, []).append((rel, node.lineno, decoradores))
+    # Un nombre definido en dos sitios es un reexport o una variante por plataforma:
+    # medir sus referencias por nombre no distingue cuál se usa, así que no se juzga.
+    return {k: v[0] for k, v in encontrados.items() if len(v) == 1}
+
+
+def _nombres_referenciados() -> set[str]:
+    """Todo identificador que APARECE en el repo, mirando el AST y no el texto.
+
+    A propósito no cuenta comentarios ni docstrings: si contaran, la lápida que explica
+    un borrado mantendría vivo al muerto, y bastaría nombrar un símbolo en un comentario
+    para que este test dejara de verlo.
+
+    Sí cuenta CADENAS, porque `getattr(mod, "x")` y `monkeypatch.setattr("mod.x", ...)`
+    son referencias reales. Y por eso ESTE archivo se excluye del barrido: los nombres
+    de `HUERFANOS_TOLERADOS` y de `SIMBOLOS_BORRADOS` son cadenas, así que incluirse a
+    sí mismo hacía que la lista que existe para TOLERAR un huérfano lo marcara como
+    vivo — la excepción se volvía innecesaria y, peor, cualquier símbolo muerto pasaría
+    inadvertido con sólo nombrarlo aquí. Medido el 2026-08-15: sin esta exclusión los
+    tres contratos de `HUERFANOS_TOLERADOS` desaparecían del recuento.
+    """
+    vistos: set[str] = set()
+    for p in _py_files(ALL_DIRS):
+        if p.name == Path(__file__).name:
+            continue
+        try:
+            tree = ast.parse(_read(p))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                vistos.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                vistos.add(node.attr)
+            elif isinstance(node, ast.alias):
+                vistos.add(node.name.split(".")[-1])
+                if node.asname:
+                    vistos.add(node.asname)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                # `__all__`, getattr(m, "x"), monkeypatch.setattr("mod.x", ...)
+                vistos.add(node.value)
+                vistos.add(node.value.split(".")[-1])
+    return vistos
+
+
+def _es_endpoint(decoradores: list[str]) -> bool:
+    """A un handler lo referencia su decorador, no su nombre."""
+    return any(
+        marca in d
+        for d in decoradores
+        for marca in ("router.", "app.", "route", "exception_handler", "middleware")
+    )
+
+
+def test_h13_ningun_simbolo_publico_nuevo_se_queda_sin_consumidor():
+    definidos = _simbolos_publicos_de_produccion()
+    referenciados = _nombres_referenciados()
+
+    huerfanos = {}
+    for nombre, (archivo, linea, decoradores) in definidos.items():
+        if nombre in referenciados or nombre in HUERFANOS_TOLERADOS or _es_endpoint(decoradores):
+            continue
+        huerfanos[nombre] = f"{archivo}:{linea}"
+
+    assert not huerfanos, (
+        "Símbolos públicos de producción cuya única aparición en el repositorio es su "
+        f"propia definición: {huerfanos}\n\n"
+        "Esto es H-13 volviendo a crecer. Tres salidas legítimas, en este orden:\n"
+        "  1. CABLEARLO — si hace falta, que lo llame producción y que un test ejercite "
+        "ese camino. Un símbolo entra el mismo día que su consumidor.\n"
+        "  2. BORRARLO — con su lápida explicando por qué, como los demás de esta fase.\n"
+        "  3. DECLARARLO en HUERFANOS_TOLERADOS — sólo si NO es código muerto sino un "
+        "contrato sin enforcar, con el motivo medido y la fase que lo cierra.\n"
+        "Lo que no vale es dejarlo: así llegaron los 16 de la auditoría."
     )

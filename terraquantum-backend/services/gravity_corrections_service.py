@@ -80,9 +80,11 @@ def compute_free_air_correction(
     return fac
 
 
-def compute_free_air_correction_simple(elevations_m: np.ndarray) -> np.ndarray:
-    """FAC simplificada (0.3086 mGal/m). Error < 0.01 mGal para Δlat < 2°."""
-    return 0.3086 * np.asarray(elevations_m, dtype=np.float64)
+# Fase 6 (cierre, H-13): aquí vivía `compute_free_air_correction_simple` — la FAC de
+# coeficiente fijo 0.3086 mGal/m. Cero llamadores: el pipeline usa siempre la versión
+# dependiente de latitud de arriba, que es estrictamente mejor y cuesta lo mismo.
+# Mantener las dos era ofrecer una elección que nadie debe tomar: la única diferencia
+# posible es un resultado peor.
 
 
 # ---------------------------------------------------------------------------
