@@ -1131,8 +1131,13 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     # Llamada LLM bloqueante (~100s, puede reintentar). NO produce el modelo 3D —
     # es interpretación geológica opcional. Por defecto OFF para que el joint
     # devuelva el modelo rápido; activar con JOINT_ENABLE_GEMINI=true.
-    import os as _os_jg  # noqa: PLC0415
-    if _os_jg.getenv("JOINT_ENABLE_GEMINI", "false").lower() != "true":
+    # Fase 5 (H-11): era `_os_jg.getenv(...).lower() != "true"`, así que
+    # `JOINT_ENABLE_GEMINI=1` NO la encendía y no lo decía. Ahora el vocabulario
+    # booleano es uno solo en todo el backend, y un valor ininteligible se queja.
+    # (sin alias a propósito: el inventario de la Fase 5 rastrea la variable por el
+    # NOMBRE de la función lectora, y un alias la sacaría del censo en silencio.)
+    from core.config import env_bool  # noqa: PLC0415
+    if not env_bool("JOINT_ENABLE_GEMINI", False):
         report["gemini_interpretation"] = {
             "skipped": True,
             "note": "Interpretación Gemini omitida (JOINT_ENABLE_GEMINI!=true) para "

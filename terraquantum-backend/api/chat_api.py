@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from services.block_model_store import get_run_report_path, get_run_inputs_path
 from core.logging import get_logger
-from core.config import GEMINI_CHAT_MODEL, GEMINI_REPORT_MODEL
+from core.config import GEMINI_CHAT_MODEL, GEMINI_REPORT_MODEL, env_bool, env_int
 
 router = APIRouter(prefix="/api/chat", tags=["AI Chat"])
 _log = get_logger(__name__)
@@ -403,8 +403,12 @@ def build_system_instruction(
 # creación falla (contexto chico, modelo sin soporte) cae con gracia al inline.
 # BYO-key: la caché vive en la cuenta del usuario; aquí solo recordamos su nombre.
 # ─────────────────────────────────────────────────────────────────────────────
-_CACHE_ENABLED = os.getenv("GEMINI_CONTEXT_CACHE", "false").lower() == "true"
-_CACHE_TTL_SECONDS = int(os.getenv("GEMINI_CONTEXT_CACHE_TTL", "600"))
+# Fase 5 (H-11): estas dos se leían con `os.getenv(...) == "true"` e `int(os.getenv(...))`
+# crudos. La primera ignoraba en silencio `GEMINI_CONTEXT_CACHE=1`; la segunda mataba el
+# arranque con `invalid literal for int()` sin decir CUÁL de las cuarenta y tantas
+# variables era. Los lectores de `core.config` ya sabían nombrarse; ahora también aquí.
+_CACHE_ENABLED = env_bool("GEMINI_CONTEXT_CACHE", False)
+_CACHE_TTL_SECONDS = env_int("GEMINI_CONTEXT_CACHE_TTL", 600)
 _cache_registry: dict = {}  # cache_key -> (cache_name, expiry_monotonic)
 
 

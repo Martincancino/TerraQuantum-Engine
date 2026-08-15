@@ -1,7 +1,7 @@
 {
   "api": {
     "files": 22,
-    "loc": 6102,
+    "loc": 6106,
     "func_loc_max": 927,
     "func_loc_max_where": "api/gravity_import_api.py:1975 invert_gravity_csv",
     "cc_max": 165,
@@ -9,16 +9,16 @@
   },
   "core": {
     "files": 11,
-    "loc": 1774,
+    "loc": 1881,
     "func_loc_max": 67,
     "func_loc_max_where": "core/license_service.py:136 verify_license",
     "cc_max": 19,
     "cc_max_where": "core/errors.py:621 __init__"
   },
   "exploration": {
-    "files": 15,
-    "loc": 10777,
-    "func_loc_max": 1039,
+    "files": 14,
+    "loc": 10475,
+    "func_loc_max": 1074,
     "func_loc_max_where": "exploration/gravimetry.py:1728 solve_inversion_lsqr",
     "cc_max": 143,
     "cc_max_where": "exploration/gravimetry.py:1728 solve_inversion_lsqr"
@@ -49,10 +49,10 @@
   },
   "services": {
     "files": 54,
-    "loc": 27592,
-    "func_loc_max": 2013,
-    "func_loc_max_where": "services/geophysics_service.py:2568 run_geophysics_inversion",
+    "loc": 27473,
+    "func_loc_max": 2022,
+    "func_loc_max_where": "services/geophysics_service.py:2564 run_geophysics_inversion",
     "cc_max": 183,
-    "cc_max_where": "services/geophysics_service.py:2568 run_geophysics_inversion"
+    "cc_max_where": "services/geophysics_service.py:2564 run_geophysics_inversion"
   }
 }

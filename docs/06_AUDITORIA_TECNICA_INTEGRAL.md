@@ -70,7 +70,7 @@ Y tiene una implicación incómoda que conviene decir: la honestidad epistémica
 
 | # | Hallazgo | Sev. | Estado |
 |---|---|---|---|
-| **H-1** | El depth-weighting `W_z` se cancela **exactamente** contra la normalización de columnas `Ws`. `depth_beta` es algebraicamente inerte y el funcional de regularización real no es el documentado. | 🔴 Crítico | **[MEDIDO]** a precisión de máquina |
+| **H-1** | El depth-weighting `W_z` se cancela **exactamente** contra la normalización de columnas `Ws`. `depth_beta` es algebraicamente inerte y el funcional de regularización real no es el documentado. **✅ CERRADO en la Fase 4 (08-14): se probó la reparación con 3.450 inversiones y NO mejora — el techo de profundidad es null-space, no bug. `depth_beta` eliminado del solver.** | 🔴 Crítico | **[MEDIDO]** a precisión de máquina |
 | **H-2** | `solve_sparse_normal_equations` se invoca pero **no existe en el repositorio**. `USE_SPARSE_DIRECT=true` ⇒ `NameError` en mitad de la inversión. | 🟠 Alto | **[MEDIDO]** por AST + import |
 | **H-3** | 21 funciones (2,1%) concentran el 26,4% del código. `run_geophysics_inversion` = 1.996 LOC, CC=201. Un handler HTTP con 927 LOC y 41 parámetros. | 🟠 Alto | **[MEDIDO]** por AST |
 | **H-4** | La regresión física F9 **no corre en CI** (skip por defecto, la CI no activa la variable). El "congelado para siempre" depende de que alguien lo recuerde. | 🟠 Alto | **[MEDIDO]** |
@@ -143,7 +143,7 @@ Y tiene una implicación incómoda que conviene decir: la honestidad epistémica
 │ MOTOR     exploration/ 15 archivos / 11.023 LOC                         │
 │   gravimetry.py (3.976) · magnetometry.py (3.163) · pgi_engine ·        │
 │   implicit_modeling · focusing · solver_preconditioned · treemesh ·      │
-│   jacobian_wavelet · checkerboard_test · geophysics_weights             │
+│   checkerboard_test · geophysics_weights                                │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ DATOS     Parquet (block models) · Zarr (grids grandes) ·               │
 │           Arrow IPC/LZ4 (transporte al visor) · SQLite (historial) ·    │
@@ -456,6 +456,8 @@ Todo a nivel de ruido de punto flotante. Identidades predichas confirmadas: `Wz_
 4. **[INFERENCIA, la parte que hay que MEDIR, no creer]:** si se separa la normalización de columnas (como *precondicionador* dentro del solver, que no cambia la solución del problema regularizado) del peso de modelo (como `W_m` explícito en el funcional, que sí la cambia), `depth_beta` recuperaría su efecto y la profundidad pasaría a ser ajustable. **Podría mejorar sustancialmente la recuperación de profundidad — o podría confirmar que la ley del null-space domina de todos modos.** Ambos resultados son valiosos: el primero es un producto nuevo; el segundo cierra definitivamente la pregunta y permite vender el límite con autoridad.
 
 Este es exactamente el tipo de experimento que el proyecto sabe hacer (harness de error budget con verdad analítica ya existe). **Es la recomendación #1 de esta auditoría.**
+
+> **✅ HECHO — Fase 4, 2026-08-14. Salió el segundo resultado.** 3.450 inversiones con Morozov re-eligiendo λ en cada brazo: **ningún β fijo mejora la profundidad** en los cuatro regímenes y las tres configuraciones. La perilla revive (β=0 vs β=2 mueve el modelo un 49,8 % del pico) pero no tiene un valor universal — β=1,5 rescata 900 m (88 m vs 538 m) y arruina 300 m (175 m vs 12 m). **Y dos correcciones a lo que se acaba de leer arriba:** (1) el peso efectivo **no** decae «como 1/z² y de forma distinta al estándar»: ajusta a `(z+z₀)^(−β/2)` con **β=2,63** y 5,3 % de desviación — misma familia que Li & Oldenburg, y el brazo separado que mejor compite es justo β=3; (2) el peso está muerto en `solve_inversion_lsqr` pero **vivo en `solve_inversion_treemesh`** (8.125× más), que producción elige sola por tamaño de survey. Registro completo en §FASE 4.
 
 ## 6.3 H-2 — camino de ejecución imposible
 
@@ -1055,7 +1057,7 @@ Es decir: **justo cuando el modelo es débil —el escenario donde el usuario m�
 
 **[MEDIDO]** Solo se importa en `Exploration3DView.tsx:26-31` y **nunca se invoca** en el cuerpo; el otro consumidor (`frontendApi.ts:1`) importa únicamente el tipo. **Es inalcanzable: no engaña a nadie hoy.**
 
-**[OPINIÓN]** Pero es la tercera pieza de física muerta en el frontend (con `engine-physics.ts` de H-6), y esta fabrica ubicaciones en el mapa. Una reconexión accidental produciría un modelo georreferenciado con coordenadas inventadas. **Borrar, no congelar.** Va a la Fase 6.
+**[OPINIÓN]** Pero es la tercera pieza de física muerta en el frontend (con `engine-physics.ts` de H-6), y esta fabrica ubicaciones en el mapa. Una reconexión accidental produciría un modelo georreferenciado con coordenadas inventadas. **Borrar, no congelar.** Va a la Fase 6. — **✅ BORRADO el 2026-08-09** (`geophysicsModel.ts`, con los otros 7 archivos de H-6/H-31); verificado sobre el índice de git el 2026-08-14: ninguno ha vuelto.
 
 ## 9E.5 [H-32] Un `catch` que solo hace `console.warn` deja al usuario sin señal 🟡
 
@@ -1299,7 +1301,7 @@ El informe es tajante sobre el principio de exclusión, y lo enuncia con ejemplo
 
 **Por qué importa, más allá de la pulcritud.** El Core es el estrato que el informe describe como *"el estrato geológico base que debe permanecer inalterado durante décadas"*. Su valor está en ser **microscópico y estable**. Cuando contiene un almacén de modelos de bloques de 840 líneas, cada cambio en el formato del block model toca el estrato que debería ser inmutable — y todo lo que depende de él queda expuesto a churn que no le corresponde. **[INFERENCIA]** Es también la razón por la que `core/block_model_store.py` aparece en el estudio de duplicación (§9B.1, 25 ventanas repetidas): la lógica de dominio en el Core no recibe la misma atención de diseño que la de `services/`.
 
-**Arreglo:** mover `block_model_store` y `geo_utils` a `services/` (capa de dominio), y `gee_client` junto a `satellite_service`. **No hay dependencias ascendentes que romper** (§9I.1), así que es un movimiento de archivos con actualización de imports — de riesgo bajo. Va a la Fase 6.
+**Arreglo:** mover `block_model_store` y `geo_utils` a `services/` (capa de dominio), y `gee_client` junto a `satellite_service`. **No hay dependencias ascendentes que romper** (§9I.1), así que es un movimiento de archivos con actualización de imports — de riesgo bajo. Va a la Fase 6. — **✅ HECHO el 2026-08-09**, con un matiz medido: *«no hay dependencias ascendentes que romper»* era cierto para las que existían, pero el movimiento **fabricaba** una (`core/utils.py` importaba `clean_trace_id` hacia arriba). Ver el registro de la Fase 6.
 
 ## 9I.3 Los tres antipatrones del informe: TQ tiene dos
 
@@ -1455,7 +1457,7 @@ Ordenado por **valor estratégico**, no por facilidad. Esfuerzo en S/M/L/XL.
 
 **∥ = paralelizable** con lo anterior: son frontend o backend aislado y no tocan el motor, así que su posición en la lista marca prioridad, no bloqueo.
 
-**Estado de ejecución.** ✅ **Fase 1** (2026-08-08) · ✅ **Fase 2** (2026-08-10) · ✅ **Fase 3** (2026-08-12, **cerrada del todo el 2026-08-13**: la CI estaba en rojo por dos causas medidas y el criterio «CI roja si la física regresiona» no se cumplía) · ✅ **Fase 6** (2026-08-09). Cada una lleva su registro `### ✅ EJECUTADA` al final de su sección, con lo que se midió y lo que se dejó fuera a propósito. **Siguiente: Fase 4** (resolver el depth-weighting inerte, 🔴 P0).
+**Estado de ejecución.** ✅ **Fase 1** (2026-08-08) · ✅ **Fase 2** (2026-08-10) · ✅ **Fase 3** (2026-08-12, **cerrada del todo el 2026-08-13**: la CI estaba en rojo por dos causas medidas y el criterio «CI roja si la física regresiona» no se cumplía) · ✅ **Fase 4** (2026-08-14, **cerrada CERRANDO**: 3.450 inversiones dicen que ningún β fijo mejora la profundidad en todos los regímenes; el límite es el null-space, no un bug — y de paso aparecieron **dos** funcionales de regularización en gravimetría, no uno) · ✅ **Fase 6** (2026-08-09, **cerrada del todo el 2026-08-14**: H-13 pedía revisar 16 símbolos «uno a uno» y la primera pasada resolvió los 6 que §9B.5 había listado por nombre — al volver a MEDIR aparecieron 11 más, ninguno en la tabla original, incluido un Gauge de Prometheus que publicaba «0 inversiones activas» mientras había una corriendo). **Dejó dos deberes medidos a la Fase 4**: `test_fase7_wiring::test_e2e_enabled_changes_model_and_reports` falla por un 9% bajo su umbral **igual con y sin el cierre** (A/B), y `test_fase4_depth_weighting::test_effective_model_weight_...` **pasa aislado y falla en la suite** — depende del orden, así que hoy no defiende nada. · ✅ **Fase 5** (2026-08-15: las 44 variables medidas por AST son **42** de superficie real; la sonda de la Fase 3 comprobaba que el módulo *carga*, no que la variable *llegue*; y aparecieron **cinco huecos que la auditoría no había visto** — una perilla inerte, un rollback que no rollbackeaba con `0`, un flag de seguridad que se encendía estando **vacío**, un reporte que afirmaba un solver que no corrió, y tres números que morían sin decir su nombre). Cada una lleva su registro `### ✅ EJECUTADA` al final de su sección, con lo que se midió y lo que se dejó fuera a propósito. **CERRADAS: 1, 2, 3, 4, 5 y 6. Siguiente: Fase 7** (extracción compartida, 🟠 P1 — la Fase 4 le añadió un motivo medido) o **Fase 9** (UI de F7, con 3 paneles ya escritos y sin montar).
 
 **Un cambio de orden respecto a la tabla original, y su motivo:** la Fase 4 (depth-weighting) sube por delante de la 5 (superficie de configuración). Antes iban al revés porque la 5 es más barata; pero la 4 es **P0** y la 5 es **P2**, y una fase barata no justifica retrasar la única pregunta abierta sobre qué producto se tiene. El resto del orden es el que ya fijaba la tabla de la 1ª entrega.
 
@@ -1683,7 +1685,7 @@ En los cinco casos con arranque se compara el censo de `terraquantum-backend.exe
 | `tests/test_fase3_capas.py` | Que la dirección de dependencias se rompa (§9I) | 8 tests, grafo medido con AST |
 | `scripts/ci/ast_budgets.py` + `ast_baseline.json` | Que la Fase 8 se deshaga sola | 7 tests; línea base medida |
 | `scripts/ci/validation_inventory.py` + `GATES.json` | Que un diagnóstico se llame gate (**H-22**) | 65 scripts clasificados |
-| `tests/test_fase3_config_matrix.py` | Que un flag documentado rompa el arranque (**H-11**) | 29 tests, 22 variables |
+| ~~`tests/test_fase3_config_matrix.py`~~ → `tests/test_fase5_superficie_config.py` | Que un flag documentado rompa el arranque (**H-11**) | 29 tests / 22 variables → **154 tests / 42 variables** al fusionarse con la Fase 5 (la auditoría ya preveía la fusión) |
 | Job `physics-regression-nightly` + canario en PR | Que la física regresione en silencio (**H-4**) | 6 tests de contabilidad |
 | `core/config.py::_env_int` | Que un valor basura muera sin decir qué variable es | 4 tests |
 
@@ -1699,7 +1701,7 @@ En los cinco casos con arranque se compara el censo de `terraquantum-backend.exe
 
 **H-7, cerrado de paso.** `credenciales_gee.json.REVOKED_2026-06-03` seguía **rastreado por git** con un bloque `BEGIN PRIVATE KEY` real de la cuenta de servicio `terraquantum-satelite@…`. Está revocada, pero viajaba en cada clon. Se sacó del índice y del árbol de trabajo, y se corrigió la causa: `.gitignore` cubría el nombre **exacto** `credenciales_gee.json`, de modo que cualquier renombrado volvía a ser rastreable. Ahora cubre `credenciales_gee.json.*` y `credenciales_gee*.json`. **Pendiente y de decisión humana:** purgar el blob de la *historia* exige reescribirla y forzar el push, lo que rompe todo clon existente. Con la clave ya revocada el riesgo residual es de higiene, no de acceso.
 
-**Segundo hallazgo de paso:** `MAGNETIC_SUSCEPTIBILITY_PRESETS` (`core/config.py:129`) es una tabla de dominio dentro del Core **sin ningún consumidor de producción** — su única referencia fuera de la definición es un test. Queda anotada como deuda, no se borra aquí (borrar código de dominio es Fase 6, ya cerrada, y toca un test ajeno).
+**Segundo hallazgo de paso:** `MAGNETIC_SUSCEPTIBILITY_PRESETS` (`core/config.py:129`) es una tabla de dominio dentro del Core **sin ningún consumidor de producción** — su única referencia fuera de la definición es un test. Queda anotada como deuda, no se borra aquí (borrar código de dominio es Fase 6, ya cerrada, y toca un test ajeno). — **✅ CERRADO el 2026-08-14 en el cierre de la Fase 6**: borrada la tabla y el test que la validaba contra sí misma. Ver el registro `### ✅ CERRADA DEL TODO` de la Fase 6.
 
 **La foto de complejidad que congela esta fase** (medida con AST, línea base commiteada):
 
@@ -1741,12 +1743,14 @@ En los cinco casos con arranque se compara el censo de `terraquantum-backend.exe
 - `python-version-file` apunta a **3.14.4**, y 3.14.4 **existe** en el manifiesto de `actions/setup-python` para linux x64 (22.04 y 24.04). El paso no va a fallar.
 - Las **30 dependencias** de `requirements.txt` tienen rueda linux-cp314 (o `py3-none-any`) en PyPI. `opentelemetry-instrumentation-fastapi==0.63b1` es una prerelease publicada y válida, no un pin roto.
 - Job `frontend` **verde de verdad**: `npm ci`, `npm run lint` (0 errores, 23 avisos), la guarda cliente→backend de la Fase 2 y `npm run build`, con los códigos de salida leídos bien.
-- Sobre el clon prístino pasan `compile_check`, `ast_budgets`, `validation_inventory`, los cuatro ficheros de guardas (32 passed / 2 skipped) y el canario de física (7,7 s). **Ningún test depende de datos gitignorados**: la hipótesis de que el checkout limpio rompería la suite era falsa.
+- Sobre el clon prístino pasan `compile_check`, `ast_budgets`, `validation_inventory`, los cuatro ficheros de guardas (32 passed / 2 skipped) y el canario de física (7,7 s). Y la suite entera del job de PR: **2.312 passed / 8 skipped / 34 deselected, 0 fallos** sobre el checkout limpio. **Ningún test depende de datos gitignorados**: la hipótesis de que el checkout limpio rompería la suite era falsa.
+
+  **Y ese verde es exactamente el problema.** Esas 2.312 pruebas pasan porque corren en Windows y contra los paquetes que hay instalados en esta máquina — que no son los que instala el runner. Las dos causas de rojo de abajo son, por construcción, invisibles para esta corrida. Un pleno de verde no dice «la CI pasa»: dice «la CI pasa *aquí*», y esa confusión es la que la Fase 3 existe para eliminar. (El reloj de esa corrida —16 h 45 m— no es una estimación de coste: la máquina estaba haciendo otras diez cosas a la vez. La medición honesta del coste sigue siendo la del 08-11: ~60 min.)
 
 **DOS CAUSAS MEDIDAS DE CI EN ROJO, invisibles en esta máquina.** Las dos son la misma enfermedad que la fase ya había diagnosticado para el intérprete —la CI instala un árbol distinto del que hay en desarrollo— y que el arreglo del 08-12 sólo curó a medias: fijó la **versión de Python** y dejó suelto el **conjunto de paquetes**.
 
 1. **`psutil` no estaba declarada.** Llegaba de rebote como transitiva de `distributed`, que la Fase 6/H-14 eliminó con razón el 08-09. El código la sigue importando. Simulando un runner sin ella (bloqueando el módulo en `sys.meta_path`): **6 tests de `test_kernel_sparsity_memory.py` mueren con `ModuleNotFoundError` → job `backend` en rojo**. Y hay un segundo daño, peor y silencioso: el `except Exception` de `exploration/gravimetry.py` deja `available = None` y **la red de seguridad de memoria del kernel (`SOLVER_KERNEL_TOO_DENSE`) se apaga sin decir nada** — un fallback que finge, que es la causa #1 del propio informe industrial del proyecto. Declarada con techo de major (H-23).
-2. **`PyWavelets` está declarada y NO instalada aquí.** O sea: la CI la instala y ejecuta dos tests que **en esta máquina no se han corrido nunca**. Medido con pywt 1.9.0 y el numpy del propio entorno: `test_wavelet_compression_ratio` retiene **98,2%** donde exige <15%, y `test_wavelet_forward_error` da **0,615%** donde exige <0,5%. El bloque wavelet de la Fase 10 no cumple su propio criterio §10.6.1. No se arregla aquí (no tiene llamadores de producción, Fase 6/H-13, y tocar el algoritmo es física) pero tampoco se esconde: van como `xfail(strict=True)` con el número medido, así que la CI queda verde con el fallo **registrado** y un futuro arreglo produce XPASS y obliga a actualizar la promesa. De paso: estaban escritos como `if not _PYWT: print(...); return`, que reportaba **PASSED sin ejecutar nada**; ahora son `skipif` y se ven SKIPPED.
+2. **`PyWavelets` está declarada y NO instalada aquí.** O sea: la CI la instala y ejecuta dos tests que **en esta máquina no se han corrido nunca**. Medido con pywt 1.9.0 y el numpy del propio entorno: `test_wavelet_compression_ratio` retiene **98,2%** donde exige <15%, y `test_wavelet_forward_error` da **0,615%** donde exige <0,5%. El bloque wavelet de la Fase 10 no cumple su propio criterio §10.6.1. No se arregla aquí (no tiene llamadores de producción, Fase 6/H-13, y tocar el algoritmo es física) pero tampoco se esconde: van como `xfail(strict=True)` con el número medido, así que la CI queda verde con el fallo **registrado** y un futuro arreglo produce XPASS y obliga a actualizar la promesa. De paso: estaban escritos como `if not _PYWT: print(...); return`, que reportaba **PASSED sin ejecutar nada**; ahora son `skipif` y se ven SKIPPED. — **✅ RESUELTO el 2026-08-14 en el cierre de la Fase 6**: `exploration/jacobian_wavelet.py`, sus tres tests y la dependencia `PyWavelets` fueron BORRADOS. Un `xfail(strict=True)` es honesto pero no es un final: deja registrada indefinidamente una promesa incumplida de código que nadie llama. Como cumplirla exigía rehacer el algoritmo (física, no CI), la salida correcta era la otra mitad de la regla de la Fase 6.
 
 **El criterio de aceptación, puesto a prueba por mutación.** «CI roja si: la física regresiona, un flag documentado rompe, o una función supera los umbrales.» Nadie lo había comprobado — los tests existentes verifican que los gates **corren**, que no es lo mismo. Seis mutaciones reversibles sobre el clon, con su código de salida:
 
@@ -1776,7 +1780,7 @@ En los cinco casos con arranque se compara el censo de `terraquantum-backend.exe
 - En un checkout limpio, `test_fase3_f9_no_evaluado.py` deja **2 skipped**: son los que comparan la fixture contra la corrida viva, y en un runner no hay corrida viva que comparar. Es el diseño del 08-12 funcionando —esa comparación es un gate de la máquina de Martín— y los otros 8 sí corren.
 - Los avisos de `npm run lint` (23) no rompen nada: el job exige **0 errores**, y hay 0.
 
-**Riesgo residual medido, no cerrado.** Los rangos con techo de major (H-23) hacen que la CI instale versiones distintas de las de esta máquina: **zarr 3.2.1 aquí → 3.3.0 en la CI**, **dask 2026.3.0 → 2026.7.1**, y **PyWavelets 1.9.0 en la CI donde aquí no hay ninguna**. Los rangos son deliberados y no se tocan; pero eso significa que el primer runner ejecuta código contra minors que aquí nadie ha probado. Es exactamente por donde salió la causa nº 2.
+**Riesgo residual medido, no cerrado.** Los rangos con techo de major (H-23) hacen que la CI instale versiones distintas de las de esta máquina: **zarr 3.2.1 aquí → 3.3.0 en la CI**, **dask 2026.3.0 → 2026.7.1**, y **PyWavelets 1.9.0 en la CI donde aquí no hay ninguna**. Los rangos son deliberados y no se tocan; pero eso significa que el primer runner ejecuta código contra minors que aquí nadie ha probado. Es exactamente por donde salió la causa nº 2. *(El caso `PyWavelets` dejó de existir el 2026-08-14: la dependencia se eliminó al cerrar la Fase 6. El riesgo general —zarr, dask— sigue vigente tal cual.)*
 
 **Lo que sigue sin poder afirmarse, dicho claro.** Todo esto se midió reproduciendo el runner, no en el runner: no hay `gh` en esta máquina y **el push sigue pendiente de decisión humana**, porque la historia se reescribió el 08-12 para purgar el blob de H-7 y publicarla exige `--force`, que rompe cualquier clon existente. Lo que ya no está en el aire es lo que se preguntaba el 08-12: las dos causas de rojo estaban **dentro** del árbol, no en el runner, y se corrigieron con el número delante.
 
@@ -1814,6 +1818,135 @@ En los cinco casos con arranque se compara el censo de `terraquantum-backend.exe
 
 **Riesgos de regresión.** Altos si se cablea sin gate. Mitigación: F9 debe correr antes y después, y el default debe ser byte-idéntico hasta que el número lo justifique.
 
+### ✅ EJECUTADA — 2026-08-14
+
+*Iteración de backend únicamente. Antes de tocar nada se verificó que `depth_beta` **no** aparece en `terraquantum-web/` ni en ningún schema de **request**: sólo en `response_schema.py:97` como campo de salida, alimentado por **magnetometría**. Y que **ningún llamador de producción se lo pasaba nunca** al solver gravimétrico de grilla regular. Nada de esta fase cruza el contrato HTTP ni el frontend.*
+
+#### 1. Primero la sonda; sólo después mirar el resultado
+
+`scripts/validation/wz_separation_probe.py` reescribe el problema de `solve_inversion_lsqr` en **espacio físico**, separando los dos conceptos que producción tiene fundidos: `u`, el **peso de modelo** (entra en el funcional, *debe* mover la solución) y `P`, el **precondicionador de columna** (cambio de variable de *todo* el sistema, *no debe* moverla). Producción es el caso particular `u_j = ‖col_j(W_d·G)‖`, `P = diag(1/‖col_j‖)`.
+
+| Control | Qué compara | Medido | |
+|---|---|---:|---|
+| **C1b** fidelidad | sonda(`u=‖col‖`,`P=colG`) vs `solve_inversion_lsqr`, mismo solver interno | **3,2e-14 t/m³** | PASA |
+| **C1a** | la misma sonda vs producción con TRF | 1,76e-04 | PASA — *idéntico* a lo que se separan entre sí los dos solvers de producción |
+| **C2** invariancia | `P=colG` vs `P=colA`, mismo funcional | **1,37e-09 t/m³** | PASA |
+| **C3** perilla viva | β=0 vs β=2 **con la separación** | **49,8 % del pico** | PASA |
+
+C1b a 3,2e-14 no es «se parece»: es la prueba de que la reescritura **es** el motor, y por tanto que todo lo que la sonda mida después habla del motor. C2 es la mitad algebraica de H-1 medida de frente — **el precondicionador no es física**. C3 es la otra mitad: en cuanto el peso deja de cancelarse, β mueve medio pico.
+
+#### 2. La respuesta, medida
+
+**576 puntos Morozov = 3.450 inversiones** (3,6 h-proceso), sobre esfera analítica (anti-inverse-crime), 8 semillas de ruido, **Morozov re-eligiendo λ en cada brazo** (como la fase exigía: comparar con λ congelado mediría otra cosa), en tres configuraciones.
+
+**Error de profundidad del PICO — mediana sobre 8 semillas, en metros. Configuración de producción (L2 + padding):**
+
+| brazo | 150 m | 300 m | 600 m | 900 m | **AGREGADO** |
+|---|---:|---:|---:|---:|---:|
+| **`prod`** (sensibilidad, β_eq 2,63) | 38 | **12** | **38** | 538 | **38** |
+| `sep` β=0 (Tikhonov plano) | 88 | 238 | 538 | 838 | 388 |
+| `sep` β=1 | 88 | 238 | 538 | 838 | 388 |
+| `sep` β=1,5 | 88 | 175 | 288 | **88** | 131 |
+| `sep` β=2 (*estándar industrial*) | 38 | 112 | 162 | 538 | 138 |
+| `sep` β=3 | 38 | **12** | 88 | 538 | **62** |
+
+**Y el agregado es el mismo en las tres configuraciones** — el padding y la norma no cambian el veredicto (ése era el control que se montó para poder afirmarlo):
+
+| Configuración | `prod` | β=0 | β=1 | β=1,5 | β=2 | β=3 |
+|---|---:|---:|---:|---:|---:|---:|
+| L2 sin padding | **38** | 388 | 388 | 194 | 138 | 62 |
+| L2 con padding *(= producción)* | **38** | 388 | 388 | 131 | 138 | 62 |
+| compact con padding | **38** | 388 | 388 | 100 | 112 | 62 |
+
+**DECISIÓN MEDIDA: CERRAR.** Ningún β fijo gana en los cuatro regímenes y las tres configuraciones a la vez (regla D1–D4, declarada en el script *antes* de mirar los números). La separación **resucita la perilla** —eso está medido, C3— pero la perilla **no tiene un valor que sirva para todos los casos**.
+
+Tres lecturas que el número permite y la teoría no daba:
+
+1. **Producción ya está cerca del óptimo de esa familia.** El brazo separado que mejor le compite es **β=3**, y es precisamente el más cercano al **β_eq = 2,63** que se midió para el peso efectivo de producción (§3.1 abajo). Dos análisis independientes —ajuste de la norma de columna y barrido de recuperación— apuntan al mismo exponente. Ningún β *mejora*: el peso que el kernel impone por accidente resulta ser un buen peso.
+2. **La profundidad se compra y se paga.** β=1,5 rescata el régimen de 900 m (88 m frente a los 538 m de producción, 6×) y **arruina el de 300 m** (175 m frente a 12 m). Es el trade clásico, y aparece con **IQR de 238–312 m entre semillas** en ese mismo régimen profundo: incluso la «victoria» es inestable. Un peso que arregla 900 m y rompe 300 m es un **régimen, no un arreglo** — y el producto no sabe a priori en qué régimen está.
+3. **El límite de profundidad no es un bug de implementación.** Es el null-space del dato, como `docs/05` §A′ ya sostenía. La diferencia es que ahora se puede decir **con autoridad**: se probó la reparación que la auditoría pedía probar, con el peso vivo y λ re-elegido, y el techo no se movió. Eso es exactamente el segundo resultado que §6.2 punto 4 anticipaba como valioso: *«cierra definitivamente la pregunta y permite vender el límite con autoridad»*.
+
+*Efecto lateral honesto: los brazos separados sí **mejoran algo el error horizontal** agregado (β=1,5 da 9–10 m frente a los 14–17 m de producción). No basta para cambiar la decisión —el targeting horizontal ya es el observable sano del producto— pero queda registrado por si alguna vez se persigue esa décima.*
+
+#### 3. Tres cosas que esta fase corrige de la propia auditoría
+
+**(1) El peso efectivo NO tiene «forma distinta» al estándar industrial.** §6.2 punto 3 infería que `‖colⱼ‖` *«decae aproximadamente como 1/z², un peso mucho más agresivo y **de forma distinta** al estándar industrial»*. Medido (`--weight-shape`): ajusta a `(z+z₀)^(−β/2)` con **β = 2,63 y desviación máxima del 5,3 %** — una ley de potencia de **la misma familia** que Li & Oldenburg, con exponente 2,63 en vez de 2,0. Modestamente más agresiva, no de otra especie. Esto reencuadra H-1: **el problema no es que el peso esté mal, sino que no es ajustable y no está declarado** — lo fija el kernel, no una decisión.
+
+**(2) `depth_beta` no era inerte del todo, y el residuo ya tiene nombre y número.** §9G.1 dejó el caveat explícito: *«si trunca por iteraciones, habría un efecto residual… No lo cuantifiqué.»* Cuantificado: mover β de 0 a 4 movía la solución **2,5e-04** (relativo L2) con TRF y **5,2e-06** con LSQR+GPCG. Que el número **cambie 48× al cambiar de solver** lo identifica como parada temprana y no como física: `Wz` seguía siendo un precondicionador por la derecha legítimo. *(Corolario: la afirmación de `docs/01_PLAN_MAESTRO.md` de que «beta=0 y beta=2 dan resultados byte-idénticos» es falsa en sentido estricto — son idénticos como física, no como bits.)*
+
+**(3) Gravimetría también tiene DOS funcionales de regularización, no uno.** La auditoría documentó ese patrón como enfermedad de magnetometría (H-33, H-38) y para gravimetría cerró el cuadro con «❌ Nunca (H-1)». Medido (`wz_beta_liveness_gravimetry.py`):
+
+| Solver | Dónde se calcula `Ws` | ¿`depth_beta` mueve la solución? |
+|---|---|---:|
+| `solve_inversion_lsqr` (:1728), malla regular | sobre el kernel **ya pesado** por `Wz` ⇒ se cancela | **2,5e-04** — residuo de parada temprana |
+| `solve_inversion_treemesh` (:3633), malla Octree | sobre el kernel **sin pesar**; `w_reg` sólo en smallness/suavidad | **2,045** — **8.125× más** |
+
+Y quién elige entre los dos **no es el usuario**: `should_auto_use_treemesh` (`services/octree_mesh_builder.py:117`) conmuta solo cuando la grilla pasa de **50.000 celdas** o el survey de **50 km**. Es decir: **la misma configuración nominal aplica un depth weighting o ninguno según el tamaño del levantamiento, y nada en la salida lo declara.** Es la patología de H-33 en el motor donde la auditoría la daba por descartada — **la separación que esta fase venía a probar ya existía escrita en el solver de al lado**. El arreglo (un único `build_model_weights()` que declare el funcional) es literalmente lo que pide la **Fase 7**, y esta medición le añade un motor más a su justificación.
+
+*(Corolario menor: la nota `[D6]` de `audit_synthetic_test.py` —«el solver usa `depth_beta=2.0` y el módulo de focusing usa `_DEPTH_BETA=1.0`, inconsistencia»— queda sin objeto para el solver de grilla regular: no había β con el que ser inconsistente.)*
+
+#### 4. Lo que cambió en el motor — criterio de aceptación (c)
+
+Un archivo, una función: `exploration/gravimetry.py::solve_inversion_lsqr`.
+
+* **`depth_beta` fuera de la firma**, y con él el cambio de variable muerto entero (`z0`, `true_depth`, `wz_inv_diag`, `Wz_inv`): con β cancelándose, `Wz_inv·Ws ≡ Ws`, así que la cadena de pesos se escribe **una vez** y dice la verdad. Los bounds pasan de `(d−base)/w_j · w_j‖col‖` a `(d−base)·‖col‖`, que es lo que siempre calcularon.
+* **Los ~60 líneas de comentario reescritas.** El bloque «H-A0 Bug 1: W_z formal (Li & Oldenburg 1998)» describía un efecto que no ocurría. Ahora lleva la demostración de la cancelación en tres líneas, el número que la mide, el funcional que el código **sí** aplica (`φ = λ_eff²·Σⱼ(‖colⱼ(W_d·G)‖·mⱼ)²`), el β equivalente medido y el puntero al instrumento y al invariante. El log de cada corrida dejó de imprimir `depth_beta=2.0` y `smallness=W_z-formal(H-A0)`.
+* **5 llamadores actualizados** (4 scripts de validación + `tests/audit_bushveld_phase3.py`), cada uno con la nota de por qué desapareció el argumento.
+
+**Byte-identidad, medida en los 10 caminos que tocaban `Wz_inv`** (L2, compact/IRLS, padding, anclaje soft, anclaje hard, bounds litológicos, cross-gradient, `m_ref`, topografía no plana y todo junto):
+
+| Solver interno | Peor diferencia relativa | Lectura |
+|---|---:|---|
+| TRF (`lsq_linear`) | 2,4e-04 | del orden del residuo de parada temprana ya medido |
+| LSQR+GPCG | **1,4e-05**, con 6 de 10 casos a **1e-10…1e-14** | al converger mejor el solver, la diferencia se desploma |
+
+Que caiga **17× sólo por cambiar de solver** es la firma de una identidad algebraica resuelta con tolerancia finita, no de un cambio de comportamiento. **No es bit-a-bit y no se afirma que lo sea.**
+
+**Red que impide que vuelva:** `tests/test_fase4_depth_weighting.py` (3 tests, 8,6 s). *(a)* El peso de modelo efectivo **es** `‖colⱼ(W_d·G)‖` — se resuelve el mismo problema escrito a mano en espacio físico y se exige coincidencia a 1e-6, así que reintroducir cualquier peso en la cadena rompe la suite; *(b)* `depth_beta` no puede volver a la firma del solver donde no hace nada; *(c)* `solve_inversion_treemesh` **sigue** teniendo el peso vivo — sin este test, (b) invita a «limpiar por analogía» el solver donde el parámetro sí cambia la física.
+
+**Gate F9 (regresión física) después del cambio: PASS 6/6** (98 min re-invirtiendo los datasets canónicos). No «pasa dentro de tolerancia»: **cada número es el mismo que antes**, que es la evidencia fuerte de que el refactor no movió la física.
+
+| Caso | Post-cambio | Referencia histórica | Tolerancia |
+|---|---:|---:|---|
+| Esfera sintética (canario de forma) | **0,7259** | 0,7259 *(medido antes del cambio, misma sesión)* | r ≥ 0,70 |
+| DO-27 (kimberlita) — error horizontal | **53,7 m** | 53,7 m | ≤ 70 m |
+| Raglan Ni-Cu — pico interior | **212,1 m** | 212 m | ≤ 250 m |
+| San Nicolás (VMS) — misfit | **1,51 %** | 1,51 % | ≤ 3 % |
+| Laguna del Maule — χ² reducido | **0,9869** | 0,99 | ∈ [0,7 · 1,3] |
+| Ambigüedad de profundidad | **2675 m** | 2675 m | LÍMITE documentado |
+
+*Y un detalle que cierra el círculo: la nota del propio canario ya advertía que «con W_z apagado el veredicto no se mueve (r=0,7259 en los tres casos)». La Fase 4 explica por qué —no había W_z que apagar— y `tests/test_fase3_calibracion_absoluta.py` sigue siendo quien cubre las regresiones de escala.*
+
+**Comandos de validación de esta fase**
+
+```powershell
+python scripts/validation/wz_separation_probe.py --controls      # C1/C2/C3
+python scripts/validation/wz_separation_probe.py --weight-shape  # beta equivalente
+python scripts/validation/wz_separation_probe.py --sweep --padding
+python scripts/validation/wz_separation_verdict.py               # regla D1-D4
+python scripts/validation/wz_beta_liveness_gravimetry.py         # los dos solvers
+python -m pytest tests/test_fase4_depth_weighting.py -v          # la red
+python scripts/validation/f9_gate_regression.py                  # regresión física
+python scripts/ci/compile_check.py; python scripts/ci/ast_budgets.py; python scripts/ci/validation_inventory.py
+```
+
+*Aviso medido para quien repita esto: `tests/test_f8_perf_budgets.py::test_budget_inversion` es un presupuesto de **reloj de pared**. Con los tres barridos ocupando la máquina dio **122,9 s** contra un techo de 120 s; con la máquina libre, **63,75 s**. Antes de diagnosticar una regresión de rendimiento, repetir en limpio.*
+
+**Un fallo propio, encontrado por la suite completa — y dos intentos hasta dar con la causa.** La suite entera dio **2.347 passed / 17 skipped / 1 failed**, y el fallo era **el test nuevo de esta fase**: pasaba aislado y fallaba en suite. No era el motor (F9 ya había re-invertido los cuatro datasets reales dando los mismos números): era el test, **orden-dependiente**.
+
+*Primer diagnóstico, equivocado.* Medí que con `USE_PROJECTED_SOLVER=False` producción se salta la proyección GPCG mientras la referencia la aplica ⇒ **76 % de diferencia**, y como el test sólo fijaba una de las tres perillas del solver, lo di por explicado. Fijé las tres, comprobé que pasaba incluso arrancando con las tres invertidas… **y la suite completa volvió a fallar exactamente igual.** La comprobación que hice no era la que refutaba la hipótesis.
+
+*Causa real, medida.* Aislado el reproductor mínimo (`test_fase2_arranque.py` + este test → falla en 3 s), los números señalan solos: el dato de entrada es idéntico, **la referencia es bit-idéntica (0,0e+00)** y **sólo producción se mueve (1,8e-03)**. El log del solver dice por qué: producción pasa de `LSQR+clip` a **`TRF/bounded`**. Y el motivo no es el valor de la perilla sino **la identidad del módulo**: `test_fase2_arranque.py` hace `sys.modules.pop("core.config")` + `importlib.import_module("core.config")`, que **construye un objeto de módulo NUEVO** y deja huérfana toda referencia tomada antes. El test hacía `import core.config as cfg` al importarse, así que **estaba parcheando un fantasma**: `id()` distinto, la perilla en `False` en el huérfano y en `True` en el vivo, y el motor —que resuelve el módulo por `sys.modules` en cada llamada— cogiendo TRF tan tranquilo. Corregido resolviendo el módulo **en el momento de usarlo**, no al importar.
+
+**Dos lecciones que valen más que el arreglo.** (1) *Un invariante que depende de la configuración ambiente no es un invariante.* (2) *Recargar un módulo sustituyéndolo en `sys.modules` es una trampa silenciosa para cualquiera que lo tenga importado por nombre* — aquí sólo se manifestó como un test rojo, pero el mismo patrón podría dejar a un servicio leyendo configuración fantasma. Y queda anotada a propósito la ironía: la fase que persigue código que miente sobre sí mismo produjo un test que medía el solver creyendo medir el funcional, y un diagnóstico que sonaba bien y era falso hasta que lo refutó la medición.
+
+#### 5. Lo que NO se hizo, y por qué
+
+* **No se cableó nada.** El número no lo justifica, y la fase decía «el default debe ser byte-idéntico hasta que el número lo justifique».
+* **No se tocó magnetometría.** H-33/H-38 dicen que allí `depth_beta` también es inerte en producción, pero **por otro mecanismo** (todos los bloques comparten `Wz_inv` cuando hay padding, y el padding es incondicional). Es un cambio de funcional, no de comentario, y su sitio es la **Fase 7**. La propia Fase 4 declaraba que «H-1 es exclusivo de gravimetría».
+* **No se tocó `solve_inversion_treemesh`.** Ahí el peso está vivo y clavado en 2.0 por `getattr(params, "depth_beta", 2.0)` sobre un campo que **no existe** en el schema de request. Cambiar ese 2.0 es una decisión de física que exige su propio barrido: esta fase midió el peso equivalente de *otra* parametrización (`(z+z₀)^(−β/2)` sólo en smallness, frente a `(z+z₀)^(−β)` en smallness *y* suavidad) y **no lo transfiere**.
+* **Los dos scripts del Punto 4 no se borraron.** `wz_smallness_liveness.py` y `wz_tradeoff.py` pasan `smallness_depth_beta=` a un solver que ya no lo acepta: **verificado, dan `TypeError`**. Borrarlos es trabajo de la Fase 6, ya cerrada. Se les puso cabecera de «INOPERANTE» con puntero al sucesor y su ficha en `GATES.json` dice lo mismo: un instrumento roto que la documentación cita como si midiera es la trampa de §9D.2, y ahora está marcada en vez de en limbo. — **✅ BORRADOS el 2026-08-14 en el cierre de la Fase 6.** Sus reportes JSON siguen en el directorio (la evidencia era el reporte, no el script), el código está íntegro en `cc2e7ab` y la cita de `docs/05` §Hallazgos endurecidos apunta ahora ahí.
+
 ---
 
 ---
@@ -1831,6 +1964,90 @@ En los cinco casos con arranque se compara el censo de `terraquantum-backend.exe
 **Criterios de aceptación.** 0 variables sin ejercitar. La CI falla si se añade una nueva sin test.
 
 **Riesgo.** Muy bajo. **Caza H-2 automáticamente y previene su reaparición.**
+
+### ✅ EJECUTADA — 2026-08-15
+
+*Iteración de backend únicamente (regla de oro del repo). El frontend se **midió** —leerlo no es tocarlo— y lo que hay que arreglar allí queda escrito abajo con nombre y número.*
+
+**Gate: 154 tests nuevos en `tests/test_fase5_superficie_config.py`.** `compileall` OK. La fase cabe en el paso barato de la CI (guardas de arquitectura), no en el de la hora.
+
+**Corrida completa de la suite: `2.459 passed, 1 failed`** en 2 h 13 min, y el único fallo restante (`test_fase7_wiring`) es **anterior a esta fase y está declarado** — ver §8, donde también se cuenta lo que la suite completa encontró y el archivo de la fase no.
+
+#### 1. El inventario: no eran 44 sino 42, y la diferencia importa
+
+El AST sobre **todo** el backend —incluyendo `os.environ[...]` y `os.environ.get(...)`, que un `grep getenv` no ve— confirma las **44** de §9B.3. De ellas, dos no son superficie del producto y se declaran como tales en vez de inflar el número: `ENABLE_FOCUSING` (borrada, ver abajo) y `ROI_CSV`, que vive en `terraquantum-backend/tmp/`, **directorio en `.gitignore`**. Incluir `tmp/` habría hecho que el inventario diera un número distinto en la CI que en la máquina de Martín, y *un invariante que depende del entorno no es un invariante* (lección de la Fase 4, aplicada). Quedan **42**: 29 que lee código de producción y 13 que sólo leen tests y scripts de gate.
+
+La Fase 3 inventariaba **22** (sólo `core/config.py`). Las otras veinte viven en `api/chat_api.py`, `services/run_queue_service.py`, `services/gee_client.py`, `services/joint_inversion.py`, `services/gemini_agent.py` y en los propios scripts F7/F8.
+
+**El registro declara para cada variable su tipo, su ámbito, su dueño y —lo que importa— su NIVEL de ejercicio**, en una escala honesta: `inversion` (se mide con una inversión real) > `llamada` > `arranque` > `externo` (el ejercicio vive en otro archivo, que se nombra y se comprueba que sigue mencionándola) > `sitio` (sólo se verifica el sitio de lectura). **Una sola variable de producción se queda en `sitio`** —`JOINT_ENABLE_GEMINI`, que se lee a mitad de una inversión conjunta de minutos— y para ello hay que inscribirla en una lista aparte con el motivo escrito. Que cueste es el punto: H-11 nació de que nadie tuvo que justificar nada.
+
+#### 2. La sonda de la Fase 3 comprobaba que el módulo CARGA, no que la variable LLEGUE
+
+Es la corrección metodológica de la fase. `test_config_reloads_with_each_flag` recargaba `core.config` con la variable puesta y comprobaba que existieran `host` y `port`: **eso pasa igual si la variable se ignora por completo**. Ahora cada una declara *dónde se observa su efecto* (`c.BACKEND_HOST`, `c.TQ_TIER_LIMITS['free']['max_voxels']`, `_CACHE_TTL_SECONDS`, `_MAX_WORKERS`…) y el test lee ese valor. Un módulo que ignore la perilla ya no pasa.
+
+`test_fase3_config_matrix.py` **se borra**: sus cuatro comprobaciones están aquí, cada una más fuerte. La propia auditoría preveía la fusión, y mantener dos registros de las mismas variables es exactamente la enfermedad que esta fase cura.
+
+#### 3. Cinco huecos MEDIDOS, y ninguno estaba en la lista de la auditoría
+
+| # | Qué | Cómo se midió | Por qué importa |
+|---|---|---|---|
+| 1 | **`ENABLE_FOCUSING` era una perilla inerte.** `main.py` la leía del entorno, la guardaba en `_ENABLE_FOCUSING` y nadie la miraba jamás | sus 2 únicas apariciones en todo el repo eran su comentario y su asignación | Mismo pecado que `USE_SPARSE_DIRECT` (H-2) y las dos de wavelet (H-13), ya borradas. **BORRADA**, con su lápida |
+| 2 | **El rollback documentado no funcionaba con `0`, `no` ni `off`.** `USE_BOUNDED_SOLVER=0` dejaba el solver bounded **activo** | inversión real de 384 celdas: modelo byte a byte **idéntico al default** | El comentario de esa misma línea documenta `=false` como rollback. Quien lo intentara con la forma que escribe todo el mundo no obtenía rollback **ni aviso** |
+| 3 | **`TQ_AUTH_ENABLED=` (vacío) ENCENDÍA la autenticación** | arranque completo: `POST /geophysics/invert` pasó de 404 a **401** | El cargador de `.env.local` parte por el primer `=`, así que la línea `TQ_AUTH_ENABLED=` deja cadena vacía. Se rompe el camino dorado escribiendo una variable que se lee como apagada |
+| 4 | **`bounded_solver_active` decía lo que se PIDIÓ, no lo que PASÓ** | 8.712 celdas activas: el solver despachó `LSQR+clip` y el campo afirmaba `true` | Ver §4 abajo — es H-37 otra vez |
+| 5 | **Tres lecturas numéricas fuera de `core/config.py` morían sin nombrar la variable** | `int(os.getenv(...))` crudo en `chat_api` y en `run_queue_service` ×2 | La Fase 3 arregló esto **dentro** de `config.py` y la costumbre no cruzó el archivo. La peor, `TQ_TEST_SLOW_BEFORE_SOLVE_S`, se lee **dentro del worker**: mataba la corrida a mitad |
+
+**El arreglo de fondo de los huecos 2 y 3 es uno solo: había DOS vocabularios booleanos y los dos mentían.** Las perillas con default ON se leían `!= "false"`; las de default OFF, `== "true"`. Un usuario no tiene por qué saber cuál le tocó. Ahora hay un `_env_bool` único —`1 true t yes y on si` / `0 false f no n off`, vacío = el default declarado, **y un valor ininteligible detiene el arranque nombrando la variable**, igual que ya hacía `_env_int`. Adivinar en silencio es cómo un flag de seguridad acaba encendido sin que nadie lo pidiera.
+
+#### 4. Las perillas del solver, medidas con una inversión real — lo que la Fase 3 dijo que no podía ver
+
+Malla de 8×6×8 = **384 celdas activas**, 49 estaciones, cuerpo enterrado, 1 % de ruido. Cada configuración corre en su propio subproceso **con la variable en el entorno**, de modo que lo ejercitado es la cadena entera: entorno → `core.config` → despacho. El truco que lo hace barato: 384 celdas están por debajo del umbral de TRF (8.000) y por encima de un `LSMR_THRESHOLD_N_ACTIVE` que se puede bajar a 100 — **los tres caminos del solver se alcanzan en la misma malla diminuta**.
+
+| Perilla | ¿Viva? | Lo medido |
+|---|---|---|
+| `USE_BOUNDED_SOLVER` | **Sí** | `TRF/bounded` → `LSQR+clip`, y el modelo cambia |
+| `USE_PROJECTED_SOLVER` | **Sí, y caro** | apagarla lleva el **χ² de 0,244 a 22,7 — 93×**. El comentario histórico decía «el clip degradaba el misfit ~35 %»; el número real en este caso es de otro orden. No es una preferencia de solver: es ajustar el dato o no ajustarlo |
+| `USE_LSMR_LARGE` | **Sí** | con el umbral bajado, el despacho pasa a LSMR y vuelve a LSQR al apagarla |
+| `LSMR_THRESHOLD_N_ACTIVE` | **Sí** | mueve la frontera LSQR/LSMR |
+
+> **Matiz honesto, medido y escrito en el test.** LSMR y LSQR producen aquí el **mismo modelo** (coinciden a nueve decimales; cond(A)≈1e2, un sistema bien condicionado donde ambos convergen al mismo sitio). Eso **no** es inertidad —el despacho cambia y se comprueba— sino acuerdo, que es lo que uno querría. La perilla existe para mallas de 50k+ mal condicionadas, y **ese régimen no cabe en un test de segundos: se dice en vez de fingir que se prueba.**
+
+#### 5. El hueco nº 4 es H-37 otra vez, y en el régimen NORMAL del producto
+
+`bounded_solver_active` se calculaba en `geophysics_service` con `os.getenv("USE_BOUNDED_SOLVER")` — o sea, lo que se **pidió**. Pero el solver sólo despacha TRF **por debajo de 8.000 celdas activas**, y el producto declara mallas de 30k-100k vóxeles. Es decir: **el campo no fallaba en un caso de borde, fallaba casi siempre.** Y `validation/runner.py` lo lee para caracterizar cada corrida — era evidencia de validación contaminada.
+
+Ahora sale de `solver_meta`, que es quien sabe qué se ejecutó, y el reporte gana `solver_path` (`TRF/bounded` · `LSMR` · `LSQR+clip`), `bounded_solver_requested` y `projected_solver_used`: **lo que se pidió y lo que pasó, por separado**. Dos tests lo defienden: uno que invierte 8.712 celdas y mide el desacuerdo, y una guarda estática por AST —el error original era de UNA línea y alguien puede rehacerlo sin querer.
+
+#### 6. `TQ_AUTH_ENABLED`, resuelta como pedía la fase — y la doc estaba mal
+
+La fase exigía *o se arregla, o se elimina, o se marca como no soportado*. Se marca, **con el número corregido**: `docs/03` decía *«el frontend nunca envía `X-TQ-API-Key`»* y es falso por la mitad. MEDIDO: de los **43** proxies de Next.js, **17 SÍ la reenvían** (desde `process.env.TQ_API_KEY`) y **26 no**, entre ellos `geophysics-invert`.
+
+**La rotura no es total, es asimétrica**: importar y exportar funcionan, invertir devuelve 401. Es peor de diagnosticar que una caída limpia — el usuario ve una app que a ratos funciona. Y hay un segundo piso: el orquestador de escritorio (`src-tauri/src/lib.rs`) no fija `TQ_AUTH_ENABLED` **ni** `TQ_API_KEY`, así que ni los 17 tendrían clave que enviar.
+
+Veredicto declarado en `docs/04` §9.3: **perilla de despliegue SERVIDOR/Docker, no soportada con la UI web**, dicha en voz alta en cada arranque en los dos sentidos (antes sólo avisaba cuando estaba apagada — el aviso que faltaba era justo el del caso que rompe). Y la puerta de atrás se cerró: el vacío ya no la enciende.
+
+#### 7. La documentación de despliegue deja de poder quedarse atrás
+
+`docs/04_EMPAQUE_LOCAL_FIRST.md` §9 documenta las **29 variables de producción** en cinco tablas (arranque/red · motor · licencia y auth · servicios externos · observabilidad), y **un test falla si el producto lee una que la doc no menciona**. Es la deriva que produjo H-11 —la superficie creció durante catorce fases sin que nadie llevara la lista— cerrada por construcción y no por disciplina.
+
+#### 8. Lo que la suite completa dijo después, y por qué vale la pena contarlo
+
+El archivo de la fase estaba verde y la regresión dirigida a los ocho módulos tocados también (70 tests). **La suite completa —2 h 13 min, 2.459 passed— encontró igualmente dos cosas**, y las dos son de la clase que sólo aparece corriéndolo todo:
+
+1. **`test_gee_credentials_path_llega_a_init_gee` pasaba aislado y fallaba en suite.** Asertaba `is_available() is False` después de apuntar a un archivo inexistente. Pero `_gee_available` es un **global de módulo** y `init_gee()` retorna sin tocarlo cuando la ruta no existe: si otro test lo dejó en `True`, la aserción cae. Es literalmente la trampa que la Fase 4 dejó documentada, cometida otra vez. Arreglado fijándolo a `False` con `monkeypatch` antes de llamar — así la aserción **dice algo** (que esta llamada no lo encendió) en vez de depender del orden.
+2. **El presupuesto AST de la Fase 3 se puso rojo, y tenía razón.** `core.loc` pasó de 1.774 a 1.881 (+107): los lectores tipados y sus docstrings con lo medido. Es crecimiento deliberado y de **infraestructura**, que es justo para lo que existe el Core — pero el techo se sube a mano y por escrito, que es el ritual que ese gate impone.
+
+   **Y el gate ganó su sueldo por un motivo mejor.** Al correr `--update` se vio que también subiría `exploration.cc_max` de **143 a 144**: la primera versión del arreglo del §5 metía un `if solver_meta is not None` dentro de `solve_inversion_lsqr` — la función de 1.039 líneas y CC=143 que la **Fase 8 tiene que partir**. Aceptar ese techo habría sido pagar la corrección de un reporte con complejidad en la espina dorsal. Se reescribió sin rama: el despacho se anota en locales y se publica en el bloque `if solver_meta is not None` **que ya existía** al final. `cc_max` vuelve a 143, y el modelo sale **byte a byte idéntico** (mismo sha, mismo χ² y misma norma L2 a todos sus dígitos) — comprobado, porque un cambio de contabilidad que mueva un número no sería un cambio de contabilidad.
+
+**El cuarto fallo NO es de esta fase**: `test_fase7_wiring::test_e2e_enabled_changes_model_and_reports` da `max_diff=9,10e-05` contra un umbral de `1e-4` —un 9 % por debajo— sobre `implicit_geology`, y viene declarado como deber pendiente desde el cierre de la Fase 6, que ya lo midió A/B. La comprobación de inercia numérica de arriba descarta que esta fase lo haya causado.
+
+#### 9. Lo que NO se hizo, y por qué
+
+* **No se tocó el frontend.** Reenviar la cabecera en los 26 proxies es mecánico y de bajo riesgo, pero es una iteración de frontend (regla de oro), y **por sí sola no arregla nada**: sin que el orquestador acuñe una clave y la pase a los dos procesos, los 43 reenviarían una cabecera vacía. Es trabajo de producto, escrito con su alcance en `docs/04` §9.3 en vez de quedar como rumor en un comentario.
+* **No se cablearon las perillas que faltan.** `JOINT_ENABLE_GEMINI` se queda en el nivel más débil de ejercicio, declarada y con el motivo escrito.
+* **No se validó el régimen para el que existe LSMR** (50k+ celdas mal condicionadas): no cabe en un test de segundos y se dice en vez de simularlo.
+* **`ROI_CSV` no se tocó** — vive en `tmp/`, que `CLAUDE.md` prohíbe tocar y `.gitignore` excluye.
+* **La deuda que esta fase deja anotada, y es la única nueva**: `TQ_TEST_SLOW_BEFORE_SOLVE_S` es un gancho de prueba que lee **código de producción**. Es inocuo sin la variable, ahora está declarado y documentado como lo que es, pero un gancho de test en el camino del usuario es deuda, no diseño.
 
 ---
 
@@ -1889,15 +2106,75 @@ En los cinco casos con arranque se compara el censo de `terraquantum-backend.exe
 
 1. **Quitar `shapely` y `distributed` NO reduce el instalador ni un byte.** La auditoría infería una "reducción gratuita de tamaño" por ser dependencias pesadas. Medido en el TOC de PyInstaller del build real: `shapely` **0 entradas**, `distributed` **0**, `pywt` **0** — frente a `scipy` 3.034 y `dask` 172. El análisis estático ya las excluía por inalcanzables. El instalador sigue en **321,5 MB** y el sidecar en **198,8 MB**. La ganancia real es otra: el manifiesto deja de mentir sobre lo que el producto necesita.
 2. **Mover `block_model_store` habría creado la arista `core/ → services/`** que la Fase 3 va a prohibir. `core/utils.py` importaba `clean_trace_id` **hacia arriba**, desde el almacén de modelos de bloques. La auditoría decía "no hay dependencias ascendentes que romper" — cierto para las que existían, pero el movimiento **fabricaba una**. Se resolvió antes de mover: sanear un identificador para usarlo como nombre de carpeta es infraestructura, así que `clean_trace_id` bajó a `core/utils.py` y el almacén lo reexporta (sus importadores no cambian).
-3. **Las dos perillas de wavelet eran el mismo pecado que H-2.** `USE_WAVELET_COMPRESSION` y `WAVELET_THRESHOLD_N_ACTIVE` prometían activar la compresión del Jacobiano y **ningún código las leía**: su único consumidor posible era `solve_inversion_lsmr_wavelet`, que nunca se cableó. Se borraron con él. Los building blocks siguen vivos y con tests en `exploration/jacobian_wavelet.py`. Tras la poda, **cero constantes de `core/config.py` quedan sin lector** (medido).
+3. **Las dos perillas de wavelet eran el mismo pecado que H-2.** `USE_WAVELET_COMPRESSION` y `WAVELET_THRESHOLD_N_ACTIVE` prometían activar la compresión del Jacobiano y **ningún código las leía**: su único consumidor posible era `solve_inversion_lsmr_wavelet`, que nunca se cableó. Se borraron con él. Los building blocks siguen vivos y con tests en `exploration/jacobian_wavelet.py`. Tras la poda, **cero constantes de `core/config.py` quedan sin lector** (medido). *(**Corregido el 2026-08-14**: dejar los building blocks «vivos con tests» fue dejar el limbo a medias — sin llamador, esos tests eran sus únicos importadores. El módulo y la dependencia `PyWavelets` se borraron al cerrar la fase; ver `### ✅ CERRADA DEL TODO`.)*
 
 **La decisión que la fase pedía tomar explícitamente ("borrar o cablear, no dejar en limbo"): BORRAR la cadena de sondajes.** El ADR del render declaraba que los slices 3 y 4 no se montaban porque las coordenadas de sondaje no tenían transform al frame re-centrado. Ese problema **ya se resolvió por otro camino**: `GET /borehole/view` entrega hoy los intervalos en coordenadas del visor, y quien los consume es `BoreholeLayer.tsx`, **montada y viva** en `Scene3D.tsx`. Es decir: los sondajes ya se dibujan, y `InstancedSegmentsLayer` era un **segundo motor superado por el que se entrega**. Además su LOD y su culling GPU están dimensionados para 1M+ segmentos, cuando el producto declara 30k–100k vóxeles — la propia auditoría llama sobreingeniería a eso. Cablearlo habría significado sustituir una capa que funciona por una cuyo WGSL **nunca corrió en una GPU real**. Queda registrado en `terraquantum-web/docs/ADR-fase6-render.md`, no borrado en silencio.
 
 **Lo que NO se hizo, y por qué.**
 - **H-7 (la clave privada revocada) queda para Martín.** `CLAUDE.md` prohíbe explícitamente tocar credenciales, y el archivo lo es. Lo que sí se hizo es **cerrar la causa raíz**: `.gitignore` exigía que el nombre *terminara* en `.json`, así que `*gee*.json` **no cubría** `credenciales_gee.json.REVOKED_2026-06-03` — **el renombrado que pretendía neutralizar el archivo es justo lo que lo dejó fuera del ignore y permitió committearlo**. Ahora se cubre cualquier sufijo. El borrado del árbol es un comando de dos líneas y la purga de la historia sólo hace falta si el repo sale de la máquina.
+  - **✅ HECHO por Martín** — commit `7b9cd07` («sacar del árbol la credencial GEE revocada y tapar el patrón»). Verificado el 2026-08-14: el archivo no está en el índice (`git ls-files` no lo lista) ni en el árbol de trabajo. **H-7 cerrado.** Queda vivo sólo el matiz declarado arriba: la purga de la HISTORIA (`filter-repo`/BFG) sigue pendiente y sólo hace falta si el repositorio sale de esta máquina.
 - **`PUBLIC_DIR` y `GEMINI_MODEL_NAME` se revisaron y NO son código muerto**: no tienen lectores externos, pero sí uso interno dentro de `config.py`. Se dejan.
 
 **Red que impide que vuelva:** `tests/test_fase6_limpieza_verificada.py` (26 tests). Convierte cada borrado en un invariante ejecutable: los símbolos y flags borrados no pueden reaparecer, las deps muertas no pueden volver a `requirements.txt` ni como import, **`core/` tiene lista blanca de módulos** (uno nuevo sin declarar rompe la suite), **`core/` no puede importar hacia arriba** (anticipo del test de capas de la Fase 3), y ninguna constante de `config.py` puede quedarse sin lector. Incluye contraprueba de que la poda no se llevó nada vivo.
+
+### ✅ CERRADA DEL TODO — 2026-08-14
+
+*La pasada del 08-09 hizo el trabajo grande; este cierre responde a una pregunta que aquella no se hizo: **¿cuántos de los 16 símbolos de H-13 se revisaron de verdad «uno a uno»?***
+
+**La respuesta era 6.** §9B.5 midió 16 huérfanos pero sólo tabuló los *«destacables por su significado»*; la ejecución resolvió esos 6 (7 símbolos, porque `export_*_to_gslib` eran dos) y **los otros diez nunca se enumeraron en ningún sitio**. No es que se decidiera dejarlos: es que salieron del radar en cuanto la lista dejó de estar escrita. Al volver a medir con un cruce de referencias AST sobre código + tests + scripts —un símbolo está muerto si su única aparición en TODO el repositorio es su propia definición— aparecieron **11**, y ninguno estaba en la tabla original.
+
+**Contabilidad honesta de las líneas** (misma regla que la primera pasada: no se suma lo que sólo cambia de sitio, y los comentarios que explican un borrado no cuentan como borrado):
+
+| | Líneas |
+|---|---:|
+| **Código muerto BORRADO** — 4 archivos que desaparecen (564: `jacobian_wavelet` 203, los dos scripts del Punto 4 306, `PostFX.tsx` 55) + símbolos recortados de archivos que sobreviven (382) + tests de lo borrado (95) | **≈ 1.041** |
+| Añadido: la lápida de cada borrado, en su sitio | +99 |
+| Añadido: red anti-regresión (de 26 a 48 tests) | +175 |
+
+| Símbolo | Dónde | Decisión y por qué |
+|---|---|---|
+| `INVERSIONS_TOTAL`, `INVERSION_DURATION`, `ACTIVE_INVERSIONS` | `core/metrics.py` | **BORRAR.** Definidas y jamás incrementadas: el docstring del módulo enseñaba a instrumentar una llamada que nunca se escribió. Con el Gauge el daño era **peor que código muerto**: un Gauge sin etiquetas sí se emite, así que `GET /metrics` publicaba `terraquantum_active_inversions 0.0` **también mientras una inversión corría** — una lectura falsa, no una ausencia. No hay Prometheus ni Grafana en ninguna parte del repo. La instrumentación HTTP, que sí mide, se queda |
+| `upward_continue_gravity_fft` | `exploration/preprocessing.py` | **BORRAR.** 151 líneas de continuación hacia arriba por FFT, cero llamadores y **cero tests**. Mismo cadáver y misma familia que `remove_regional_scale` (borrado en la primera pasada): ambos servían el pipeline regional de Bushveld, que este proyecto midió y descartó. Física correcta sin un solo test en el módulo de preprocesamiento es una invitación a cablear física no validada al camino crítico |
+| `calculate_optimal_block_size` + `auto_compute_grid_params` | `services/gravity_import_service.py` | **BORRAR (153 LOC).** No hubo que investigar el motivo: su propio docstring lo declaraba — *«Legacy A1.0 grid helper. A1.3 flow uses `services.grid_calculator_service.compute_auto_grid`»*. El sucesor está vivo, se llama desde ese mismo archivo y tiene su suite. Dos calculadoras de grilla en un módulo, una muerta, es cómo se arregla un bug de mallado en la que nadie ejecuta |
+| `normalize_unit` | `services/gravity_import_service.py` | **BORRAR.** Era `return unit.strip()`. Por el nombre parece **la** función de normalización de unidades; la de verdad es `canonicalize_unit`, que traduce los alias ("milligal", "gamma"…). Cablearla por error habría metido un CSV en milligal como si fuera m/s² — corrupción silenciosa, justo lo que el blindaje de ingesta existe para impedir |
+| `ALLOWED_MAGNETIC_UNITS` | `services/gravity_import_service.py` | **BORRAR.** Copia literal y muerta de las claves magnéticas del mapa vivo de `canonicalize_unit`. **Deuda registrada al borrar:** el pipeline magnético canonicaliza la unidad pero no **rechaza** una desconocida; validar eso cambia qué CSVs se aceptan — comportamiento de ingesta, no limpieza |
+| `compute_free_air_correction_simple` | `services/gravity_corrections_service.py` | **BORRAR.** FAC de coeficiente fijo 0.3086; el pipeline usa siempre la dependiente de latitud, que es estrictamente mejor y cuesta lo mismo. Mantener las dos era ofrecer una elección cuya única diferencia posible es un resultado peor |
+| `normalize_array` | `services/geophysics_service.py` | **BORRAR.** Min-max a [0,1] sin un solo llamador |
+| `queue_snapshot` | `services/run_queue_service.py` | **BORRAR, dejando dicho el hueco.** Su docstring decía «diagnóstico/UI» y no hay endpoint que la exponga ni pantalla que la pinte: **la cola no es observable desde fuera del proceso**. Dejarla puesta inducía la conclusión falsa de que basta con cablearla — si la Fase 9 quiere mostrar la cola, tiene que escribir el endpoint |
+| `MAGNETIC_SUSCEPTIBILITY_PRESETS` | `core/config.py` | **BORRAR** (lo dejó anotado la Fase 3 y es trabajo de ésta). Cero consumidores de producción: su único lector era un test que comprobaba la tabla **contra sí misma** — no podía fallar por una regresión del producto. Y era **dominio dentro del Core**: la primera pasada declaró «`core/` al 0% de dominio» con esta tabla petrofísica todavía dentro. Ahora ese 0% es cierto |
+
+**Dos limbos que la propia auditoría había asignado a esta fase y seguían abiertos:**
+
+1. **`exploration/jacobian_wavelet.py` — BORRADO, con la dependencia `PyWavelets`.** Es el ejemplo más limpio de por qué la regla es *«borrar o cablear, no dejar en limbo»*. La primera pasada borró el llamador (`solve_inversion_lsmr_wavelet`) y las dos perillas de config, y dejó los building blocks *«vivos y con tests»*. Pero sin llamador **esos tests eran sus únicos importadores**, y cuando la Fase 3 los ejecutó por primera vez en un runner con PyWavelets instalado midió que el algoritmo **no cumple su propio criterio §10.6.1** (98,2% retenido exigiendo <15%; 0,615% de error forward exigiendo <0,5%), y los dejó en `xfail(strict=True)`: honesto, pero una promesa incumplida en mantenimiento indefinido. Cablearlo no era opción para una fase de limpieza —falla su criterio, así que exige rehacer el algoritmo, y eso es física—, de modo que se borra el módulo, sus tres tests y la dependencia, que existía **sólo** para él (`pywt` no tenía ningún otro importador en el repo). Recuperable íntegro en `git log`.
+2. **`wz_smallness_liveness.py` y `wz_tradeoff.py` — BORRADOS.** Desde el revert del W_z-fix pasaban `smallness_depth_beta=` a un solver que ya no acepta ese argumento: ejecutarlos daba `TypeError`. La Fase 4 les puso cabecera de «INOPERANTE» y dejó el borrado aquí. **Su evidencia no se tocó**: `wz_smallness_liveness_report.json` y `wz_tradeoff_report.json` siguen en el mismo directorio, el código está íntegro en `cc2e7ab`, y la cita de `docs/05` ahora apunta al reporte y al commit en vez de a un script que no existe. Sucesor vivo: `wz_separation_probe.py`.
+
+**Lo que NO se borró, y esta vez con la distinción dicha en voz alta.** Quedan tres símbolos sin referencia — `GeophysicsInvertResponse`, `GeorefSummary`, `BlockModelArrowMetadata` — y **no son código muerto: son contratos escritos que nadie enforza.** `GeophysicsInvertResponse` describe la respuesta de la inversión mientras el endpoint declara otra; `GeorefSummary` lo replica a mano el frontend en `frontendApi.ts` (H-16); `BlockModelArrowMetadata` documenta cabeceras `X-TQ-*` que se escriben a mano. Borrarlos tiraría la única descripción escrita de esas formas, y arreglarlos —cablear `response_model=` o generar los tipos desde OpenAPI— **cambia la serialización en runtime, o sea comportamiento**: es la Fase 10. Van declarados uno a uno en `HUERFANOS_TOLERADOS`, con motivo y fase dueña.
+
+**La red, ampliada de 26 a 48 tests.** Lo importante no son los 22 tests nuevos que nombran cada borrado, sino **el que mide**: `test_h13_ningun_simbolo_publico_nuevo_se_queda_sin_consumidor` recorre todos los símbolos públicos de producción y falla si alguno tiene como única aparición su propia definición. Los tests que nombran defienden borrados concretos y no habrían impedido nada de lo que este cierre encontró — porque el problema no fue que volvieran los muertos, sino que **nadie volvió a medir**. Mira el AST y no el texto a propósito: si contara comentarios, la lápida que explica un borrado mantendría vivo al muerto. Las salidas legítimas están escritas en el mensaje de fallo: cablearlo con su test, borrarlo con su lápida, o declararlo con su motivo y su fase.
+
+**Hallazgo NUEVO del cierre, en el frontend: cuatro superficies de UI construidas y nunca montadas — y dos de ellas dejan varada una función del backend.** Los 8 borrados de la primera pasada siguen en pie (verificado sobre el índice de git). Pero al medir los 129 módulos TS/TSX versionados con el mismo criterio —¿alguien lo importa?— aparecen 4 sin ningún importador (el quinto candidato, `voxelBufferBuilder.worker.ts`, es un **falso positivo**: `Scene3D.tsx:622` lo carga con `new URL(...)`, que no es un import).
+
+| Módulo | Qué mide el rastreo | Consecuencia |
+|---|---|---|
+| `viewport/SliceControls.tsx` | **Nadie más escribe el estado del corte.** `SectionPaintLayer` sí está montada en `Scene3D` y el endpoint `/api/section` existe | El plano de corte tipo Leapfrog **es inalcanzable para el usuario**: la capa que pinta la sección está viva y no hay nada que la encienda |
+| `viewport/MultiPhysicsControls.tsx` | `setViewMode` sólo se llama desde aquí y desde `packageInversion.ts:288`, que lo fija **automáticamente** según la física | El usuario **no puede cambiar de vista a mano** (densidad / susceptibilidad / incertidumbre): la ve según lo que decidió la corrida |
+| `MultimodalComboPanel.tsx` | Único consumidor de `/api/multimodal/plan` fuera del proxy y del cliente HTTP | La función multimodal de la Fase 21 tiene **UI escrita y no montada**: es H-10 otra vez, pero al revés |
+| `viewport/PostFX.tsx` | `Scene3D` monta `SubsurfaceAOEffect`, que usa el mismo `@react-three/postprocessing` | **Segunda pila de postprocesado superada por la que se entrega** — el mismo patrón que `InstancedSegmentsLayer` |
+
+**Y aquí la fase de limpieza se detiene a propósito, salvo en el cuarto caso.** Sólo `PostFX` es lo que esta fase sabe resolver: un duplicado superado, que no deja varado nada. Los otros tres **no son código muerto: son funciones terminadas a las que les falta el último cable**, y borrarlas destruiría la única UI escrita para cosas que el backend ya sabe hacer — lo contrario de lo que persigue el plan. Montarlas es una decisión de producto con su QA visual, y ya tiene fase dueña: **la Fase 9**, que existe exactamente para esto («5 endpoints de F7 sin consumidor; el gate midió el backend, no al usuario») y que además añade el criterio obligatorio *«un usuario puede hacer/ver X desde la UI»*. Quedan **registrados aquí con su medición**, que es la diferencia entre una decisión y un limbo.
+
+**Gate del cierre:** `compileall` OK · **2.382 tests colectan** sin error de import · presupuestos AST OK · cierre de dependencias OK (105 distribuciones) · inventario de validación OK (66 scripts) · `test_fase6_limpieza_verificada.py` **48 passed** · frontend `tsc --noEmit` **0**, `eslint` de fuentes **0 errores**, `next build` **OK**.
+
+**La suite COMPLETA del backend, no una selección: 2.439 tests en 2h07 → 2.367 passed, 70 skipped, 2 failed.** (Los 77 archivos afectados se corrieron además por separado: 1.095 passed, 6 skipped, los mismos 2 failed.) Los dos fallos son **los mismos** en ambas corridas.
+
+**Los 2 fallos, medidos en vez de atribuidos.** Ninguno lo causa este cierre, y no se dice por argumento sino por A/B: se devolvieron a su versión de `HEAD` **sólo** los 9 archivos de código que tocó la fase —dejando intacto el trabajo sin commitear de la Fase 4— y se repitieron los dos tests.
+
+| Test | Con el cierre | Sin el cierre (A/B) | Veredicto |
+|---|---|---|---|
+| `test_fase7_wiring::test_e2e_enabled_changes_model_and_reports` | FALLA `max_diff=9,10e-05` vs umbral `1e-4` | **FALLA idéntico** | **No es del cierre.** Corre tres inversiones completas y mide cuánto mueve el modelo el prior geológico; pasa por `solve_inversion_lsqr`, **la función cuya cadena de pesos reescribió la Fase 4 sin commitear**. Falla por un 9% por debajo del umbral |
+| `test_fase4_depth_weighting::test_effective_model_weight_is_column_sensitivity_not_depth_weighting` | FALLA en la suite (`1,78e-03` vs `1e-6`) | **PASA aislado, en ambos brazos** | **No es una regresión de código, es orden de ejecución.** El test pasa solo y falla dentro de la suite completa: hay contaminación entre tests. El instrumento de la Fase 4 no es fiable mientras dependa del orden |
+
+Que el borrado no pueda mover estos números era predecible —cada símbolo eliminado tenía **cero referencias**, así que no hay ruta de ejecución que cambiar— pero *predecible* no es *medido*, y la regla del proyecto es medir. **Ambos quedan como trabajo abierto de la Fase 4, no de la 6:** el primero exige decidir si el umbral `1e-4` describe el efecto real del prior tras la reescritura de pesos; el segundo, encontrar qué test contamina a cuál (probablemente estado global o `data/projects/` compartido) — porque **un test que sólo pasa cuando corre solo no defiende nada en la CI**.
 
 ---
 
@@ -1968,7 +2245,14 @@ En los cinco casos con arranque se compara el censo de `terraquantum-backend.exe
 
 **Trabajo.** (1) Panel de licencia: estado, activación por pegado de clave, tier vigente. (2) Botón "exportar diagnóstico" en el modal de error y en ajustes. (3) Indicador de conectividad honesto en la barra de estado. (4) **[H-27, prioritario dentro de esta fase] Superficie de degradaciones físicas:** que el fallback a topografía plana —y cualquier otra degradación con motivo nombrado ya registrada en el backend— emita un `warnings[]` y se muestre junto al resultado, no solo en el log. El canal existe; falta usarlo y montar `WarningBanner` también en la vista de resultados. (5) **Cambio de proceso:** añadir a la plantilla de gate de fase un criterio obligatorio *"un usuario puede hacer/ver X desde la UI"*, y auditar retroactivamente los gates de F5–F8 contra él.
 
-**Criterios de aceptación.** Un tester que no conozca el código activa una licencia, exporta un diagnóstico y ve su estado de conexión, sin tocar la API a mano. Playwright cubre los 3 recorridos. **Y un test de integración que fuerce el fallo de topografía verifica que el aviso aparece en la respuesta y en la UI** — no que se escribió en el log.
+> **Ampliado por el cierre de la Fase 6 (2026-08-14) — tres paneles ya escritos que sólo hay que montar.** Al medir los módulos TS/TSX sin importador aparecieron tres superficies terminadas y nunca montadas, y en dos casos son la ÚNICA UI de una función del backend que hoy queda varada. Es H-10 otra vez, pero al revés: allí eran endpoints sin UI; aquí es UI sin montar. **Es el trabajo más barato de esta fase, porque el código ya existe:**
+> - **`viewport/SliceControls.tsx`** — nadie más escribe el estado del corte, mientras `SectionPaintLayer` **sí** está montada en `Scene3D` y `/api/section` responde. O sea: el plano de corte tipo Leapfrog está construido de punta a punta y **no hay nada que lo encienda**.
+> - **`viewport/MultiPhysicsControls.tsx`** — `setViewMode` sólo se llama desde este panel y desde `packageInversion.ts:288`, que lo fija automáticamente según la física invertida. Hoy **el usuario no puede cambiar de vista a mano** (densidad / susceptibilidad / incertidumbre).
+> - **`MultimodalComboPanel.tsx`** — único consumidor de `/api/multimodal/plan`: la función multimodal de la Fase 21 tiene UI escrita y sin montar.
+>
+> Los tres entran de lleno en el criterio de proceso que esta fase introduce (*«un usuario puede hacer/ver X desde la UI»*), y son la prueba de que ese criterio hacía falta: **pasaron los gates de sus fases sin que nadie notara que no había forma de llegar a ellos**.
+
+**Criterios de aceptación.** Un tester que no conozca el código activa una licencia, exporta un diagnóstico y ve su estado de conexión, sin tocar la API a mano. Playwright cubre los 3 recorridos. **Y un test de integración que fuerce el fallo de topografía verifica que el aviso aparece en la respuesta y en la UI** — no que se escribió en el log. **Más, del cierre de la Fase 6:** el usuario puede encender el plano de corte y cambiar de vista a mano, con su recorrido Playwright.
 
 **Riesgo.** Bajo (frontend puro sobre backend probado). **Dependencia:** iteración separada frontend, según la regla del repo.
 

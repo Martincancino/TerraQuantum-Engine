@@ -43,7 +43,7 @@ CSV usuario → PrepPanel/PreparacionView
 | multimodal_api.py | **SECUNDARIO** | `/plan` vivo (MultimodalComboPanel) |
 | metrics_api.py | **SECUNDARIO** | `/metrics` ← AnalyticsPanel |
 | report_api.py | **DORADO** | `/export-report` vivo (frontendApi + proxy) |
-| keys_api.py | **SECUNDARIO** (latente) | Auth por API-key montada pero TQ_AUTH_ENABLED=false. ⚠️ F7: activarla HOY rompería la UI (el frontend nunca envía X-TQ-API-Key) |
+| keys_api.py | **SECUNDARIO** (latente) | Auth por API-key montada pero TQ_AUTH_ENABLED=false. ⚠️ Activarla hoy rompe la UI **a medias**: MEDIDO en la Fase 5, **17 de 43 proxies SÍ reenvían `X-TQ-API-Key`** y 26 no —entre ellos `geophysics-invert`—, así que importar/exportar funciona e invertir da 401. *(Corrige la afirmación anterior, «el frontend nunca envía X-TQ-API-Key», que era falsa por la mitad.)* Veredicto declarado: perilla de despliegue servidor/Docker, no soportada con la UI web — ver `docs/04` §9.3 |
 
 ## 3. Clasificación — servicios (grafo de imports de producción)
 
@@ -109,7 +109,7 @@ Verificación post-poda: compileall OK, 41 tests export+corrections PASS, `tsc -
 1. ~~Proxy `app/api/async/tasks/[task_id]/route.ts:35`: DELETE con method GET~~ ✅ RESUELTO en F3.4 (la vía Celery completa fue eliminada; la cancelación real es POST /geophysics-cancel).
 1b. **BUG PREEXISTENTE arreglado en F3.2**: `GeophysicsStatusResponse.status` tenía pattern sin "running" (lo que escribe el solver) → el polling devolvía 500 DURANTE la inversión. Ampliado a queued|processing|running|done|error|cancelled|interrumpida.
 2. `/block-model-zarr` serializa vóxel por vóxel a JSON (block_model_api.py:151-161) — funciona pero contradice el camino binario; revisar en F4 si los grids grandes se vuelven norma.
-3. `TQ_AUTH_ENABLED=true` rompería la web UI actual (frontend no envía el header) — resolver en F7 (licencias/seguridad).
+3. ~~`TQ_AUTH_ENABLED=true` rompería la web UI actual (frontend no envía el header)~~ ✅ **RESUELTO (declarado) en la Fase 5, 2026-08-15.** Se midió en vez de heredarse: **17/43 proxies sí reenvían la cabecera**, 26 no (incluido `geophysics-invert`), y el orquestador Tauri no fija `TQ_AUTH_ENABLED` ni `TQ_API_KEY`. Es una perilla de despliegue **servidor/Docker**, marcada como **no soportada con la UI web** en `docs/04` §9.3, dicha en voz alta en cada arranque y congelada por `tests/test_fase5_superficie_config.py`. De regalo: `TQ_AUTH_ENABLED=` (vacío) la **encendía** — corregido.
 4. `_BANNED_WORDS` duplicada (chat_api vs gemini_agent) — unificar en F6.
 5. Cobertura de tests HTTP inexistente en: borehole_api, chat_api, export_api, keys_api, favorability (endpoint) — F8 (schemathesis) lo cubrirá de golpe.
 6. ~~eslint baseline (2026-07-02): 7 errores preexistentes react-hooks~~ ✅ **ARREGLADOS en F2.5 (fb4fef7)**: ColSelect fuera del componente, validStationCount→useMemo, ObsVsCalcPanel→Inner con key-remount. eslint frontend = 0 errores; check.ps1 VERDE.

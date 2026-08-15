@@ -65,10 +65,15 @@ from middleware.api_key_middleware import ApiKeyMiddleware
 # Los módulos económicos/mineros (pit design, escenarios, métodos de minado,
 # flota FMS) fueron ELIMINADOS del producto (2026-06-10): TerraQuantum es una
 # plataforma de exploración geofísica — solo modelo 3D, sin NPV/LOM.
-# ENABLE_FOCUSING: reservado para un futuro router de focusing MS-IRLS dedicado.
-# El focusing actual corre internamente en geophysics_service; esta flag prepara
-# la arquitectura para exponerlo como endpoint independiente cuando sea necesario.
-_ENABLE_FOCUSING = os.environ.get("ENABLE_FOCUSING", "false").lower() == "true"
+# Fase 5 (H-11): aquí vivía `ENABLE_FOCUSING`, «reservada para un futuro router de
+# focusing MS-IRLS dedicado». Se leía del entorno, se guardaba en `_ENABLE_FOCUSING`
+# y NADIE la miraba nunca: sus dos únicas apariciones en todo el repositorio eran su
+# propio comentario y su propia asignación. Es el mismo pecado que USE_SPARSE_DIRECT
+# (H-2) y que las dos perillas de wavelet, ya borradas: una variable documentada que
+# promete un comportamiento y no despacha a ninguna parte. El focusing MS-IRLS que sí
+# existe corre dentro de `geophysics_service` y lo elige `regularization_norm` del
+# esquema de request — que es una decisión del usuario por corrida, no una perilla de
+# despliegue. El día que haya router propio, la perilla entra con su consumidor.
 
 ensure_runtime_dirs()
 init_gee()
@@ -94,6 +99,22 @@ if not TQ_AUTH_ENABLED:
         "MODO SIN AUTENTICACIÓN: TQ_AUTH_ENABLED=false. "
         "Todas las rutas son accesibles sin API key. "
         "En producción establece TQ_AUTH_ENABLED=true y configura TQ_MASTER_KEY."
+    )
+else:
+    # Fase 5 (H-11): el aviso que faltaba, y es el que le va a pasar a alguien.
+    # MEDIDO: con la autenticación activada, `POST /geophysics/invert` responde 401
+    # a la UI web, porque 26 de los 43 proxies de Next.js no reenvían la cabecera
+    # `X-TQ-API-Key` — y el orquestador de escritorio no fija `TQ_API_KEY`, así que
+    # ni los 17 que sí la reenvían tienen qué enviar. Y se llega aquí por accidente:
+    # una línea `TQ_AUTH_ENABLED=` en `.env.local` (vacía, que se lee como apagada)
+    # bastaba para activarla. `_env_bool` ya cerró esa puerta; ésta avisa de la que
+    # queda abierta a propósito.
+    _startup_log.warning(
+        "AUTENTICACIÓN ACTIVADA (TQ_AUTH_ENABLED=true). Modo SERVIDOR/Docker: la "
+        "interfaz web NO está soportada en esta configuración — la inversión y el "
+        "historial responderán 401 porque el navegador no envía X-TQ-API-Key. Si "
+        "querías la app de escritorio, pon TQ_AUTH_ENABLED=false. Ver docs/04 "
+        "§Superficie de configuración."
     )
 
 # Fase 3: la combinación PELIGROSA no es cada mitad, es el producto de las dos.

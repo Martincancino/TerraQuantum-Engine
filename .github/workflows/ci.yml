@@ -47,7 +47,7 @@ jobs:
         # El script contrasta los paquetes declarados con los que hay en disco.
         run: python scripts/ci/compile_check.py
 
-      - name: Guardas de arquitectura (capas, complejidad, inventario, dependencias)
+      - name: Guardas de arquitectura (capas, complejidad, inventario, dependencias, configuración)
         # Las puertas de la Fase 3 que no dependen de correr física:
         #  · presupuestos AST: la Fase 8 no puede deshacerse sola con el tiempo.
         #  · inventario: cada script de validation/ declara si decide o sólo mide (H-22).
@@ -58,11 +58,17 @@ jobs:
         #    —lo instalado ES el cierre—; su trabajo lo hace en la máquina de desarrollo
         #    vía check.ps1, ANTES del push.
         #  · tests: capas, guardas de CI, contabilidad del gate F9 y calibración absoluta.
+        #  · superficie de configuración (Fase 5, H-11): censa por AST las 42 variables
+        #    de entorno del backend y falla si aparece una nueva sin declarar — que es
+        #    el criterio de aceptación de esa fase. Va AQUÍ y no en el paso de suite
+        #    porque cuatro de sus tests llevan marca `slow` (invierten de verdad para
+        #    demostrar que las perillas del solver no son decorativas) y `-m "not slow"`
+        #    los deselecciona. Sin filtro corren, y el archivo entero mide 1 min 38 s.
         run: |
           python scripts/ci/ast_budgets.py
           python scripts/ci/validation_inventory.py
           python scripts/ci/deps_closure.py
-          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py -q
+          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py tests/test_fase5_superficie_config.py -q
 
       - name: Canario de física (regresión W_z sobre esfera sintética)
         # H-4: la regresión física NUNCA corría automáticamente. Y el arreglo no

@@ -1796,8 +1796,12 @@ class GravimetryInversion:
         extra_reg_blocks: Optional[list] = None,
         extra_reg_rhs: Optional[list] = None,
         prune_observable_domain: bool = True,
-        # ── AUDIT H-A4: β configurable para test de sensibilidad ─────────────
-        depth_beta: float = 2.0,    # Li & Oldenburg: 2.0 = estándar industrial
+        # ── FASE 4: aquí vivía `depth_beta` (AUDIT H-A4). Se eliminó porque NO
+        # HACÍA NADA: la normalización de columnas lo cancelaba exactamente.
+        # La demostración, el número y la decisión están abajo, en el bloque
+        # "Peso de modelo", y el invariante en tests/test_fase4_depth_weighting.py.
+        # El solver Octree (`solve_inversion_treemesh`) SÍ tiene un depth weighting
+        # vivo y conserva su `depth_beta`: son dos funcionales distintos.
         # ── FASE 16: Ajuste automático de kappas ─────────────────────────────
         # Si True, escala padding_kappa y anchor_kappa cuando cond(A) > 1e12
         # (estimado por ratio de normas-columna de _G_aug_sm, O(nnz), sin SVD).
@@ -2188,70 +2192,76 @@ class GravimetryInversion:
             _lap_row_scale[_anchor_active] = float(laplacian_relax_alpha)
             L_active = (sp.diags(_lap_row_scale) @ L_active).tocsr()
 
-        # ── H-A0 Bug 1: W_z formal (Li & Oldenburg 1998) — cambio de variable ─
-        # Reemplaza column scaling (Ws) + depth weighting separado (w_reg).
-        # Wz_inv = diag((depth+z0)^{+β/2}) aplica simétricamente en datos
-        # Y regularización → elimina la doble compensación de profundidad.
-        # Referencia: test sintético 2026-06-07, pico a 775m vs 400m real (FAIL).
-        z0 = self.dy / 2.0
-        true_depth = y_c_active - _topo_sol
-        true_depth = np.clip(true_depth, a_min=1.0, a_max=None)
-
-        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
-        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)   # escala global ~1
-        Wz_inv = sp.diags(wz_inv_diag)
-
-        # Bounds en espacio m_tilde: density = base_density + Wz_inv @ m_tilde
-        _lb_tilde = (float(density_min) - self.base_density) / np.maximum(wz_inv_diag, 1e-12)
-        _ub_tilde = (float(density_max) - self.base_density) / np.maximum(wz_inv_diag, 1e-12)
-
-        G_scaled = G_w @ Wz_inv
-        L_scaled = L_active @ Wz_inv
-
-        # ── Fase 14: Column Normalization (Ws) — separado de Wz_inv físico ──────
-        # ORDEN EXPLÍCITO: Wd (pesos datos) → Wz_inv (profundidad física) → Ws (cond.)
+        # ── Peso de modelo: ponderación por SENSIBILIDAD ─────────────────────────
+        # Aquí vivía un bloque titulado "H-A0 Bug 1: W_z formal (Li & Oldenburg 1998)"
+        # que decía implementar el depth weighting estándar con el parámetro
+        # `depth_beta`. La FASE 4 (auditoría 06 §10, hallazgo H-1) midió que no lo
+        # implementaba, y por qué. Esta es la demostración, en tres líneas:
         #
-        # Wz_inv es un cambio de variable FÍSICO: compensa la caída de sensibilidad
-        # con la profundidad (Li & Oldenburg 1998). m = Wz_inv @ m_tilde en este punto.
+        #     Wz_inv   = diag((z+z0)^{+β/2})                     ← "depth weighting"
+        #     Ws       = diag(1/‖col_j(G_w·Wz_inv)‖)             ← se calculaba DESPUÉS
+        #              = diag(1/(w_j·‖col_j(G_w)‖))
+        #     Wz_inv·Ws = diag(1/‖col_j(G_w)‖)                   ← w_j se cancela
         #
-        # Ws = diag(1 / ‖col_j(G·Wz_inv)‖₂) es normalización ALGEBRAICA de
-        # condicionamiento: lleva columnas a norma ~1, preservando la calibración
-        # N_CALIB=256. SIN Ws, lambda=3.0 domina los datos ~14 000× (magnitudes SI).
+        # `Ws` se computaba sobre el kernel YA pesado por `Wz`, así que deshacía
+        # exactamente lo que `Wz` acababa de hacer: la columna j del sistema quedaba en
+        # g_j/‖g_j‖, sin rastro de β. También los bounds: (d−base)/w_j · w_j‖g_j‖.
+        # Medido a precisión de máquina (1,7e-16) y luego E2E: mover β de 0 a 4 cambiaba
+        # la solución 2,5e-04 con TRF y 5,2e-06 con LSQR+GPCG — es decir, un residuo de
+        # PARADA TEMPRANA (depende del solver), no un efecto físico.
         #
-        # IMPORTANTE: después de Ws, m_tilde NO tiene interpretación física directa.
-        # La densidad real se recupera con: m = Wz_inv_combined @ m_tilde,
-        # donde Wz_inv_combined = Wz_inv_phys @ Ws (fusionados en Wz_inv abajo).
-        _col_norms_wz = np.sqrt(G_scaled.power(2).sum(axis=0)).A1
+        # LO QUE EL CÓDIGO APLICA DE VERDAD, y que este comentario ahora sí describe:
+        # el bloque de smallness penaliza ‖m̃‖² con m̃ = diag(‖col_j(W_d·G)‖)·m, o sea
+        #
+        #     φ_smallness = λ_eff² · Σ_j ( ‖col_j(W_d·G)‖ · m_j )²
+        #
+        # una ponderación por SENSIBILIDAD. Medida sobre la malla del producto, esa
+        # norma de columna resulta ser una ley de potencia limpia (desviación máx 5,3 %)
+        # equivalente a un Li & Oldenburg de **β ≈ 2,63** — la misma familia que el
+        # estándar industrial β=2, algo más agresiva. El problema que H-1 nombra no es
+        # que el peso tenga mala forma: es que **no es ajustable y no está declarado**,
+        # lo fija el kernel y no una decisión.
+        #
+        # `Ws` conserva además su papel algebraico legítimo: sin él λ=3.0 domina los
+        # datos ~14 000× (magnitudes SI) y se pierde la calibración N_CALIB=256.
+        # m̃ NO tiene interpretación física directa: m = Ws @ m̃.
+        #
+        # La Fase 4 midió la alternativa (separar `Ws` como precondicionador global y
+        # meter `(z+z0)^{−β/2}` como peso explícito) en 576 inversiones con Morozov
+        # re-eligiendo λ en cada brazo, y decidió NO cablearla — ver el registro de la
+        # fase. Instrumento: scripts/validation/wz_separation_probe.py.
+        # Invariante ejecutable: tests/test_fase4_depth_weighting.py.
+        _col_norms_wz = np.sqrt(G_w.power(2).sum(axis=0)).A1
         _col_norms_wz = np.maximum(_col_norms_wz, 1e-12)
-        Ws        = sp.diags(1.0 / _col_norms_wz)   # normalización algebraica (Ws)
-        G_scaled  = G_scaled @ Ws
-        L_scaled  = L_scaled @ Ws
-        _lb_tilde = _lb_tilde * _col_norms_wz   # bounds en espacio m_tilde post-Ws
-        _ub_tilde = _ub_tilde * _col_norms_wz
+        Ws        = sp.diags(1.0 / _col_norms_wz)   # m = Ws @ m_tilde
+        G_scaled  = G_w @ Ws
+        L_scaled  = L_active @ Ws
+        # Bounds: el box físico [density_min, density_max] llevado a m̃ con la MISMA
+        # biyección que recupera la densidad (m̃_j = ‖col_j‖ · m_j). Es exacta.
+        _lb_tilde = (float(density_min) - self.base_density) * _col_norms_wz
+        _ub_tilde = (float(density_max) - self.base_density) * _col_norms_wz
 
         # ── FASE 2.3: override de bounds por unidad litológica (membership dura) ─
         # En las celdas con litología conocida, reemplaza el box escalar global por
         # el box [dens_min, dens_max] de su unidad, transformado al espacio m_tilde
-        # con la MISMA cadena Wz_inv·Ws que el bound global. El solver con bounds
+        # con la MISMA transformación que el bound global. El solver con bounds
         # (TRF/FISTA proyectado) lo impone satisfaciendo KKT por celda.
         if _litho_lb_active is not None:
             _ml = np.isfinite(_litho_lb_active)
             if _ml.any():
-                _wz_l = np.maximum(wz_inv_diag[_ml], 1e-12)
                 _cn_l = _col_norms_wz[_ml]
-                _lb_tilde[_ml] = (_litho_lb_active[_ml] - self.base_density) / _wz_l * _cn_l
-                _ub_tilde[_ml] = (_litho_ub_active[_ml] - self.base_density) / _wz_l * _cn_l
+                _lb_tilde[_ml] = (_litho_lb_active[_ml] - self.base_density) * _cn_l
+                _ub_tilde[_ml] = (_litho_ub_active[_ml] - self.base_density) * _cn_l
                 logger.info(
                     f"[FASE 2.3] Bounds litológicos por unidad aplicados a "
                     f"{int(_ml.sum()):,} celda(s) (membership dura, KKT)."
                 )
-        Wz_inv    = Wz_inv @ Ws                  # m = Wz_inv_combined @ m_tilde
 
         # ── Sistema augmentado ────────────────────────────────────────────────
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
 
         # ── Modelo de referencia m_ref (Li & Oldenburg 1999) ──────────────────
-        # L_scaled = L_active @ Wz_inv; m = Wz_inv @ m_tilde.
+        # L_scaled = L_active @ Ws; m = Ws @ m_tilde.
         # Residual de regularización: λ_spatial · L_active · (m − m_ref).
         # RHS de las filas de regularización: λ_spatial · L_active · m_ref.
         # m_ref is None → d_reg = 0 → idéntico al solver sin referencia.
@@ -2296,8 +2306,8 @@ class GravimetryInversion:
 
         # ── FASE 9C-1: inyección de regularización externa (cross-gradient) ───
         # Los bloques llegan en ESPACIO FÍSICO del modelo (m); el solver trabaja en
-        # la variable escalada m_tilde con m = Wz_inv·m_tilde, de modo que cada bloque B
-        # se convierte vía B·Wz_inv (igual que L_scaled = L_active·Wz_inv). El RHS se apila tal
+        # la variable escalada m_tilde con m = Ws·m_tilde, de modo que cada bloque B
+        # se convierte vía B·Ws (igual que L_scaled = L_active·Ws). El RHS se apila tal
         # cual (vive en el espacio de residual del bloque). Joint v1.1: el caller
         # recorta B[:, obs_mask] antes de pasar → B.shape[1] = n_active_sol (post-poda).
         if extra_reg_blocks:
@@ -2305,13 +2315,13 @@ class GravimetryInversion:
             _xg_rhs  = [d_aug]
             for _bi, _blk in enumerate(extra_reg_blocks):
                 _blk = sp.csr_matrix(_blk)
-                if _blk.shape[1] != Wz_inv.shape[0]:
+                if _blk.shape[1] != Ws.shape[0]:
                     raise ValueError(
                         f"extra_reg_blocks[{_bi}] tiene {_blk.shape[1]} columnas; "
-                        f"se esperaban {Wz_inv.shape[0]} (modelo activo post-poda). "
+                        f"se esperaban {Ws.shape[0]} (modelo activo post-poda). "
                         f"Recorta columnas al dominio observable: B[:, obs_mask_g]."
                     )
-                _xg_mats.append(_blk @ Wz_inv)
+                _xg_mats.append(_blk @ Ws)
                 if extra_reg_rhs is not None and _bi < len(extra_reg_rhs):
                     _xg_rhs.append(np.asarray(extra_reg_rhs[_bi], dtype=np.float64).ravel())
                 else:
@@ -2321,21 +2331,22 @@ class GravimetryInversion:
             logger.info(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
 
         # H-A0 Bug 2: lambda scaling con n_active (calibrado a N_CALIB=256).
-        # Con Wz_inv la smallness es uniforme en m_tilde; solo se escala la magnitud.
+        # La smallness es uniforme en m_tilde; solo se escala la magnitud.
         _N_CALIB = 256
         lambda_mag_eff = float(lambda_mag) * np.sqrt(float(_n_active_sol) / _N_CALIB)
 
         logger.info(
-            f"[INVERSIÓN F0.2] Ejecutando LSQR (H-A0: W_z formal). "
+            f"[INVERSIÓN F0.2] Ejecutando LSQR. "
             f"lambda_mag={lambda_mag:.2e} | lambda_mag_eff={lambda_mag_eff:.2e} "
-            f"| lambda_spatial={lambda_spatial:.2e} | depth_beta={depth_beta}"
+            f"| lambda_spatial={lambda_spatial:.2e}"
         )
 
-        # ── Regularización compuesta (objetivo de modelo Li & Oldenburg 1998) ─
-        #   φ_m = ‖ lambda_spatial · L_active · Wz_inv · (m_tilde − m_ref_tilde) ‖²   (suavidad)
+        # ── Regularización compuesta ─────────────────────────────────────────
+        #   φ_m = ‖ lambda_spatial · L_active · Ws · (m_tilde − m_ref_tilde) ‖²   (suavidad)
         #       + ‖ diag(lambda_mag_eff) · m_tilde ‖²   (smallness en espacio transformado)
-        # El depth weighting vive en Wz_inv (cambio de variable); el bloque smallness
-        # es identidad en m_tilde para no reintroducir doble compensación.
+        # La suavidad opera sobre el contraste FÍSICO (L_active·Ws·m̃ = L_active·m).
+        # La smallness es identidad en m̃, que en espacio físico equivale a pesar por
+        # ‖col_j(W_d·G)‖ — la ponderación por sensibilidad descrita arriba.
         # padding (R-02) y anclajes (FASE 8) usan RHS en espacio m_tilde.
         # RHS de smallness: 0 (core/padding → hacia base_density) excepto celdas
         # ancladas, que apuntan al contraste medido del sondaje. El residual de la
@@ -2343,34 +2354,29 @@ class GravimetryInversion:
         _small_target = np.zeros(_n_active_sol, dtype=np.float64)
         if _has_anchors:
             # FASE 25B: el target de anclaje vive en CONTRASTE FÍSICO (t/m³), pero el
-            # bloque smallness opera en m_tilde con  m = base_density + Wz_inv·m_tilde.
+            # bloque smallness opera en m_tilde con  m = base_density + Ws·m_tilde.
             # Para que la densidad recuperada en la celda anclada sea
             #   base_density + contraste_medido
-            # el target en m_tilde debe ser  contraste / diag(Wz_inv)  usando el MISMO
-            # Wz_inv que mapea m_tilde→m (ya incluye el column-norm Ws, línea ~1700).
-            # Esta es exactamente la misma transformación que los bounds (líneas
-            # 1674/1698): bound_tilde = (densidad − base) / diag(Wz_inv). Sin ella,
+            # el target en m_tilde debe ser  contraste / diag(Ws)  usando el MISMO
+            # Ws que mapea m_tilde→m. Es exactamente la misma transformación que los
+            # bounds de arriba: bound_tilde = (densidad − base) · ‖col_j‖. Sin ella,
             # anclar m_tilde→contraste deja la densidad en base + diag·contraste ≈ base
-            # (atenuada por el depth-weighting) — el bug medido E2E en Fase 25.
-            # NOTA: NO se toca m_ref_sol (línea ~1739): la suavidad opera como
-            # L_active·(Wz_inv·m_tilde − m_ref) = L_active·(m_phys − m_ref), por lo que
+            # — el bug medido E2E en Fase 25.
+            # NOTA: NO se toca m_ref_sol: la suavidad opera como
+            # L_active·(Ws·m_tilde − m_ref) = L_active·(m_phys − m_ref), por lo que
             # ahí el contraste físico es el espacio CORRECTO.
-            _wz_inv_comb_diag = np.asarray(Wz_inv.diagonal(), dtype=np.float64)
-            # Protección contra división por cero: diag(Wz_inv) es estrictamente > 0
-            # por construcción ((depth+z0)^β/2 · 1/‖col‖), pero se blinda igualmente.
-            _wz_safe = np.where(
-                np.abs(_wz_inv_comb_diag) < 1e-12,
-                1e-12,
-                _wz_inv_comb_diag,
-            )
+            _ws_diag = np.asarray(Ws.diagonal(), dtype=np.float64)
+            # Protección contra división por cero: diag(Ws) = 1/‖col_j‖ es estrictamente
+            # > 0 por construcción (‖col‖ está acotada a 1e-12), pero se blinda igual.
+            _wz_safe = np.where(np.abs(_ws_diag) < 1e-12, 1e-12, _ws_diag)
             _small_target[_anchor_active] = (
                 _anchor_contrast_active[_anchor_active] / _wz_safe[_anchor_active]
             )
 
         # ── FASE 2.1: Anclaje DURO (hard constraint por eliminación de variables) ─
         # En modo "hard" las celdas ancladas se FIJAN exactamente a su valor de
-        # sondaje: el valor objetivo en m_tilde es _small_target (= contraste/diag(Wz_inv),
-        # de modo que Wz_inv·m_tilde = contraste exacto). Se elimina la celda del sistema
+        # sondaje: el valor objetivo en m_tilde es _small_target (= contraste/diag(Ws),
+        # de modo que Ws·m_tilde = contraste exacto). Se elimina la celda del sistema
         # moviendo su contribución G_aug[:,j]·target al RHS y anulando la columna j; tras
         # resolver se reinyecta el valor exacto. Sin error residual de smallness (~2% soft).
         if _hard_anchor:
@@ -2491,11 +2497,33 @@ class GravimetryInversion:
                 _solver_label = f"LSMR (Fase10, n>{_LSMR_THRESH:,})"
             else:
                 _solver_label = "LSQR+clip"
+            # Fase 5 (H-11): recordar el despacho REAL para publicarlo abajo.
+            # El reporte del servicio traía `bounded_solver_active` calculado con
+            # `os.getenv("USE_BOUNDED_SOLVER")`, que es lo que se PIDIÓ. Medido con
+            # 8.712 celdas activas y la variable sin tocar: el solver despachó
+            # `LSQR+clip` y el reporte afirmaba `true`. Y no es un caso de borde —
+            # el umbral son 8.000 celdas y el producto declara mallas de 30k-100k
+            # vóxeles, así que en el régimen normal el campo estaba SIEMPRE mal.
+            # `validation/runner.py` lo lee para caracterizar cada corrida: era
+            # evidencia de validación contaminada.
+            #
+            # Se anota en LOCALES, no en `solver_meta` aquí: un `if solver_meta is
+            # not None` en este punto añadía una rama a `solve_inversion_lsqr`, que
+            # ya tiene CC=143 y es la función que la Fase 8 tiene que partir. El
+            # bloque de más abajo ya está guardado; escribir allí cuesta cero ramas.
+            # (El bucle IRLS corre siempre al menos una vez —`_n_irls = max(1, …)`—
+            # así que estos nombres existen después, con el despacho de la última
+            # iteración, que es el que produjo el modelo que se devuelve.)
+            _solver_path_usado   = _solver_label
+            _bounded_usado       = bool(_use_trf)
+            _bounded_pedido      = bool(_USE_BC)
+            _lsmr_usado          = bool(_use_lsmr)
+            _proyectado_usado    = False   # FISTA corre después del solve; lo pone a True
             _norm_tag = f"norm={_reg_norm}" + (f"/irls{_irls_it}" if _reg_norm != "l2" else "")
             logger.info(
                 f"[SOLVER] G_aug=({_G_aug_sm.shape[0]:,}×{_G_aug_sm.shape[1]:,}) "
                 f"n_active_sol={_n_active_sol:,} NNZ={_G_aug_sm.nnz:,} "
-                f"smallness=W_z-formal(H-A0) lambda_eff={lambda_mag_eff:.2e} "
+                f"smallness=sensibilidad(||col_j||) lambda_eff={lambda_mag_eff:.2e} "
                 f"{_norm_tag} -> {_solver_label}"
             )
             _t_solve = time.perf_counter()
@@ -2560,18 +2588,19 @@ class GravimetryInversion:
                         f"[SOLVER] FISTA proyectado en {time.perf_counter()-_t_pgd:.1f}s "
                         f"(post-{'LSMR' if _use_lsmr else 'LSQR'}+warm-start)."
                     )
+                    _proyectado_usado = True   # Fase 5: lo que PASÓ, no lo que se pidió
                     if solver_meta is not None:
                         solver_meta["pgd"] = _pgd_info
 
             # FASE 2.1: reinyecta el valor EXACTO en las celdas de anclaje duro.
             # Sus columnas fueron eliminadas → el solver las dejó en 0; se restaura
-            # m_tilde[j] = target para que Wz_inv·m_tilde = contraste medido exacto
-            # (también antes del reweighting IRLS, que lee Wz_inv·m_tilde).
+            # m_tilde[j] = target para que Ws·m_tilde = contraste medido exacto
+            # (también antes del reweighting IRLS, que lee Ws·m_tilde).
             if _hard_anchor:
                 m_tilde[_anchor_active] = _small_target[_anchor_active]
 
             # ── Reponderación IRLS minimum-support (compact/mixed) ─────────────
-            # Foco sobre el CONTRASTE FÍSICO c = Wz_inv·m_tilde (t/m³). Peso
+            # Foco sobre el CONTRASTE FÍSICO c = Ws·m_tilde (t/m³). Peso
             # f_i = 1/sqrt(c_i² + ε²) normalizado a media 1 sobre celdas libres:
             # concentra la penalización donde c≈0 (vacía el fondo) y la relaja
             # donde hay cuerpo (lo deja crecer) → cuerpos compactos y nítidos.
@@ -2580,7 +2609,7 @@ class GravimetryInversion:
             # ε se enfría por iteración para endurecer progresivamente el foco.
             if _reg_norm == "l2":
                 break
-            _c = Wz_inv @ m_tilde
+            _c = Ws @ m_tilde
             _c_free = np.abs(_c[_free_mask]) if _free_mask.any() else np.abs(_c)
             if _eps is None:
                 _eps = (
@@ -2619,7 +2648,7 @@ class GravimetryInversion:
                 f"o lambda_mag={lambda_mag:.2e}."
             )
 
-        density_contrast_active = Wz_inv @ m_tilde
+        density_contrast_active = Ws @ m_tilde
 
         if len(density_contrast_active) != _n_active_sol:
             raise RuntimeError("LSQR devolvió un vector de densidad activo con tamaño incorrecto.")
@@ -2713,6 +2742,12 @@ class GravimetryInversion:
         if solver_meta is not None:
             solver_meta["acond"]         = float(_acond)
             solver_meta["chi2_final"]    = float(_chi2_final)
+            # Fase 5 (H-11): qué solver corrió DE VERDAD, frente a cuál se pidió.
+            solver_meta["solver_path"]               = _solver_path_usado
+            solver_meta["bounded_solver_used"]       = _bounded_usado
+            solver_meta["bounded_solver_requested"]  = _bounded_pedido
+            solver_meta["lsmr_used"]                 = _lsmr_usado
+            solver_meta["projected_solver_used"]     = _proyectado_usado
             # FASE 24B: norma de regularización usada + diagnóstico IRLS compacto
             solver_meta["regularization_norm"] = _reg_norm
             solver_meta["compact_irls_iters"]  = len(_compact_hist)

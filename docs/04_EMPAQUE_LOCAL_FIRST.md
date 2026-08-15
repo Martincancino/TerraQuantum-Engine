@@ -35,7 +35,7 @@ El frontend **no se tocó** (respeta "iteraciones separadas"): el `next.config.t
 **Reproducibilidad (Fase 2, H-23).** El determinismo numérico ya estaba cubierto —`numpy`, `scipy`, `pyproj` y `polars` con pin exacto— pero la cadena de build no. Ahora:
 - `terraquantum-backend/requirements-build.txt` fija **`pyinstaller==6.21.0`**, la herramienta que produce el ejecutable que se firma y distribuye. Va en un archivo aparte a propósito: PyInstaller no debe viajar dentro del contenedor Docker ni del entorno del usuario.
 - `terraquantum-backend/.python-version` declara el intérprete verificado (3.14.4).
-- Las 6 dependencias que usaban `>=` sin techo (`pyarrow`, `zarr`, `dask`, `PyWavelets`, `scikit-learn`, `scikit-image`) llevan **techo de major**, con la versión medida anotada al lado.
+- Las 6 dependencias que usaban `>=` sin techo (`pyarrow`, `zarr`, `dask`, `PyWavelets`, `scikit-learn`, `scikit-image`) llevan **techo de major**, con la versión medida anotada al lado. *(`PyWavelets` ya no está: se eliminó el 2026-08-14 al cerrar la Fase 6 junto con `exploration/jacobian_wavelet.py`, su único importador. Quedan 5.)*
 - `tests/test_fase2_arranque.py::test_no_requirement_is_unbounded` convierte eso en invariante: una dependencia nueva sin techo rompe la suite.
 
 ---
@@ -143,3 +143,79 @@ El principio de producto —*"ningún input produce crash ni basura silenciosa; 
 > **Honestidad sobre el caso (e).** El criterio original decía "matar durante una inversión". El gate mata con **tráfico real en vuelo por ambos sidecars**, no durante una inversión completa (que exigiría un paquete de datos y minutos de cómputo). Es una aproximación deliberada y está anotada en el propio script: lo que se prueba es el ciclo de vida de los procesos, que no depende de qué esté calculando el backend.
 
 **Seguridad del arranque.** El default de `TERRAQUANTUM_HOST` pasó de `0.0.0.0` a `127.0.0.1` (H-15): la API corre sin autenticación por defecto, así que el binding a loopback es la única barrera real, y ahora lo es **por construcción** y no porque tres lanzadores se acuerden de fijarlo. Docker sigue pidiendo `0.0.0.0` explícito, que es lo correcto dentro de un contenedor. Y el navegador **dejó de conocer la URL del backend** (H-21): las tres llamadas directas que quedaban se enrutaron por proxies nuevos (`/api/export-bundle`, `/api/delete-run`, `/api/project-footprint`), con un gate estático —`terraquantum-web/scripts/check_client_backend_calls.mjs`— que falla si alguna vuelve.
+
+---
+
+## 9. Superficie de configuración (Fase 5)
+
+Todo lo que este producto lee del entorno, en una sola tabla. La lista no se mantiene a mano: `terraquantum-backend/tests/test_fase5_superficie_config.py` censa el backend por AST y **falla si aparece una variable que no esté declarada aquí y allí**. Antes de la Fase 5 había 44 variables y ningún sitio las enumeraba; 29 no las tocaba ningún test (H-11), incluidas todas las del solver.
+
+**Reglas del vocabulario, iguales para todas** (Fase 5, antes había dos y las dos mentían fuera del par exacto `true`/`false`):
+
+* **Booleanas** — sí: `1 true t yes y on si`. No: `0 false f no n off`. Mayúsculas indiferentes.
+* **Vacía o ausente = el valor por defecto.** Una línea `TQ_AUTH_ENABLED=` en `.env.local` significa *no la declaré*, no *enciéndela*.
+* **Un valor ininteligible detiene el arranque nombrando la variable.** Vale para booleanas, enteros y decimales. Adivinar un default en silencio es cómo un flag de seguridad acaba encendido sin que nadie lo pidiera.
+
+### 9.1 Arranque, datos y red
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `TERRAQUANTUM_DATA_DIR` | `<repo>/terraquantum-backend/data` | Raíz de los datos del usuario. El instalador la fija a `%APPDATA%\TerraQuantum\data` (§2). Respaldar = copiar esa carpeta |
+| `TERRAQUANTUM_HOST` | `127.0.0.1` | Interfaz de escucha. **Sólo Docker debe ponerla en `0.0.0.0`**, y lo hace explícito |
+| `TERRAQUANTUM_PORT` | `8010` | Puerto del backend. El orquestador elige otro del tramo si está ocupado (§8) |
+| `TERRAQUANTUM_INSTANCE_TOKEN` | *(vacío)* | Identidad del proceso; el shell la compara contra `/health` para distinguir su sidecar de un zombi (H-19) |
+| `CORS_ALLOWED_ORIGINS` | `localhost:3000,3001` + `127.0.0.1:3000` | Orígenes del navegador. Con `*` el arranque avisa, y con autenticación activada **se niega a arrancar** |
+| `CSV_MAX_BYTES` | `10485760` (10 MB) | Tope de subida de CSV |
+
+### 9.2 Motor de inversión
+
+Cuatro perillas de rollback. La Fase 5 las midió **con una inversión real** (384 celdas, A/B desde el entorno): las cuatro están vivas.
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `USE_BOUNDED_SOLVER` | `true` | `false` → LSQR+clip en vez de TRF con bounds. **Sólo decide por debajo de 8.000 celdas activas**; por encima el solver usa LSQR+clip esté como esté |
+| `USE_PROJECTED_SOLVER` | `true` | `false` → sin refinamiento FISTA. **Medido: el χ² pasa de 0,244 a 22,7 (93×)**. Es la vía de escape si FISTA se rompe, no una preferencia |
+| `USE_LSMR_LARGE` | `true` | `false` → LSQR también en mallas grandes |
+| `LSMR_THRESHOLD_N_ACTIVE` | `50000` | Celdas activas a partir de las cuales se usa LSMR |
+| `TQ_INVERSION_WORKERS` | `1` | Inversiones simultáneas en la cola de corridas |
+| `TQ_TEST_SLOW_BEFORE_SOLVE_S` | `0` | **Gancho de prueba** leído por código de producción: retarda el inicio del solve para que los tests de progreso y cancelación tengan una ventana determinista. En una instalación real no debe estar puesta |
+
+### 9.3 Licencia y autenticación
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `TQ_LICENSE` | *(vacío)* | Token de licencia por entorno (alternativa al archivo `license.key`) |
+| `TQ_LICENSE_PUBLIC_KEY_HEX` | *(vacío)* | Clave pública Ed25519 del emisor. Vacía = **modo local libre**, sin límites |
+| `TQ_FREE_MAX_VOXELS` | `40000` | Tope de vóxeles del tier `free` |
+| `TQ_AUTH_ENABLED` | `false` | Autenticación por API key. **Ver el aviso de abajo** |
+| `TQ_MASTER_KEY` | *(vacío)* | Clave maestra para administrar API keys en `/api/keys/` |
+
+> ### ⚠️ `TQ_AUTH_ENABLED` es una perilla de despliegue SERVIDOR/Docker. **No está soportada con la interfaz web.**
+>
+> Si se activa, la app de escritorio y la web quedan **medio rotas**: importar y exportar siguen funcionando y **invertir devuelve 401**. Medido: de los 43 proxies de Next.js, **17 reenvían la cabecera `X-TQ-API-Key`** (desde `process.env.TQ_API_KEY`) y **26 no**, y entre estos últimos está `geophysics-invert`. Además, el orquestador de escritorio (`src-tauri/src/lib.rs`) no fija `TQ_AUTH_ENABLED` **ni** `TQ_API_KEY`, así que ni los 17 tendrían clave que enviar.
+>
+> *(Corrige lo que decía `docs/03` — «el frontend nunca envía `X-TQ-API-Key`» — que era falso por la mitad. Una rotura asimétrica es peor de diagnosticar que una total: el usuario ve una app que a ratos funciona.)*
+>
+> **Úsala sólo cuando el cliente HTTP sea tuyo** (Docker, servidor, integración programática) y emite las keys con `TQ_MASTER_KEY`. En escritorio, déjala en `false`. El backend lo dice en voz alta en cada arranque, en los dos sentidos. Soportarla con la UI exige que el orquestador acuñe una clave y la pase a los dos procesos, y que los 26 proxies la reenvíen: es trabajo de producto y está declarado, no supuesto.
+
+### 9.4 Servicios externos (todos opcionales; sin ellos el producto funciona)
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `OPENTOPO_API_KEY` | *(vacío)* | Clave de OpenTopography para descargar DEM (corrección de terreno). Sin ella, 50 llamadas/día |
+| `GEE_CREDENTIALS_PATH` | `<backend>/credenciales_gee.json` | JSON de cuenta de servicio de Google Earth Engine. Si falta, el backend lo dice y sigue |
+| `GEMINI_API_KEY` | *(vacío)* | Clave del copiloto en el servidor. **Es sólo el último recurso**: el modelo es BYO-key y la clave del consultor viaja desde su navegador y manda sobre ésta |
+| `GEMINI_MODEL_NAME` | `gemini-2.0-flash` | Modelo por defecto del copiloto |
+| `GEMINI_CHAT_MODEL` | = `GEMINI_MODEL_NAME` | Modelo del chat |
+| `GEMINI_REPORT_MODEL` | = `GEMINI_MODEL_NAME` | Modelo del borrador de informe |
+| `GEMINI_CONTEXT_CACHE` | `false` | Caché de contexto del chat (opt-in: tiene coste y ciclo de vida propios) |
+| `GEMINI_CONTEXT_CACHE_TTL` | `600` | Segundos de vida de esa caché |
+| `JOINT_ENABLE_GEMINI` | `false` | Interpretación geológica por LLM al final de la inversión conjunta. Apagada por defecto para devolver el modelo 3D sin la latencia del LLM |
+
+### 9.5 Observabilidad
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `OTEL_ENABLED` | `false` | Trazas OpenTelemetry. Apagada = coste cero |
+| `OTEL_SERVICE_NAME` | `terraquantum-backend` | Nombre del servicio en las trazas |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(vacío)* | Vacío = exportador de consola (desarrollo); con valor, Jaeger/Tempo |

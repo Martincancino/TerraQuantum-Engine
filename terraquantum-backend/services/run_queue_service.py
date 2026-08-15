@@ -37,13 +37,16 @@ import time
 from collections import deque
 from typing import Any, Dict, Optional, Tuple
 
+from core.config import env_float, env_int
 from core.logging import get_logger
 
 _log = get_logger(__name__)
 
 CANCEL_FILENAME = "cancel.requested"
 
-_MAX_WORKERS = max(1, int(os.getenv("TQ_INVERSION_WORKERS", "1")))
+# Fase 5 (H-11): antes `int(os.getenv(...))` a pelo. Un `TQ_INVERSION_WORKERS=dos`
+# tumbaba el arranque con un `invalid literal` que no nombra la variable.
+_MAX_WORKERS = max(1, env_int("TQ_INVERSION_WORKERS", 1))
 
 _LOCK = threading.Lock()
 _ACTIVE: "Dict[Tuple[str, str], mp.Process]" = {}
@@ -132,7 +135,9 @@ def _worker_entry(payload: dict, project_id: str, run_id: str) -> None:
     # Hook de test E2E (F3): retardo artificial ANTES de resolver, para que los
     # tests de progreso/cancelación tengan una ventana determinista. Inocuo en
     # producción (sin la variable no duerme).
-    _slow_s = float(os.getenv("TQ_TEST_SLOW_BEFORE_SOLVE_S", "0") or 0)
+    # Fase 5: `float(os.getenv(...))` crudo moría AQUÍ DENTRO, en el worker de
+    # inversión y a mitad de una corrida del usuario, sin nombrar la variable.
+    _slow_s = env_float("TQ_TEST_SLOW_BEFORE_SOLVE_S", 0.0)
     if _slow_s > 0:
         deadline = time.monotonic() + _slow_s
         while time.monotonic() < deadline:
@@ -335,16 +340,11 @@ def cancel_run(project_id: str, run_id: str) -> Dict[str, Any]:
     return {"cancelled": True, "outcome": outcome}
 
 
-def queue_snapshot() -> Dict[str, Any]:
-    """Estado de la cola (diagnóstico/UI)."""
-    with _LOCK:
-        return {
-            "max_workers": _MAX_WORKERS,
-            "active": [
-                {"project_id": p, "run_id": r, "pid": proc.pid, "alive": proc.is_alive()}
-                for (p, r), proc in _ACTIVE.items()
-            ],
-            "pending": [
-                {"project_id": p, "run_id": r} for _, p, r in list(_PENDING)
-            ],
-        }
+# Fase 6 (cierre, H-13): aquí vivía `queue_snapshot()`, que devolvía activas, pendientes
+# y `max_workers`. Su docstring decía «diagnóstico/UI» y cero código la llamaba: no hay
+# endpoint que la exponga ni pantalla que la pinte, así que la cola NO es observable
+# desde fuera del proceso. Se borra el cadáver, pero el hueco queda dicho aquí porque es
+# lo único que importa: **si la Fase 9 quiere mostrar el estado de la cola, tiene que
+# escribir el endpoint** — no le basta con encontrar esta función y cablearla, que es
+# justo la conclusión falsa que provocaba dejarla puesta. Reconstruirla son 10 líneas
+# sobre `_ACTIVE` y `_PENDING`, ambos vivos aquí arriba.

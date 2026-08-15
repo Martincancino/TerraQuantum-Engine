@@ -604,14 +604,10 @@ def write_run_report_snapshot(params: GeophysicsInvertInput, report: dict):
         json.dump(report, f, indent=2)
 
 
-def normalize_array(values: np.ndarray):
-    values = np.asarray(values, dtype=float)
-
-    v_min = float(np.min(values))
-    v_max = float(np.max(values))
-    v_range = max(v_max - v_min, 1e-9)
-
-    return np.clip((values - v_min) / v_range, 0.0, 1.0)
+# Fase 6 (cierre, H-13): aquí vivía `normalize_array` (min-max a [0,1]), sin un solo
+# llamador en código, tests ni scripts. El normalizado que sí usa el producto vive donde
+# le corresponde: en el frontend para pintar, y en `build_voxel_output` para la heurística
+# de ley, cada uno con su propio rango declarado.
 
 
 _GRADE_PROVENANCE = {
@@ -4415,7 +4411,16 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         # estructurada, no sólo en el log estructurado que nadie lee.
         "topography_degraded": _topography_used == "flat_fallback",
         "warnings": _run_warnings,
-        "bounded_solver_active": os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false",
+        # Fase 5 (H-11): esto leía `os.getenv("USE_BOUNDED_SOLVER")`, o sea lo que se
+        # PIDIÓ, y lo publicaba como si fuera lo que PASÓ. El solver sólo despacha TRF
+        # por debajo de 8.000 celdas activas; medido con 8.712 usó `LSQR+clip` mientras
+        # el campo decía `true`. Ahora sale del propio solver. `solver_path` es el
+        # dato completo (TRF/bounded · LSMR · LSQR+clip); el booleano se conserva
+        # porque `validation/runner.py` lo lee por nombre.
+        "bounded_solver_active": bool(_solver_meta.get("bounded_solver_used", False)),
+        "bounded_solver_requested": bool(_solver_meta.get("bounded_solver_requested", False)),
+        "solver_path": _solver_meta.get("solver_path"),
+        "projected_solver_used": bool(_solver_meta.get("projected_solver_used", False)),
         # ── R-06: Auditoría de impacto físico del padding saturado ───────────────
         "r06_padding_saturation_audit": r06_padding_saturation_audit,
         # ── Fase 10: Zarr out-of-core storage ─────────────────────────────────

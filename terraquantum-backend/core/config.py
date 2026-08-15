@@ -25,6 +25,80 @@ def _env_int(name: str, default: int) -> int:
         ) from exc
 
 
+def _env_float(name: str, default: float) -> float:
+    """Lo mismo que `_env_int`, para los que se leen como decimal.
+
+    Fase 5. Existía un `float(os.getenv("TQ_TEST_SLOW_BEFORE_SOLVE_S", "0") or 0)`
+    suelto en `run_queue_service`, y ése muere **dentro del worker de inversión**:
+    la corrida se cae a mitad con `could not convert string to float` y sin decir
+    qué perilla la mató.
+    """
+    crudo = os.getenv(name)
+    if crudo is None or crudo.strip() == "":
+        return default
+    try:
+        return float(crudo.strip())
+    except ValueError as exc:
+        raise ValueError(
+            f"La variable de entorno {name} debe ser un número; llegó {crudo!r}. "
+            f"Corrígela (o bórrala para usar el valor por defecto, {default})."
+        ) from exc
+
+
+#: Fase 5. Vocabulario booleano ACEPTADO. Fuera de estas dos listas no se
+#: adivina: se muere nombrando la variable, igual que con un entero basura.
+_ENV_TRUE = frozenset({"1", "true", "t", "yes", "y", "on", "si", "sí"})
+_ENV_FALSE = frozenset({"0", "false", "f", "no", "n", "off"})
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Lee un booleano de entorno aceptando el vocabulario que la gente escribe.
+
+    **Fase 5 (H-11), y esto se MIDIÓ antes de tocarlo.** Todas las perillas
+    booleanas se leían con una de estas dos formas:
+
+        os.getenv(X, "true").lower() != "false"     # USE_*, TQ_AUTH_ENABLED
+        os.getenv(X, "false").lower() == "true"     # OTEL_ENABLED
+
+    y las dos mienten fuera del par exacto `"true"`/`"false"`. Medido con una
+    inversión real de 384 celdas y con el arranque completo de la app:
+
+      · `USE_BOUNDED_SOLVER=0` **NO hace rollback**: el solver siguió despachando
+        TRF/bounded y el modelo salió byte-idéntico al default. El comentario de
+        esta misma línea documenta `=false` como rollback; con `0`, `no` u `off`
+        el rollback no ocurre y nadie avisa.
+      · `TQ_AUTH_ENABLED=` (vacío, que es lo que produce un `.env.local` con la
+        línea `TQ_AUTH_ENABLED=`) **ACTIVA** la autenticación: `/geophysics/invert`
+        pasó de 404 a **401**. Es decir, el camino dorado se rompe por escribir
+        una variable que se lee como «apagada».
+      · `OTEL_ENABLED=1` no enciende nada, por el defecto simétrico contrario.
+
+    Regla nueva, y es la misma que ya seguía `_env_int`: valor vacío o ausente =
+    el default declarado; vocabulario conocido = lo que dice; **cualquier otra
+    cosa mata el arranque nombrando la variable**. Un flag de seguridad no se
+    adivina.
+    """
+    crudo = os.getenv(name)
+    if crudo is None or crudo.strip() == "":
+        return default
+    valor = crudo.strip().lower()
+    if valor in _ENV_TRUE:
+        return True
+    if valor in _ENV_FALSE:
+        return False
+    raise ValueError(
+        f"La variable de entorno {name} debe ser un booleano; llegó {crudo!r}. "
+        f"Valores aceptados: {sorted(_ENV_TRUE)} para sí, {sorted(_ENV_FALSE)} "
+        f"para no. Bórrala para usar el valor por defecto ({default})."
+    )
+
+
+#: Fase 5: alias públicos. `api/` y `services/` también leen entorno y hasta ahora
+#: lo hacían con `int(os.getenv(...))` crudo, que muere sin decir qué variable es.
+env_int = _env_int
+env_float = _env_float
+env_bool = _env_bool
+
 APP_NAME = "terraquantum-backend"
 APP_TITLE = "TerraQuantum Backend"
 APP_VERSION = "0.2.0"
@@ -121,30 +195,42 @@ GRAVIMETER_NOISE_FLOOR: dict = {
     "unknown": 0.020,           # conservador para gravímetro desconocido
 }
 
-# FASE 20B Tarea 5: presets de susceptibilidad magnética por litología (SI volumétrico).
-# Valores típicos para fijar bounds [susc_min, susc_max] o priors de litología en el
-# motor magnético (magnetita masiva = χ alta; roca estéril/sedimentaria ≈ 0).
-# Cada entrada: (susc_típica, susc_max_recomendado) en SI. Fuentes: Clark 1997
-# (rangos de susceptibilidad de rocas y minerales); Hunt et al. 1995 (rock magnetism).
-MAGNETIC_SUSCEPTIBILITY_PRESETS: dict = {
-    "magnetite_massive": (1.0, 5.0),     # magnetita masiva (IOCG/skarn): χ muy alta
-    "magnetite_disseminated": (0.1, 1.0),  # magnetita diseminada (pórfido magnético)
-    "bif": (0.5, 3.0),                   # banded iron formation
-    "chromite": (0.05, 0.5),
-    "mafic_intrusive": (0.01, 0.2),      # gabro/diorita (magnetita accesoria)
-    "granite": (0.001, 0.05),            # granito (mag-series vs ilmenite-series)
-    "sediment_barren": (0.0, 0.01),      # roca estéril/sedimentaria ≈ 0
-    "unknown": (0.0, 1.0),               # default conservador del schema
-}
+# Fase 6 (cierre, H-13 + H-35): aquí vivía `MAGNETIC_SUSCEPTIBILITY_PRESETS` — nueve
+# litologías con (χ típica, χ máx) en SI. Lo detectó la Fase 3 al pasar por aquí y lo
+# dejó anotado como deuda; se cierra ahora porque es exactamente el trabajo de esta fase.
+#
+# Dos motivos, y el segundo es el que manda:
+#  · CERO consumidores de producción. Su único lector era `test_lithology_presets_sane`,
+#    que comprobaba la tabla contra sí misma (que χ_max ≥ χ_típica, que la magnetita es
+#    alta): un test que no puede fallar por una regresión del producto, porque ningún
+#    código del producto la leía. El bound magnético real lo fija el usuario vía
+#    `susc_max` del esquema, medido en `test_custom_bounds_respected`.
+#  · Es DOMINIO dentro del Core. La Fase 6 movió `block_model_store`, `geo_utils` y
+#    `gee_client` a `services/` para dejar el Core en 0% de dominio, y declaró ese 0%
+#    con esta tabla todavía dentro: una tabla petrofísica por litología es dominio
+#    geofísico, no infraestructura. Ahora el 0% es cierto.
+#
+# Si vuelve a hacer falta, NO va aquí: va junto al motor magnético que la consuma, y
+# entra el mismo día que su consumidor — no antes.
 
 # HITO 5: Solver con bounds (B-06). Env var USE_BOUNDED_SOLVER=false fuerza LSQR+clip (rollback).
-USE_BOUNDED_SOLVER: bool = os.getenv("USE_BOUNDED_SOLVER", "true").lower() != "false"
+# Fase 5: el rollback ahora también funciona con `0`, `no` y `off` (antes SOLO con
+# la cadena exacta "false" — medido: con `=0` el solver seguía en TRF/bounded).
+# LÍMITE del rollback, medido y escrito para que no se lea de más: esta perilla
+# sólo decide por debajo de 8.000 celdas activas. Por encima —el régimen normal
+# del producto, 30k-100k vóxeles— el solver usa LSQR+clip esté como esté.
+USE_BOUNDED_SOLVER: bool = _env_bool("USE_BOUNDED_SOLVER", True)
 
 # Tier 1 A1: FISTA proyectado refina la solución LSQR/LSMR+clip para n>8K,
 # respetando los bounds petrofísicos SIN clip destructivo (el clip degradaba
 # el misfit ~35% en cuerpos compactos). USE_PROJECTED_SOLVER=false = rollback
 # exacto al comportamiento clip.
-USE_PROJECTED_SOLVER: bool = os.getenv("USE_PROJECTED_SOLVER", "true").lower() != "false"
+# Fase 5: MEDIDO en la sonda de liveness (384 celdas, misma malla y mismo dato).
+# El "rollback exacto" no es inocuo: con USE_PROJECTED_SOLVER=false el χ² final
+# pasó de 0,244 a 22,7 (93×). No es una preferencia de solver, es la diferencia
+# entre ajustar el dato y no ajustarlo. Se deja la perilla —es la vía de escape
+# si FISTA se rompe— pero queda escrito lo que cuesta usarla.
+USE_PROJECTED_SOLVER: bool = _env_bool("USE_PROJECTED_SOLVER", True)
 
 # Fase 6 (H-2): USE_SPARSE_DIRECT ELIMINADA. Prometía un solver directo SuperLU
 # para n_active > 8000, pero la función a la que llamaba no existía: activarla
@@ -154,7 +240,7 @@ USE_PROJECTED_SOLVER: bool = os.getenv("USE_PROJECTED_SOLVER", "true").lower() !
 # Fase 10: LSMR para n_active > LSMR_THRESHOLD_N_ACTIVE (default 50K).
 # LSMR tiene mejor convergencia que LSQR para sistemas mal condicionados.
 # Default ON. Rollback: USE_LSMR_LARGE=false.
-USE_LSMR_LARGE: bool = os.getenv("USE_LSMR_LARGE", "true").lower() != "false"
+USE_LSMR_LARGE: bool = _env_bool("USE_LSMR_LARGE", True)
 LSMR_THRESHOLD_N_ACTIVE: int = _env_int("LSMR_THRESHOLD_N_ACTIVE", 50000)
 
 # Fase 6 (H-13): USE_WAVELET_COMPRESSION y WAVELET_THRESHOLD_N_ACTIVE ELIMINADAS.
@@ -163,7 +249,10 @@ LSMR_THRESHOLD_N_ACTIVE: int = _env_int("LSMR_THRESHOLD_N_ACTIVE", 50000)
 # consumidor posible era `solve_inversion_lsmr_wavelet`, que nunca se cableó y se
 # borró en esta misma fase. Mismo pecado que USE_SPARSE_DIRECT: una perilla que
 # promete un comportamiento y no despacha a ninguna parte.
-# Los building blocks siguen vivos y con tests en `exploration/jacobian_wavelet.py`.
+# CIERRE 2026-08-14: `exploration/jacobian_wavelet.py` también se borró. Quedarse con
+# los building blocks fue dejar el limbo a medias — sin llamador, sus únicos
+# importadores eran sus tests, y esos tests medían que el algoritmo NO cumple su
+# criterio §10.6.1. Con él se fue la dependencia `PyWavelets`.
 
 # Fase 6 (H-12): la abstracción de cloud storage (HITO 7) fue ELIMINADA junto con
 # core/storage.py y la env var STORAGE_BACKEND. Tenía cero importadores: era una
@@ -178,14 +267,21 @@ LSMR_THRESHOLD_N_ACTIVE: int = _env_int("LSMR_THRESHOLD_N_ACTIVE", 50000)
 # HITO 7: Observability — OpenTelemetry + Prometheus.
 # OTEL_ENABLED=false (default) → zero overhead; set true to activate tracing.
 # OTEL_EXPORTER_OTLP_ENDPOINT: omit for console exporter (dev), set for Jaeger/Tempo (prod).
-OTEL_ENABLED: bool = os.getenv("OTEL_ENABLED", "false").lower() == "true"
+OTEL_ENABLED: bool = _env_bool("OTEL_ENABLED", False)
 OTEL_SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "terraquantum-backend")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
 # HITO 7: Auth middleware (B-11).
-# Default OFF para desarrollo local. En producción: TQ_AUTH_ENABLED=true + crear keys.
-# TQ_MASTER_KEY es requerido para gestionar API keys via /api/keys/.
-TQ_AUTH_ENABLED: bool = os.getenv("TQ_AUTH_ENABLED", "false").lower() != "false"
+# Default OFF para desarrollo local. TQ_MASTER_KEY es requerido para gestionar API
+# keys vía /api/keys/.
+#
+# Fase 5: perilla de despliegue SERVIDOR/Docker. **NO soportada con la UI web** —
+# MEDIDO: 17 de los 43 proxies reenvían `X-TQ-API-Key` y 26 no (incluido
+# `geophysics-invert`), y `src-tauri/src/lib.rs` no fija ni el flag ni `TQ_API_KEY`.
+# Rotura ASIMÉTRICA: importar/exportar funciona, invertir da 401. El detalle y el
+# trabajo que exigiría soportarla están en `docs/04` §9.3; `main.py` lo avisa al
+# arrancar. (Corrige a `docs/03`: «el frontend nunca envía X-TQ-API-Key» era falso.)
+TQ_AUTH_ENABLED: bool = _env_bool("TQ_AUTH_ENABLED", False)
 TQ_MASTER_KEY: str = os.getenv("TQ_MASTER_KEY", "")
 TQ_API_KEYS_DB: Path = DATA_DIR / "api_keys.db"
 
