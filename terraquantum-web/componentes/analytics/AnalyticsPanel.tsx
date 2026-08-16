@@ -19,6 +19,7 @@ import {
 import ObsVsCalcPanel from "../datos/ObsVsCalcPanel";
 import ConvergenceCurveWidget from "./ConvergenceCurveWidget";
 import DensitySusceptibilityHistogramWidget from "./DensitySusceptibilityHistogramWidget";
+import RegularizationFunctionalWidget from "./RegularizationFunctionalWidget";
 
 /** Entrada escalonada (Fase E — microinteracciones) preservando el gap del slot. */
 function FadePanel({ index, children }: { index: number; children: ReactNode }) {
@@ -89,37 +90,49 @@ export default function AnalyticsPanel() {
         </Panel>
       </FadePanel>
 
+      {/* FASE 9 — lo que la Fase 7 publicó y sólo llegaba al JSON: qué funcional
+          de regularización usó ESTA corrida y si el solver llegó a converger.
+          Va justo tras «Solver» porque es la letra pequeña de esos números. */}
       <FadePanel index={4}>
+        <Panel
+          title="Funcional y convergencia"
+          subtitle="Qué regularización usó esta corrida (Fase 7)"
+        >
+          <RegularizationFunctionalWidget report={report} />
+        </Panel>
+      </FadePanel>
+
+      <FadePanel index={5}>
         <Panel title="DOI Confidence" subtitle="Profundidad de investigación (Li & Oldenburg)">
           <DoiConfidenceWidget report={report} cells={cells} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={5}>
+      <FadePanel index={6}>
         <Panel title="Ruido / SNR" subtitle="Calidad de señal observada">
           <NoiseSnrWidget report={report} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={6}>
+      <FadePanel index={7}>
         <Panel title="Incertidumbre posterior" subtitle="σ por vóxel (Hutchinson)">
           <UncertaintyPosteriorWidget report={report} cells={cells} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={7}>
+      <FadePanel index={8}>
         <Panel title="L-Curve" subtitle="Sensibilidad a la regularización λ">
           <LCurveWidget inputs={inputs} observations={observations} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={8}>
+      <FadePanel index={9}>
         <Panel title="Cobertura de sensores" subtitle="Planta X/Z del survey">
           <SensorCoverageWidget report={report} observations={observations} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={9}>
+      <FadePanel index={10}>
         <Panel title="Recuperación sintética" subtitle="Benchmark de resolución">
           <RecoveryWidget report={report} metrics={metrics} />
         </Panel>
@@ -127,20 +140,20 @@ export default function AnalyticsPanel() {
 
       {/* ── F5: gráficos + exportables — obs-vs-calc, histograma, convergencia ── */}
       {activeRun.projectId && activeRun.runId && (
-        <FadePanel index={10}>
+        <FadePanel index={11}>
           <Panel title="Obs vs Calc" subtitle="Residuales por estación (H-C2)">
             <ObsVsCalcPanel projectId={activeRun.projectId} runId={activeRun.runId} />
           </Panel>
         </FadePanel>
       )}
 
-      <FadePanel index={11}>
+      <FadePanel index={12}>
         <Panel title="Densidad / Susceptibilidad" subtitle="Distribución sobre celdas activas">
           <DensitySusceptibilityHistogramWidget cells={cells} />
         </Panel>
       </FadePanel>
 
-      <FadePanel index={12}>
+      <FadePanel index={13}>
         <Panel title="Convergencia" subtitle="Barrido λ (Morozov chi² discrepancy)">
           <ConvergenceCurveWidget projectId={activeRun.projectId} runId={activeRun.runId} />
         </Panel>

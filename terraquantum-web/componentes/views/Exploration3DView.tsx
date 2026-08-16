@@ -20,9 +20,23 @@ import IsosurfaceControls from "../viewport/IsosurfaceControls";
 import BoreholeControls from "../viewport/BoreholeControls";
 import DoiOverlayControls from "../viewport/DoiOverlayControls";
 import ExportPanel from "../viewport/ExportPanel";
+// FASE 9 — dos superficies terminadas que NUNCA se montaron (cierre de la Fase 6).
+// `SliceControls` es el único escritor del estado del corte, y `SectionPaintLayer`
+// ya estaba montada en Scene3D con `/api/section` respondiendo: el plano de corte
+// estaba construido de punta a punta y no había nada que lo encendiera.
+// `MultiPhysicsControls` es el único control HUMANO de `setViewMode` — hasta ahora
+// la capa física la fijaba `packageInversion.ts` de forma automática y el usuario
+// no podía cambiarla.
+import SliceControls from "../viewport/SliceControls";
+import MultiPhysicsControls from "../viewport/MultiPhysicsControls";
 import CanvasExportBridge from "../../lib/render/CanvasExportBridge";
 import WarningBanner from "../WarningBanner";
-import { fetchRunWarnings, warningViewsFromTexts } from "../../lib/terraquantum/runWarnings";
+import {
+  extractRunWarnings,
+  fetchRunReport,
+  warningViewsFromTexts,
+} from "../../lib/terraquantum/runWarnings";
+import { solverConverged } from "../analytics/RegularizationFunctionalWidget";
 
 import {
   getExplorationBlockModelForRunWithArrow,
@@ -440,20 +454,34 @@ export default function Exploration3DView() {
   // `warnings[]`. Antes sólo se veían en el detalle de Historial; aquí llegan a la
   // pantalla donde el usuario mira el modelo y elige dónde perforar.
   const [runWarnings, setRunWarnings] = React.useState<string[]>([]);
+  // FASE 9: `true` sólo si el backend declaró explícitamente que NO convergió.
+  // `null` (no aplica: la ruta acotada no usa LSQR) NO es un fallo y no avisa.
+  const [solverDidNotConverge, setSolverDidNotConverge] = React.useState(false);
   useEffect(() => {
     let isMounted = true;
-    if (!activeRun.projectId || !activeRun.runId || activeRun.status !== "ready") {
+    // FASE 9: antes exigía `status === "ready"`, así que una corrida en ERROR
+    // —la que más motivos tiene para traer avisos— no pedía ninguno. `ready` y
+    // `error` son los dos estados terminales: en ambos hay reporte que leer.
+    // `fetchRunReport` ya devuelve null si aún no hay nada persistido.
+    const terminal = activeRun.status === "ready" || activeRun.status === "error";
+    if (!activeRun.projectId || !activeRun.runId || !terminal) {
       setRunWarnings([]);
+      setSolverDidNotConverge(false);
       return () => {
         isMounted = false;
       };
     }
-    fetchRunWarnings(activeRun.projectId, activeRun.runId)
-      .then((warnings) => {
-        if (isMounted) setRunWarnings(warnings);
+    // Una sola lectura del detalle para las DOS señales que la vista necesita.
+    fetchRunReport(activeRun.projectId, activeRun.runId)
+      .then((rep) => {
+        if (!isMounted) return;
+        setRunWarnings(extractRunWarnings(rep));
+        setSolverDidNotConverge(solverConverged(rep) === false);
       })
       .catch(() => {
-        if (isMounted) setRunWarnings([]);
+        if (!isMounted) return;
+        setRunWarnings([]);
+        setSolverDidNotConverge(false);
       });
     return () => {
       isMounted = false;
@@ -667,6 +695,11 @@ export default function Exploration3DView() {
                 <BoxClipControls />
               </SidebarSection>
             )}
+            {showModel && (
+              <SidebarSection title="Plano de corte">
+                <SliceControls />
+              </SidebarSection>
+            )}
             {activeRun.projectId && activeRun.runId && (
               <SidebarSection title="Descargar">
                 <ExportPanel projectId={activeRun.projectId} runId={activeRun.runId} />
@@ -778,27 +811,60 @@ export default function Exploration3DView() {
                   </div>
                 </div>
               )}
-              {/* ── FASE 1 (§9H.2): resultado DESACTUALIZADO ────────────────────── */}
-              {/* El modelo sigue siendo real, pero los parámetros de preparación
-                  cambiaron después de esta inversión: lo que se ve ya no es lo que
-                  la interfaz declara. Se marca en pantalla en vez de borrarlo. */}
-              {showModel && resultIsStale && (
-                <div
-                  data-testid="stale-result-badge"
-                  className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/80 border border-amber-500/70 text-amber-300 text-[10px] font-mono px-3 py-1 rounded-full pointer-events-none"
-                >
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" />
-                  Resultado desactualizado: cambiaste parámetros tras esta inversión
-                </div>
-              )}
               {/* ── Fase 12: Panel Multi-Física (overlay sobre el Canvas) ────────── */}
-              {/* Badge: datos magnéticos no disponibles para la corrida actual */}
-              {showModel && !resultIsStale && viewMode === 'susceptibility' && !susceptibilityDataAvailable && (
-                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/75 border border-yellow-500/60 text-yellow-400 text-[10px] font-mono px-3 py-1 rounded-full pointer-events-none">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400" />
-                  Datos magnéticos no disponibles para este modelo
-                </div>
-              )}
+              {/* FASE 9: montado por fin. El panel existía completo desde la Fase 12
+                  y su único llamador vivo era el automático de `packageInversion`,
+                  así que el badge de más abajo avisaba de un modo que el usuario no
+                  podía elegir. Va fuera del <Canvas> (es DOM, no R3F) y fuera de la
+                  columna de avisos, que es `pointer-events-none`: dentro de ella
+                  quedaría montado pero muerto al clic — otra vez UI inalcanzable. */}
+              {showModel && <MultiPhysicsControls />}
+
+              {/* ── Avisos flotantes sobre el modelo ─────────────────────────────
+                  FASE 9: los dos badges que había ocupaban EXACTAMENTE la misma
+                  posición (`top-2 left-1/2`) y sólo no chocaban porque uno se
+                  excluía con `!resultIsStale`. Al añadir un tercero —la
+                  no-convergencia, que es independiente de los otros dos— eso deja
+                  de sostenerse. Se apilan en una columna. */}
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1.5 pointer-events-none">
+                {/* ── FASE 1 (§9H.2): resultado DESACTUALIZADO ────────────────── */}
+                {/* El modelo sigue siendo real, pero los parámetros de preparación
+                    cambiaron después de esta inversión: lo que se ve ya no es lo que
+                    la interfaz declara. Se marca en pantalla en vez de borrarlo. */}
+                {showModel && resultIsStale && (
+                  <div
+                    data-testid="stale-result-badge"
+                    className="flex items-center gap-1.5 bg-black/80 border border-amber-500/70 text-amber-300 text-[10px] font-mono px-3 py-1 rounded-full"
+                  >
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" />
+                    Resultado desactualizado: cambiaste parámetros tras esta inversión
+                  </div>
+                )}
+
+                {/* ── FASE 9: el solver no convergió ───────────────────────────
+                    La Fase 7 midió que el LSQR magnético termina por límite de
+                    iteraciones (istop=7, 500/500) y que ahí un parámetro inerte
+                    sobre el papel mueve el resultado hasta un 86 %. El dato ya
+                    viajaba en el reporte; lo que faltaba era decirlo donde se
+                    mira el modelo. El detalle está en «Funcional y convergencia». */}
+                {showModel && solverDidNotConverge && (
+                  <div
+                    data-testid="solver-not-converged-badge"
+                    className="flex items-center gap-1.5 bg-black/80 border border-yellow-500/70 text-yellow-300 text-[10px] font-mono px-3 py-1 rounded-full"
+                  >
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                    El solver no convergió: es donde se detuvo, no la solución
+                  </div>
+                )}
+
+                {/* Badge: datos magnéticos no disponibles para la corrida actual */}
+                {showModel && !resultIsStale && viewMode === 'susceptibility' && !susceptibilityDataAvailable && (
+                  <div className="flex items-center gap-1.5 bg-black/75 border border-yellow-500/60 text-yellow-400 text-[10px] font-mono px-3 py-1 rounded-full">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                    Datos magnéticos no disponibles para este modelo
+                  </div>
+                )}
+              </div>
             </div>
 
             {showModel && (
@@ -809,17 +875,22 @@ export default function Exploration3DView() {
           </div>
         }
         analytics={
-          showModel ? (
+          <>
+            {/* FASE 1 (H-27) + FASE 9: lo que el backend degradó, dicho aquí.
+                La Fase 1 lo montó DENTRO de la rama `showModel`, de modo que los
+                avisos desaparecían justo cuando el modelo no se podía pintar —
+                que es cuando más falta hacen (solver que no converge, corrida en
+                error). Ahora vive fuera del ternario y se ve haya modelo o no. */}
+            {runWarnings.length > 0 && (
+              <div data-testid="run-warnings" className="mb-3">
+                <WarningBanner
+                  warnings={warningViewsFromTexts(runWarnings)}
+                  showAction={false}
+                />
+              </div>
+            )}
+            {showModel ? (
             <>
-              {/* FASE 1 (H-27): lo que el backend degradó, dicho aquí. */}
-              {runWarnings.length > 0 && (
-                <div data-testid="run-warnings" className="mb-3">
-                  <WarningBanner
-                    warnings={warningViewsFromTexts(runWarnings)}
-                    showAction={false}
-                  />
-                </div>
-              )}
               {resultIsStale && (
                 <div className="mb-3 rounded border border-amber-500/50 bg-amber-950/20 px-3 py-2">
                   <p className="text-[10px] leading-relaxed text-amber-300">
@@ -973,14 +1044,15 @@ export default function Exploration3DView() {
 
               {/* HUD button removed (Fase B II) */}
             </>
-          ) : (
-            <Panel title="Analytics">
-              <p className="text-[9px] text-white/45 leading-relaxed">
-                Los diagnósticos del solver (χ², DOI, L-Curve, recuperación sintética,
-                cobertura de sensores) aparecerán aquí tras ejecutar una inversión.
-              </p>
-            </Panel>
-          )
+            ) : (
+              <Panel title="Analytics">
+                <p className="text-[9px] text-white/45 leading-relaxed">
+                  Los diagnósticos del solver (χ², DOI, L-Curve, recuperación sintética,
+                  cobertura de sensores) aparecerán aquí tras ejecutar una inversión.
+                </p>
+              </Panel>
+            )}
+          </>
         }
       />
     </div>

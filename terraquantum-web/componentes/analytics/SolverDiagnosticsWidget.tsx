@@ -10,6 +10,7 @@ import {
   EmptyState,
   type Tone,
 } from "./analyticsShared";
+import { readRegularizationFunctional } from "./RegularizationFunctionalWidget";
 
 function chiTone(chi: number | null): { tone: Tone; hint: string } {
   if (chi === null) return { tone: "neutral", hint: "" };
@@ -37,7 +38,11 @@ export default function SolverDiagnosticsWidget({
   const misfit = numOf(report, "misfit_error_percent");
   const lambda = numOf(inputs, "lambda_mag") ?? numOf(report, "lambda_mag");
   const alpha = numOf(inputs, "alpha_spatial") ?? numOf(report, "alpha_spatial");
+  // FASE 9: la cuenta real de iteraciones la publica la Fase 7 dentro de
+  // `regularization_functional.lsqr_iters`. Se busca ahí primero; las otras
+  // claves se conservan porque corridas antiguas las traían.
   const iterations =
+    numOf(readRegularizationFunctional(report), "lsqr_iters") ??
     numOf(metrics, "iterations", "lsqr_iterations", "n_iter", "itn") ??
     numOf(report, "iterations", "lsqr_iterations", "n_iter", "itn");
 
@@ -81,10 +86,16 @@ export default function SolverDiagnosticsWidget({
         <StatCard label="Misfit" value={fmtNum(misfit, 2)} unit="%" />
         <StatCard label="λ (mag)" value={fmtSci(lambda)} />
         <StatCard label="α espacial" value={fmtNum(alpha, 3)} />
+        {/* FASE 9: aquí decía «≤150» cuando el backend NO reportaba iteraciones.
+            Era un número inventado en el frontend sobre física del backend: las
+            rutas de producción usan iter_lim=500/600/800 (magnetometría) y 500
+            (gravimetría), no 150. Y lo afirmaba justo cuando no tenía el dato,
+            enmascarando el 500/500 que es la evidencia de no-convergencia. Si no
+            se sabe, se dice que no se sabe. */}
         <StatCard
           label="Iteraciones"
-          value={iterations !== null ? fmtNum(iterations, 0) : "≤150"}
-          hint={iterations === null ? "LSQR (máx)" : undefined}
+          value={iterations !== null ? fmtNum(iterations, 0) : "—"}
+          hint={iterations === null ? "no reportadas por esta corrida" : undefined}
         />
       </div>
 

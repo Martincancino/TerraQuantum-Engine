@@ -28,6 +28,27 @@ type Props = {
 // Escala de referencia para la barra de error (mag-only ≈ 40–55 m es el peor caso).
 const ERROR_SCALE_MAX_M = 55;
 
+// FASE 9 — endurecido al MONTARLO. El panel llevaba escrito desde la Fase 21 sin
+// un solo importador, así que nunca se ejecutó contra una respuesta real: leía
+// `plan.confidence_pct.toFixed()`, `plan.error_depth_m.toFixed()`,
+// `plan.warnings.length` y `plan.resolution_priority.join()` directamente. Con un
+// campo ausente eso es un TypeError EN RENDER — y montarlo así habría metido en
+// una vista del camino dorado justo lo que el invariante «nunca crashea» prohíbe
+// (medido: con un plan incompleto la pestaña se cae entera).
+// No se inventa ningún valor: lo que no venga se muestra como «—».
+function num(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+function fmt(value: number | null, digits = 0): string {
+  return value === null ? "—" : value.toFixed(digits);
+}
+function strList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string")
+    : [];
+}
+
 function confidenceColor(pct: number): string {
   if (pct >= 80) return "#22c55e"; // verde
   if (pct >= 65) return "#eab308"; // ámbar
@@ -83,9 +104,12 @@ export default function MultimodalComboPanel({
     };
   }, [nGrav, nMag, nBh, dq, cov]);
 
-  const errorPct = plan
-    ? Math.min(100, (plan.error_depth_m / ERROR_SCALE_MAX_M) * 100)
-    : 0;
+  const confianzaPct = plan ? num(plan.confidence_pct) : null;
+  const errorDepthM = plan ? num(plan.error_depth_m) : null;
+  const avisos = plan ? strList(plan.warnings) : [];
+  const prioridad = plan ? strList(plan.resolution_priority) : [];
+  const errorPct =
+    errorDepthM === null ? 0 : Math.min(100, (errorDepthM / ERROR_SCALE_MAX_M) * 100);
 
   return (
     <div className="flex flex-col gap-4 rounded-lg border border-slate-700 bg-slate-900/60 p-4 text-slate-200">
@@ -161,15 +185,15 @@ export default function MultimodalComboPanel({
             <div className="flex items-center justify-between text-xs text-slate-400">
               <span>Confianza</span>
               <span className="font-semibold text-slate-100">
-                {plan.confidence_pct.toFixed(0)}%
+                {fmt(confianzaPct)}%
               </span>
             </div>
             <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-700">
               <div
                 className="h-full rounded-full transition-all"
                 style={{
-                  width: `${plan.confidence_pct}%`,
-                  backgroundColor: confidenceColor(plan.confidence_pct),
+                  width: `${confianzaPct ?? 0}%`,
+                  backgroundColor: confidenceColor(confianzaPct ?? 0),
                 }}
               />
             </div>
@@ -180,7 +204,7 @@ export default function MultimodalComboPanel({
             <div className="flex items-center justify-between text-xs text-slate-400">
               <span>Error de profundidad esperado</span>
               <span className="font-semibold text-slate-100">
-                ±{plan.error_depth_m.toFixed(0)} m
+                ±{fmt(errorDepthM)} m
               </span>
             </div>
             <div className="mt-1 flex items-center gap-2">
@@ -189,7 +213,7 @@ export default function MultimodalComboPanel({
                 <div
                   className="absolute inset-y-0 left-1/2 -translate-x-1/2 rounded bg-indigo-500/30"
                   style={{ width: `${errorPct}%` }}
-                  title={`Banda de incertidumbre ±${plan.error_depth_m.toFixed(0)} m`}
+                  title={`Banda de incertidumbre ±${fmt(errorDepthM)} m`}
                 />
                 <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-indigo-300" />
               </div>
@@ -201,9 +225,9 @@ export default function MultimodalComboPanel({
           </div>
 
           {/* Avisos */}
-          {plan.warnings.length > 0 && (
+          {avisos.length > 0 && (
             <div className="flex flex-col gap-1">
-              {plan.warnings.map((w, i) => (
+              {avisos.map((w, i) => (
                 <div
                   key={i}
                   className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-300"
@@ -215,9 +239,11 @@ export default function MultimodalComboPanel({
           )}
 
           {/* Prioridad de resolución de conflictos */}
-          <div className="text-[10px] text-slate-500">
-            Prioridad ante conflicto: {plan.resolution_priority.join(" › ")}
-          </div>
+          {prioridad.length > 0 && (
+            <div className="text-[10px] text-slate-500">
+              Prioridad ante conflicto: {prioridad.join(" › ")}
+            </div>
+          )}
 
           {onSelectCombo && (
             <button

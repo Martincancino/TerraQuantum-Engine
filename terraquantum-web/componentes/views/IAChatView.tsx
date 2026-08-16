@@ -266,9 +266,29 @@ export default function IAChatView() {
           <h1 className="text-sm font-semibold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">
             Chat Geológico
           </h1>
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/[0.03] border border-white/5 backdrop-blur-md">
-            <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.8)]"></div>
-            <span className="text-[10px] font-medium text-neutral-400 uppercase tracking-widest">Online</span>
+          {/* FASE 9 — este badge decía «Online» con un punto verde palpitante y
+              NO comprobaba absolutamente nada: era literal, fijo en el JSX. El
+              copiloto necesita internet y una clave, así que el único estado
+              honesto que esta vista conoce sin salir a la red es de dónde saldría
+              la clave. Lo que sí se comprueba de verdad (que el motor de cálculo
+              responde) vive en la barra de navegación. */}
+          <div
+            data-testid="copilot-key-source"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/[0.03] border border-white/5 backdrop-blur-md"
+            title={
+              apiKey.trim()
+                ? "Se usará la clave que pegaste. Requiere internet."
+                : "Sin clave propia: se intentará la del servidor, si la hay. Requiere internet."
+            }
+          >
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${
+                apiKey.trim() ? "bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)]" : "bg-neutral-600"
+              }`}
+            ></div>
+            <span className="text-[10px] font-medium text-neutral-400 uppercase tracking-widest">
+              {apiKey.trim() ? "Clave propia" : "Sin clave propia"}
+            </span>
           </div>
         </div>
 

@@ -51,6 +51,19 @@ export function runWarningViews(report: unknown, limit = 8): TQErrorView[] {
   return warningViewsFromTexts(extractRunWarnings(report), limit);
 }
 
+/** El `report` persistido de una corrida, o `null` si no se pudo leer.
+ *  FASE 9: la vista 3D necesita del mismo documento DOS señales (los avisos y si
+ *  el solver convergió). Se expone la lectura para no pedir el detalle dos veces
+ *  ni duplicar el manejo de errores. */
+export async function fetchRunReport(
+  projectId: string,
+  runId: string,
+): Promise<Record<string, unknown> | null> {
+  const res = await getProjectRunDetail(projectId, runId);
+  if (!res.ok || !res.data) return null;
+  return asRecord(asRecord(res.data)?.report);
+}
+
 /** Carga el reporte persistido de una corrida y devuelve sus avisos.
  *  Devuelve [] ante cualquier fallo: un aviso que no llega nunca debe romper
  *  la vista, pero tampoco se sustituye por un texto inventado. */
@@ -58,8 +71,5 @@ export async function fetchRunWarnings(
   projectId: string,
   runId: string,
 ): Promise<string[]> {
-  const res = await getProjectRunDetail(projectId, runId);
-  if (!res.ok || !res.data) return [];
-  const detail = asRecord(res.data);
-  return extractRunWarnings(detail?.report);
+  return extractRunWarnings(await fetchRunReport(projectId, runId));
 }

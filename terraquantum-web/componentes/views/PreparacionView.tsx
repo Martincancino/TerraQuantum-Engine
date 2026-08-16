@@ -5,6 +5,7 @@ import React, { useState } from "react";
 import PrepPanel from "../PrepPanel";
 import PrepEnrichPanel from "../PrepEnrichPanel";
 import BoreholeUploadPanel from "../BoreholeUploadPanel";
+import MultimodalComboPanel from "../MultimodalComboPanel";
 import { boreholeSurveyToIntervals } from "../../lib/terraquantum/frontendApi";
 
 /**
@@ -49,6 +50,27 @@ export default function PreparacionView() {
             }
           />
         </section>
+
+        {/* FASE 9 — Combo multimodal (Fase 21) montado por fin.
+            Era el ÚNICO consumidor de `/api/multimodal/plan`: la función existía
+            entera en el backend, la UI estaba escrita, y nadie la importaba. Va
+            aquí porque la pregunta que responde —«con los datos que tengo, qué
+            combinación conviene y con qué error de profundidad»— es una decisión
+            de PREPARACIÓN, anterior a invertir. Colapsado: no es parte del flujo
+            mínimo. El panel no calcula nada: el backend decide el combo. */}
+        <details className="rounded-2xl border border-neutral-800 bg-black/30">
+          <summary
+            data-testid="multimodal-combo-summary"
+            className="cursor-pointer select-none px-6 py-4 text-[11px] uppercase tracking-widest text-neutral-400 hover:text-neutral-200"
+          >
+            Combo multimodal · qué datos conviene combinar
+          </summary>
+          <div className="px-6 pb-6 pt-2" data-testid="multimodal-combo-panel">
+            <MultimodalComboPanel
+              nBoreholesWithDensity={boreholeIntervals.length}
+            />
+          </div>
+        </details>
 
         {/* Parámetros de inversión + flujo clásico — COLAPSADO por defecto.
             El flujo normal NO requiere abrirlo (auto-defaults sensatos en el backend). */}

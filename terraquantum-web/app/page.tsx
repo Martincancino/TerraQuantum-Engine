@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { useAppStore } from "../store/useAppStore";
+import { normalizeView } from "../lib/terraquantum/views";
 
 // Componentes de Layout
 import WelcomeScreen from "../componentes/layout/WelcomeScreen";
@@ -12,6 +13,7 @@ import HomeView from "../componentes/views/HomeView";
 import PreparacionView from "../componentes/views/PreparacionView";
 import IAChatView from "../componentes/views/IAChatView";
 import Exploration3DView from "../componentes/views/Exploration3DView";
+import SistemaView from "../componentes/views/SistemaView";
 
 // Dashboards
 import DatosView from "../componentes/DatosView";
@@ -21,7 +23,11 @@ export default function Home() {
   const { view } = useAppStore();
   const [appInitialized, setAppInitialized] = useState(false);
 
-  const normalizedView = String(view || "inicio").toLowerCase().trim();
+  // FASE 9: antes había DOS listas de vistas aquí (los ternarios y la lista de
+  // exclusión del fallback) más una tercera en NavBar. `normalizeView` deja una
+  // sola fuente: un id desconocido cae a "inicio" de forma explícita, no por que
+  // ninguna condición encajara.
+  const normalizedView = normalizeView(view);
 
   if (!appInitialized) {
     return <WelcomeScreen onEnter={() => setAppInitialized(true)} />;
@@ -44,14 +50,7 @@ export default function Home() {
 
         {normalizedView === "historial" && <HistorialView />}
 
-        {![
-          "inicio",
-          "preparación",
-          "ia geológica",
-          "figura 3d",
-          "datos",
-          "historial",
-        ].includes(normalizedView) && <HomeView />}
+        {normalizedView === "sistema" && <SistemaView />}
       </section>
     </main>
   );

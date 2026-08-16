@@ -17,6 +17,7 @@ import {
   SEVERITY_META,
   type TQErrorView,
 } from "../lib/terraquantum/errorContract";
+import { DIAGNOSTICS_EXPORT_URL } from "../lib/terraquantum/systemApi";
 
 type Tab = "resumen" | "detalles" | "accion";
 
@@ -189,7 +190,21 @@ export default function ErrorModal({
         </div>
 
         {/* Pie */}
-        <div className={`flex items-center justify-end gap-2 border-t ${meta.border} px-5 py-3`}>
+        <div className={`flex flex-wrap items-center justify-end gap-2 border-t ${meta.border} px-5 py-3`}>
+          {/* FASE 9 (H-10): «Descargar registro» sólo guarda ESTE error. Cuando
+              el consultor tiene que pedir soporte hace falta el contexto —
+              versiones, config saneada, conectividad, tier, cola de errores— y
+              ese paquete existía en el backend desde F7 sin ninguna forma de
+              pedirlo. Es una descarga local: no se envía nada a ningún sitio. */}
+          <a
+            data-testid="error-modal-export-diagnostics"
+            href={DIAGNOSTICS_EXPORT_URL}
+            download
+            title="Descarga un ZIP con versiones, configuración saneada y últimos errores. Sin datos de survey ni claves."
+            className="rounded border border-white/15 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60 hover:bg-white/5 hover:text-white"
+          >
+            Exportar diagnóstico
+          </a>
           <button
             type="button"
             onClick={downloadLog}

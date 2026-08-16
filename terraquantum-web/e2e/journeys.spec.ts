@@ -12,7 +12,9 @@ import { test, expect, Page } from "@playwright/test";
  * cubre la parte navegable (figura 3D / Historial renderizan sin crash).
  */
 
-const NAV = ["inicio", "Preparación", "ia geológica", "figura 3D", "Datos", "Historial"];
+// FASE 9: «Sistema» es la séptima vista — licencia, diagnóstico y conexión, que
+// hasta ahora no tenían ninguna interfaz (H-10).
+const NAV = ["inicio", "Preparación", "ia geológica", "figura 3D", "Datos", "Historial", "Sistema"];
 
 /** Entra a la plataforma (pasa la WelcomeScreen) y devuelve la lista de errores de página. */
 async function enterApp(page: Page): Promise<string[]> {
@@ -38,14 +40,14 @@ async function navTo(page: Page, label: string) {
 test.describe("F8 · recorridos de UI", () => {
   test("welcome → entrar → NavBar presente", async ({ page }) => {
     const errors = await enterApp(page);
-    // Los 6 items de navegación existen.
+    // Todos los items de navegación existen (7 desde la Fase 9).
     for (const label of NAV) {
       await expect(page.getByRole("button", { name: new RegExp(`^${label}$`, "i") })).toBeVisible();
     }
     expect(errors, `errores de JS: ${errors.join(" | ")}`).toHaveLength(0);
   });
 
-  test("navegar por las 6 vistas sin crash", async ({ page }) => {
+  test("navegar por todas las vistas sin crash", async ({ page }) => {
     const errors = await enterApp(page);
     for (const label of NAV) {
       await navTo(page, label);
