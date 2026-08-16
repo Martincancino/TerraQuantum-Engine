@@ -80,7 +80,12 @@ async def system_status():
 @router.get("/system/connectivity")
 async def system_connectivity(probe: bool = False):
     """F7 — Honestidad offline: qué features necesitan internet y confirmación de
-    que el camino dorado (ingesta→inversión→3D→export) funciona sin conexión."""
+    que el camino dorado (ingesta→inversión→3D→export) funciona sin conexión.
+
+    `probe` se acepta por compatibilidad de firma y **no sondea nada**: la
+    respuesta trae `probed: false` siempre, con `probe_requested` y `probe_note`
+    diciendo por qué (Fase 9 — antes devolvía `probed: true` sin tocar la red).
+    """
     from services.connectivity_service import connectivity_summary
     return connectivity_summary(probe=probe)
 
