@@ -1448,7 +1448,7 @@ Ordenado por **valor estratégico**, no por facilidad. Esfuerzo en S/M/L/XL.
 | 6 | **Limpieza verificada** *(antes D)* | Código muerto, deps, clave privada | S | 🟡 P2 | H-2, H-6, H-7, H-12, H-13, H-14 |
 | 7 | **Extraer el motor común** *(antes B-0)* | Prerrequisito para cablear la Fase 4 | M | 🟠 P1 | H-9, H-33 |
 | 8 | **Partir la espina dorsal** *(antes B)* | Coste marginal creciente por feature | L | 🟠 P1 | H-3 |
-| 9 ∥ | **Interfaz de F7 y gates con criterio de usuario** *(antes H)* | Bloquea la monetización | M | 🟠 P1 | H-10 |
+| **9** ∥ | **Interfaz de F7 y gates con criterio de usuario** *(antes H)* | **Bloquea la monetización** | M | 🟠 P1 | H-10 |
 | 10 ∥ | **Contratos tipados + `PrepPanel`** *(antes J)* | Divergencia silenciosa de contratos; el estado que causa H-28/H-29 | M | 🟠 P1 | H-16, H-30 |
 | 11 | **API de scripting** *(antes M)* | El usuario experto no puede automatizar | S/M | 🟠 P1 | §9F.3 |
 | 12 ∥ | **OMF** *(antes E)* | Interoperabilidad comercial | M | 🟡 P2 | §4.2 |
@@ -1459,7 +1459,27 @@ Ordenado por **valor estratégico**, no por facilidad. Esfuerzo en S/M/L/XL.
 
 **Estado de ejecución.** ✅ **Fase 1** (2026-08-08) · ✅ **Fase 2** (2026-08-10) · ✅ **Fase 3** (2026-08-12, **cerrada del todo el 2026-08-13**: la CI estaba en rojo por dos causas medidas y el criterio «CI roja si la física regresiona» no se cumplía) · ✅ **Fase 4** (2026-08-14, **cerrada CERRANDO**: 3.450 inversiones dicen que ningún β fijo mejora la profundidad en todos los regímenes; el límite es el null-space, no un bug — y de paso aparecieron **dos** funcionales de regularización en gravimetría, no uno) · ✅ **Fase 6** (2026-08-09, **cerrada del todo el 2026-08-14**: H-13 pedía revisar 16 símbolos «uno a uno» y la primera pasada resolvió los 6 que §9B.5 había listado por nombre — al volver a MEDIR aparecieron 11 más, ninguno en la tabla original, incluido un Gauge de Prometheus que publicaba «0 inversiones activas» mientras había una corriendo). **Dejó dos deberes medidos a la Fase 4**: `test_fase7_wiring::test_e2e_enabled_changes_model_and_reports` falla por un 9% bajo su umbral **igual con y sin el cierre** (A/B), y `test_fase4_depth_weighting::test_effective_model_weight_...` **pasa aislado y falla en la suite** — depende del orden, así que hoy no defiende nada. · ✅ **Fase 5** (2026-08-15: las 44 variables medidas por AST son **42** de superficie real; la sonda de la Fase 3 comprobaba que el módulo *carga*, no que la variable *llegue*; y aparecieron **cinco huecos que la auditoría no había visto** — una perilla inerte, un rollback que no rollbackeaba con `0`, un flag de seguridad que se encendía estando **vacío**, un reporte que afirmaba un solver que no corrió, y tres números que morían sin decir su nombre). · ✅ **Fase 7** (2026-08-15: **192 → 20** ventanas duplicadas con byte-identidad en **34/34** casos; y tres cosas que no estaban en el guion — el `study_duplication.py` que el criterio (a) citaba **no existía** en el repositorio y hubo que reconstruirlo; el escáner de λ medía con un operador que la Fase 4 había retirado, con un ratio de χ² de **23× a 12.700×** creciente con la profundidad y **0/4** aciertos en la elección de λ, hoy **4/4** y ratio **1,0000** con el box abierto; y el caveat que H-33 dejó sin cuantificar vale **66 %–86 %**, no un redondeo: la solución exacta de la ruta B es invariante a 1e-11 pero el LSQR termina por límite de iteraciones —`istop=7`, 500/500— y el motor **descartaba ese criterio de parada**). Cada una lleva su registro `### ✅ EJECUTADA` al final de su sección, con lo que se midió y lo que se dejó fuera a propósito. · ✅ **Fase 8** (2026-08-16: la espina partida y **medida** — `run_geophysics_inversion` 2.030 → **152** líneas y CC 183 → **12**; `invert_gravity_csv` 927 → **54** con 41 → **9** parámetros; `solve_inversion_lsqr` 1.046 → **212** y CC 124 → **12**; todo con byte-identidad verificada —28 casos de servicio y API, 34 de motor— y **sin reescribir una línea**: los cuerpos se movieron textualmente y las fronteras se calcularon con AST. Tres cosas fuera del guion: **Morozov re-liga λ** y partir la función lo rompía en silencio; agrupar los 41 parámetros como dice el plano —`Annotated[Modelo, Form()]`— **cambia el contrato HTTP** y hubo que hacerlo con `Depends`; y la configuración **no puede** subir a nivel de módulo porque cinco sondas la fijan por atributo. El deber de `iter_lim=500` queda **decidido: no se sube** — en gravimetría el límite no ata (Δ = 0,000e+00 exacto) y en magnetometría subirlo no mejora el χ² —ya está en 1e-14— sino que mueve el modelo hasta un **66 %** por el espacio nulo).
 
-**CERRADAS: 1, 2, 3, 4, 5, 6, 7 y 8. Siguiente: Fase 9** (UI de F7 ∥ — con 3 paneles ya escritos sin montar, la declaración de funcional que la Fase 7 dejó en el reporte, y ahora también el aviso de **solver que no convergió** que la Fase 8 midió que vale hasta un 66 % del modelo magnético) o **Fase 10** (contratos tipados). La Fase 8 deja además, medido y con nombre, lo que NO entró en sus cuatro pasos: `solve_magnetic_inversion_lsqr` (812 LOC / CC 116), `_import_gravity_csv_v1_impl` (777 / CC 181), `run_joint_inversion` (736 / CC 87) y `run_magnetic_inversion` (616 / CC 73) — el mismo método mecánico se les aplica tal cual.
+· ✅ **Fase 9** (2026-08-16: H-10 cerrado — la superficie F7 entera pasa de **5 endpoints sin un solo consumidor** a tener camino de usuario, y los 3 paneles que la Fase 6 encontró escritos-y-sin-montar quedan montados: **componentes `.tsx` sin importador, 3 → 0**. Lo que no estaba en el plan y salió al medir: **cinco defectos de honestidad**, todos en el lado que la fase venía a hacer visible — `copilot_gemini.configured` era `False` **constante** porque leía un atributo inexistente tras un `hasattr`; `/system/connectivity` devolvía `probed: true` **sin haber tocado la red jamás**; el copiloto pintaba un «Online» **literal en el JSX**; el widget del solver afirmaba «≤150 iteraciones» justo cuando **no tenía el dato**, tapando el `500/500` que es la evidencia de no-convergencia; y `MultimodalComboPanel`, nunca ejecutado por nunca haber sido importado, **tumbaba la pestaña entera** ante un plan incompleto. El cambio de proceso se implementó **midiendo**: `test_fase9_camino_de_usuario.py` recorre los tres eslabones —endpoint → proxy/cliente → componente montado— con excepciones que llevan motivo y fase dueña, y verificado por mutación que la allowlist es portante. Y la **auditoría retroactiva de F5–F8 dio 4 de 4**: cada una de esas fases entregó algo que el usuario no podía ver — el caso más llamativo, los 6 campos de solver de la Fase 5, incluido su arreglo estrella de distinguir el solver *pedido* del *usado*, que aparecían en **0 archivos** del frontend).
+
+**CERRADAS: 1, 2, 3, 4, 5, 6, 7, 8 y 9. Siguiente: Fase 10** (contratos tipados — y hereda de la 9 los 5 endpoints de F7 sin `response_model`, cuyo esquema OpenAPI va vacío). La Fase 8 deja además, medido y con nombre, lo que NO entró en sus cuatro pasos: `solve_magnetic_inversion_lsqr` (812 LOC / CC 116), `_import_gravity_csv_v1_impl` (777 / CC 181), `run_joint_inversion` (736 / CC 87) y `run_magnetic_inversion` (616 / CC 73) — el mismo método mecánico se les aplica tal cual.
+
+### Plantilla de gate de fase (obligatoria desde la Fase 9)
+
+Ninguna fase se declara cerrada sin responder estas cuatro, **con evidencia
+medida** y no con una afirmación:
+
+1. **¿Qué puede hacer o ver un usuario desde la interfaz que antes no podía?**
+   Si la respuesta es «nada», decirlo explícitamente y justificar por qué (hay
+   fases legítimamente internas: la 3, la 6 y la 8 lo son). Lo que no vale es no
+   hacerse la pregunta — es así como pasaron los gates de F5, F7 y F8.
+2. **¿Todo lo que la fase publica tiene consumidor?** Lo mide
+   `tests/test_fase9_camino_de_usuario.py` en los tres eslabones. Una excepción es
+   aceptable; una excepción **sin motivo escrito y fase dueña**, no.
+3. **¿Cada valor de cada enumerado nuevo está ejercitado?** Patrón de
+   `test_fase1_literal_dispatch.py`.
+4. **¿El gate falla si se rompe lo que dice defender?** Verificado por
+   **mutación**, no por lectura. La Fase 3 encontró un gate de física que pasaba
+   con el bug dentro; la Fase 6, un guard que se anulaba a sí mismo.
 
 **Un cambio de orden respecto a la tabla original, y su motivo:** la Fase 4 (depth-weighting) sube por delante de la 5 (superficie de configuración). Antes iban al revés porque la 5 es más barata; pero la 4 es **P0** y la 5 es **P2**, y una fase barata no justifica retrasar la única pregunta abierta sobre qué producto se tiene. El resto del orden es el que ya fijaba la tabla de la 1ª entrega.
 
@@ -2429,6 +2449,104 @@ Y **`args_max` sigue en 38** en `exploration`: es la firma pública de `solve_in
 **Criterios de aceptación.** Un tester que no conozca el código activa una licencia, exporta un diagnóstico y ve su estado de conexión, sin tocar la API a mano. Playwright cubre los 3 recorridos. **Y un test de integración que fuerce el fallo de topografía verifica que el aviso aparece en la respuesta y en la UI** — no que se escribió en el log. **Más, del cierre de la Fase 6:** el usuario puede encender el plano de corte y cambiar de vista a mano, con su recorrido Playwright.
 
 **Riesgo.** Bajo (frontend puro sobre backend probado). **Dependencia:** iteración separada frontend, según la regla del repo.
+
+---
+
+### ✅ EJECUTADA — 2026-08-16
+
+**Los 5 puntos del trabajo, hechos.** Ejecutada en tres iteraciones separadas
+(backend / frontend / proceso) por la regla del repo. Gate: **tsc 0 · eslint 0
+errores · 25/25 Playwright** (13 recorridos nuevos + los 12 previos, incluida la
+regresión visual) · **45 tests de backend** entre los nuevos y los tocados.
+
+**(4) H-27 ya estaba cerrado por la Fase 1, y verificado aquí.** El canal
+`warnings[]` viaja, `WarningBanner` está montado y hay pytest + Playwright a los
+dos lados. Lo que faltaba lo encontró la medición de esta fase y se arregló: el
+banner vivía **dentro** de la rama `showModel` y el fetch exigía
+`status === "ready"`, de modo que los avisos desaparecían justo cuando no hay
+modelo que pintar —una corrida en error, un solver que no converge—, que es
+cuando más hacen falta.
+
+**Tres superficies montadas** (`SliceControls`, `MultiPhysicsControls`,
+`MultimodalComboPanel`), y con ellas el plano de corte tipo Leapfrog queda
+alcanzable de punta a punta por primera vez. **Componentes `.tsx` sin ningún
+importador: 3 → 0, medido.**
+
+#### Cinco defectos NUEVOS, todos medidos (ninguno estaba en el plan)
+
+1. **`copilot_gemini.configured` era `False` constante.** `connectivity_service`
+   leía `config.GEMINI_API_KEY`, un atributo que **no existe** en `core/config.py`,
+   protegido con un `hasattr` que lo convertía en un False silencioso. La clave
+   real la resuelve `chat_api::_resolve_api_key` desde el entorno. Además el
+   copiloto es **BYO-key** (la clave se pega en la interfaz): «no configurado» no
+   significa «no disponible», y ahora hay campo propio (`user_supplied_key`) para
+   que la UI no mienta por omisión.
+2. **`probed: true` sin haber tocado la red.** El endpoint aceptaba `probe=True`,
+   lo reflejaba como sondeo hecho, y **el sondeo nunca se implementó**. Se dice la
+   verdad (`probed:false` + `probe_requested` + `probe_note`) en vez de añadir una
+   llamada de red al servicio que certifica que el producto es offline. Los tests
+   que había pasaban con la mentira dentro porque sólo miraban el caso por defecto.
+3. **Un «Online» fijo en el copiloto.** `IAChatView` pintaba un punto verde
+   palpitante y la palabra *Online* escritos en el JSX, sin comprobar nada.
+4. **`≤150` iteraciones inventadas en el frontend.** `SolverDiagnosticsWidget`
+   afirmaba ese máximo justo cuando el backend **no** reportaba iteraciones —y las
+   rutas de producción usan 500/600/800—, enmascarando el `500/500` que es la
+   evidencia de no-convergencia. Física inventada en TS: viola la Regla de Oro.
+5. **`MultimodalComboPanel` tumbaba la pestaña.** Escrito en la Fase 21 y jamás
+   importado, nunca se había ejecutado contra una respuesta real: leía
+   `plan.confidence_pct.toFixed()` y `plan.resolution_priority.join()` a pelo. Con
+   un plan incompleto es un TypeError en render y **se cae la página entera**
+   («This page couldn't load»). Montarlo tal cual habría metido en el camino
+   dorado justo lo que el invariante «nunca crashea» prohíbe.
+
+#### (5) El cambio de proceso, MEDIDO en vez de escrito
+
+La lección de la Fase 6 es que los tests que **nombran** defienden borrados
+concretos y no detectan nada nuevo. Así que el criterio *«un usuario puede
+hacer/ver X desde la UI»* no se añade sólo a la plantilla: se mide en
+`tests/test_fase9_camino_de_usuario.py`, en los **tres eslabones** de la cadena
+—endpoint → proxy/cliente → componente montado—, porque romper cualquiera deja la
+capacidad igual de inalcanzable. Las excepciones van con **motivo y fase dueña**
+(como `HUERFANOS_TOLERADOS`), y hay un test que comprueba que esa lista es
+**portante**: si una ruta desaparece o gana UI, la excusa caduca y la suite cae.
+Verificado por mutación: desmontar `SliceControls` lo caza; quitar una entrada de
+la allowlist, también.
+
+**Medido hoy:** 62 rutas de backend, **10 sin consumidor** (todas declaradas: 6
+son entradas de scripting que la Fase 11 hereda) · 48 proxies, **1 sin llamador**
+(`/api/system-check`, que consume el orquestador Tauri, no un componente) · 62
+componentes, **0 sin importador**.
+
+#### Auditoría retroactiva de los gates F5–F8
+
+| Fase | ¿Entregó algo que el usuario no puede ver ni hacer? | Resuelto aquí |
+|---|---|---|
+| **5** | **Sí.** `solver_path`, `bounded_solver_requested`, `bounded_solver_active`, `projected_solver_used`, `lambda_used`, `lambda_effective` aparecían en **0 archivos** del frontend — incluido el arreglo estrella de esa fase, distinguir el solver *pedido* del *usado* | ✅ panel «Solver realmente usado» |
+| **6** | Sí, **por el otro lado**: 3 UIs escritas y nunca montadas (fue ella quien lo encontró) | ✅ montadas |
+| **7** | **Sí.** `regularization_functional` y `solver_converged` sólo llegaban al JSON | ✅ panel «Funcional y convergencia» + aviso en el visor |
+| **8** | **Sí.** `lsqr_converged`, el deber que dejó nombrado | ✅ mismo panel |
+
+Cuatro de cuatro. No es casualidad: es la propiedad estructural que la auditoría
+ya había señalado (*«la disciplina de honestidad está implementada en la frontera
+del backend y sistemáticamente no cruza al frontend»*), y es exactamente lo que el
+guard nuevo impide que se repita.
+
+#### Lo que queda fuera, a propósito y con nombre
+
+* **`check_voxel_budget` no tiene ningún llamador de producción**: el límite de
+  vóxeles del tier `free` no lo comprueba ninguna inversión. El panel de licencia
+  muestra el límite rotulado *«lo declara el token; hoy ninguna inversión lo
+  comprueba»* en vez de prometer un tope que no existe. Cablearlo cambia conducta
+  (puede bloquear corridas) y no es trabajo de una fase de interfaz.
+* **`TQ_LICENSE` (entorno) tiene prioridad sobre el archivo** que escribe
+  `/license/activate`: activar desde la UI puede quedar anulado en silencio. No se
+  cambia la precedencia —es una decisión de producto—; el panel **avisa** cuando
+  `source === "env"`.
+* **El ZIP de diagnóstico se escribe en `TMP_DIR` y nunca se borra.** Registrado,
+  no arreglado: es política de retención, no interfaz.
+* **`GET /diagnostics/manifest` y los 4 endpoints hermanos no declaran
+  `response_model`**, así que su esquema OpenAPI va vacío. Es materia de la
+  **Fase 10** (contratos tipados), que es la que va a generar tipos desde OpenAPI.
 
 ---
 
