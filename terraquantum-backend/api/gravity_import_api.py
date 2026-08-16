@@ -1,12 +1,13 @@
 import math
 import uuid
+from dataclasses import dataclass
 import os
 import shutil
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Form, Request
-from pydantic import ValidationError
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Form, Request
+from pydantic import BaseModel, ValidationError
 from typing import Optional
 
 from core.config import CSV_MAX_BYTES, TMP_DIR
@@ -1970,31 +1971,154 @@ async def load_package(
                 pass
 
 
-@router.post("/invert", response_model=GravityImportInvertResponse)
-@limiter.limit("10/minute")
-async def invert_gravity_csv(
-    request: Request,
-    file: UploadFile = File(...),
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FASE 8 — el handler HTTP, en su tamaño
+# ═════════════════════════════════════════════════════════════════════════════
+# `invert_gravity_csv` medía 927 líneas, CC 165 y **41 parámetros** — la firma
+# más ancha del backend. El paso 2 de la fase pide dejar el handler en «validar,
+# delegar, serializar» y agrupar esos 41 parámetros en objetos cohesivos.
+#
+# UNA CORRECCIÓN MEDIDA AL PLAN. La auditoría propone agruparlos en «objetos
+# Pydantic» — leído literal, `Annotated[Modelo, Form()]`. Se probó, y **cambia el
+# contrato HTTP**: con FastAPI 0.135 el formulario deja de tener campos planos
+# (`nx`, `ny`, `lambda_mag`, …) y pasa a exigir un campo `malla` con el objeto
+# dentro. El frontend actual dejaría de funcionar, y esta fase tiene prohibido
+# cambiar comportamiento.
+#
+# Lo que SÍ conserva el contrato —comprobado campo a campo contra el endpoint
+# plano, incluidos los valores por defecto y el esquema OpenAPI— es construir los
+# mismos objetos con `Depends`: los `Form(...)` viven en la dependencia, FastAPI
+# los sigue publicando planos, y la firma del handler baja de 41 a 9.
+#
+# Los modelos son `BaseModel` y no `dataclass` a propósito: así el mismo objeto
+# sirve para documentar el formulario y para pasar de una etapa a otra.
+
+
+class CorridaCfg(BaseModel):
+    """Identidad de la corrida y banderas de importación."""
+    project_id: Optional[str] = None
+    run_id: Optional[str] = None
+    nir: int = 0
+    fe: int = 0
+    region: str = ""
+    strict: bool = True
+    allow_g_raw: bool = False
+    pgi_params_json: Optional[str] = None
+    remanence_json: Optional[str] = None
+
+
+class MallaCfg(BaseModel):
+    """Caja de inversión pedida por el usuario (el auto-grid puede sustituirla)."""
+    depth: int = 0
+    nx: int = 0
+    ny: int = 0
+    nz: int = 0
+    block_size: int = 0
+    cutoff_radius: float = 0.0
+
+
+class RegularizacionCfg(BaseModel):
+    """λ, suavidad y norma del funcional."""
+    lambda_mag: float = 0.0
+    alpha_spatial: float = 1.0
+    regularization_norm: str = "L2"
+    compact_max_irls: int = 8
+    compact_eps: float = 0.05
+
+
+class AnclajeCfg(BaseModel):
+    """Padding, anclaje por sondajes y ajuste automático de condicionamiento."""
+    padding_kappa: float = 1e5
+    anchor_kappa: float = 1e4
+    auto_kappa: bool = True
+    boreholes_json: Optional[str] = None
+
+
+class PesosDatoCfg(BaseModel):
+    """Bounds petrofísicos y el instrumento que fija el piso de σ."""
+    density_min: float = 0.0
+    density_max: float = 5.5
+    gravimeter_type: str = "unknown"
+
+
+class GeorefCfg(BaseModel):
+    """Anclaje geográfico y los dos reconocimientos explícitos de riesgo."""
+    lat: str = "0.0"
+    lon: str = "0.0"
+    utm_zone: Optional[str] = None
+    acknowledge_spatial_risk: bool = False
+    acknowledge_regional_scale: bool = False
+    helmert_control_points_json: Optional[str] = None
+
+
+class MagneticaCfg(BaseModel):
+    """Ruteo a magnetometría y parámetros del campo inductor."""
+    data_type: str = "gravity"
+    inclination_deg: float = -30.0
+    declination_deg: float = 2.0
+    field_intensity_nt: float = 23500.0
+    susc_min: float = 0.0
+    susc_max: float = 1.0
+
+
+def _cfg_corrida(
     project_id: Optional[str] = Form(None),
     run_id: Optional[str] = Form(None),
-    depth: int = Form(...),
     nir: int = Form(...),
     fe: int = Form(...),
     region: str = Form(...),
-    lat: str = Form("0.0"),
-    lon: str = Form("0.0"),
+    strict: bool = Form(True),
+    allow_g_raw: bool = Form(False),
+    pgi_params_json: Optional[str] = Form(None),
+    remanence_json: Optional[str] = Form(None),
+) -> CorridaCfg:
+    return CorridaCfg(
+        project_id=project_id, run_id=run_id, nir=nir, fe=fe, region=region,
+        strict=strict, allow_g_raw=allow_g_raw, pgi_params_json=pgi_params_json,
+        remanence_json=remanence_json)
+
+
+def _cfg_malla(
+    depth: int = Form(...),
     nx: int = Form(...),
     ny: int = Form(...),
     nz: int = Form(...),
     block_size: int = Form(...),
     cutoff_radius: float = Form(...),
+) -> MallaCfg:
+    return MallaCfg(depth=depth, nx=nx, ny=ny, nz=nz, block_size=block_size,
+                    cutoff_radius=cutoff_radius)
+
+
+def _cfg_regularizacion(
     lambda_mag: float = Form(...),
     alpha_spatial: float = Form(...),
-    strict: bool = Form(True),
-    allow_g_raw: bool = Form(False),
-    utm_zone: Optional[str] = Form(None),
-    acknowledge_spatial_risk: bool = Form(False),
-    acknowledge_regional_scale: bool = Form(False),
+    # FASE 24B — /invert (flujo directo) conserva "L2" por default (puede correr a
+    # escala regional donde L2 es lo apropiado); el flujo de PAQUETE usa "compact".
+    regularization_norm: str = Form("L2"),
+    compact_max_irls: int = Form(8),
+    compact_eps: float = Form(0.05),
+) -> RegularizacionCfg:
+    return RegularizacionCfg(
+        lambda_mag=lambda_mag, alpha_spatial=alpha_spatial,
+        regularization_norm=regularization_norm,
+        compact_max_irls=compact_max_irls, compact_eps=compact_eps)
+
+
+def _cfg_anclaje(
+    # FASE 16 — Kappas configurables y ajuste automático de condicionamiento
+    padding_kappa: float = Form(1e5),
+    anchor_kappa: float = Form(1e4),
+    auto_kappa: bool = Form(True),
+    # FASE 20 (Caso B) — Sondajes que anclan la inversión (combo grav+sondajes).
+    boreholes_json: Optional[str] = Form(None),
+) -> AnclajeCfg:
+    return AnclajeCfg(padding_kappa=padding_kappa, anchor_kappa=anchor_kappa,
+                      auto_kappa=auto_kappa, boreholes_json=boreholes_json)
+
+
+def _cfg_pesos_dato(
     # Bounds petrofísicos (t/m³ absolutos; base=2.6). density_min < 2.6 permite
     # contrastes NEGATIVOS (magma, sal, cavidades). Default 0.0 = bound físico
     # mínimo (recomendación industrial v2; el clip de no-negatividad estricta
@@ -2004,7 +2128,28 @@ async def invert_gravity_csv(
     # Instrumento del survey: fija el piso de sigma y habilita la selección de
     # lambda por Morozov cuando lambda_mag=0 (sigma explícito → chi² interpretable).
     gravimeter_type: str = Form("unknown"),
-    # ── Magnetometría (Fase 9A) ──────────────────────────────────────────────
+) -> PesosDatoCfg:
+    return PesosDatoCfg(density_min=density_min, density_max=density_max,
+                        gravimeter_type=gravimeter_type)
+
+
+def _cfg_georef(
+    lat: str = Form("0.0"),
+    lon: str = Form("0.0"),
+    utm_zone: Optional[str] = Form(None),
+    acknowledge_spatial_risk: bool = Form(False),
+    acknowledge_regional_scale: bool = Form(False),
+    # FASE 19 (Caso B) — Georef Helmert: ≥2 puntos de control local↔real (JSON).
+    helmert_control_points_json: Optional[str] = Form(None),
+) -> GeorefCfg:
+    return GeorefCfg(
+        lat=lat, lon=lon, utm_zone=utm_zone,
+        acknowledge_spatial_risk=acknowledge_spatial_risk,
+        acknowledge_regional_scale=acknowledge_regional_scale,
+        helmert_control_points_json=helmert_control_points_json)
+
+
+def _cfg_magnetica(
     # data_type="magnetic" parsea una columna TMI (nT) y rutea al motor magnético
     # (inversión de susceptibilidad). "gravity" (default) = comportamiento intacto.
     data_type: str = Form("gravity"),
@@ -2013,889 +2158,1194 @@ async def invert_gravity_csv(
     field_intensity_nt: float = Form(23500.0),
     susc_min: float = Form(0.0),
     susc_max: float = Form(1.0),
-    # Fase 7B — Advanced params serialized as JSON strings from the frontend
-    pgi_params_json: Optional[str] = Form(None),
-    remanence_json: Optional[str] = Form(None),
-    # FASE 16 — Kappas configurables y ajuste automático de condicionamiento
-    padding_kappa: float = Form(1e5),
-    anchor_kappa: float = Form(1e4),
-    auto_kappa: bool = Form(True),
-    # FASE 24B — Norma de regularización + knobs del IRLS minimum-support.
-    # /invert (flujo directo) conserva "L2" por default (puede correr a escala
-    # regional donde L2 es lo apropiado); el flujo de PAQUETE usa "compact".
-    regularization_norm: str = Form("L2"),
-    compact_max_irls: int = Form(8),
-    compact_eps: float = Form(0.05),
-    # FASE 19 (Caso B) — Georef Helmert: ≥2 puntos de control local↔real (JSON).
-    # Cuando el CSV es de coordenadas LOCALES, georeferencia las estaciones y valida
-    # el anclaje (residual). Formato: {"points":[{"local_x","local_z","real_e","real_n",
-    # "label"?}, ...], "residual_warn_m"?}. Vacío/None = sin georef Helmert.
-    helmert_control_points_json: Optional[str] = Form(None),
-    # FASE 20 (Caso B) — Sondajes que anclan la inversión (combo grav+sondajes).
-    # JSON: lista de intervalos verticales [{"x_m","z_m","y_from_m","y_to_m",
-    # "density_t_m3"?,"susceptibility_si"?,...}]. None/vacío = sin anclaje.
-    boreholes_json: Optional[str] = Form(None),
+) -> MagneticaCfg:
+    return MagneticaCfg(
+        data_type=data_type, inclination_deg=inclination_deg,
+        declination_deg=declination_deg, field_intensity_nt=field_intensity_nt,
+        susc_min=susc_min, susc_max=susc_max)
+
+
+@dataclass
+class _EstadoInvert:
+    """Lo que cada etapa del endpoint deja para la siguiente."""
+    import_result: object = None
+    effective_utm: object = None
+    cs_detected_invert: object = None
+    utm_zone_mismatch_warning: object = None
+    lat_value: object = None
+    lon_value: object = None
+    project_meta_warning: object = None
+    spatial_readiness_invert: object = None
+    is_magnetic_run: bool = False
+    # correcciones y grilla
+    effective_observations: object = None
+    corrections_warnings: object = None
+    corrections_meta: object = None
+    auto_grid: object = None
+    auto_params_metadata: object = None
+    effective_nx: int = 0
+    effective_ny: int = 0
+    effective_nz: int = 0
+    effective_block_size: int = 0
+    effective_depth: int = 0
+    effective_cutoff_radius: float = 0.0
+    legacy_frontend_params: object = None
+    regional_preflight: object = None
+    x_extent: float = 0.0
+    z_extent: float = 0.0
+    # extras parseados
+    sensor_elevs_v1: object = None
+    noise_floor_from_unc: object = None
+    magnetic_nt: object = None
+    pgi_params_parsed: object = None
+    remanence_parsed: object = None
+    boreholes_parsed: object = None
+    # resultado
+    inversion_result: object = None
+    # georef
+    georef_confidence: object = None
+    georef_type: object = None
+    utm_zone_val: object = None
+    georef_warnings: object = None
+    utm_hemisphere_val: object = None
+    epsg_code_val: object = None
+    input_crs_val: object = None
+    crs_source_val: object = None
+    crs_confidence_val: object = None
+    footprint_dict: object = None
+    # persistencia
+    persisted: bool = False
+    persistence_warning: object = None
+    source_csv_path_str: object = None
+    metadata_path_str: object = None
+    r3_enrichment_result: object = None
+
+
+
+async def _invert_importar_y_validar(file, temp_path, corrida: CorridaCfg,
+                                     georef: GeorefCfg, est: _EstadoInvert):
+    """Lee el CSV, lo importa y aplica el gate espacial.
+
+    Devuelve `None` si todo fue bien (el estado queda en `est`) o el **dict de
+    respuesta** cuando la importación falla: ese `return` intermedio es el mismo
+    del monolito y se conserva palabra por palabra.
+    """
+    strict = corrida.strict
+    allow_g_raw = corrida.allow_g_raw
+    utm_zone = georef.utm_zone
+    lat = georef.lat
+    lon = georef.lon
+    acknowledge_spatial_risk = georef.acknowledge_spatial_risk
+    _is_magnetic_run = est.is_magnetic_run
+
+    content = await file.read()
+    if len(content) > CSV_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Archivo CSV demasiado grande. Máximo permitido: {CSV_MAX_BYTES // 1048576} MB.",
+        )
+    with open(temp_path, "wb") as f:
+        f.write(content)
+
+    import_result = import_gravity_csv_v1(
+        temp_path, strict=strict, allow_g_raw=allow_g_raw,
+        data_kind="magnetic" if _is_magnetic_run else "gravity",
+    )
+
+    # R3.5-K — compute effective UTM zone: form param takes priority, CSV-detected as fallback
+    _effective_utm = _effective_utm_zone(utm_zone, import_result)
+    _csv_detected_zone = _extract_detected_utm_zone(import_result)
+    _utm_zone_mismatch_warning: "str | None" = None
+    if (
+        utm_zone and utm_zone.strip()
+        and _csv_detected_zone
+        and _csv_detected_zone != utm_zone.strip()
+    ):
+        _utm_zone_mismatch_warning = (
+            f"Zona UTM declarada en formulario ({utm_zone.strip()}) difiere de la zona UTM "
+            f"detectada en CSV ({_csv_detected_zone}); se usó la zona del formulario."
+        )
+
+    if import_result.status != "ok":
+        _cs_detected_import_error = (
+            getattr(import_result.coordinate_transform, "input_coordinate_system", None)
+            if import_result.coordinate_transform else None
+        )
+        spatial_readiness_import_error = _compute_spatial_readiness_for_import(
+            import_result.csv_analysis,
+            coordinate_system_detected=_cs_detected_import_error,
+            utm_zone=_effective_utm,
+            anchor_lat=parse_geo_coord(lat, -90.0, 90.0),
+            anchor_lon=parse_geo_coord(lon, -180.0, 180.0),
+        )
+        try:
+            _rsp_import_error = model_to_dict(build_preflight_from_import_result(import_result))
+        except Exception:
+            _rsp_import_error = None
+        return {
+            "status": "error",
+            "stage": "import",
+            "importMetadata": model_to_dict(import_result.import_metadata) if import_result.import_metadata else None,
+            "csv_analysis": model_to_dict(import_result.csv_analysis) if import_result.csv_analysis else None,
+            "coordinate_transform": model_to_dict(import_result.coordinate_transform) if import_result.coordinate_transform else None,
+            "auto_grid": model_to_dict(import_result.auto_grid) if import_result.auto_grid else None,
+            "spatial_readiness": model_to_dict(spatial_readiness_import_error),
+            "regional_scale_preflight": _rsp_import_error,
+            "warnings": import_result.warnings,
+            "errors": import_result.errors,
+            "inversionResult": None
+        }
+
+    # R3.5-D — Parse anchor coords early (required by spatial gate before solver)
+    lat_value = parse_geo_coord(lat, -90.0, 90.0)
+    lon_value = parse_geo_coord(lon, -180.0, 180.0)
+    project_meta_warning: Optional[str] = None
+    if lat_value is None or lon_value is None:
+        project_meta_warning = "Invalid lat/lon; geospatial metadata was stored as null."
+
+    # R3.5-D — Spatial readiness must be classified before the solver call
+    _cs_detected_invert = (
+        getattr(import_result.coordinate_transform, "input_coordinate_system", None)
+        if import_result.coordinate_transform else None
+    )
+    spatial_readiness_invert = _compute_spatial_readiness_for_import(
+        import_result.csv_analysis,
+        coordinate_system_detected=_cs_detected_invert,
+        utm_zone=_effective_utm,
+        anchor_lat=lat_value,
+        anchor_lon=lon_value,
+    )
+
+    # R3.5-D — Hard gate: raises HTTP 422 if spatial readiness is insufficient
+    _enforce_spatial_readiness_gate(
+        spatial_readiness_invert,
+        acknowledge_spatial_risk=acknowledge_spatial_risk,
+        gravity_type=getattr(import_result.import_metadata, "gravity_type", None),
+    )
+
+    est.import_result = import_result
+    est.effective_utm = _effective_utm
+    est.cs_detected_invert = _cs_detected_invert
+    est.utm_zone_mismatch_warning = _utm_zone_mismatch_warning
+    est.lat_value = lat_value
+    est.lon_value = lon_value
+    est.project_meta_warning = project_meta_warning
+    est.spatial_readiness_invert = spatial_readiness_invert
+    return None
+
+
+
+def _invert_corregir_gravedad(est: _EstadoInvert):
+    """H-B2: GRS80 + aire libre + Bouguer cuando el dato es `g_raw` con lat/lon/elev."""
+    import_result = est.import_result
+    _is_magnetic_run = est.is_magnetic_run
+
+    # H-B2 — Apply gravity corrections when data is g_raw and lat/lon/elev available.
+    # Corrections (GRS80 latitude, FAC, Bouguer) are applied in-place on a new
+    # observations list; the original import_result is not mutated.
+    _corrections_meta: dict = {}
+    _corrections_warnings: list[str] = []
+    _gravity_type_raw = getattr(import_result.import_metadata, "gravity_type", None) or ""
+    _effective_observations = list(import_result.observations)
+
+    # magnetic_only: las correcciones gravimétricas (GRS80/FAC/BC/TC) NO aplican.
+    _ALREADY_CORRECTED = {"bouguer_anomaly", "complete_bouguer_anomaly", "synthetic_demo", "magnetic_only"}
+    if (
+        not _is_magnetic_run
+        and _gravity_type_raw not in _ALREADY_CORRECTED
+        and import_result.raw_latlon_elev is not None
+        and len(import_result.raw_latlon_elev) == len(import_result.observations)
+    ):
+        try:
+            import numpy as _np
+            from services.gravity_corrections_service import apply_all_corrections
+            from schemas.geophysics_schema import GravityObservation as _GravObs
+
+            _lats = _np.array([s["lat_deg"] for s in import_result.raw_latlon_elev])
+            _lons = _np.array([s["lon_deg"] for s in import_result.raw_latlon_elev])
+            _elevs_raw = _np.array([s["elev_m"] for s in import_result.raw_latlon_elev])
+            _g_ms2 = _np.array([obs.g for obs in import_result.observations])
+            _g_mgal = _g_ms2 * 1e5  # m/s² → mGal
+
+            _has_elevations = (
+                not _np.all(_np.isnan(_elevs_raw))
+                and not _np.all(_elevs_raw == 0.0)
+            )
+            _elevs = _np.where(_np.isnan(_elevs_raw), 0.0, _elevs_raw)
+
+            _g_corrected_mgal, _corr_meta = apply_all_corrections(
+                lats_deg=_lats,
+                lons_deg=_lons,
+                elevs_m=_elevs,
+                g_obs_mgal=_g_mgal,
+                gravity_type_in=_gravity_type_raw if _gravity_type_raw else "g_raw",
+                apply_lat=True,
+                apply_fac=_has_elevations,
+                apply_bouguer=_has_elevations,
+                apply_terrain=False,
+            )
+
+            _effective_observations = [
+                _GravObs(x_m=obs.x_m, y_m=obs.y_m, z_m=obs.z_m, g=float(gc) / 1e5)
+                for obs, gc in zip(import_result.observations, _g_corrected_mgal)
+            ]
+            _corrections_meta = _corr_meta
+            _corrections_meta["has_elevations"] = _has_elevations
+            _applied = _corr_meta.get("corrections_applied", [])
+            _out_type = _corr_meta.get("output_gravity_type", "unknown")
+            _corrections_warnings.append(
+                f"[H-B2] Correcciones aplicadas: {_applied}. "
+                f"Tipo salida: {_out_type}. "
+                f"{'FAC+BC aplicados.' if _has_elevations else 'Sin FAC/BC (elevación no disponible).'}"
+            )
+            _log.info(
+                "gravity_corrections_applied",
+                n_stations=len(_effective_observations),
+                corrections=_applied,
+                output_type=_out_type,
+                has_elevations=_has_elevations,
+            )
+        except Exception as _corr_exc:
+            _corrections_warnings.append(
+                f"[H-B2] Correcciones de gravedad no aplicadas: {_corr_exc}. "
+                "Inversión continúa con datos originales."
+            )
+            _log.warning("gravity_corrections_failed", error=str(_corr_exc))
+    elif _gravity_type_raw not in _ALREADY_CORRECTED and import_result.raw_latlon_elev is None:
+        _corrections_warnings.append(
+            "[H-B2] Correcciones de gravedad omitidas: el CSV no es de tipo latlon "
+            "o no contiene columnas de lat/lon. Para aplicar FAC/BC/TC proporcionar "
+            "un CSV con columnas lat, lon y elev_m."
+        )
+
+    est.effective_observations = _effective_observations
+    est.corrections_warnings = _corrections_warnings
+    est.corrections_meta = _corrections_meta
+
+
+def _invert_resolver_grilla(est: _EstadoInvert, malla: MallaCfg,
+                            reg: RegularizacionCfg, georef: GeorefCfg):
+    """Grilla efectiva (usuario vs auto-grid), gate de escala regional y metadatos."""
+    import_result = est.import_result
+    _effective_observations = est.effective_observations
+    _corrections_meta = est.corrections_meta
+    spatial_readiness_invert = est.spatial_readiness_invert
+    nx = malla.nx
+    ny = malla.ny
+    nz = malla.nz
+    block_size = malla.block_size
+    depth = malla.depth
+    cutoff_radius = malla.cutoff_radius
+    lambda_mag = reg.lambda_mag
+    alpha_spatial = reg.alpha_spatial
+    acknowledge_regional_scale = georef.acknowledge_regional_scale
+
+    xs = [obs.x_m for obs in _effective_observations]
+    zs = [obs.z_m for obs in _effective_observations]
+    auto_grid = import_result.auto_grid
+    if auto_grid is None and import_result.csv_analysis:
+        auto_grid = import_result.csv_analysis.auto_grid
+    if auto_grid is None:
+        raise HTTPException(status_code=500, detail="auto_grid no disponible tras importar CSV.")
+
+    # R3.8-A — Priorizar parámetros del usuario si caben en los límites.
+    # Si el usuario especificó nx/ny/nz y son ≤ 80, usarlos. Si no, usar auto_grid.
+    max_grid_dim = 80  # Límite de esquema de inversión
+    effective_nx = nx if (nx > 0 and nx <= max_grid_dim) else auto_grid.nx
+    effective_ny = ny if (ny > 0 and ny <= max_grid_dim) else auto_grid.ny
+    effective_nz = nz if (nz > 0 and nz <= max_grid_dim) else auto_grid.nz
+    effective_block_size = int(math.ceil(block_size)) if block_size > 0 else int(math.ceil(auto_grid.block_size_m))
+    effective_depth = int(math.ceil(depth)) if depth > 0 else int(math.ceil(auto_grid.depth_m))
+    effective_cutoff_radius = float(cutoff_radius) if cutoff_radius > 0 else auto_grid.cutoff_radius_m
+
+    # R3.7-C (restaurado 2026-06-10) — Regional scale preflight gate.
+    # TOO_LARGE_SINGLE_INVERSION se evalúa sobre la EXTENSIÓN del survey
+    # (auto-grid): si la grilla necesaria excede los límites por dimensión,
+    # ninguna caja chica especificada por el usuario produce un modelo
+    # físicamente significativo (modo de fallo "kernel vacío"). Se bloquea
+    # con guía de subset/tile — sin bypass por acknowledgement.
+    regional_preflight = build_preflight_from_import_result(import_result)
+    if regional_preflight.scale_class == "TOO_LARGE_SINGLE_INVERSION":
+        _raise_regional_scale_gate(
+            regional_preflight,
+            message=(
+                "El survey excede el tamaño máximo para una inversión única: "
+                "la grilla necesaria supera los límites por dimensión. "
+                "Use un subset local o procese por tiles."
+            ),
+            required_action=regional_preflight.recommended_action,
+        )
+
+    # R3.8-B — Recalcular preflight con los parámetros efectivos del usuario
+    # (solo informativo/ack para clases ≤ REGIONAL_SCALE).
+    if (effective_nx != auto_grid.nx or effective_ny != auto_grid.ny or
+        effective_nz != auto_grid.nz or effective_depth != auto_grid.depth_m):
+        from services.regional_scale_preflight_service import classify_regional_scale_preflight
+        regional_preflight = classify_regional_scale_preflight(
+            extent_x_m=max(xs) - min(xs) if xs else None,
+            extent_z_m=max(zs) - min(zs) if zs else None,
+            station_count=len(import_result.observations),
+            estimated_nx=effective_nx,
+            estimated_ny=effective_ny,
+            estimated_nz=effective_nz,
+            estimated_voxel_count=effective_nx * effective_ny * effective_nz,
+            estimated_depth_m=effective_depth,
+            estimated_block_size_m=effective_block_size,
+            max_allowed_nx=max_grid_dim,
+            max_allowed_ny=max_grid_dim,
+            max_allowed_nz=max_grid_dim,
+        )
+
+    if (
+        regional_preflight.scale_class == "REGIONAL_SCALE"
+        and regional_preflight.requires_user_acknowledgement
+    ):
+        if not acknowledge_regional_scale:
+            _raise_regional_scale_gate(
+                regional_preflight,
+                message=(
+                    "El dataset corresponde a escala regional. Para continuar debe aceptar "
+                    "explícitamente las limitaciones de escala."
+                ),
+                required_action=(
+                    "Marcar acknowledge_regional_scale=true o usar un subset local."
+                ),
+            )
+        else:
+            regional_preflight.warnings.append(
+                "Usuario aceptó ejecutar inversión regional/conceptual con limitaciones de escala."
+            )
+
+    x_extent = max(xs) - min(xs)
+    z_extent = max(zs) - min(zs)
+    legacy_frontend_params = {
+        "depth": depth,
+        "nx": nx,
+        "ny": ny,
+        "nz": nz,
+        "block_size": block_size,
+        "cutoff_radius": cutoff_radius,
+        "lambda_mag": lambda_mag,
+        "alpha_spatial": alpha_spatial,
+    }
+    auto_params_metadata = build_auto_params_metadata(
+        csv_analysis=import_result.csv_analysis,
+        coordinate_transform=import_result.coordinate_transform,
+        auto_grid=auto_grid,
+        legacy_frontend_params=legacy_frontend_params,
+    )
+    # R3.5-E — pass spatial_readiness so geophysics_service can apply caps
+    auto_params_metadata["spatial_readiness"] = model_to_dict(spatial_readiness_invert)
+    # R3.7-C — pass regional_scale_preflight for report persistence
+    auto_params_metadata["regional_scale_preflight"] = model_to_dict(regional_preflight)
+    auto_params_metadata["acknowledge_regional_scale"] = acknowledge_regional_scale
+    # H-B2 — record corrections applied (empty dict = no corrections)
+    auto_params_metadata["gravity_corrections"] = _corrections_meta
+
+    est.auto_grid = auto_grid
+    est.auto_params_metadata = auto_params_metadata
+    est.effective_nx = effective_nx
+    est.effective_ny = effective_ny
+    est.effective_nz = effective_nz
+    est.effective_block_size = effective_block_size
+    est.effective_depth = effective_depth
+    est.effective_cutoff_radius = effective_cutoff_radius
+    est.legacy_frontend_params = legacy_frontend_params
+    est.regional_preflight = regional_preflight
+    est.x_extent = x_extent
+    est.z_extent = z_extent
+
+
+def _invert_extras_y_parseos(est: _EstadoInvert, corrida: CorridaCfg,
+                             georef: GeorefCfg, anclas: AnclajeCfg):
+    """Helmert, topografía de estación, σ del CSV, magnetometría y JSON avanzados."""
+    import_result = est.import_result
+    _is_magnetic_run = est.is_magnetic_run
+    _effective_observations = est.effective_observations
+    _corrections_warnings = est.corrections_warnings
+    _cs_detected_invert = est.cs_detected_invert
+    auto_params_metadata = est.auto_params_metadata
+    helmert_control_points_json = georef.helmert_control_points_json
+    pgi_params_json = corrida.pgi_params_json
+    remanence_json = corrida.remanence_json
+    boreholes_json = anclas.boreholes_json
+
+    # ── FASE 19 (Caso B): Georef Helmert con puntos de control ────────────
+    # Si el usuario aportó ≥2 puntos de control y el CSV es de coordenadas
+    # LOCALES, resolvemos la transformada de similitud y georeferenciamos las
+    # estaciones (footprint real + validación del anclaje por residual). NO se
+    # toca la grilla (opera en metros locales, invariante a traslación/rotación).
+    if helmert_control_points_json:
+        try:
+            from schemas.gravity_import_schema import HelmertControlPointsInput
+            from services.gravity_import_service import georeference_stations_with_helmert
+
+            _hc_input = HelmertControlPointsInput(**json.loads(helmert_control_points_json))
+            _cs_local = (_cs_detected_invert or "").lower() in (
+                "local_meters", "local", "unknown",
+            )
+            if _cs_local:
+                _station_xz = [(float(o.x_m), float(o.z_m)) for o in _effective_observations]
+                _helmert_georef = georeference_stations_with_helmert(_hc_input, _station_xz)
+                auto_params_metadata["helmert_georef"] = _helmert_georef
+                _corrections_warnings.append(
+                    f"[Fase 19] Georef Helmert aplicada: {_helmert_georef['n_stations']} "
+                    f"estaciones, confidence={_helmert_georef['confidence']}, "
+                    f"residual_rms={_helmert_georef['transform'].get('residual_rms_m')} m."
+                )
+                _corrections_warnings.extend(_helmert_georef.get("warnings", []))
+            else:
+                auto_params_metadata["helmert_georef"] = {
+                    "skipped": True,
+                    "reason": (
+                        f"Coordenadas del CSV no son locales (detectado: "
+                        f"{_cs_detected_invert}); Helmert no aplica."
+                    ),
+                }
+                _corrections_warnings.append(
+                    "[Fase 19] Puntos de control Helmert ignorados: el CSV ya trae "
+                    f"coordenadas georreferenciadas ({_cs_detected_invert})."
+                )
+        except (ValueError, ValidationError, json.JSONDecodeError) as _hexc:
+            _corrections_warnings.append(
+                f"[Fase 19] Georef Helmert no aplicada (entrada inválida): {_hexc}."
+            )
+
+    # ── Topografía activa: elevaciones de estación (cualquier coord type) ──
+    # Solo si todas las estaciones tienen elevación y el relieve supera 10 m
+    # (bajo eso, la máscara topográfica no aporta y solo mete ruido numérico).
+    _sensor_elevs_v1: "Optional[list[float]]" = None
+    _se_list = import_result.station_elevations
+    if _se_list and len(_se_list) == len(_effective_observations):
+        _se_finite = [v for v in _se_list if v == v]  # NaN != NaN
+        if len(_se_finite) == len(_se_list) and (max(_se_finite) - min(_se_finite)) >= 10.0:
+            _sensor_elevs_v1 = [float(v) for v in _se_list]
+            _corrections_warnings.append(
+                f"Topografía activa: elevaciones de estación "
+                f"({min(_se_finite):.0f}–{max(_se_finite):.0f} m) aplicadas como "
+                "máscara topográfica del modelo."
+            )
+
+    # ── Sigma por estación: mediana de la columna uncertainty [mGal] ────────
+    # Prioridad: σ por estación > piso por gravímetro > sentinel adaptivo.
+    _noise_floor_from_unc: "Optional[float]" = None
+    _unc_list = import_result.station_uncertainties
+    if _unc_list:
+        _unc_finite = sorted(u for u in _unc_list if u == u and u > 0.0)
+        if len(_unc_finite) >= max(3, len(_unc_list) // 2):
+            _noise_floor_from_unc = float(_unc_finite[len(_unc_finite) // 2])
+            _corrections_warnings.append(
+                f"Sigma del solver fijado desde la columna uncertainty del CSV: "
+                f"piso = {_noise_floor_from_unc:.4g} mGal (mediana por estación)."
+            )
+
+    # ── Magnetometría / Joint ────────────────────────────────────────────────
+    # • magnetic_run: TMI está en el slot g → se mueve a magnetic_nt y g=0
+    #   (motor magnético aislado, ignora g).
+    # • gravity con columna magnética co-localizada (import.magnetic_values):
+    #   se conserva g real Y se pasa magnetic_nt → ruteo a inversión CONJUNTA
+    #   (run_geophysics_inversion enruta a joint cuando g≠0 y magnetic_nt≠0).
+    _magnetic_nt: "Optional[list[float]]" = None
+    if _is_magnetic_run:
+        from schemas.geophysics_schema import GravityObservation as _GravObs
+        _magnetic_nt = [float(o.g) for o in _effective_observations]
+        _effective_observations = [
+            _GravObs(x_m=o.x_m, y_m=o.y_m, z_m=o.z_m, g=0.0)
+            for o in _effective_observations
+        ]
+    elif import_result.magnetic_values is not None:
+        _mv = import_result.magnetic_values
+        _all_finite = (
+            len(_mv) == len(_effective_observations)
+            and all(v == v and v not in (float("inf"), float("-inf")) for v in _mv)
+        )
+        if _all_finite and any(abs(float(v)) > 0 for v in _mv):
+            _magnetic_nt = [float(v) for v in _mv]
+            _corrections_warnings.append(
+                f"Survey co-localizado: columna magnética detectada en el CSV "
+                f"gravimétrico ({len(_mv)} estaciones) → inversión CONJUNTA "
+                "(gravedad + magnetometría, cross-gradient)."
+            )
+        else:
+            _corrections_warnings.append(
+                "Columna magnética presente pero con huecos/ceros: se ignora "
+                "para el joint; se corre solo gravedad."
+            )
+
+    # Fase 7B — Parse advanced params from JSON strings
+    _pgi_params_parsed = None
+    if pgi_params_json:
+        try:
+            from schemas.geophysics_schema import PgiParams as _PgiParams
+            _pgi_params_parsed = _PgiParams(**json.loads(pgi_params_json))
+        except Exception as _e:
+            _corrections_warnings.append(f"pgi_params_json inválido (ignorado): {_e}")
+
+    _remanence_parsed = None
+    if remanence_json:
+        try:
+            from schemas.geophysics_schema import MagneticRemanenceParams as _RemParams
+            _remanence_parsed = _RemParams(**json.loads(remanence_json))
+        except Exception as _e:
+            _corrections_warnings.append(f"remanence_json inválido (ignorado): {_e}")
+
+    # FASE 20 — Sondajes (anclaje grav+sondajes). Lista de BoreholeInterval.
+    _boreholes_parsed = None
+    if boreholes_json:
+        try:
+            from schemas.geophysics_schema import BoreholeInterval as _BHInterval
+            _bh_raw = json.loads(boreholes_json)
+            if isinstance(_bh_raw, dict):  # tolera {"boreholes":[...]} o {"intervals":[...]}
+                _bh_raw = _bh_raw.get("boreholes") or _bh_raw.get("intervals") or []
+            _boreholes_parsed = [_BHInterval(**_b) for _b in _bh_raw]
+            if _boreholes_parsed:
+                _corrections_warnings.append(
+                    f"[Fase 20] Anclaje por sondajes activo: {len(_boreholes_parsed)} "
+                    "intervalos (combo grav+sondajes)."
+                )
+        except Exception as _e:
+            _corrections_warnings.append(f"boreholes_json inválido (ignorado): {_e}")
+
+    est.effective_observations = _effective_observations
+    est.sensor_elevs_v1 = _sensor_elevs_v1
+    est.noise_floor_from_unc = _noise_floor_from_unc
+    est.magnetic_nt = _magnetic_nt
+    est.pgi_params_parsed = _pgi_params_parsed
+    est.remanence_parsed = _remanence_parsed
+    est.boreholes_parsed = _boreholes_parsed
+
+
+def _invert_ejecutar(est: _EstadoInvert, corrida: CorridaCfg, malla: MallaCfg,
+                     reg: RegularizacionCfg, anclas: AnclajeCfg,
+                     pesos: PesosDatoCfg, georef: GeorefCfg, mag: MagneticaCfg):
+    """Construye el input validado y corre la inversión (única llamada al motor)."""
+    project_id = corrida.project_id
+    run_id = corrida.run_id
+    nir = corrida.nir
+    fe = corrida.fe
+    region = corrida.region
+    lat = georef.lat
+    lon = georef.lon
+    lambda_mag = reg.lambda_mag
+    alpha_spatial = reg.alpha_spatial
+    regularization_norm = reg.regularization_norm
+    compact_max_irls = reg.compact_max_irls
+    compact_eps = reg.compact_eps
+    padding_kappa = anclas.padding_kappa
+    anchor_kappa = anclas.anchor_kappa
+    auto_kappa = anclas.auto_kappa
+    density_min = pesos.density_min
+    density_max = pesos.density_max
+    gravimeter_type = pesos.gravimeter_type
+    inclination_deg = mag.inclination_deg
+    declination_deg = mag.declination_deg
+    field_intensity_nt = mag.field_intensity_nt
+    susc_min = mag.susc_min
+    susc_max = mag.susc_max
+    effective_depth = est.effective_depth
+    effective_nx = est.effective_nx
+    effective_ny = est.effective_ny
+    effective_nz = est.effective_nz
+    effective_block_size = est.effective_block_size
+    effective_cutoff_radius = est.effective_cutoff_radius
+    _effective_observations = est.effective_observations
+    auto_params_metadata = est.auto_params_metadata
+    _sensor_elevs_v1 = est.sensor_elevs_v1
+    _noise_floor_from_unc = est.noise_floor_from_unc
+    _magnetic_nt = est.magnetic_nt
+    _pgi_params_parsed = est.pgi_params_parsed
+    _remanence_parsed = est.remanence_parsed
+    _boreholes_parsed = est.boreholes_parsed
+    spatial_readiness_invert = est.spatial_readiness_invert
+
+    try:
+        invert_input = GeophysicsInvertInput(
+            project_id=project_id,
+            run_id=run_id,
+            depth=effective_depth,
+            nir=nir,
+            fe=fe,
+            region=region,
+            lat=lat,
+            lon=lon,
+            nx=effective_nx,
+            ny=effective_ny,
+            nz=effective_nz,
+            block_size=effective_block_size,
+            cutoff_radius=effective_cutoff_radius,
+            lambda_mag=lambda_mag,
+            alpha_spatial=alpha_spatial,
+            observations=_effective_observations,  # H-B2: corrected observations
+            enable_focusing=True,
+            auto_params_metadata=auto_params_metadata,
+            density_min=density_min,
+            density_max=density_max,
+            sensor_elevations_masl=_sensor_elevs_v1,
+            noise_floor_mgal=_noise_floor_from_unc,
+            gravimeter_type=gravimeter_type,
+            # Magnetometría (Fase 9A): activa el motor de susceptibilidad.
+            magnetic_nt=_magnetic_nt,
+            inclination_deg=inclination_deg,
+            declination_deg=declination_deg,
+            field_intensity_nt=field_intensity_nt,
+            susc_min=susc_min,
+            susc_max=susc_max,
+            # Fase 7B — Advanced params
+            pgi_params=_pgi_params_parsed,
+            remanence=_remanence_parsed,
+            # Fase 20 — Sondajes que anclan la inversión (None = sin anclaje)
+            boreholes=_boreholes_parsed,
+            # FASE 16 — Kappas configurables
+            padding_kappa=padding_kappa,
+            anchor_kappa=anchor_kappa,
+            auto_kappa=auto_kappa,
+            # FASE 24B — Norma de regularización (default L2 en flujo directo).
+            regularization_norm=regularization_norm,
+            compact_max_irls=compact_max_irls,
+            compact_eps=compact_eps,
+            # compute_uncertainty queda OFF a propósito: a la λ que selecciona
+            # Morozov en surveys subdeterminados (LdM: 191 estaciones), la
+            # covarianza posterior está mal condicionada y σ explota (mediana
+            # ~41, máx ~1e13 t/m³ — no físico). Activarla mostraría basura.
+            # Requiere fijar un operating point estable (λ mayor) o regularizar
+            # la UQ; es decisión de física, no un wiring. Ver nota al usuario.
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Invalid geophysics inversion input generated from gravity import.",
+                "errors": exc.errors(),
+            },
+        ) from exc
+
+    # Crear run_dir inmediatamente para que el SSE stream pueda conectar
+    # antes de que run_geophysics_inversion escriba el primer heartbeat.
+    if project_id and run_id:
+        try:
+            update_run_status(
+                project_id=project_id,
+                run_id=run_id,
+                status="queued",
+                progress=0.0,
+                stage="queued",
+                message="Inversión en cola.",
+            )
+        except Exception:
+            pass  # No abortar si falla la persistencia del estado
+
+    try:
+        inversion_result = run_geophysics_inversion(invert_input)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "GEOPHYSICS_INPUT_VALIDATION",
+                "message": str(exc),
+                "spatial_readiness": model_to_dict(spatial_readiness_invert),
+                "required_action": "Corregir parámetros de entrada antes de ejecutar la inversión.",
+            },
+        ) from exc
+    except Exception as exc:
+        import traceback as _tb
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "INVERSION_RUNTIME_ERROR",
+                "message": str(exc),
+                "type": type(exc).__name__,
+                "traceback": _tb.format_exc()[-2000:],
+            },
+        ) from exc
+
+    est.inversion_result = inversion_result
+
+
+def _invert_georef_footprint(est: _EstadoInvert):
+    """Clasifica la georreferenciación y calcula el footprint (pyproj o aproximado)."""
+    import_result = est.import_result
+    _effective_utm = est.effective_utm
+    lat_value = est.lat_value
+    lon_value = est.lon_value
+
+    # --- Georef computation ---
+    # lat_value, lon_value, project_meta_warning, spatial_readiness_invert
+    # already computed before gate (R3.5-D); reused here unchanged.
+    # R3.5-K: use effective_utm (form param priority, CSV-detected fallback)
+    georef_r2 = _classify_georef_full(
+        import_result.coordinate_transform, lat_value, lon_value,
+        utm_zone_form=_effective_utm,
+    )
+    georef_confidence = georef_r2["confidence"]
+    georef_type = georef_r2["type"]
+    utm_zone_val = georef_r2["utm_zone"]
+    georef_warnings = georef_r2["warnings"]
+    utm_hemisphere_val = georef_r2["utm_hemisphere"]
+    epsg_code_val = georef_r2["epsg_code"]
+    input_crs_val = georef_r2["input_crs"]
+    crs_source_val = georef_r2["crs_source"]
+    crs_confidence_val = georef_r2["crs_confidence"]
+
+    ct = import_result.coordinate_transform
+
+    # R2.3 — Compute footprint: try real pyproj UTM bbox first, then equirectangular fallback
+    _pyproj_used = False
+    footprint_dict = _build_missing_footprint()  # safe default
+
+    if (
+        georef_type == "csv_utm"
+        and utm_zone_val is not None
+        and epsg_code_val is not None
+        and ct is not None
+        and ct.x_min_raw is not None
+        and ct.x_max_raw is not None
+        and ct.z_min_raw is not None
+        and ct.z_max_raw is not None
+    ):
+        try:
+            footprint_dict = compute_utm_footprint_with_pyproj(
+                min_easting=float(ct.x_min_raw),
+                max_easting=float(ct.x_max_raw),
+                min_northing=float(ct.z_min_raw),
+                max_northing=float(ct.z_max_raw),
+                epsg_code=epsg_code_val,
+                crs_source=crs_source_val,
+            )
+            footprint_dict["utm_hemisphere"] = utm_hemisphere_val
+            footprint_dict["crs_confidence"] = crs_confidence_val
+
+            # Remove obsolete "pyproj pendiente" warning now that pyproj computed the footprint
+            georef_warnings = [
+                w for w in georef_warnings
+                if "queda pendiente" not in w and "R2.2" not in w
+            ]
+
+            # Validate anchor lat/lon against pyproj-derived center
+            if lat_value is not None and lon_value is not None:
+                fp_lat = footprint_dict["center_lat"]
+                fp_lon = footprint_dict["center_lon"]
+                dist_km = approx_dist_km(lat_value, lon_value, fp_lat, fp_lon)
+                if dist_km > 5.0:
+                    georef_warnings.append(
+                        f"El centro transformado desde UTM ({fp_lat:.4f}°, {fp_lon:.4f}°) "
+                        f"no coincide con el lat/lon declarado ({lat_value:.4f}°, "
+                        f"{lon_value:.4f}°). Diferencia: {dist_km:.1f} km. "
+                        "Verificar zona UTM o anclaje."
+                    )
+                    georef_confidence = "MEDIUM"
+                else:
+                    georef_confidence = "HIGH"
+
+            footprint_dict["confidence"] = georef_confidence
+            footprint_dict["warnings"] = list(georef_warnings)
+            _pyproj_used = True
+        except Exception:
+            # pyproj unavailable or failed — fall through to equirectangular
+            pass
+
+    if not _pyproj_used:
+        if (
+            lat_value is not None
+            and lon_value is not None
+            and ct is not None
+            and ct.x_extent_m > 0
+            and ct.z_extent_m > 0
+        ):
+            footprint_dict = compute_footprint_from_center(
+                lat_value, lon_value, ct.x_extent_m, ct.z_extent_m,
+                source=georef_type,
+                confidence=georef_confidence,
+                warnings=list(georef_warnings),
+                utm_zone=utm_zone_val,
+            )
+            footprint_dict["utm_hemisphere"] = utm_hemisphere_val
+            footprint_dict["epsg_code"] = epsg_code_val
+            footprint_dict["crs_source"] = crs_source_val
+            footprint_dict["crs_confidence"] = crs_confidence_val
+            if georef_type == "csv_utm" and utm_zone_val is not None:
+                footprint_dict["warnings"].append(
+                    "Zona UTM declarada, pero no fue posible construir footprint UTM real. "
+                    "Se usó aproximación por centro/extensión."
+                )
+        else:
+            footprint_dict = _build_missing_footprint()
+            footprint_dict["utm_hemisphere"] = utm_hemisphere_val
+            footprint_dict["epsg_code"] = epsg_code_val
+            footprint_dict["crs_source"] = crs_source_val
+            footprint_dict["crs_confidence"] = crs_confidence_val
+
+    est.georef_confidence = georef_confidence
+    est.georef_type = georef_type
+    est.utm_zone_val = utm_zone_val
+    est.georef_warnings = georef_warnings
+    est.utm_hemisphere_val = utm_hemisphere_val
+    est.epsg_code_val = epsg_code_val
+    est.input_crs_val = input_crs_val
+    est.crs_source_val = crs_source_val
+    est.crs_confidence_val = crs_confidence_val
+    est.footprint_dict = footprint_dict
+
+
+def _invert_persistir(est: _EstadoInvert, corrida: CorridaCfg, file, temp_path):
+    """Guarda CSV fuente, metadatos y `project_meta.json`; luego enriquece (R3)."""
+    project_id = corrida.project_id
+    run_id = corrida.run_id
+    import_result = est.import_result
+    auto_grid = est.auto_grid
+    legacy_frontend_params = est.legacy_frontend_params
+    spatial_readiness_invert = est.spatial_readiness_invert
+    lat_value = est.lat_value
+    lon_value = est.lon_value
+    project_meta_warning = est.project_meta_warning
+    georef_confidence = est.georef_confidence
+    georef_type = est.georef_type
+    utm_zone_val = est.utm_zone_val
+    utm_hemisphere_val = est.utm_hemisphere_val
+    epsg_code_val = est.epsg_code_val
+    input_crs_val = est.input_crs_val
+    crs_source_val = est.crs_source_val
+    crs_confidence_val = est.crs_confidence_val
+    footprint_dict = est.footprint_dict
+
+    # --- Persistence ---
+    persisted = False
+    persistence_warning: Optional[str] = None
+    source_csv_path_str: Optional[str] = None
+    metadata_path_str: Optional[str] = None
+
+    if project_id and run_id:
+        try:
+            source_csv_path = get_run_source_gravity_csv_path(project_id, run_id)
+            metadata_path = get_run_gravity_import_metadata_path(project_id, run_id)
+            source_csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Always update project_meta.json — load existing or start fresh
+            project_meta_path = get_project_meta_path(project_id)
+            now_utc = datetime.now(timezone.utc).isoformat()
+
+            if project_meta_path.exists():
+                try:
+                    with open(project_meta_path, "r", encoding="utf-8") as f:
+                        existing_meta: dict = json.load(f)
+                except Exception:
+                    existing_meta = {}
+            else:
+                existing_meta = {}
+
+            updated_meta: dict = dict(existing_meta)
+            updated_meta["project_id"] = project_id
+            if "crs" not in updated_meta:
+                updated_meta["crs"] = "EPSG:4326"
+            updated_meta["updated_at"] = now_utc
+            updated_meta["source"] = "csv_import"
+            # Always overwrite georef fields with current run result
+            updated_meta["georef_confidence"] = georef_confidence
+            updated_meta["georef_type"] = georef_type
+            updated_meta["utm_zone"] = utm_zone_val
+            updated_meta["footprint"] = footprint_dict
+            # R2 CRS fields
+            updated_meta["input_crs"] = input_crs_val
+            updated_meta["epsg_code"] = epsg_code_val
+            updated_meta["crs_source"] = crs_source_val
+            updated_meta["utm_hemisphere"] = utm_hemisphere_val
+            updated_meta["horizontal_datum"] = "WGS84" if epsg_code_val else None
+            updated_meta["crs_contract"] = {
+                "input_crs": input_crs_val,
+                "output_crs": "EPSG:4326",
+                "horizontal_datum": "WGS84" if epsg_code_val else None,
+                "vertical_datum": None,
+                "utm_zone": utm_zone_val,
+                "utm_hemisphere": utm_hemisphere_val,
+                "epsg_code": epsg_code_val,
+                "crs_source": crs_source_val,
+                "crs_confidence": crs_confidence_val,
+            }
+            # R3.5-C — persist spatial readiness in project_meta
+            updated_meta["spatial_readiness"] = model_to_dict(spatial_readiness_invert)
+
+            if lat_value is not None:
+                updated_meta["latitude"] = lat_value
+            elif "latitude" not in updated_meta:
+                updated_meta["latitude"] = None
+
+            if lon_value is not None:
+                updated_meta["longitude"] = lon_value
+            elif "longitude" not in updated_meta:
+                updated_meta["longitude"] = None
+
+            if not updated_meta.get("created_at"):
+                updated_meta["created_at"] = now_utc
+
+            save_project_meta(project_id, updated_meta)
+
+            shutil.copyfile(temp_path, source_csv_path)
+
+            metadata_content = {
+                "schema_version": "TerraQuantum Gravity CSV v1",
+                "original_filename": file.filename,
+                "stored_source_file": "source_gravity.csv",
+                "project_id": project_id,
+                "run_id": run_id,
+                "lat": lat_value,
+                "lon": lon_value,
+                "latitude": lat_value,
+                "longitude": lon_value,
+                "crs": "EPSG:4326",
+                "geo_source": "csv_import_ui",
+                "geo_warning": project_meta_warning,
+                "stored_at_utc": datetime.now(timezone.utc).isoformat(),
+                "import_metadata": model_to_dict(import_result.import_metadata),
+                "csv_analysis": model_to_dict(import_result.csv_analysis) if import_result.csv_analysis else None,
+                "coordinate_transform": model_to_dict(import_result.coordinate_transform) if import_result.coordinate_transform else None,
+                "auto_grid": model_to_dict(auto_grid),
+                "legacy_frontend_params": legacy_frontend_params,
+                "warnings": import_result.warnings,
+                "errors": import_result.errors,
+                "spatial_readiness": model_to_dict(spatial_readiness_invert),
+            }
+
+            with open(metadata_path, "w", encoding="utf-8") as meta_f:
+                json.dump(metadata_content, meta_f, indent=2, ensure_ascii=False)
+
+            persisted = True
+            source_csv_path_str = str(source_csv_path)
+            metadata_path_str = str(metadata_path)
+        except Exception as e:
+            persistence_warning = f"Failed to persist artifacts: {str(e)}"
+    else:
+        persistence_warning = "project_id/run_id missing; gravity import artifacts were not persisted."
+        project_meta_warning = "project_id/run_id missing; project_meta.json was not created."
+
+    # --- R3 post-inversion enrichment ---
+    r3_enrichment_result: dict = {
+        "attempted": False,
+        "terrain_persisted": False,
+        "enrichment_attempted": False,
+        "enrichment_status": None,
+        "has_elevation_data": False,
+        "warnings": [],
+    }
+    if project_id and run_id:
+        r3_enrichment_result = _run_r3_post_inversion_enrichment(
+            project_id, run_id, georef_confidence
+        )
+
+    est.persisted = persisted
+    est.persistence_warning = persistence_warning
+    est.source_csv_path_str = source_csv_path_str
+    est.metadata_path_str = metadata_path_str
+    est.project_meta_warning = project_meta_warning
+    est.r3_enrichment_result = r3_enrichment_result
+
+
+def _invert_respuesta(est: _EstadoInvert, corrida: CorridaCfg, malla: MallaCfg,
+                      georef: GeorefCfg):
+    """Avisos de degradación honestos + el JSON que ve el frontend."""
+    project_id = corrida.project_id
+    run_id = corrida.run_id
+    nx = malla.nx
+    ny = malla.ny
+    nz = malla.nz
+    block_size = malla.block_size
+    acknowledge_regional_scale = georef.acknowledge_regional_scale
+    import_result = est.import_result
+    inversion_result = est.inversion_result
+    x_extent = est.x_extent
+    z_extent = est.z_extent
+    _corrections_warnings = est.corrections_warnings
+    georef_warnings = est.georef_warnings
+    r3_enrichment_result = est.r3_enrichment_result
+    _utm_zone_mismatch_warning = est.utm_zone_mismatch_warning
+    project_meta_warning = est.project_meta_warning
+    legacy_frontend_params = est.legacy_frontend_params
+    spatial_readiness_invert = est.spatial_readiness_invert
+    regional_preflight = est.regional_preflight
+    georef_confidence = est.georef_confidence
+    georef_type = est.georef_type
+    utm_zone_val = est.utm_zone_val
+    utm_hemisphere_val = est.utm_hemisphere_val
+    epsg_code_val = est.epsg_code_val
+    input_crs_val = est.input_crs_val
+    crs_source_val = est.crs_source_val
+    crs_confidence_val = est.crs_confidence_val
+    footprint_dict = est.footprint_dict
+    auto_grid = est.auto_grid
+    persisted = est.persisted
+    source_csv_path_str = est.source_csv_path_str
+    metadata_path_str = est.metadata_path_str
+    persistence_warning = est.persistence_warning
+    effective_nx = est.effective_nx
+    effective_ny = est.effective_ny
+    effective_nz = est.effective_nz
+    effective_block_size = est.effective_block_size
+    effective_depth = est.effective_depth
+    effective_cutoff_radius = est.effective_cutoff_radius
+
+    regional_warnings: list[str] = []
+    x_span_km = x_extent / 1000.0
+    z_span_km = z_extent / 1000.0
+    if x_span_km > 10 or z_span_km > 10:
+        regional_warnings.append(
+            f"Dataset regional detectado ({x_span_km:.0f}km × {z_span_km:.0f}km). "
+            "La inversión modela distribución de densidades a escala regional. "
+            "El pit design conceptual opera sobre una subgrilla normalizada."
+        )
+    # ── Guard de degradación: el 3D no debe verse "presentable" en silencio ──
+    # cuando el ajuste es malo o la mayoría de la malla no fue sensada.
+    _degradation_warnings: list[str] = []
+    try:
+        _mis_g = (inversion_result or {}).get("misfit_error_percent")
+        if _mis_g is not None and float(_mis_g) > 50.0:
+            _degradation_warnings.append(
+                f"MODELO DEGRADADO: misfit {float(_mis_g):.0f}% — el modelo explica menos de "
+                "la mitad de la señal observada. NO usar para interpretación. Revisar "
+                "cutoff_radius, lambda, bounds de densidad y correcciones."
+            )
+        _r05_g = ((inversion_result or {}).get("report") or {}).get("r05_geometry_audit") or {}
+        _obs_ratio_g = _r05_g.get("observable_ratio")
+        if _obs_ratio_g is not None and float(_obs_ratio_g) < 0.5:
+            _degradation_warnings.append(
+                f"COBERTURA INSUFICIENTE: solo {float(_obs_ratio_g) * 100:.0f}% de los vóxeles "
+                "activos es sensado por las estaciones (cutoff_radius demasiado pequeño "
+                "para el espaciamiento del survey)."
+            )
+    except Exception:
+        pass
+
+    all_warnings = (
+        import_result.warnings
+        + regional_warnings
+        + georef_warnings
+        + r3_enrichment_result.get("warnings", [])
+        + _corrections_warnings
+        + _degradation_warnings
+    )
+    if _utm_zone_mismatch_warning:
+        all_warnings.append(_utm_zone_mismatch_warning)
+    if project_meta_warning:
+        all_warnings.append(project_meta_warning)
+
+    # Strip voxels from the HTTP response — they are already persisted to parquet
+    # and the frontend loads them via the /block-model API.
+    _inversion_dict = model_to_dict(inversion_result) if inversion_result else {}
+    if isinstance(_inversion_dict, dict) and "voxels" in _inversion_dict:
+        _inversion_dict.pop("voxels", None)
+
+    return sanitize_nan({
+        "status": "done",
+        "stage": "inversion",
+        "project_id": project_id,
+        "run_id": run_id,
+        "r3_enrichment": r3_enrichment_result,
+        "spatial_readiness": model_to_dict(spatial_readiness_invert),
+        "regional_scale_preflight": model_to_dict(regional_preflight),
+        "acknowledge_regional_scale": acknowledge_regional_scale,
+        "georef": {
+            "confidence": georef_confidence,
+            "type": georef_type,
+            "utm_zone": utm_zone_val,
+            "utm_hemisphere": utm_hemisphere_val,
+            "epsg_code": epsg_code_val,
+            "input_crs": input_crs_val,
+            "crs_source": crs_source_val,
+            "crs_confidence": crs_confidence_val,
+            "warnings": georef_warnings,
+            "footprint": footprint_dict,
+        },
+        "importMetadata": model_to_dict(import_result.import_metadata),
+        "csv_analysis": model_to_dict(import_result.csv_analysis) if import_result.csv_analysis else None,
+        "coordinate_transform": model_to_dict(import_result.coordinate_transform) if import_result.coordinate_transform else None,
+        "auto_grid": model_to_dict(auto_grid),
+        "legacy_frontend_params": legacy_frontend_params,
+        "warnings": all_warnings,
+        "errors": [],
+        "inversionResult": _inversion_dict,
+        "importPersistence": {
+            "persisted": persisted,
+            "sourceGravityPath": source_csv_path_str,
+            "metadataPath": metadata_path_str,
+            "warning": persistence_warning,
+            "projectMetaWarning": project_meta_warning
+        },
+        "gridAutoAdapt": {
+            "applied": True,
+            "reason": "auto_grid_v0_1",
+            "frontendRequested": {
+                "nx": nx,
+                "ny": ny,
+                "nz": nz,
+                "block_size": block_size
+            },
+            "effectiveUsed": {
+                "nx": effective_nx,
+                "ny": effective_ny,
+                "nz": effective_nz,
+                "block_size": effective_block_size,
+                "depth": effective_depth,
+                "cutoff_radius": effective_cutoff_radius
+            },
+            "totalVoxels": effective_nx * effective_ny * effective_nz,
+            "extentXm": x_extent,
+            "extentZm": z_extent
+        }
+    })
+
+
+@router.post("/invert", response_model=GravityImportInvertResponse)
+@limiter.limit("10/minute")
+async def invert_gravity_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    corrida: CorridaCfg = Depends(_cfg_corrida),
+    malla: MallaCfg = Depends(_cfg_malla),
+    reg: RegularizacionCfg = Depends(_cfg_regularizacion),
+    anclas: AnclajeCfg = Depends(_cfg_anclaje),
+    pesos: PesosDatoCfg = Depends(_cfg_pesos_dato),
+    georef: GeorefCfg = Depends(_cfg_georef),
+    mag: MagneticaCfg = Depends(_cfg_magnetica),
 ):
+    """Importa un CSV gravimétrico/magnético, invierte y devuelve el reporte.
+
+    FASE 8: validar, delegar, serializar. Los 41 `Form(...)` siguen viajando
+    planos por el cable (los declaran las dependencias `_cfg_*`); lo que cambió
+    es que aquí ya no se leen de a uno.
+    """
     if not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must end with .csv")
-    if data_type not in ("gravity", "magnetic"):
+    if mag.data_type not in ("gravity", "magnetic"):
         raise HTTPException(
             status_code=422,
-            detail=f"data_type inválido: '{data_type}'. Use 'gravity' o 'magnetic'.",
+            detail=f"data_type inválido: '{mag.data_type}'. Use 'gravity' o 'magnetic'.",
         )
-    _is_magnetic_run = (data_type == "magnetic")
-    if gravimeter_type not in _VALID_GRAVIMETERS:
+    if pesos.gravimeter_type not in _VALID_GRAVIMETERS:
         raise HTTPException(
             status_code=422,
-            detail=f"gravimeter_type inválido: '{gravimeter_type}'. "
+            detail=f"gravimeter_type inválido: '{pesos.gravimeter_type}'. "
                    f"Valores soportados: {sorted(_VALID_GRAVIMETERS)}.",
         )
 
+    est = _EstadoInvert(is_magnetic_run=(mag.data_type == "magnetic"))
     temp_filename = f"{uuid.uuid4()}.csv"
     temp_path = Path(TMP_DIR) / temp_filename
 
     try:
-        content = await file.read()
-        if len(content) > CSV_MAX_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Archivo CSV demasiado grande. Máximo permitido: {CSV_MAX_BYTES // 1048576} MB.",
-            )
-        with open(temp_path, "wb") as f:
-            f.write(content)
+        respuesta_error = await _invert_importar_y_validar(
+            file, temp_path, corrida, georef, est)
+        if respuesta_error is not None:
+            return respuesta_error
 
-        import_result = import_gravity_csv_v1(
-            temp_path, strict=strict, allow_g_raw=allow_g_raw,
-            data_kind="magnetic" if _is_magnetic_run else "gravity",
-        )
-
-        # R3.5-K — compute effective UTM zone: form param takes priority, CSV-detected as fallback
-        _effective_utm = _effective_utm_zone(utm_zone, import_result)
-        _csv_detected_zone = _extract_detected_utm_zone(import_result)
-        _utm_zone_mismatch_warning: "str | None" = None
-        if (
-            utm_zone and utm_zone.strip()
-            and _csv_detected_zone
-            and _csv_detected_zone != utm_zone.strip()
-        ):
-            _utm_zone_mismatch_warning = (
-                f"Zona UTM declarada en formulario ({utm_zone.strip()}) difiere de la zona UTM "
-                f"detectada en CSV ({_csv_detected_zone}); se usó la zona del formulario."
-            )
-
-        if import_result.status != "ok":
-            _cs_detected_import_error = (
-                getattr(import_result.coordinate_transform, "input_coordinate_system", None)
-                if import_result.coordinate_transform else None
-            )
-            spatial_readiness_import_error = _compute_spatial_readiness_for_import(
-                import_result.csv_analysis,
-                coordinate_system_detected=_cs_detected_import_error,
-                utm_zone=_effective_utm,
-                anchor_lat=parse_geo_coord(lat, -90.0, 90.0),
-                anchor_lon=parse_geo_coord(lon, -180.0, 180.0),
-            )
-            try:
-                _rsp_import_error = model_to_dict(build_preflight_from_import_result(import_result))
-            except Exception:
-                _rsp_import_error = None
-            return {
-                "status": "error",
-                "stage": "import",
-                "importMetadata": model_to_dict(import_result.import_metadata) if import_result.import_metadata else None,
-                "csv_analysis": model_to_dict(import_result.csv_analysis) if import_result.csv_analysis else None,
-                "coordinate_transform": model_to_dict(import_result.coordinate_transform) if import_result.coordinate_transform else None,
-                "auto_grid": model_to_dict(import_result.auto_grid) if import_result.auto_grid else None,
-                "spatial_readiness": model_to_dict(spatial_readiness_import_error),
-                "regional_scale_preflight": _rsp_import_error,
-                "warnings": import_result.warnings,
-                "errors": import_result.errors,
-                "inversionResult": None
-            }
-
-        # R3.5-D — Parse anchor coords early (required by spatial gate before solver)
-        lat_value = parse_geo_coord(lat, -90.0, 90.0)
-        lon_value = parse_geo_coord(lon, -180.0, 180.0)
-        project_meta_warning: Optional[str] = None
-        if lat_value is None or lon_value is None:
-            project_meta_warning = "Invalid lat/lon; geospatial metadata was stored as null."
-
-        # R3.5-D — Spatial readiness must be classified before the solver call
-        _cs_detected_invert = (
-            getattr(import_result.coordinate_transform, "input_coordinate_system", None)
-            if import_result.coordinate_transform else None
-        )
-        spatial_readiness_invert = _compute_spatial_readiness_for_import(
-            import_result.csv_analysis,
-            coordinate_system_detected=_cs_detected_invert,
-            utm_zone=_effective_utm,
-            anchor_lat=lat_value,
-            anchor_lon=lon_value,
-        )
-
-        # R3.5-D — Hard gate: raises HTTP 422 if spatial readiness is insufficient
-        _enforce_spatial_readiness_gate(
-            spatial_readiness_invert,
-            acknowledge_spatial_risk=acknowledge_spatial_risk,
-            gravity_type=getattr(import_result.import_metadata, "gravity_type", None),
-        )
-
-        # H-B2 — Apply gravity corrections when data is g_raw and lat/lon/elev available.
-        # Corrections (GRS80 latitude, FAC, Bouguer) are applied in-place on a new
-        # observations list; the original import_result is not mutated.
-        _corrections_meta: dict = {}
-        _corrections_warnings: list[str] = []
-        _gravity_type_raw = getattr(import_result.import_metadata, "gravity_type", None) or ""
-        _effective_observations = list(import_result.observations)
-
-        # magnetic_only: las correcciones gravimétricas (GRS80/FAC/BC/TC) NO aplican.
-        _ALREADY_CORRECTED = {"bouguer_anomaly", "complete_bouguer_anomaly", "synthetic_demo", "magnetic_only"}
-        if (
-            not _is_magnetic_run
-            and _gravity_type_raw not in _ALREADY_CORRECTED
-            and import_result.raw_latlon_elev is not None
-            and len(import_result.raw_latlon_elev) == len(import_result.observations)
-        ):
-            try:
-                import numpy as _np
-                from services.gravity_corrections_service import apply_all_corrections
-                from schemas.geophysics_schema import GravityObservation as _GravObs
-
-                _lats = _np.array([s["lat_deg"] for s in import_result.raw_latlon_elev])
-                _lons = _np.array([s["lon_deg"] for s in import_result.raw_latlon_elev])
-                _elevs_raw = _np.array([s["elev_m"] for s in import_result.raw_latlon_elev])
-                _g_ms2 = _np.array([obs.g for obs in import_result.observations])
-                _g_mgal = _g_ms2 * 1e5  # m/s² → mGal
-
-                _has_elevations = (
-                    not _np.all(_np.isnan(_elevs_raw))
-                    and not _np.all(_elevs_raw == 0.0)
-                )
-                _elevs = _np.where(_np.isnan(_elevs_raw), 0.0, _elevs_raw)
-
-                _g_corrected_mgal, _corr_meta = apply_all_corrections(
-                    lats_deg=_lats,
-                    lons_deg=_lons,
-                    elevs_m=_elevs,
-                    g_obs_mgal=_g_mgal,
-                    gravity_type_in=_gravity_type_raw if _gravity_type_raw else "g_raw",
-                    apply_lat=True,
-                    apply_fac=_has_elevations,
-                    apply_bouguer=_has_elevations,
-                    apply_terrain=False,
-                )
-
-                _effective_observations = [
-                    _GravObs(x_m=obs.x_m, y_m=obs.y_m, z_m=obs.z_m, g=float(gc) / 1e5)
-                    for obs, gc in zip(import_result.observations, _g_corrected_mgal)
-                ]
-                _corrections_meta = _corr_meta
-                _corrections_meta["has_elevations"] = _has_elevations
-                _applied = _corr_meta.get("corrections_applied", [])
-                _out_type = _corr_meta.get("output_gravity_type", "unknown")
-                _corrections_warnings.append(
-                    f"[H-B2] Correcciones aplicadas: {_applied}. "
-                    f"Tipo salida: {_out_type}. "
-                    f"{'FAC+BC aplicados.' if _has_elevations else 'Sin FAC/BC (elevación no disponible).'}"
-                )
-                _log.info(
-                    "gravity_corrections_applied",
-                    n_stations=len(_effective_observations),
-                    corrections=_applied,
-                    output_type=_out_type,
-                    has_elevations=_has_elevations,
-                )
-            except Exception as _corr_exc:
-                _corrections_warnings.append(
-                    f"[H-B2] Correcciones de gravedad no aplicadas: {_corr_exc}. "
-                    "Inversión continúa con datos originales."
-                )
-                _log.warning("gravity_corrections_failed", error=str(_corr_exc))
-        elif _gravity_type_raw not in _ALREADY_CORRECTED and import_result.raw_latlon_elev is None:
-            _corrections_warnings.append(
-                "[H-B2] Correcciones de gravedad omitidas: el CSV no es de tipo latlon "
-                "o no contiene columnas de lat/lon. Para aplicar FAC/BC/TC proporcionar "
-                "un CSV con columnas lat, lon y elev_m."
-            )
-
-        xs = [obs.x_m for obs in _effective_observations]
-        zs = [obs.z_m for obs in _effective_observations]
-        auto_grid = import_result.auto_grid
-        if auto_grid is None and import_result.csv_analysis:
-            auto_grid = import_result.csv_analysis.auto_grid
-        if auto_grid is None:
-            raise HTTPException(status_code=500, detail="auto_grid no disponible tras importar CSV.")
-
-        # R3.8-A — Priorizar parámetros del usuario si caben en los límites.
-        # Si el usuario especificó nx/ny/nz y son ≤ 80, usarlos. Si no, usar auto_grid.
-        max_grid_dim = 80  # Límite de esquema de inversión
-        effective_nx = nx if (nx > 0 and nx <= max_grid_dim) else auto_grid.nx
-        effective_ny = ny if (ny > 0 and ny <= max_grid_dim) else auto_grid.ny
-        effective_nz = nz if (nz > 0 and nz <= max_grid_dim) else auto_grid.nz
-        effective_block_size = int(math.ceil(block_size)) if block_size > 0 else int(math.ceil(auto_grid.block_size_m))
-        effective_depth = int(math.ceil(depth)) if depth > 0 else int(math.ceil(auto_grid.depth_m))
-        effective_cutoff_radius = float(cutoff_radius) if cutoff_radius > 0 else auto_grid.cutoff_radius_m
-
-        # R3.7-C (restaurado 2026-06-10) — Regional scale preflight gate.
-        # TOO_LARGE_SINGLE_INVERSION se evalúa sobre la EXTENSIÓN del survey
-        # (auto-grid): si la grilla necesaria excede los límites por dimensión,
-        # ninguna caja chica especificada por el usuario produce un modelo
-        # físicamente significativo (modo de fallo "kernel vacío"). Se bloquea
-        # con guía de subset/tile — sin bypass por acknowledgement.
-        regional_preflight = build_preflight_from_import_result(import_result)
-        if regional_preflight.scale_class == "TOO_LARGE_SINGLE_INVERSION":
-            _raise_regional_scale_gate(
-                regional_preflight,
-                message=(
-                    "El survey excede el tamaño máximo para una inversión única: "
-                    "la grilla necesaria supera los límites por dimensión. "
-                    "Use un subset local o procese por tiles."
-                ),
-                required_action=regional_preflight.recommended_action,
-            )
-
-        # R3.8-B — Recalcular preflight con los parámetros efectivos del usuario
-        # (solo informativo/ack para clases ≤ REGIONAL_SCALE).
-        if (effective_nx != auto_grid.nx or effective_ny != auto_grid.ny or
-            effective_nz != auto_grid.nz or effective_depth != auto_grid.depth_m):
-            from services.regional_scale_preflight_service import classify_regional_scale_preflight
-            regional_preflight = classify_regional_scale_preflight(
-                extent_x_m=max(xs) - min(xs) if xs else None,
-                extent_z_m=max(zs) - min(zs) if zs else None,
-                station_count=len(import_result.observations),
-                estimated_nx=effective_nx,
-                estimated_ny=effective_ny,
-                estimated_nz=effective_nz,
-                estimated_voxel_count=effective_nx * effective_ny * effective_nz,
-                estimated_depth_m=effective_depth,
-                estimated_block_size_m=effective_block_size,
-                max_allowed_nx=max_grid_dim,
-                max_allowed_ny=max_grid_dim,
-                max_allowed_nz=max_grid_dim,
-            )
-
-        if (
-            regional_preflight.scale_class == "REGIONAL_SCALE"
-            and regional_preflight.requires_user_acknowledgement
-        ):
-            if not acknowledge_regional_scale:
-                _raise_regional_scale_gate(
-                    regional_preflight,
-                    message=(
-                        "El dataset corresponde a escala regional. Para continuar debe aceptar "
-                        "explícitamente las limitaciones de escala."
-                    ),
-                    required_action=(
-                        "Marcar acknowledge_regional_scale=true o usar un subset local."
-                    ),
-                )
-            else:
-                regional_preflight.warnings.append(
-                    "Usuario aceptó ejecutar inversión regional/conceptual con limitaciones de escala."
-                )
-
-        x_extent = max(xs) - min(xs)
-        z_extent = max(zs) - min(zs)
-        legacy_frontend_params = {
-            "depth": depth,
-            "nx": nx,
-            "ny": ny,
-            "nz": nz,
-            "block_size": block_size,
-            "cutoff_radius": cutoff_radius,
-            "lambda_mag": lambda_mag,
-            "alpha_spatial": alpha_spatial,
-        }
-        auto_params_metadata = build_auto_params_metadata(
-            csv_analysis=import_result.csv_analysis,
-            coordinate_transform=import_result.coordinate_transform,
-            auto_grid=auto_grid,
-            legacy_frontend_params=legacy_frontend_params,
-        )
-        # R3.5-E — pass spatial_readiness so geophysics_service can apply caps
-        auto_params_metadata["spatial_readiness"] = model_to_dict(spatial_readiness_invert)
-        # R3.7-C — pass regional_scale_preflight for report persistence
-        auto_params_metadata["regional_scale_preflight"] = model_to_dict(regional_preflight)
-        auto_params_metadata["acknowledge_regional_scale"] = acknowledge_regional_scale
-        # H-B2 — record corrections applied (empty dict = no corrections)
-        auto_params_metadata["gravity_corrections"] = _corrections_meta
-
-        # ── FASE 19 (Caso B): Georef Helmert con puntos de control ────────────
-        # Si el usuario aportó ≥2 puntos de control y el CSV es de coordenadas
-        # LOCALES, resolvemos la transformada de similitud y georeferenciamos las
-        # estaciones (footprint real + validación del anclaje por residual). NO se
-        # toca la grilla (opera en metros locales, invariante a traslación/rotación).
-        if helmert_control_points_json:
-            try:
-                from schemas.gravity_import_schema import HelmertControlPointsInput
-                from services.gravity_import_service import georeference_stations_with_helmert
-
-                _hc_input = HelmertControlPointsInput(**json.loads(helmert_control_points_json))
-                _cs_local = (_cs_detected_invert or "").lower() in (
-                    "local_meters", "local", "unknown",
-                )
-                if _cs_local:
-                    _station_xz = [(float(o.x_m), float(o.z_m)) for o in _effective_observations]
-                    _helmert_georef = georeference_stations_with_helmert(_hc_input, _station_xz)
-                    auto_params_metadata["helmert_georef"] = _helmert_georef
-                    _corrections_warnings.append(
-                        f"[Fase 19] Georef Helmert aplicada: {_helmert_georef['n_stations']} "
-                        f"estaciones, confidence={_helmert_georef['confidence']}, "
-                        f"residual_rms={_helmert_georef['transform'].get('residual_rms_m')} m."
-                    )
-                    _corrections_warnings.extend(_helmert_georef.get("warnings", []))
-                else:
-                    auto_params_metadata["helmert_georef"] = {
-                        "skipped": True,
-                        "reason": (
-                            f"Coordenadas del CSV no son locales (detectado: "
-                            f"{_cs_detected_invert}); Helmert no aplica."
-                        ),
-                    }
-                    _corrections_warnings.append(
-                        "[Fase 19] Puntos de control Helmert ignorados: el CSV ya trae "
-                        f"coordenadas georreferenciadas ({_cs_detected_invert})."
-                    )
-            except (ValueError, ValidationError, json.JSONDecodeError) as _hexc:
-                _corrections_warnings.append(
-                    f"[Fase 19] Georef Helmert no aplicada (entrada inválida): {_hexc}."
-                )
-
-        # ── Topografía activa: elevaciones de estación (cualquier coord type) ──
-        # Solo si todas las estaciones tienen elevación y el relieve supera 10 m
-        # (bajo eso, la máscara topográfica no aporta y solo mete ruido numérico).
-        _sensor_elevs_v1: "Optional[list[float]]" = None
-        _se_list = import_result.station_elevations
-        if _se_list and len(_se_list) == len(_effective_observations):
-            _se_finite = [v for v in _se_list if v == v]  # NaN != NaN
-            if len(_se_finite) == len(_se_list) and (max(_se_finite) - min(_se_finite)) >= 10.0:
-                _sensor_elevs_v1 = [float(v) for v in _se_list]
-                _corrections_warnings.append(
-                    f"Topografía activa: elevaciones de estación "
-                    f"({min(_se_finite):.0f}–{max(_se_finite):.0f} m) aplicadas como "
-                    "máscara topográfica del modelo."
-                )
-
-        # ── Sigma por estación: mediana de la columna uncertainty [mGal] ────────
-        # Prioridad: σ por estación > piso por gravímetro > sentinel adaptivo.
-        _noise_floor_from_unc: "Optional[float]" = None
-        _unc_list = import_result.station_uncertainties
-        if _unc_list:
-            _unc_finite = sorted(u for u in _unc_list if u == u and u > 0.0)
-            if len(_unc_finite) >= max(3, len(_unc_list) // 2):
-                _noise_floor_from_unc = float(_unc_finite[len(_unc_finite) // 2])
-                _corrections_warnings.append(
-                    f"Sigma del solver fijado desde la columna uncertainty del CSV: "
-                    f"piso = {_noise_floor_from_unc:.4g} mGal (mediana por estación)."
-                )
-
-        # ── Magnetometría / Joint ────────────────────────────────────────────────
-        # • magnetic_run: TMI está en el slot g → se mueve a magnetic_nt y g=0
-        #   (motor magnético aislado, ignora g).
-        # • gravity con columna magnética co-localizada (import.magnetic_values):
-        #   se conserva g real Y se pasa magnetic_nt → ruteo a inversión CONJUNTA
-        #   (run_geophysics_inversion enruta a joint cuando g≠0 y magnetic_nt≠0).
-        _magnetic_nt: "Optional[list[float]]" = None
-        if _is_magnetic_run:
-            from schemas.geophysics_schema import GravityObservation as _GravObs
-            _magnetic_nt = [float(o.g) for o in _effective_observations]
-            _effective_observations = [
-                _GravObs(x_m=o.x_m, y_m=o.y_m, z_m=o.z_m, g=0.0)
-                for o in _effective_observations
-            ]
-        elif import_result.magnetic_values is not None:
-            _mv = import_result.magnetic_values
-            _all_finite = (
-                len(_mv) == len(_effective_observations)
-                and all(v == v and v not in (float("inf"), float("-inf")) for v in _mv)
-            )
-            if _all_finite and any(abs(float(v)) > 0 for v in _mv):
-                _magnetic_nt = [float(v) for v in _mv]
-                _corrections_warnings.append(
-                    f"Survey co-localizado: columna magnética detectada en el CSV "
-                    f"gravimétrico ({len(_mv)} estaciones) → inversión CONJUNTA "
-                    "(gravedad + magnetometría, cross-gradient)."
-                )
-            else:
-                _corrections_warnings.append(
-                    "Columna magnética presente pero con huecos/ceros: se ignora "
-                    "para el joint; se corre solo gravedad."
-                )
-
-        # Fase 7B — Parse advanced params from JSON strings
-        _pgi_params_parsed = None
-        if pgi_params_json:
-            try:
-                from schemas.geophysics_schema import PgiParams as _PgiParams
-                _pgi_params_parsed = _PgiParams(**json.loads(pgi_params_json))
-            except Exception as _e:
-                _corrections_warnings.append(f"pgi_params_json inválido (ignorado): {_e}")
-
-        _remanence_parsed = None
-        if remanence_json:
-            try:
-                from schemas.geophysics_schema import MagneticRemanenceParams as _RemParams
-                _remanence_parsed = _RemParams(**json.loads(remanence_json))
-            except Exception as _e:
-                _corrections_warnings.append(f"remanence_json inválido (ignorado): {_e}")
-
-        # FASE 20 — Sondajes (anclaje grav+sondajes). Lista de BoreholeInterval.
-        _boreholes_parsed = None
-        if boreholes_json:
-            try:
-                from schemas.geophysics_schema import BoreholeInterval as _BHInterval
-                _bh_raw = json.loads(boreholes_json)
-                if isinstance(_bh_raw, dict):  # tolera {"boreholes":[...]} o {"intervals":[...]}
-                    _bh_raw = _bh_raw.get("boreholes") or _bh_raw.get("intervals") or []
-                _boreholes_parsed = [_BHInterval(**_b) for _b in _bh_raw]
-                if _boreholes_parsed:
-                    _corrections_warnings.append(
-                        f"[Fase 20] Anclaje por sondajes activo: {len(_boreholes_parsed)} "
-                        "intervalos (combo grav+sondajes)."
-                    )
-            except Exception as _e:
-                _corrections_warnings.append(f"boreholes_json inválido (ignorado): {_e}")
-
-        try:
-            invert_input = GeophysicsInvertInput(
-                project_id=project_id,
-                run_id=run_id,
-                depth=effective_depth,
-                nir=nir,
-                fe=fe,
-                region=region,
-                lat=lat,
-                lon=lon,
-                nx=effective_nx,
-                ny=effective_ny,
-                nz=effective_nz,
-                block_size=effective_block_size,
-                cutoff_radius=effective_cutoff_radius,
-                lambda_mag=lambda_mag,
-                alpha_spatial=alpha_spatial,
-                observations=_effective_observations,  # H-B2: corrected observations
-                enable_focusing=True,
-                auto_params_metadata=auto_params_metadata,
-                density_min=density_min,
-                density_max=density_max,
-                sensor_elevations_masl=_sensor_elevs_v1,
-                noise_floor_mgal=_noise_floor_from_unc,
-                gravimeter_type=gravimeter_type,
-                # Magnetometría (Fase 9A): activa el motor de susceptibilidad.
-                magnetic_nt=_magnetic_nt,
-                inclination_deg=inclination_deg,
-                declination_deg=declination_deg,
-                field_intensity_nt=field_intensity_nt,
-                susc_min=susc_min,
-                susc_max=susc_max,
-                # Fase 7B — Advanced params
-                pgi_params=_pgi_params_parsed,
-                remanence=_remanence_parsed,
-                # Fase 20 — Sondajes que anclan la inversión (None = sin anclaje)
-                boreholes=_boreholes_parsed,
-                # FASE 16 — Kappas configurables
-                padding_kappa=padding_kappa,
-                anchor_kappa=anchor_kappa,
-                auto_kappa=auto_kappa,
-                # FASE 24B — Norma de regularización (default L2 en flujo directo).
-                regularization_norm=regularization_norm,
-                compact_max_irls=compact_max_irls,
-                compact_eps=compact_eps,
-                # compute_uncertainty queda OFF a propósito: a la λ que selecciona
-                # Morozov en surveys subdeterminados (LdM: 191 estaciones), la
-                # covarianza posterior está mal condicionada y σ explota (mediana
-                # ~41, máx ~1e13 t/m³ — no físico). Activarla mostraría basura.
-                # Requiere fijar un operating point estable (λ mayor) o regularizar
-                # la UQ; es decisión de física, no un wiring. Ver nota al usuario.
-            )
-        except ValidationError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "message": "Invalid geophysics inversion input generated from gravity import.",
-                    "errors": exc.errors(),
-                },
-            ) from exc
-
-        # Crear run_dir inmediatamente para que el SSE stream pueda conectar
-        # antes de que run_geophysics_inversion escriba el primer heartbeat.
-        if project_id and run_id:
-            try:
-                update_run_status(
-                    project_id=project_id,
-                    run_id=run_id,
-                    status="queued",
-                    progress=0.0,
-                    stage="queued",
-                    message="Inversión en cola.",
-                )
-            except Exception:
-                pass  # No abortar si falla la persistencia del estado
-
-        try:
-            inversion_result = run_geophysics_inversion(invert_input)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": "GEOPHYSICS_INPUT_VALIDATION",
-                    "message": str(exc),
-                    "spatial_readiness": model_to_dict(spatial_readiness_invert),
-                    "required_action": "Corregir parámetros de entrada antes de ejecutar la inversión.",
-                },
-            ) from exc
-        except Exception as exc:
-            import traceback as _tb
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "INVERSION_RUNTIME_ERROR",
-                    "message": str(exc),
-                    "type": type(exc).__name__,
-                    "traceback": _tb.format_exc()[-2000:],
-                },
-            ) from exc
-
-        # --- Georef computation ---
-        # lat_value, lon_value, project_meta_warning, spatial_readiness_invert
-        # already computed before gate (R3.5-D); reused here unchanged.
-        # R3.5-K: use effective_utm (form param priority, CSV-detected fallback)
-        georef_r2 = _classify_georef_full(
-            import_result.coordinate_transform, lat_value, lon_value,
-            utm_zone_form=_effective_utm,
-        )
-        georef_confidence = georef_r2["confidence"]
-        georef_type = georef_r2["type"]
-        utm_zone_val = georef_r2["utm_zone"]
-        georef_warnings = georef_r2["warnings"]
-        utm_hemisphere_val = georef_r2["utm_hemisphere"]
-        epsg_code_val = georef_r2["epsg_code"]
-        input_crs_val = georef_r2["input_crs"]
-        crs_source_val = georef_r2["crs_source"]
-        crs_confidence_val = georef_r2["crs_confidence"]
-
-        ct = import_result.coordinate_transform
-
-        # R2.3 — Compute footprint: try real pyproj UTM bbox first, then equirectangular fallback
-        _pyproj_used = False
-        footprint_dict = _build_missing_footprint()  # safe default
-
-        if (
-            georef_type == "csv_utm"
-            and utm_zone_val is not None
-            and epsg_code_val is not None
-            and ct is not None
-            and ct.x_min_raw is not None
-            and ct.x_max_raw is not None
-            and ct.z_min_raw is not None
-            and ct.z_max_raw is not None
-        ):
-            try:
-                footprint_dict = compute_utm_footprint_with_pyproj(
-                    min_easting=float(ct.x_min_raw),
-                    max_easting=float(ct.x_max_raw),
-                    min_northing=float(ct.z_min_raw),
-                    max_northing=float(ct.z_max_raw),
-                    epsg_code=epsg_code_val,
-                    crs_source=crs_source_val,
-                )
-                footprint_dict["utm_hemisphere"] = utm_hemisphere_val
-                footprint_dict["crs_confidence"] = crs_confidence_val
-
-                # Remove obsolete "pyproj pendiente" warning now that pyproj computed the footprint
-                georef_warnings = [
-                    w for w in georef_warnings
-                    if "queda pendiente" not in w and "R2.2" not in w
-                ]
-
-                # Validate anchor lat/lon against pyproj-derived center
-                if lat_value is not None and lon_value is not None:
-                    fp_lat = footprint_dict["center_lat"]
-                    fp_lon = footprint_dict["center_lon"]
-                    dist_km = approx_dist_km(lat_value, lon_value, fp_lat, fp_lon)
-                    if dist_km > 5.0:
-                        georef_warnings.append(
-                            f"El centro transformado desde UTM ({fp_lat:.4f}°, {fp_lon:.4f}°) "
-                            f"no coincide con el lat/lon declarado ({lat_value:.4f}°, "
-                            f"{lon_value:.4f}°). Diferencia: {dist_km:.1f} km. "
-                            "Verificar zona UTM o anclaje."
-                        )
-                        georef_confidence = "MEDIUM"
-                    else:
-                        georef_confidence = "HIGH"
-
-                footprint_dict["confidence"] = georef_confidence
-                footprint_dict["warnings"] = list(georef_warnings)
-                _pyproj_used = True
-            except Exception:
-                # pyproj unavailable or failed — fall through to equirectangular
-                pass
-
-        if not _pyproj_used:
-            if (
-                lat_value is not None
-                and lon_value is not None
-                and ct is not None
-                and ct.x_extent_m > 0
-                and ct.z_extent_m > 0
-            ):
-                footprint_dict = compute_footprint_from_center(
-                    lat_value, lon_value, ct.x_extent_m, ct.z_extent_m,
-                    source=georef_type,
-                    confidence=georef_confidence,
-                    warnings=list(georef_warnings),
-                    utm_zone=utm_zone_val,
-                )
-                footprint_dict["utm_hemisphere"] = utm_hemisphere_val
-                footprint_dict["epsg_code"] = epsg_code_val
-                footprint_dict["crs_source"] = crs_source_val
-                footprint_dict["crs_confidence"] = crs_confidence_val
-                if georef_type == "csv_utm" and utm_zone_val is not None:
-                    footprint_dict["warnings"].append(
-                        "Zona UTM declarada, pero no fue posible construir footprint UTM real. "
-                        "Se usó aproximación por centro/extensión."
-                    )
-            else:
-                footprint_dict = _build_missing_footprint()
-                footprint_dict["utm_hemisphere"] = utm_hemisphere_val
-                footprint_dict["epsg_code"] = epsg_code_val
-                footprint_dict["crs_source"] = crs_source_val
-                footprint_dict["crs_confidence"] = crs_confidence_val
-
-        # --- Persistence ---
-        persisted = False
-        persistence_warning: Optional[str] = None
-        source_csv_path_str: Optional[str] = None
-        metadata_path_str: Optional[str] = None
-
-        if project_id and run_id:
-            try:
-                source_csv_path = get_run_source_gravity_csv_path(project_id, run_id)
-                metadata_path = get_run_gravity_import_metadata_path(project_id, run_id)
-                source_csv_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Always update project_meta.json — load existing or start fresh
-                project_meta_path = get_project_meta_path(project_id)
-                now_utc = datetime.now(timezone.utc).isoformat()
-
-                if project_meta_path.exists():
-                    try:
-                        with open(project_meta_path, "r", encoding="utf-8") as f:
-                            existing_meta: dict = json.load(f)
-                    except Exception:
-                        existing_meta = {}
-                else:
-                    existing_meta = {}
-
-                updated_meta: dict = dict(existing_meta)
-                updated_meta["project_id"] = project_id
-                if "crs" not in updated_meta:
-                    updated_meta["crs"] = "EPSG:4326"
-                updated_meta["updated_at"] = now_utc
-                updated_meta["source"] = "csv_import"
-                # Always overwrite georef fields with current run result
-                updated_meta["georef_confidence"] = georef_confidence
-                updated_meta["georef_type"] = georef_type
-                updated_meta["utm_zone"] = utm_zone_val
-                updated_meta["footprint"] = footprint_dict
-                # R2 CRS fields
-                updated_meta["input_crs"] = input_crs_val
-                updated_meta["epsg_code"] = epsg_code_val
-                updated_meta["crs_source"] = crs_source_val
-                updated_meta["utm_hemisphere"] = utm_hemisphere_val
-                updated_meta["horizontal_datum"] = "WGS84" if epsg_code_val else None
-                updated_meta["crs_contract"] = {
-                    "input_crs": input_crs_val,
-                    "output_crs": "EPSG:4326",
-                    "horizontal_datum": "WGS84" if epsg_code_val else None,
-                    "vertical_datum": None,
-                    "utm_zone": utm_zone_val,
-                    "utm_hemisphere": utm_hemisphere_val,
-                    "epsg_code": epsg_code_val,
-                    "crs_source": crs_source_val,
-                    "crs_confidence": crs_confidence_val,
-                }
-                # R3.5-C — persist spatial readiness in project_meta
-                updated_meta["spatial_readiness"] = model_to_dict(spatial_readiness_invert)
-
-                if lat_value is not None:
-                    updated_meta["latitude"] = lat_value
-                elif "latitude" not in updated_meta:
-                    updated_meta["latitude"] = None
-
-                if lon_value is not None:
-                    updated_meta["longitude"] = lon_value
-                elif "longitude" not in updated_meta:
-                    updated_meta["longitude"] = None
-
-                if not updated_meta.get("created_at"):
-                    updated_meta["created_at"] = now_utc
-
-                save_project_meta(project_id, updated_meta)
-
-                shutil.copyfile(temp_path, source_csv_path)
-
-                metadata_content = {
-                    "schema_version": "TerraQuantum Gravity CSV v1",
-                    "original_filename": file.filename,
-                    "stored_source_file": "source_gravity.csv",
-                    "project_id": project_id,
-                    "run_id": run_id,
-                    "lat": lat_value,
-                    "lon": lon_value,
-                    "latitude": lat_value,
-                    "longitude": lon_value,
-                    "crs": "EPSG:4326",
-                    "geo_source": "csv_import_ui",
-                    "geo_warning": project_meta_warning,
-                    "stored_at_utc": datetime.now(timezone.utc).isoformat(),
-                    "import_metadata": model_to_dict(import_result.import_metadata),
-                    "csv_analysis": model_to_dict(import_result.csv_analysis) if import_result.csv_analysis else None,
-                    "coordinate_transform": model_to_dict(import_result.coordinate_transform) if import_result.coordinate_transform else None,
-                    "auto_grid": model_to_dict(auto_grid),
-                    "legacy_frontend_params": legacy_frontend_params,
-                    "warnings": import_result.warnings,
-                    "errors": import_result.errors,
-                    "spatial_readiness": model_to_dict(spatial_readiness_invert),
-                }
-
-                with open(metadata_path, "w", encoding="utf-8") as meta_f:
-                    json.dump(metadata_content, meta_f, indent=2, ensure_ascii=False)
-
-                persisted = True
-                source_csv_path_str = str(source_csv_path)
-                metadata_path_str = str(metadata_path)
-            except Exception as e:
-                persistence_warning = f"Failed to persist artifacts: {str(e)}"
-        else:
-            persistence_warning = "project_id/run_id missing; gravity import artifacts were not persisted."
-            project_meta_warning = "project_id/run_id missing; project_meta.json was not created."
-
-        # --- R3 post-inversion enrichment ---
-        r3_enrichment_result: dict = {
-            "attempted": False,
-            "terrain_persisted": False,
-            "enrichment_attempted": False,
-            "enrichment_status": None,
-            "has_elevation_data": False,
-            "warnings": [],
-        }
-        if project_id and run_id:
-            r3_enrichment_result = _run_r3_post_inversion_enrichment(
-                project_id, run_id, georef_confidence
-            )
-
-        regional_warnings: list[str] = []
-        x_span_km = x_extent / 1000.0
-        z_span_km = z_extent / 1000.0
-        if x_span_km > 10 or z_span_km > 10:
-            regional_warnings.append(
-                f"Dataset regional detectado ({x_span_km:.0f}km × {z_span_km:.0f}km). "
-                "La inversión modela distribución de densidades a escala regional. "
-                "El pit design conceptual opera sobre una subgrilla normalizada."
-            )
-        # ── Guard de degradación: el 3D no debe verse "presentable" en silencio ──
-        # cuando el ajuste es malo o la mayoría de la malla no fue sensada.
-        _degradation_warnings: list[str] = []
-        try:
-            _mis_g = (inversion_result or {}).get("misfit_error_percent")
-            if _mis_g is not None and float(_mis_g) > 50.0:
-                _degradation_warnings.append(
-                    f"MODELO DEGRADADO: misfit {float(_mis_g):.0f}% — el modelo explica menos de "
-                    "la mitad de la señal observada. NO usar para interpretación. Revisar "
-                    "cutoff_radius, lambda, bounds de densidad y correcciones."
-                )
-            _r05_g = ((inversion_result or {}).get("report") or {}).get("r05_geometry_audit") or {}
-            _obs_ratio_g = _r05_g.get("observable_ratio")
-            if _obs_ratio_g is not None and float(_obs_ratio_g) < 0.5:
-                _degradation_warnings.append(
-                    f"COBERTURA INSUFICIENTE: solo {float(_obs_ratio_g) * 100:.0f}% de los vóxeles "
-                    "activos es sensado por las estaciones (cutoff_radius demasiado pequeño "
-                    "para el espaciamiento del survey)."
-                )
-        except Exception:
-            pass
-
-        all_warnings = (
-            import_result.warnings
-            + regional_warnings
-            + georef_warnings
-            + r3_enrichment_result.get("warnings", [])
-            + _corrections_warnings
-            + _degradation_warnings
-        )
-        if _utm_zone_mismatch_warning:
-            all_warnings.append(_utm_zone_mismatch_warning)
-        if project_meta_warning:
-            all_warnings.append(project_meta_warning)
-
-        # Strip voxels from the HTTP response — they are already persisted to parquet
-        # and the frontend loads them via the /block-model API.
-        _inversion_dict = model_to_dict(inversion_result) if inversion_result else {}
-        if isinstance(_inversion_dict, dict) and "voxels" in _inversion_dict:
-            _inversion_dict.pop("voxels", None)
-
-        return sanitize_nan({
-            "status": "done",
-            "stage": "inversion",
-            "project_id": project_id,
-            "run_id": run_id,
-            "r3_enrichment": r3_enrichment_result,
-            "spatial_readiness": model_to_dict(spatial_readiness_invert),
-            "regional_scale_preflight": model_to_dict(regional_preflight),
-            "acknowledge_regional_scale": acknowledge_regional_scale,
-            "georef": {
-                "confidence": georef_confidence,
-                "type": georef_type,
-                "utm_zone": utm_zone_val,
-                "utm_hemisphere": utm_hemisphere_val,
-                "epsg_code": epsg_code_val,
-                "input_crs": input_crs_val,
-                "crs_source": crs_source_val,
-                "crs_confidence": crs_confidence_val,
-                "warnings": georef_warnings,
-                "footprint": footprint_dict,
-            },
-            "importMetadata": model_to_dict(import_result.import_metadata),
-            "csv_analysis": model_to_dict(import_result.csv_analysis) if import_result.csv_analysis else None,
-            "coordinate_transform": model_to_dict(import_result.coordinate_transform) if import_result.coordinate_transform else None,
-            "auto_grid": model_to_dict(auto_grid),
-            "legacy_frontend_params": legacy_frontend_params,
-            "warnings": all_warnings,
-            "errors": [],
-            "inversionResult": _inversion_dict,
-            "importPersistence": {
-                "persisted": persisted,
-                "sourceGravityPath": source_csv_path_str,
-                "metadataPath": metadata_path_str,
-                "warning": persistence_warning,
-                "projectMetaWarning": project_meta_warning
-            },
-            "gridAutoAdapt": {
-                "applied": True,
-                "reason": "auto_grid_v0_1",
-                "frontendRequested": {
-                    "nx": nx,
-                    "ny": ny,
-                    "nz": nz,
-                    "block_size": block_size
-                },
-                "effectiveUsed": {
-                    "nx": effective_nx,
-                    "ny": effective_ny,
-                    "nz": effective_nz,
-                    "block_size": effective_block_size,
-                    "depth": effective_depth,
-                    "cutoff_radius": effective_cutoff_radius
-                },
-                "totalVoxels": effective_nx * effective_ny * effective_nz,
-                "extentXm": x_extent,
-                "extentZm": z_extent
-            }
-        })
+        _invert_corregir_gravedad(est)
+        _invert_resolver_grilla(est, malla, reg, georef)
+        _invert_extras_y_parseos(est, corrida, georef, anclas)
+        _invert_ejecutar(est, corrida, malla, reg, anclas, pesos, georef, mag)
+        _invert_georef_footprint(est)
+        _invert_persistir(est, corrida, file, temp_path)
+        return _invert_respuesta(est, corrida, malla, georef)
     finally:
         if temp_path.exists():
             try:
                 os.remove(temp_path)
             except Exception:
                 pass
+
+

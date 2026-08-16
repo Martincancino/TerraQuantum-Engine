@@ -1,0 +1,7 @@
+{
+  "_nota": "Huellas ANTERIORES de los dos selectores de lambda, conservadas para trazabilidad. La Fase 7 los alineo al funcional que solve_inversion_lsqr resuelve de verdad (ver el registro de la fase en docs/06 y la medicion en scripts/validation/fase7_lambda_identity_probe.py). Es el UNICO cambio de comportamiento de la fase: los otros 29 casos son byte-identicos. Ninguno de los dos selectores tiene llamadores de produccion (H-25).",
+  "huellas_previas": {
+    "grav/select_lambda_chi2_target": "773e8b077dac124500fb605beae71b4df3fafb34361ea2a9e61d715667c23917",
+    "grav/select_lambda_lcurve": "996d500dc37e81b36759e2f208cad541ff263fe8482726baeb165c9647731521"
+  }
+}

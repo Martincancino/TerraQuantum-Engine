@@ -1,0 +1,10 @@
+{
+  "window": 12,
+  "n_archivos": 115,
+  "n_ventanas": 18518,
+  "fase7_pair": 20,
+  "cruzado": {
+    "exploration/gravimetry.py <-> exploration/magnetometry.py": 20
+  },
+  "propio": {}
+}

@@ -1457,7 +1457,9 @@ Ordenado por **valor estratégico**, no por facilidad. Esfuerzo en S/M/L/XL.
 
 **∥ = paralelizable** con lo anterior: son frontend o backend aislado y no tocan el motor, así que su posición en la lista marca prioridad, no bloqueo.
 
-**Estado de ejecución.** ✅ **Fase 1** (2026-08-08) · ✅ **Fase 2** (2026-08-10) · ✅ **Fase 3** (2026-08-12, **cerrada del todo el 2026-08-13**: la CI estaba en rojo por dos causas medidas y el criterio «CI roja si la física regresiona» no se cumplía) · ✅ **Fase 4** (2026-08-14, **cerrada CERRANDO**: 3.450 inversiones dicen que ningún β fijo mejora la profundidad en todos los regímenes; el límite es el null-space, no un bug — y de paso aparecieron **dos** funcionales de regularización en gravimetría, no uno) · ✅ **Fase 6** (2026-08-09, **cerrada del todo el 2026-08-14**: H-13 pedía revisar 16 símbolos «uno a uno» y la primera pasada resolvió los 6 que §9B.5 había listado por nombre — al volver a MEDIR aparecieron 11 más, ninguno en la tabla original, incluido un Gauge de Prometheus que publicaba «0 inversiones activas» mientras había una corriendo). **Dejó dos deberes medidos a la Fase 4**: `test_fase7_wiring::test_e2e_enabled_changes_model_and_reports` falla por un 9% bajo su umbral **igual con y sin el cierre** (A/B), y `test_fase4_depth_weighting::test_effective_model_weight_...` **pasa aislado y falla en la suite** — depende del orden, así que hoy no defiende nada. · ✅ **Fase 5** (2026-08-15: las 44 variables medidas por AST son **42** de superficie real; la sonda de la Fase 3 comprobaba que el módulo *carga*, no que la variable *llegue*; y aparecieron **cinco huecos que la auditoría no había visto** — una perilla inerte, un rollback que no rollbackeaba con `0`, un flag de seguridad que se encendía estando **vacío**, un reporte que afirmaba un solver que no corrió, y tres números que morían sin decir su nombre). Cada una lleva su registro `### ✅ EJECUTADA` al final de su sección, con lo que se midió y lo que se dejó fuera a propósito. **CERRADAS: 1, 2, 3, 4, 5 y 6. Siguiente: Fase 7** (extracción compartida, 🟠 P1 — la Fase 4 le añadió un motivo medido) o **Fase 9** (UI de F7, con 3 paneles ya escritos y sin montar).
+**Estado de ejecución.** ✅ **Fase 1** (2026-08-08) · ✅ **Fase 2** (2026-08-10) · ✅ **Fase 3** (2026-08-12, **cerrada del todo el 2026-08-13**: la CI estaba en rojo por dos causas medidas y el criterio «CI roja si la física regresiona» no se cumplía) · ✅ **Fase 4** (2026-08-14, **cerrada CERRANDO**: 3.450 inversiones dicen que ningún β fijo mejora la profundidad en todos los regímenes; el límite es el null-space, no un bug — y de paso aparecieron **dos** funcionales de regularización en gravimetría, no uno) · ✅ **Fase 6** (2026-08-09, **cerrada del todo el 2026-08-14**: H-13 pedía revisar 16 símbolos «uno a uno» y la primera pasada resolvió los 6 que §9B.5 había listado por nombre — al volver a MEDIR aparecieron 11 más, ninguno en la tabla original, incluido un Gauge de Prometheus que publicaba «0 inversiones activas» mientras había una corriendo). **Dejó dos deberes medidos a la Fase 4**: `test_fase7_wiring::test_e2e_enabled_changes_model_and_reports` falla por un 9% bajo su umbral **igual con y sin el cierre** (A/B), y `test_fase4_depth_weighting::test_effective_model_weight_...` **pasa aislado y falla en la suite** — depende del orden, así que hoy no defiende nada. · ✅ **Fase 5** (2026-08-15: las 44 variables medidas por AST son **42** de superficie real; la sonda de la Fase 3 comprobaba que el módulo *carga*, no que la variable *llegue*; y aparecieron **cinco huecos que la auditoría no había visto** — una perilla inerte, un rollback que no rollbackeaba con `0`, un flag de seguridad que se encendía estando **vacío**, un reporte que afirmaba un solver que no corrió, y tres números que morían sin decir su nombre). · ✅ **Fase 7** (2026-08-15: **192 → 20** ventanas duplicadas con byte-identidad en **34/34** casos; y tres cosas que no estaban en el guion — el `study_duplication.py` que el criterio (a) citaba **no existía** en el repositorio y hubo que reconstruirlo; el escáner de λ medía con un operador que la Fase 4 había retirado, con un ratio de χ² de **23× a 12.700×** creciente con la profundidad y **0/4** aciertos en la elección de λ, hoy **4/4** y ratio **1,0000** con el box abierto; y el caveat que H-33 dejó sin cuantificar vale **66 %–86 %**, no un redondeo: la solución exacta de la ruta B es invariante a 1e-11 pero el LSQR termina por límite de iteraciones —`istop=7`, 500/500— y el motor **descartaba ese criterio de parada**). Cada una lleva su registro `### ✅ EJECUTADA` al final de su sección, con lo que se midió y lo que se dejó fuera a propósito. · ✅ **Fase 8** (2026-08-16: la espina partida y **medida** — `run_geophysics_inversion` 2.030 → **152** líneas y CC 183 → **12**; `invert_gravity_csv` 927 → **54** con 41 → **9** parámetros; `solve_inversion_lsqr` 1.046 → **212** y CC 124 → **12**; todo con byte-identidad verificada —28 casos de servicio y API, 34 de motor— y **sin reescribir una línea**: los cuerpos se movieron textualmente y las fronteras se calcularon con AST. Tres cosas fuera del guion: **Morozov re-liga λ** y partir la función lo rompía en silencio; agrupar los 41 parámetros como dice el plano —`Annotated[Modelo, Form()]`— **cambia el contrato HTTP** y hubo que hacerlo con `Depends`; y la configuración **no puede** subir a nivel de módulo porque cinco sondas la fijan por atributo. El deber de `iter_lim=500` queda **decidido: no se sube** — en gravimetría el límite no ata (Δ = 0,000e+00 exacto) y en magnetometría subirlo no mejora el χ² —ya está en 1e-14— sino que mueve el modelo hasta un **66 %** por el espacio nulo).
+
+**CERRADAS: 1, 2, 3, 4, 5, 6, 7 y 8. Siguiente: Fase 9** (UI de F7 ∥ — con 3 paneles ya escritos sin montar, la declaración de funcional que la Fase 7 dejó en el reporte, y ahora también el aviso de **solver que no convergió** que la Fase 8 midió que vale hasta un 66 % del modelo magnético) o **Fase 10** (contratos tipados). La Fase 8 deja además, medido y con nombre, lo que NO entró en sus cuatro pasos: `solve_magnetic_inversion_lsqr` (812 LOC / CC 116), `_import_gravity_csv_v1_impl` (777 / CC 181), `run_joint_inversion` (736 / CC 87) y `run_magnetic_inversion` (616 / CC 73) — el mismo método mecánico se les aplica tal cual.
 
 **Un cambio de orden respecto a la tabla original, y su motivo:** la Fase 4 (depth-weighting) sube por delante de la 5 (superficie de configuración). Antes iban al revés porque la 5 es más barata; pero la 4 es **P0** y la 5 es **P2**, y una fase barata no justifica retrasar la única pregunta abierta sobre qué producto se tiene. El resto del orden es el que ya fijaba la tabla de la 1ª entrega.
 
@@ -2202,6 +2204,96 @@ Que el borrado no pueda mover estos números era predecible —cada símbolo eli
 
 ---
 
+### ✅ EJECUTADA — 2026-08-15
+
+**Los cuatro criterios, con su número.**
+
+| Criterio | Estado | Medido |
+|---|---|---|
+| (a) ventanas duplicadas grav↔mag < 40 | ✅ | **192 → 20** (`scripts/ci/study_duplication.py`, con gate y línea base congelada) |
+| (b) suite verde y byte-identidad | ✅ | **34/34 casos byte-idénticos** (SHA-256 sobre los bits de float64), salvo 2 cambios deliberados |
+| (c) test que fija el funcional por motor y configuración | ✅ | `tests/test_fase7_nucleo_compartido.py`, **15 tests**, 5 configuraciones magnéticas + gravimetría |
+| (d) la corrida declara qué funcional usó | ✅ | `solver_meta["regularization_functional"]` en los **tres** solvers, y en el reporte del servicio |
+
+**El script del criterio (a) no existía.** El informe citaba `study_duplication.py` como el medidor con el que verificar el gate, pero era una herramienta ad-hoc del auditor que no quedó en el repositorio: el criterio no era verificable. Se reconstruyó desde el método descrito (tokens normalizados, ventanas de 12 líneas, huella criptográfica). Barre **114 archivos — el mismo número que el informe**, lo que da confianza en que mide lo mismo; pero midió **192** ventanas donde el informe decía 228. La diferencia es honesta y tiene dos causas: los detalles finos del medidor original no están escritos (por eso éste congela su propia línea base en vez de heredar un número), y las Fases 4 y 6 ya habían borrado código de ambos motores. **Lo que el gate defiende es la propiedad —«la duplicación no vuelve a subir»— con un medidor estable, no un número heredado de una herramienta perdida.**
+
+**Lo que se extrajo, y por qué el conteo subió antes de bajar.** El núcleo compartido es `exploration/potential_field_core.py`: σ adaptativo, máscara de celdas activas, dominio observable R-05, mapeo de intervalos de sondaje y litología, `build_model_weights`, peso de fila por profundidad, estimador de `cond(A)`, reponderación IRLS de minimum-support, modelo de referencia, operador de suavizado, ensemble del null-space shuttle, ecuaciones normales, update de Woodbury, sub-región del live-update y misfit ponderado. A mitad de camino el conteo subió de 192 a **106**: al sustituir bloques largos y divergentes por llamadas cortas e idénticas, la estructura compartida que quedaba debajo se hizo visible para el medidor. Eso no fue un retroceso, fue el diagnóstico de lo que faltaba extraer.
+
+**Los dos motores adelgazaron 277 líneas y el núcleo pesa 883** — de las cuales **408 (46 %) son docstrings y comentarios** que dejan escritas las mediciones de esta fase. El presupuesto AST de `exploration` sube de 10.475 a 11.081 LOC y se actualiza a propósito. A cambio, **la complejidad ciclomática máxima del paquete baja de 143 a 124**, que es la dirección en la que la Fase 8 tiene que seguir.
+
+---
+
+#### Hallazgo 1 — el escáner de λ medía con un operador que ya no existía, y nadie lo había cuantificado
+
+§9D.2 dejó esta medición escrita como pendiente y la llamó *«verificación decisiva y barata (una tarde)»*: registrar el χ² que el escáner predice para el λ elegido y el χ² que el solve consigue con ese mismo λ. **Nadie la corrió.** Esta fase la corrió (`scripts/validation/fase7_lambda_identity_probe.py`):
+
+| profundidad | χ² prometido | χ² real del solve | ratio | ¿acertó el λ? |
+|---|---:|---:|---:|:--:|
+| 150 m | 2,084 | 48,53 | **23×** | NO |
+| 350 m | 0,444 | 128,5 | **289×** | NO |
+| 550 m | 0,0724 | 165,7 | **2.290×** | NO |
+| 750 m | 0,0161 | 204,5 | **12.700×** | NO |
+
+**0 de 4**: el escáner nunca eligió el λ que el solver real habría elegido. Y el error **crece con la profundidad** — exactamente el mecanismo que §9D.2 planteó como hipótesis no descartada, ahora con número.
+
+Eran **cuatro** desajustes, no uno: (1) el escáner pesaba el Laplaciano por `w_reg` y el solver no; (2) su smallness era `diag(λ·w_reg)·Ws` —espacio físico, relajada con la profundidad— y la del solver es identidad en `m̃`; (3) usaba λ crudo y el solver `λ·√(n/256)`; (4) **calculaba su χ² con un σ que el llamador no controlaba**, y χ² es literalmente `Σ(r/σ)²/n`.
+
+El comentario `gravimetry.py:1664` documentaba haber arreglado este mismo desajuste una vez («*el χ² del trial divergía ~700× del χ² real del solve*»). La Fase 4 quitó `w_reg` del solver y **nadie actualizó el escáner: el bug volvió en silencio, por el mecanismo que su propio comentario advertía.**
+
+**Después del arreglo**: ratio **1,12–1,70** y **4/4** en la elección de λ. Y con el box petrofísico abierto —el brazo de control que aísla la única diferencia que le queda al escáner, porque no modela bounds— el ratio es **1,0000 a las cuatro profundidades**. La identidad es exacta; lo que resta es el bound, medido, no supuesto.
+
+**Alcance, para no exagerar el hallazgo:** producción **no** usa este selector (lo rodea desde Tier 1 A2 escaneando con el solver real, y la propia auditoría lo rectificó). Lo arreglado es el **instrumento de diagnóstico**, que es lo que H-25 dejó abierto. Es también el único cambio de comportamiento de toda la fase: 2 de los 34 casos del arnés cambiaron a propósito, y sus huellas anteriores quedaron conservadas en `fase7_byte_identity_baseline.pre_fase7_lambda.json`.
+
+---
+
+#### Hallazgo 2 — el caveat que H-33 dejó sin cuantificar vale el 86 %, no un redondeo
+
+§9G.1 cerraba con esto:
+
+> *«en la ruta B, `Wz_inv` sigue siendo un precondicionador por la derecha legítimo […] si trunca por iteraciones, habría un efecto residual de regularización implícita por parada temprana. **No lo cuantifiqué.**»*
+
+**[MEDIDO]** Se cuantificó, y cambia la lectura de H-33:
+
+* la solución **exacta** de la ruta B (por `lstsq` denso) es invariante en β a **1e-11** — H-33 tiene razón **sobre el funcional**;
+* pero el LSQR del motor termina con **`istop=7`** (límite de iteraciones) en **500/500 para todo β**, y queda a **54 %–269 %** de la exacta;
+* de modo que mover β de 0,5 a 3,0 cambia la susceptibilidad recuperada un **66 %–86 %**.
+
+**No es ruido de punto flotante: es casi toda la señal.** Y el mecanismo no es el solver proyectado —se comprobó con FISTA apagado y el efecto se mantiene—, es dónde se detiene el LSQR.
+
+Esto obliga a un matiz que la declaración no podía omitir: **«inerte» era cierto del álgebra y falso de la corrida.** `declare_functional` distingue ahora los dos casos y, cuando el peso es cambio de variable puro **pero el solver no convergió**, declara `depth_beta_has_effect: true` con `effect_mechanism: "early_stopping"` y el motivo en español.
+
+**Y de paso:** los dos motores **descartaban el criterio de parada de LSQR** (`istop`, `itn`). Una corrida que se rinde por límite de iteraciones era indistinguible de una que convergió. Ahora se publican (`lsqr_istop`, `lsqr_iters`, `lsqr_converged`).
+
+---
+
+#### Hallazgo 3 — había un TERCER sitio construyendo el peso de modelo
+
+`solve_inversion_treemesh` (el solver Octree, al que producción conmuta **sola** con >50.000 celdas o >50 km de survey) tenía su propia cadena de pesos escrita a mano. Es el caso que §9.1884 describe: *«la misma configuración nominal aplica un depth weighting o ninguno según el tamaño del levantamiento, y nada en la salida lo declara»*. Quedó recableado al mismo constructor y **declara su funcional**, que es el opuesto al del solver de grilla regular: allí `w_reg` va sólo en la smallness y la suavidad, no en el bloque de datos, así que **no se cancela y `depth_beta` está VIVO** (la Fase 4 lo midió: 8.125×). Dos corridas del mismo producto sobre mallas de distinto tamaño ya no son incomparables en silencio.
+
+---
+
+#### La regla, en un sitio y en una línea
+
+Toda la física de la declaración es esto: **un peso `W` que multiplica *todos* los bloques del sistema aumentado es un cambio de variable puro y no cambia la solución exacta; sólo actúa si algún bloque —en la práctica, la smallness— queda sin él.** De esa única regla salen las tres filas que H-33 midió, sin que nadie tenga que acordarse de mirar si el padding está encendido:
+
+| Motor / ruta | `smallness` | `depth_beta` en el funcional | Declarado |
+|---|---|---|---|
+| Gravimetría, grilla regular | identidad en `m̃` | ❌ (el peso es `‖col_j(W_d·G)‖`, sensibilidad) | `model_weight_kind: sensitivity` |
+| Magnetometría RUTA A (sin padding/anclas/IRLS) | identidad en `m̃` | ✅ | `depth_weighting_active: true` |
+| Magnetometría RUTA B (producción) | `diags(w)·W` | ❌ en el funcional; ⚠️ **sí en el resultado si el solver trunca** | `effect_mechanism: early_stopping` |
+| Gravimetría, solver Octree | `diags(λ·w_reg)·Ws` (peso de FILA, no se cancela) | ✅ | `effect_mechanism: row_weight_...` |
+
+La corrida publica además a qué Li & Oldenburg equivale **su** malla, con la desviación del ajuste. La Fase 4 midió β≈2,63 con 5,3 % de desviación **una vez, a mano, sobre la malla del producto**; ahora cada corrida lo mide sobre su propia geometría — y en mallas pequeñas la desviación sale alta, que es justo la información que hacía falta para saber cuándo ese número significa algo. **β_eq=2,63 es una propiedad de la malla del producto, no una constante universal.**
+
+---
+
+#### Lo que NO se hizo, y por qué
+
+* **No se cambió la física de ninguna ruta de producción.** El criterio (c) admite explícitamente *«o ninguno, si así se decide»*, y el criterio (b) exige byte-identidad. Se conserva la física validada (DO-27, Raglan, San Nicolás) y se declara la verdad sobre ella. Encender el depth weighting en la ruta B magnética es un cambio de funcional que exige su propio barrido medido — como el que la Fase 4 hizo para gravimetría — y **no cabe en una fase cuyo criterio duro es no mover un bit**.
+* **No se tocó el frontend.** La declaración viaja en el reporte de la corrida; mostrarla al usuario es trabajo de la **Fase 9**, que es la que introduce el criterio *«un usuario puede ver X desde la UI»*. Añadido a su lista.
+* **No se borraron los dos selectores de λ**, que era la otra opción que §9D.2 ofrecía. Se arreglaron: un instrumento que mide bien vale más que uno borrado, y ahora hay un test que impide que vuelva a desalinearse.
+* **`iter_lim=500` no se subió.** El Hallazgo 2 dice que el LSQR magnético no converge en 500 iteraciones en la malla de prueba. Subirlo cambia resultados en producción; medirlo y decidirlo es trabajo propio, no un efecto colateral de una fase de extracción. **Queda como deber medido para la Fase 8.**
+
 ---
 
 ## FASE 8 — Partir la espina dorsal · **L** · 🟠 P1
@@ -2229,6 +2321,84 @@ Que el borrado no pueda mover estos números era predecible —cada símbolo eli
 
 **Riesgos.** Altos por naturaleza. Mitigación: byte-identidad, commits atómicos, y **prohibido combinar con cambios de comportamiento** (Fase 4 va antes o después, nunca durante).
 
+### ✅ EJECUTADA — 2026-08-16
+
+**Estado: los 4 pasos del diseño están hechos y verificados. La espina está partida.**
+
+| | antes | después | verificación |
+|---|---|---|---|
+| `run_geophysics_inversion` | 2.030 LOC · CC **183** | **152 LOC · CC 12** | 28/28 byte-idéntico |
+| `invert_gravity_csv` | 927 LOC · CC 165 · **41 args** | **54 LOC · CC 7 · 9 args** | contrato HTTP campo a campo |
+| `solve_inversion_lsqr` | 1.046 LOC · CC 124 | **212 LOC · CC 12** | 34/34 byte-idéntico |
+
+**Lo primero fue construir el instrumento, y lo primero que midió fue que el instrumento anterior no servía.** El arnés de la Fase 7 (`fase7_byte_identity.py`, 34 casos) mide los MOTORES. Se comprobó mutilando `run_geophysics_inversion` a propósito: **34/34 en verde**. Es decir, la red de la fase anterior no ve nada de lo que ésta toca. Por eso se escribió `scripts/validation/fase8_byte_identity.py`: **28 configuraciones** que llaman al servicio y al endpoint reales y hashean con SHA-256 (a) el payload completo canonicalizado —los `float` por `repr`, roundtrip exacto de float64— y (b) los **bits de las columnas numéricas del parquet** que queda en disco, que es el producto de verdad.
+
+**Congelar la línea base costó tres correcciones, y las tres eran defectos del arnés que habrían dejado pasar un refactor roto:**
+
+1. `favorability.computed_at` hacía que dos corridas idénticas dieran hashes distintos → se normaliza el valor (no se borra la clave: la presencia del campo sigue comparándose).
+2. `importMetadata.source_file` lleva el UUID del temporal → misma normalización.
+3. **Los 7 casos de API daban el MISMO hash**: los siete morían en el gate de *spatial readiness* (422) sin llegar a invertir. Un arnés que mide el mismo 422 siete veces habría dado «byte-identidad OK» con el endpoint destrozado.
+
+**El método: no se reescribió ni una línea.** Partir 4.000 líneas con byte-identidad como criterio duro obliga a mover texto, no a mejorarlo. Los cuerpos de cada helper son **las mismas líneas** del monolito; las entradas y salidas de cada bloque **no se dedujeron leyendo, se calcularon con AST** (variables leídas antes de asignarse dentro del rango = entradas; asignadas y leídas después = salidas). Auditoría posterior: **0 sentencias del original perdidas** en `gravimetry.py` (comparación multiconjunto de líneas de código, ignorando indentación).
+
+**Tres cosas que el diseño no anticipaba, medidas:**
+
+* **Morozov re-liga λ, y partir la función rompía eso en silencio.** En el monolito `_lambda_mag` se re-asignaba en el mismo scope y todo lo de abajo —PGI, DOI, checkerboard, σ posterior, el reporte— veía el valor nuevo. Al extraer el solver, deja de ser automático. Sin la escritura de vuelta, el refactor habría sido *el mismo código con otra λ*: la clase de regresión que ningún test de contrato detecta. Lo cazó el arnés, no una revisión.
+
+* **[CORRECCIÓN AL PLAN] Agrupar los 41 parámetros «en objetos Pydantic» —leído literal— ROMPE el contrato HTTP.** Con FastAPI 0.135, `Annotated[Modelo, Form()]` hace que el formulario deje de tener campos planos (`nx`, `ny`, `lambda_mag`…) y pase a exigir un campo `malla` con el objeto dentro; medido con endpoint plano vs agrupado lado a lado (`422 Field required`). El frontend dejaría de poder invertir. Lo que **sí** conserva el contrato es construir los mismos objetos con `Depends`: comprobado campo a campo, incluidos los defaults y el esquema OpenAPI — **40 campos, idénticos**. Con eso la firma baja de 41 a 9 y el handler queda en **54 líneas** (el diseño pedía <100).
+
+* **[CORRECCIÓN AL PLAN] El paso 4 no puede subir la configuración a nivel de módulo.** El texto dice «eliminar los `from core.config import ...` del interior del solver». Estaban dentro del **bucle IRLS** (se re-ejecutaban en cada reponderación) y de ahí salieron. Pero **no suben al módulo**: `wz_separation_probe.py`, `wz_beta_liveness_gravimetry.py`, `fase7_byte_identity.py`, `tests/generate_validation_report.py` y `test_benchmark_checkerboard.py` fijan esas perillas escribiendo el **atributo** de `core.config` justo antes de llamar — uno de ellos lo documenta: *«gravimetry lo importa dentro del bucle»*. Un import de módulo congelaría el valor en el arranque y esas sondas medirían en silencio la configuración equivocada: el mismo modo de fallo que la Fase 5 encontró en `bounded_solver_active`. Se leen **una vez por llamada**, y hay un test que lo afirma en los dos sentidos.
+
+**El deber medido que dejó la Fase 7: `iter_lim=500`. Decisión: NO se sube, y el motivo no es el que se esperaba.**
+
+`scripts/validation/fase8_iter_lim_probe.py` resuelve cada motor con `iter_lim` ∈ {500, 1000, 2000, 5000} y mide por qué paró, cuánto cambia el modelo y cuánto cuesta:
+
+| caso | istop@500 | itn | Δmodelo vs 500 (1000 / 2000 / 5000) |
+|---|---|---|---|
+| grav λ=0,316 | **2** (converge) | 40 | 0 · 0 · 0 |
+| grav λ=0,316 + padding | **2** | 33 | 0 · 0 · 0 |
+| grav λ=0,01 | **2** | 232 | 0 · 0 · 0 |
+| mag λ=1e-3 | **7** (se rinde) | 500 | 18,5 % · 29,3 % · 25,0 % |
+| mag λ=1e-3 + padding | **7** | 500 | 33,2 % · 56,9 % · **66,1 %** |
+| mag λ=1e-2 | **7** | 500 | 16,9 % · 24,2 % · 20,8 % |
+
+* **En gravimetría el límite no ata**: LSQR para por tolerancia a las 33–232 iteraciones y subir el techo cambia el modelo en **0,000e+00 exacto**. El hallazgo de la Fase 7 era magnético, y sólo magnético.
+* **En magnetometría subir el límite no da una respuesta mejor: da una distinta.** A las 500 iteraciones el χ² ya está en **1e-14 – 1e-16** — el dato está ajustado a precisión de máquina. Las iteraciones extra no mejoran el ajuste: mueven el modelo por el **espacio nulo**, hasta un **66 %**. Y con padding —el régimen de producción— **ni a 5.000 converge** (`istop=7`, 5000/5000).
+* Por eso subirlo sería cambiar el resultado sin justificación física, y además pagando ~8× en tiempo. **La cura no son iteraciones: es regularización** (λ=1e-2 se comporta igual que 1e-3, o sea que las magnitudes actuales de λ no restringen el espacio nulo magnético). Eso es decisión de física y no entra en una fase de byte-identidad.
+* **Lo accionable y barato ya existe**: la corrida publica `lsqr_istop` y `lsqr_converged` desde la Fase 7. Un resultado que se rindió y no lo dice es el patrón de H-27. **Mostrarlo es trabajo de la Fase 9**, que ya lo tiene anotado.
+
+**Un defecto reachable que el arnés destapó sin buscarlo (NO se arregla aquí).** Al construir el caso con topografía activa, la corrida **revienta con `TypeError`** y el endpoint devuelve 500. Mecanismo, medido:
+
+1. Con topografía, la capa superior del núcleo son celdas de **aire** (36 de 216 en el caso medido) y su `visual_score` es `NaN`.
+2. **Polars ordena `NaN` por encima de cualquier número**, así que el filtro de anomalías `visual_score >= 0.35` selecciona **exactamente las celdas de aire** — y sólo ésas, porque ningún vóxel vivo llegaba al cutoff (máx. 2,69 vs 2,75).
+3. `build_voxel_output` las serializa a propósito con `density: None`.
+4. `build_geophysics_report` filtra las inactivas… y su **«fallback defensivo»** (`if not active_voxels: active_voxels = voxels`) devuelve justo la lista de `None`, que la línea siguiente pasa por `float()`.
+
+O sea: **el guardia que debía proteger el cálculo es lo que lo mata**, y el conjunto de anomalías puede estar hecho de aire sin que nada lo diga. Se ha **congelado como fallo** en la línea base (`servicio/topografia` → `ERROR::TypeError`) para que el refactor tenga que conservarlo bit a bit; arreglarlo es un cambio de conducta y esta fase lo tiene prohibido. Es de la familia de la Fase 1 (*«resultado equivocado con cara de correcto»*) y debería ir en su propio commit, con su medición antes/después.
+
+**Un SEGUNDO hallazgo, y éste es peor: la misma entrada puede dar dos modelos.** Al verificar el paso 2 apareció un caso de API que no reproducía. Se corrió **tres veces seguidas sobre el mismo código**: `76434aaf…`, `f7848157…`, `f7848157…`. **No es el refactor** — dos de las tres reproducen exactamente la línea base anterior a tocar nada, y el caso equivalente a nivel de servicio (`servicio/lambda_morozov`, que también corre Morozov) es estable en todas las corridas medidas. Es decir: **por la ruta HTTP, el mismo CSV y el mismo formulario pueden devolver dos modelos distintos**, con `lambda_mag=0` + `gravimeter_type` declarado (la ruta de Morozov, 6 solves). Para una herramienta de targeting eso es de la familia del peor hallazgo posible: no es que el número sea aproximado, es que **no es reproducible**. Se deja **midiéndose** en el arnés (`INESTABLES`, el hash se congela y se imprime) pero **fuera del veredicto**, porque un gate que falla una de cada tres veces sin que nadie toque nada acaba desactivado y entonces tampoco defiende lo que sí es estable. Diagnosticarlo es trabajo propio: **no se toca aquí** porque esta fase tiene prohibido cambiar comportamiento, y porque la causa aún no está aislada (el envoltorio de heartbeat sólo escribe estado; el bucle de Morozov es determinista en el papel).
+
+**Lo que queda fuera, medido y con nombre.** El criterio de aceptación pide «máx LOC ≤300, máx CC ≤40, máx args ≤12» por métrica AST. Para las **tres funciones del camino crítico** se cumple. Para el **máximo por paquete** no, y los ofensores restantes están **fuera de los cuatro pasos** del diseño:
+
+| función | LOC | CC | por qué no entró |
+|---|---|---|---|
+| `exploration/magnetometry.py::solve_magnetic_inversion_lsqr` | 812 | 116 | el gemelo magnético; misma forma, mismo método aplicable |
+| `services/gravity_import_service.py::_import_gravity_csv_v1_impl` | 777 | **181** | ingesta CSV, no la espina de inversión |
+| `services/joint_inversion.py::run_joint_inversion` | 736 | 87 | inversión conjunta |
+| `services/geophysics_service.py::run_magnetic_inversion` | 616 | 73 | orquestador magnético |
+
+Y **`args_max` sigue en 38** en `exploration`: es la firma pública de `solve_inversion_lsqr`, que llaman producción, los tests y **diez sondas de validación**. Estrecharla es un cambio incompatible que congelaría firmas justo antes de la **Fase 11** («API de scripting»), y la propia auditoría advierte de eso: *«conviene marcarla v0 hasta después de la Fase 8, para no congelar firmas que el refactor va a cambiar»*. Se deja explícito en vez de disfrazarlo con `**kwargs`, que bajaría el número sin mejorar nada.
+
+**Instrumentos que deja la fase**
+
+* `scripts/validation/fase8_byte_identity.py` + su línea base (28 casos) — servicio y API, con el parquet incluido.
+* `scripts/validation/fase8_iter_lim_probe.py` + `fase8_iter_lim_report.json` — la medición que cierra el deber de la Fase 7.
+* `tests/test_fase8_espina_dorsal.py` (11 tests) — techos **por nombre** del camino crítico, los 40 campos del formulario de `/invert`, la configuración fuera del bucle *y* fuera del módulo, y los protocolos.
+* `scripts/ci/ast_budgets.py` ahora mide **`args_max`**: el gate vigilaba longitud y ramas mientras una función llevaba 41 parámetros.
+* `exploration/protocols.py` — `ForwardOperator` y `Solver` como protocolos estructurales. Al escribirlos apareció que no hay «una sola implementación» como suponía el diseño: hay **cuatro solvers** con la misma forma y ninguna firma común declarada.
+
+---
+
 ---
 
 ---
@@ -2251,6 +2421,10 @@ Que el borrado no pueda mover estos números era predecible —cada símbolo eli
 > - **`MultimodalComboPanel.tsx`** — único consumidor de `/api/multimodal/plan`: la función multimodal de la Fase 21 tiene UI escrita y sin montar.
 >
 > Los tres entran de lleno en el criterio de proceso que esta fase introduce (*«un usuario puede hacer/ver X desde la UI»*), y son la prueba de que ese criterio hacía falta: **pasaron los gates de sus fases sin que nadie notara que no había forma de llegar a ellos**.
+
+> **Añadido por el cierre de la Fase 7 (2026-08-15) — el funcional declarado necesita superficie.** La Fase 7 hizo que cada corrida publique **qué funcional de regularización usó**: `regularization_functional` viaja ya en el reporte del servicio, con `depth_weighting_active`, `effect_mechanism`, `solver_converged` y el motivo escrito en español. Hoy sólo llega al JSON. Dos cosas concretas para esta fase:
+> - **Mostrar el funcional junto al resultado.** Es lo que hace comparables dos corridas: la misma configuración nominal aplica un depth weighting o ninguno según haya padding, y ahora la corrida lo dice — pero el usuario no lo ve.
+> - **Avisar cuando el solver no convergió.** La Fase 7 midió que el LSQR magnético termina por límite de iteraciones (`istop=7`, 500/500) y que eso hace que un parámetro inerte en el papel mueva el resultado hasta un 86 %. `lsqr_converged` ya está en la salida. **Un resultado que no convergió y no lo dice es el mismo patrón que H-27**: el backend registra la degradación con un motivo nombrado y el camino del usuario se detiene ahí.
 
 **Criterios de aceptación.** Un tester que no conozca el código activa una licencia, exporta un diagnóstico y ve su estado de conexión, sin tocar la API a mano. Playwright cubre los 3 recorridos. **Y un test de integración que fuerce el fallo de topografía verifica que el aviso aparece en la respuesta y en la UI** — no que se escribió en el log. **Más, del cierre de la Fase 6:** el usuario puede encender el plano de corte y cambiar de vista a mano, con su recorrido Playwright.
 

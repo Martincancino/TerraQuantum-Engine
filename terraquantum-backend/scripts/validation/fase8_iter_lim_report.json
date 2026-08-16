@@ -1,0 +1,262 @@
+{
+  "limites": [
+    500,
+    1000,
+    2000,
+    5000
+  ],
+  "casos": {
+    "grav/lambda_0.316": {
+      "500": {
+        "istop": 2,
+        "itn": 40,
+        "convergio": true,
+        "chi2": 0.4309612433945795,
+        "misfit_pct": 2.801236,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 1.199
+      },
+      "1000": {
+        "istop": 2,
+        "itn": 40,
+        "convergio": true,
+        "chi2": 0.4309612433945795,
+        "misfit_pct": 2.801236,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 0.761
+      },
+      "2000": {
+        "istop": 2,
+        "itn": 40,
+        "convergio": true,
+        "chi2": 0.4309612433945795,
+        "misfit_pct": 2.801236,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 1.611
+      },
+      "5000": {
+        "istop": 2,
+        "itn": 40,
+        "convergio": true,
+        "chi2": 0.4309612433945795,
+        "misfit_pct": 2.801236,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 0.51
+      }
+    },
+    "grav/lambda_0.316+padding": {
+      "500": {
+        "istop": 2,
+        "itn": 33,
+        "convergio": true,
+        "chi2": 0.5226104550885668,
+        "misfit_pct": 3.084748,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 0.243
+      },
+      "1000": {
+        "istop": 2,
+        "itn": 33,
+        "convergio": true,
+        "chi2": 0.5226104550885668,
+        "misfit_pct": 3.084748,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 0.362
+      },
+      "2000": {
+        "istop": 2,
+        "itn": 33,
+        "convergio": true,
+        "chi2": 0.5226104550885668,
+        "misfit_pct": 3.084748,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 0.245
+      },
+      "5000": {
+        "istop": 2,
+        "itn": 33,
+        "convergio": true,
+        "chi2": 0.5226104550885668,
+        "misfit_pct": 3.084748,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 1.102
+      }
+    },
+    "grav/lambda_0.01": {
+      "500": {
+        "istop": 2,
+        "itn": 232,
+        "convergio": true,
+        "chi2": 0.13391515326981093,
+        "misfit_pct": 1.561513,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 2.069
+      },
+      "1000": {
+        "istop": 2,
+        "itn": 232,
+        "convergio": true,
+        "chi2": 0.13391515326981093,
+        "misfit_pct": 1.561513,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 6.676
+      },
+      "2000": {
+        "istop": 2,
+        "itn": 232,
+        "convergio": true,
+        "chi2": 0.13391515326981093,
+        "misfit_pct": 1.561513,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 0.832
+      },
+      "5000": {
+        "istop": 2,
+        "itn": 232,
+        "convergio": true,
+        "chi2": 0.13391515326981093,
+        "misfit_pct": 1.561513,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 0.568
+      }
+    },
+    "mag/lambda_1e-3": {
+      "500": {
+        "istop": 7,
+        "itn": 500,
+        "convergio": false,
+        "chi2": 2.9898775651806784e-14,
+        "misfit_pct": 1e-06,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 0.626
+      },
+      "1000": {
+        "istop": 7,
+        "itn": 1000,
+        "convergio": false,
+        "chi2": 1.869997368683414e-13,
+        "misfit_pct": 2e-06,
+        "delta_vs_500": 0.18514468,
+        "delta_pre_fista": 0.49444432,
+        "segundos": 0.849
+      },
+      "2000": {
+        "istop": 7,
+        "itn": 2000,
+        "convergio": false,
+        "chi2": 1.1819792997383174e-16,
+        "misfit_pct": 0.0,
+        "delta_vs_500": 0.29317177,
+        "delta_pre_fista": 0.85014806,
+        "segundos": 3.756
+      },
+      "5000": {
+        "istop": 2,
+        "itn": 2430,
+        "convergio": true,
+        "chi2": 1.296356571515475e-15,
+        "misfit_pct": 0.0,
+        "delta_vs_500": 0.25006736,
+        "delta_pre_fista": 0.76996626,
+        "segundos": 2.916
+      }
+    },
+    "mag/lambda_1e-3+padding": {
+      "500": {
+        "istop": 7,
+        "itn": 500,
+        "convergio": false,
+        "chi2": 6.583094651456078e-07,
+        "misfit_pct": 0.003473,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 0.905
+      },
+      "1000": {
+        "istop": 7,
+        "itn": 1000,
+        "convergio": false,
+        "chi2": 1.672938968451377e-06,
+        "misfit_pct": 0.005537,
+        "delta_vs_500": 0.3316251,
+        "delta_pre_fista": 0.40187811,
+        "segundos": 2.798
+      },
+      "2000": {
+        "istop": 7,
+        "itn": 2000,
+        "convergio": false,
+        "chi2": 1.5965889626441237e-06,
+        "misfit_pct": 0.005409,
+        "delta_vs_500": 0.56942297,
+        "delta_pre_fista": 0.65424491,
+        "segundos": 4.155
+      },
+      "5000": {
+        "istop": 7,
+        "itn": 5000,
+        "convergio": false,
+        "chi2": 1.6213295070213283e-06,
+        "misfit_pct": 0.00545,
+        "delta_vs_500": 0.66149117,
+        "delta_pre_fista": 0.75143378,
+        "segundos": 7.129
+      }
+    },
+    "mag/lambda_1e-2": {
+      "500": {
+        "istop": 7,
+        "itn": 500,
+        "convergio": false,
+        "chi2": 3.6120668959138525e-16,
+        "misfit_pct": 0.0,
+        "delta_vs_500": 0.0,
+        "delta_pre_fista": 0.0,
+        "segundos": 2.238
+      },
+      "1000": {
+        "istop": 7,
+        "itn": 1000,
+        "convergio": false,
+        "chi2": 2.0009700583155684e-13,
+        "misfit_pct": 2e-06,
+        "delta_vs_500": 0.16915788,
+        "delta_pre_fista": 0.45284903,
+        "segundos": 2.395
+      },
+      "2000": {
+        "istop": 7,
+        "itn": 2000,
+        "convergio": false,
+        "chi2": 2.310732165187285e-16,
+        "misfit_pct": 0.0,
+        "delta_vs_500": 0.24164474,
+        "delta_pre_fista": 0.71327496,
+        "segundos": 3.304
+      },
+      "5000": {
+        "istop": 2,
+        "itn": 2376,
+        "convergio": true,
+        "chi2": 4.602840655160736e-16,
+        "misfit_pct": 0.0,
+        "delta_vs_500": 0.20806061,
+        "delta_pre_fista": 0.65115503,
+        "segundos": 5.469
+      }
+    }
+  }
+}

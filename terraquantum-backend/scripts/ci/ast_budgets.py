@@ -14,6 +14,11 @@ empeoran**. Eso es lo que hace este script.
   por cada `if`/`for`/`while`/`except`/`with`/`assert`, cada operador booleano,
   cada comprensión y cada expresión condicional. Es la definición práctica de
   McCabe; no pretende ser la de un libro, pretende ser **estable**.
+* `args_max` — la firma más ancha del paquete (posicionales + keyword-only,
+  `self` incluido; `*args`/`**kwargs` cuentan uno cada uno). **Añadido por la
+  Fase 8**, cuyo criterio de aceptación pide `máx args ≤ 12` y que hasta ahora
+  NADIE medía: el gate vigilaba longitud y ramas mientras `invert_gravity_csv`
+  llevaba 41 parámetros y `solve_inversion_lsqr` 38.
 
 **Cómo decide.** Compara contra `ast_baseline.json`, que se genera con
 `--update` y se commitea. Un PR que empeore cualquier techo falla y dice
@@ -57,6 +62,7 @@ class FuncMetric:
     line: int
     loc: int
     cc: int
+    args: int = 0
 
 
 @dataclass
@@ -73,6 +79,10 @@ class PackageMetric:
     def cc_max(self) -> FuncMetric | None:
         return max(self.funcs, key=lambda f: f.cc, default=None)
 
+    @property
+    def args_max(self) -> FuncMetric | None:
+        return max(self.funcs, key=lambda f: f.args, default=None)
+
 
 def _cyclomatic(node: ast.AST) -> int:
     score = 1
@@ -82,6 +92,15 @@ def _cyclomatic(node: ast.AST) -> int:
         elif isinstance(child, ast.BoolOp):
             score += len(child.values) - 1
     return score
+
+
+def _n_args(node: ast.AST) -> int:
+    """Ancho de la firma. `self` cuenta: quien llama al método lo ve igual de ancho."""
+    a = node.args
+    total = len(a.posonlyargs) + len(a.args) + len(a.kwonlyargs)
+    total += 1 if a.vararg is not None else 0
+    total += 1 if a.kwarg is not None else 0
+    return total
 
 
 def measure(root: Path = BACKEND_ROOT) -> dict[str, PackageMetric]:
@@ -109,6 +128,7 @@ def measure(root: Path = BACKEND_ROOT) -> dict[str, PackageMetric]:
                             line=node.lineno,
                             loc=end - node.lineno + 1,
                             cc=_cyclomatic(node),
+                            args=_n_args(node),
                         )
                     )
         result[package] = metric
@@ -120,6 +140,7 @@ def to_baseline(metrics: dict[str, PackageMetric]) -> dict:
     for package, metric in metrics.items():
         worst_loc = metric.func_loc_max
         worst_cc = metric.cc_max
+        worst_args = metric.args_max
         out[package] = {
             "files": metric.files,
             "loc": metric.loc,
@@ -127,6 +148,8 @@ def to_baseline(metrics: dict[str, PackageMetric]) -> dict:
             "func_loc_max_where": f"{worst_loc.file}:{worst_loc.line} {worst_loc.name}" if worst_loc else "",
             "cc_max": worst_cc.cc if worst_cc else 0,
             "cc_max_where": f"{worst_cc.file}:{worst_cc.line} {worst_cc.name}" if worst_cc else "",
+            "args_max": worst_args.args if worst_args else 0,
+            "args_max_where": f"{worst_args.file}:{worst_args.line} {worst_args.name}" if worst_args else "",
         }
     return out
 
@@ -139,7 +162,12 @@ def _compare(current: dict, baseline: dict) -> tuple[list[str], list[str]]:
         if base is None:
             peor.append(f"{package}: paquete nuevo sin linea base (corre --update)")
             continue
-        for key in ("loc", "func_loc_max", "cc_max"):
+        for key in ("loc", "func_loc_max", "cc_max", "args_max"):
+            if key not in base:
+                # Métrica nueva sin línea base (p.ej. `args_max`, añadida en la
+                # Fase 8): no se puede comparar, y fingir un techo de 0 haría
+                # fallar la CI por existir. Se registra al correr `--update`.
+                continue
             techo = base[key] * (1 + SLACK)
             if actual[key] > techo:
                 donde = actual.get(f"{key}_where", "")
@@ -166,9 +194,9 @@ def main() -> int:
 
     if args.top:
         todas = [f for m in metrics.values() for f in m.funcs]
-        print(f"{'CC':>4} {'LOC':>5}  funcion")
+        print(f"{'CC':>4} {'LOC':>5} {'ARGS':>5}  funcion")
         for f in sorted(todas, key=lambda f: f.cc, reverse=True)[: args.top]:
-            print(f"{f.cc:>4} {f.loc:>5}  {f.file}:{f.line} {f.name}")
+            print(f"{f.cc:>4} {f.loc:>5} {f.args:>5}  {f.file}:{f.line} {f.name}")
         return 0
 
     if args.update or not BASELINE_PATH.exists():
@@ -179,7 +207,8 @@ def main() -> int:
         for package, data in sorted(current.items()):
             print(
                 f"  {package:12} {data['files']:>3} archivos  {data['loc']:>6} LOC  "
-                f"func_max={data['func_loc_max']:>4}  cc_max={data['cc_max']:>3}"
+                f"func_max={data['func_loc_max']:>4}  cc_max={data['cc_max']:>3}  "
+                f"args_max={data['args_max']:>3}"
             )
         return 0
 

@@ -122,6 +122,30 @@
       "que_hace": "Renderiza el informe HTML de la suite F9; la importa f9_gate_regression.py.",
       "tipo_manual": true
     },
+    "fase7_byte_identity.py": {
+      "tipo": "gate",
+      "decide": true,
+      "tipo_manual": true,
+      "que_hace": "FASE 7 — byte-identidad de los dos motores. 34 configuraciones comparadas por SHA-256 sobre los bits de float64; --check devuelve exit 1 si un solo bit cambia. Es el criterio de aceptacion (b) de la fase; corre en el job nocturno."
+    },
+    "fase7_lambda_identity_probe.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "tipo_manual": true,
+      "que_hace": "FASE 7 — mide si el chi2 que el escaner de lambda promete es el que el solve consigue. Es la medicion que la auditoria 06 §9D.2 dejo escrita como pendiente. Mide e imprime; no decide."
+    },
+    "fase8_byte_identity.py": {
+      "tipo": "gate",
+      "decide": true,
+      "tipo_manual": true,
+      "que_hace": "FASE 8 — byte-identidad del ORQUESTADOR y del ENDPOINT (28 casos). El arnes de la Fase 7 mide los motores y NO ve lo que la Fase 8 toca (comprobado: mutilar run_geophysics_inversion da 34/34 en verde). Hashea el payload canonicalizado y los bits del parquet. --check decide."
+    },
+    "fase8_iter_lim_probe.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "tipo_manual": true,
+      "que_hace": "FASE 8 — el deber medido que dejo la Fase 7: mide istop/itn/chi2 y el cambio del modelo con iter_lim 500..5000 en los dos motores. Conclusion: en gravimetria el limite NO ata (delta 0 exacto); en magnetometria subirlo mueve el modelo hasta 66% por el espacio nulo sin mejorar el chi2, que ya esta en 1e-14."
+    },
     "field_validation_harness.py": {
       "tipo": "diagnostico",
       "decide": false,

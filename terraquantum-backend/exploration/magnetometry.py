@@ -46,6 +46,33 @@ from scipy.sparse.linalg import lsqr
 from scipy.spatial import cKDTree
 
 from exploration.geophysics_weights import sigma_parametric
+from exploration.potential_field_core import (
+    MODEL_WEIGHT_DEPTH,
+    SMALLNESS_IDENTITY_IN_TILDE,
+    SMALLNESS_SCALED_BY_W,
+    active_cells_from_topography,
+    build_model_weights,
+    declare_functional,
+    estimate_cond_from_columns,
+    initial_irls_eps,
+    irls_focus_weights,
+    assemble_shuttle_ensemble,
+    build_smoothing_operator,
+    map_intervals_to_cells,
+    normal_equations,
+    observable_domain_mask,
+    relative_misfit,
+    combine_existing_and_new_data,
+    inject_extra_reg_blocks,
+    split_region_response,
+    solve_local_region_cg,
+    validate_live_update_args,
+    woodbury_update_from_new_rows,
+    resolve_reference_model,
+    resolve_sigma,
+    robust_amplitude,
+)
+from exploration.potential_field_core import sigma_adaptive as _shared_sigma_adaptive
 
 logger = logging.getLogger(__name__)
 
@@ -72,56 +99,20 @@ def field_unit_vector(inclination_deg: float, declination_deg: float) -> np.ndar
 
 
 def _sigma_adaptive(d_observed: np.ndarray, detect_outliers: bool = False) -> tuple:
+    """Sigma calibrado a la amplitud del dato — delega en el núcleo compartido.
+
+    FASE 7 (H-9): esta función era un clon literal de la de `gravimetry.py`; su
+    propio docstring lo admitía («port de gravimetry Fase 18», «idéntico en forma
+    al de gravimetry»). Hoy la aritmética vive una sola vez en
+    :func:`exploration.potential_field_core.sigma_adaptive`.
+
+    Lo único que este wrapper conserva es el **defecto** `detect_outliers=False`,
+    que NO coincide con el de gravimetría (`True`). Esa asimetría es real y
+    deliberada — el path de producción magnético lo enciende vía
+    `params.robust_sigma` — así que se preserva aquí, visible, en vez de
+    esconderla dentro de la función compartida.
     """
-    Sigma calibrado a la amplitud de los datos (Li & Oldenburg / SimPEG), idéntico
-    en forma al de gravimetry: invariante de escala, funciona en nT directamente.
-
-        sigma_i = max(0.02 · |d_obs_i|,  0.01 · data_range)
-
-    ROBUST VERSION (FASE 20B Tarea 4, port de gravimetry Fase 18):
-
-    Detección de outliers por MAD (Median Absolute Deviation):
-    - is_outlier = |d_i − median(d)| > 3 · 1.4826 · MAD
-    - los outliers se downpesan 10× (sigma permisivo) → no dilatan el sigma global
-    - data_range limpio desde percentiles p5–p95 (no min–max) cuando hay outliers
-
-    CAVEAT: el downweighting 10× es heurístico. Para surveys muy anómalos (>10%
-    outliers) el usuario debe inspeccionar el CSV o bajar el umbral.
-
-    Referencia: Li & Oldenburg 1998; Hampel et al. 1986 (estadística robusta).
-
-    Returns
-    -------
-    sigma      : np.ndarray
-    is_outlier : np.ndarray[bool]  — True para sensores marcados como outliers
-    """
-    d = np.asarray(d_observed, dtype=np.float64)
-
-    if detect_outliers:
-        median = np.median(d)
-        mad = np.median(np.abs(d - median))
-        sigma_est = 1.4826 * mad
-        outlier_threshold = 3.0 * sigma_est
-        is_outlier = np.abs(d - median) > outlier_threshold
-
-        if is_outlier.any():
-            clean = d[~is_outlier]
-            data_range = max(
-                float(np.percentile(clean, 95) - np.percentile(clean, 5)),
-                1e-30,
-            )
-        else:
-            data_range = max(float(np.max(d) - np.min(d)), 1e-30)
-    else:
-        data_range = max(float(np.max(d) - np.min(d)), 1e-30)
-        is_outlier = np.zeros(len(d), dtype=bool)
-
-    sigma = np.maximum(0.02 * np.abs(d), 0.01 * data_range)
-
-    if is_outlier.any():
-        sigma[is_outlier] = 10.0 * sigma[is_outlier]
-
-    return np.maximum(sigma, 1e-30), is_outlier
+    return _shared_sigma_adaptive(d_observed, detect_outliers=detect_outliers)
 
 
 class MagnetometryForward:
@@ -1024,29 +1015,17 @@ class MagnetometryInversion:
         _anchor_active = None
         _anchor_value_active = None
         if boreholes is not None and len(boreholes) > 0:
-            _bh = np.asarray(boreholes, dtype=np.float64)
-            if _bh.ndim != 2 or _bh.shape[1] != 5:
-                raise ValueError(
-                    "boreholes debe tener shape (n,5): [x_m, z_m, y_from_m, y_to_m, susc_SI]."
-                )
             _anchor_mask_full = np.zeros(self.total_voxels, dtype=bool)
             _anchor_value_full = np.zeros(self.total_voxels, dtype=np.float64)
-            _tol_xz = self.dx / 2.0
-            for _bx, _bz, _yf, _yt, _bsusc in _bh:
-                if _yt < _yf:
-                    _yf, _yt = _yt, _yf
-                _col = (np.abs(x_c_arr - _bx) <= _tol_xz) & (np.abs(z_c_arr - _bz) <= _tol_xz)
-                if not np.any(_col):
-                    continue
-                _seg = _col & (y_c >= _yf) & (y_c <= _yt)
-                if not np.any(_seg):
-                    _ymid = 0.5 * (_yf + _yt)
-                    _cidx = np.where(_col)[0]
-                    _near = int(_cidx[int(np.argmin(np.abs(y_c[_cidx] - _ymid)))])
-                    _seg = np.zeros(self.total_voxels, dtype=bool)
-                    _seg[_near] = True
+            for _seg, _val in map_intervals_to_cells(
+                boreholes, x_c_arr, y_c, z_c_arr,
+                total_voxels=self.total_voxels, tol_xz=self.dx / 2.0, n_cols=5,
+                nombre="boreholes",
+                mensaje_shape=("boreholes debe tener shape (n,5): "
+                               "[x_m, z_m, y_from_m, y_to_m, susc_SI]."),
+            ):
                 _anchor_mask_full[_seg] = True
-                _anchor_value_full[_seg] = float(_bsusc) - self.base_susc
+                _anchor_value_full[_seg] = float(_val[0]) - self.base_susc
             _anchor_active = _anchor_mask_full[active_cells]
             _anchor_value_active = _anchor_value_full[active_cells]
 
@@ -1054,32 +1033,20 @@ class MagnetometryInversion:
         _litho_lb_active = None
         _litho_ub_active = None
         if lithology_bounds is not None and len(lithology_bounds) > 0:
-            _lba = np.asarray(lithology_bounds, dtype=np.float64)
-            if _lba.ndim != 2 or _lba.shape[1] != 6:
-                raise ValueError(
-                    "lithology_bounds debe tener shape (n,6): "
-                    "[x_m, z_m, y_from_m, y_to_m, susc_min, susc_max]."
-                )
             _litho_lb_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
             _litho_ub_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
-            _tol_xz_l = self.dx / 2.0
-            for _bx, _bz, _yf, _yt, _pmin, _pmax in _lba:
-                if _yt < _yf:
-                    _yf, _yt = _yt, _yf
+            for _seg, _val in map_intervals_to_cells(
+                lithology_bounds, x_c_arr, y_c, z_c_arr,
+                total_voxels=self.total_voxels, tol_xz=self.dx / 2.0, n_cols=6,
+                nombre="lithology_bounds",
+                mensaje_shape=("lithology_bounds debe tener shape (n,6): "
+                               "[x_m, z_m, y_from_m, y_to_m, susc_min, susc_max]."),
+            ):
+                _pmin, _pmax = float(_val[0]), float(_val[1])
                 if _pmax < _pmin:
                     _pmin, _pmax = _pmax, _pmin
-                _col = (np.abs(x_c_arr - _bx) <= _tol_xz_l) & (np.abs(z_c_arr - _bz) <= _tol_xz_l)
-                if not np.any(_col):
-                    continue
-                _seg = _col & (y_c >= _yf) & (y_c <= _yt)
-                if not np.any(_seg):
-                    _ymid = 0.5 * (_yf + _yt)
-                    _cidx = np.where(_col)[0]
-                    _near = int(_cidx[int(np.argmin(np.abs(y_c[_cidx] - _ymid)))])
-                    _seg = np.zeros(self.total_voxels, dtype=bool)
-                    _seg[_near] = True
-                _litho_lb_full[_seg] = float(_pmin)
-                _litho_ub_full[_seg] = float(_pmax)
+                _litho_lb_full[_seg] = _pmin
+                _litho_ub_full[_seg] = _pmax
             _litho_lb_active = _litho_lb_full[active_cells]
             _litho_ub_active = _litho_ub_full[active_cells]
 
@@ -1103,10 +1070,8 @@ class MagnetometryInversion:
         # Vóxeles más allá del cutoff_radius para TODOS los sensores tienen columnas
         # cero en G_active. Incluirlos produce plateau de chi² por mínima norma y
         # saturación espuria en susc_min. Misma lógica/threshold que gravimetry.py.
-        _col_sens_r05 = np.asarray(G_active.power(2).sum(axis=0)).ravel()
-        _sens_thr_r05 = 1e-6 * max(float(np.max(_col_sens_r05)), 1e-30)
         if prune_observable_domain:
-            _obs_in_active = _col_sens_r05 > _sens_thr_r05
+            _obs_in_active = observable_domain_mask(G_active)
         else:
             _obs_in_active = np.ones(n_active, dtype=bool)
         _n_obs_domain = int(np.sum(_obs_in_active))
@@ -1200,10 +1165,11 @@ class MagnetometryInversion:
         # z0 = 0.5·dy estabiliza el peso en la primera capa (Li & Oldenburg: z0 del
         # orden de medio voxel, NO un valor grande arbitrario).
         z0 = 0.5 * self.dy
-        true_depth = np.clip(y_c_active - _topo_sol, a_min=1.0, a_max=None)
-        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))   # (depth+z0)^{+β/2}
-        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)               # escala global ~1
-        Wz_inv = sp.diags(wz_inv_diag)
+        _mw = build_model_weights(
+            MODEL_WEIGHT_DEPTH, depths=y_c_active - _topo_sol,
+            z0=z0, depth_beta=depth_beta)
+        wz_inv_diag = _mw.diag        # (depth+z0)^{+β/2}, escala global ~1
+        Wz_inv = _mw.W
 
         # ── HITO 5 — Bounds en espacio escalado m_tilde ──────────────────────────
         # susc = Wz_inv @ m_tilde (wz_inv_diag_i * m_tilde_i)
@@ -1256,23 +1222,9 @@ class MagnetometryInversion:
         # FASE 9C-1: modelo de referencia m_ref (warm-start). El término de suavidad
         # penaliza L·(m − m_ref); m_ref se acepta en grilla completa o en celdas
         # activas. Los anclajes de sondaje, si existen, lo sobre-escriben por celda.
-        if m_ref is None:
-            m_ref_sol = None
-        else:
-            m_ref = np.asarray(m_ref, dtype=np.float64)
-            if m_ref.shape[0] == self.total_voxels:
-                m_ref_sol = m_ref[active_cells].copy()
-            elif m_ref.shape[0] == n_active:
-                m_ref_sol = m_ref.copy()
-            else:
-                raise ValueError(
-                    f"m_ref debe tener longitud {self.total_voxels} (grilla completa) "
-                    f"o {n_active} (celdas activas), got {m_ref.shape[0]}."
-                )
-            if _n_dead > 0:
-                m_ref_sol = m_ref_sol[_obs_in_active]
-            if not np.isfinite(m_ref_sol).all():
-                raise ValueError("m_ref contiene NaN o Inf.")
+        m_ref_sol = resolve_reference_model(
+            m_ref, total_voxels=self.total_voxels, n_active=n_active,
+            active_cells=active_cells, obs_in_active=_obs_in_active, n_dead=_n_dead)
 
         if _has_anchors:
             if m_ref_sol is None:
@@ -1294,23 +1246,9 @@ class MagnetometryInversion:
         # Las columnas deben conformar con el modelo activo (post-poda R-05 si aplica):
         # con prune_observable_domain=True el caller debe pasar B[:, obs_mask].
         if extra_reg_blocks:
-            _xg_mats = [G_aug]
-            _xg_rhs  = [d_aug]
-            for _bi, _blk in enumerate(extra_reg_blocks):
-                _blk = sp.csr_matrix(_blk)
-                if _blk.shape[1] != Wz_inv.shape[0]:
-                    raise ValueError(
-                        f"extra_reg_blocks[{_bi}] tiene {_blk.shape[1]} columnas; "
-                        f"se esperaban {Wz_inv.shape[0]} (modelo activo post-poda). "
-                        f"Recorta columnas al dominio observable: B[:, obs_mask]."
-                    )
-                _xg_mats.append(_blk @ Wz_inv)
-                if extra_reg_rhs is not None and _bi < len(extra_reg_rhs):
-                    _xg_rhs.append(np.asarray(extra_reg_rhs[_bi], dtype=np.float64).ravel())
-                else:
-                    _xg_rhs.append(np.zeros(_blk.shape[0], dtype=np.float64))
-            G_aug = sp.vstack(_xg_mats).tocsr()
-            d_aug = np.concatenate(_xg_rhs)
+            G_aug, d_aug = inject_extra_reg_blocks(
+                G_aug, d_aug, extra_reg_blocks, extra_reg_rhs, _mw,
+                hint_mask="obs_mask")
             logger.info(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
 
         logger.info(
@@ -1342,6 +1280,12 @@ class MagnetometryInversion:
         _anchor_kappa_used = float(anchor_kappa)
         _cond_a_est = None
         _auto_kappa_adjusted = False
+        # FASE 7: el criterio de parada de LSQR se descartaba. `istop=7` es "se agoto
+        # el limite de iteraciones" — una corrida que no convergio — y con un peso de
+        # modelo que es cambio de variable puro, no converger es JUSTO lo que hace que
+        # un `depth_beta` inerte en el papel mueva el resultado de verdad.
+        _lsqr_istop = None
+        _lsqr_iters = None
 
         # ── FASE 20B Tarea 6: control de norma de regularización (port Fase 24B) ─
         # "L2" (default) = comportamiento histórico EXACTO (1 solve, sin foco).
@@ -1404,6 +1348,7 @@ class MagnetometryInversion:
             histórico EXACTO (damp escalar / λI). focus_w!=None → smallness enfocado
             diags(w·focus)·Wz_inv. Devuelve (m_tilde, acond); actualiza diagnósticos kappa."""
             nonlocal _cond_a_est, _anchor_kappa_used, _auto_kappa_adjusted
+            nonlocal _lsqr_istop, _lsqr_iters
             A_sys = None
             b_sys = None
             if _has_anchors:
@@ -1423,12 +1368,7 @@ class MagnetometryInversion:
 
                 A_sys, b_sys = _assemble_anchor(_anchor_kappa_used)
                 # ── Dynamic Kappa Adaptation (port Fase 16) ──────────────────
-                _col_sq = np.array(A_sys.power(2).sum(axis=0)).ravel()
-                _nz = _col_sq > 0.0
-                if _nz.any():
-                    _mx, _mn = float(np.max(_col_sq)), float(np.min(_col_sq[_nz]))
-                    if _mn > 0.0:
-                        _cond_a_est = float(np.sqrt(_mx / _mn))
+                _cond_a_est = estimate_cond_from_columns(A_sys) or _cond_a_est
                 if auto_kappa and _cond_a_est is not None and _cond_a_est > 1e12:
                     _scale = 1e12 / _cond_a_est
                     _anchor_kappa_used = float(anchor_kappa) * _scale
@@ -1447,6 +1387,7 @@ class MagnetometryInversion:
                 else:
                     _res = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
                     _mt, _ac = _res[0], float(_res[6])
+                    _lsqr_istop, _lsqr_iters = int(_res[1]), int(_res[2])
             elif _padding_active is not None:
                 # Padding sin anclajes (L2 o compact): la smallness ya NO es uniforme (las
                 # celdas de padding conservan padding_kappa·λ), así que se ensambla un bloque
@@ -1467,6 +1408,7 @@ class MagnetometryInversion:
                 else:
                     _res = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
                     _mt, _ac = _res[0], float(_res[6])
+                    _lsqr_istop, _lsqr_iters = int(_res[1]), int(_res[2])
             elif focus_w is None:
                 # L2 sin anclajes ni padding: damp escalar / λI (byte-idéntico al histórico).
                 if _use_bc_m_eff:
@@ -1480,6 +1422,7 @@ class MagnetometryInversion:
                 else:
                     _res = lsqr(G_aug, d_aug, damp=float(lambda_mag), iter_lim=500, atol=1e-8, btol=1e-8, show=False)
                     _mt, _ac = _res[0], float(_res[6])
+                    _lsqr_istop, _lsqr_iters = int(_res[1]), int(_res[2])
             else:
                 # compact sin anclajes: bloque smallness enfocado diags(λ·focus)·Wz_inv.
                 _ws = np.full(_n_active_sol, float(lambda_mag), dtype=np.float64) * focus_w
@@ -1494,6 +1437,7 @@ class MagnetometryInversion:
                 else:
                     _res = lsqr(A_sys, b_sys, damp=0.0, iter_lim=500, atol=1e-8, btol=1e-8, show=False)
                     _mt, _ac = _res[0], float(_res[6])
+                    _lsqr_istop, _lsqr_iters = int(_res[1]), int(_res[2])
 
             # ── Tier 1 A1 MAGNÉTICO: FISTA proyectado (bounds reales, solo path LSQR) ──
             # El clip post-hoc descarta masa fuera del box; FISTA parte del clip como warm
@@ -1532,12 +1476,8 @@ class MagnetometryInversion:
             _c = Wz_inv @ m_tilde
             _c_free = np.abs(_c[_free_mask]) if _free_mask.any() else np.abs(_c)
             if _eps is None:
-                _eps = (max(_eps_floor, 0.5 * float(np.percentile(_c_free, 90)))
-                        if _c_free.size else _eps_floor)
-            _raw = 1.0 / np.sqrt(_c ** 2 + _eps ** 2)
-            _den = float(np.mean(_raw[_free_mask])) if _free_mask.any() else float(np.mean(_raw))
-            _den = _den if _den > 1e-12 else 1.0
-            _fw_new = np.clip(_raw / _den, 0.05, 20.0)
+                _eps = initial_irls_eps(_c_free, _eps_floor)
+            _fw_new = irls_focus_weights(_c, _free_mask, _eps)
             _delta = (float(np.linalg.norm(_fw_new - _focus_w) / max(np.linalg.norm(_fw_new), 1e-12))
                       if _focus_w is not None else 1.0)
             _focus_w = _fw_new
@@ -1641,6 +1581,29 @@ class MagnetometryInversion:
             solver_meta["susc_min"] = float(susc_min)
             solver_meta["susc_max"] = float(susc_max)
             solver_meta["depth_beta"] = float(depth_beta)
+            # ── FASE 7, criterio (d): la corrida DECLARA su funcional ─────────
+            # H-33 midió que `depth_beta` actúa o no según qué opciones estén
+            # activas, y que nada en la salida lo decía. El discriminador es si el
+            # bloque de smallness lleva `Wz_inv`: con anclajes, con padding o con
+            # IRLS compacto lo lleva, y entonces TODOS los bloques comparten `W`
+            # ⇒ cambio de variable puro ⇒ beta inerte (RUTA B, la de producción).
+            # Sin ninguna de las tres, la smallness es `damp=λ`/`λI` sobre `m̃` y
+            # el peso SÍ entra en el funcional (RUTA A).
+            solver_meta["regularization_functional"] = declare_functional(
+                _mw,
+                smallness=(SMALLNESS_SCALED_BY_W
+                           if (_has_anchors or _padding_active is not None
+                               or _reg_norm != "l2")
+                           else SMALLNESS_IDENTITY_IN_TILDE),
+                depths=y_c_active - _topo_sol,
+                depth_beta_solicitado=float(depth_beta),
+                lsqr_istop=_lsqr_istop, lsqr_iters=_lsqr_iters,
+            )
+            solver_meta["lsqr_istop"] = _lsqr_istop
+            solver_meta["lsqr_iters"] = _lsqr_iters
+            solver_meta["lsqr_converged"] = (
+                None if _lsqr_istop is None else int(_lsqr_istop) not in (3, 7)
+            )
             solver_meta["n_anchored_voxels"] = int(np.sum(_anchor_active)) if _anchor_active is not None else 0
             solver_meta["anchor_mode"] = _anchor_mode if _has_anchors else None
             solver_meta["anchor_kappa"] = float(anchor_kappa) if (_has_anchors and not _hard_anchor) else None
@@ -1743,15 +1706,8 @@ class MagnetometryInversion:
             )
 
         # ── Máscara de celdas activas (idéntica a solve_magnetic_inversion_lsqr) ──
-        if topography_elevations is None:
-            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
-        else:
-            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
-        voxel_top = y_c - (self.dy / 2.0)
-        active_cells = voxel_top >= topo_depth
-        n_active = int(np.sum(active_cells))
-        if n_active == 0:
-            raise ValueError("[UQ MAG] No hay celdas activas bajo la topografía dada.")
+        topo_depth, active_cells, n_active = active_cells_from_topography(
+            y_c, self.dy, self.total_voxels, topography_elevations, contexto="[UQ MAG] ")
 
         n_sensors = len(d_observed)
         y_c_active = y_c[active_cells]
@@ -1772,20 +1728,18 @@ class MagnetometryInversion:
             )
 
         # ── Data weighting Wd (sigma adaptivo, igual que el solver) ───────────
-        if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma, _ = _sigma_adaptive(d_observed, detect_outliers=False)
-        else:
-            sigma = sigma_parametric(d_observed, noise_floor, noise_pct)
+        sigma = resolve_sigma(d_observed, noise_floor, noise_pct, detect_outliers=False)
         Wd = sp.diags(1.0 / sigma)
         G_w = Wd @ G_active
 
         # ── Cambio de variable Li & Oldenburg: Wz_inv = diag((depth+z0)^{+β/2}) ──
         # (idéntico al solver: NO hay column scaling Ws en el motor magnético).
         z0 = 0.5 * self.dy
-        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
-        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
-        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
-        Wz_inv = sp.diags(wz_inv_diag)
+        _mw = build_model_weights(
+            MODEL_WEIGHT_DEPTH, depths=y_c_active - topo_depth[active_cells],
+            z0=z0, depth_beta=depth_beta)
+        wz_inv_diag = _mw.diag
+        Wz_inv = _mw.W
         G_scaled = (G_w @ Wz_inv).tocsr()
 
         # ── Laplaciano reducido a activas y escalado: L̃ = L·Wz_inv ───────────
@@ -1796,11 +1750,7 @@ class MagnetometryInversion:
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
 
         # ── Matriz de información posterior (SPD por el término λ_mag²·I) ─────
-        A = (
-            (G_scaled.T @ G_scaled)
-            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
-            + (float(lambda_mag) ** 2) * sp.identity(n_active, format="csr", dtype=np.float64)
-        ).tocsr()
+        A = normal_equations(G_scaled, L_scaled, lambda_spatial, lambda_mag, n_active)
 
         diag_C = hutchinson_diag_inv(
             A, n_probes=n_probes, cg_maxiter=cg_maxiter, cg_rtol=cg_rtol, seed=seed
@@ -1905,15 +1855,9 @@ class MagnetometryInversion:
             )
 
         # ── Máscara de celdas activas (idéntica a solve_magnetic_inversion_lsqr) ──
-        if topography_elevations is None:
-            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
-        else:
-            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
-        voxel_top = y_c - (self.dy / 2.0)
-        active_cells = voxel_top >= topo_depth
-        n_active = int(np.sum(active_cells))
-        if n_active == 0:
-            raise ValueError("[UQ MAG shuttle] No hay celdas activas bajo la topografía dada.")
+        topo_depth, active_cells, n_active = active_cells_from_topography(
+            y_c, self.dy, self.total_voxels, topography_elevations,
+            contexto="[UQ MAG shuttle] ")
 
         n_sensors = len(d_observed)
         y_c_active = y_c[active_cells]
@@ -1934,10 +1878,7 @@ class MagnetometryInversion:
             )
 
         # ── Data weighting Wd (sigma adaptivo, igual que el solver / σ posterior) ──
-        if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma, _ = _sigma_adaptive(d_observed, detect_outliers=False)
-        else:
-            sigma = sigma_parametric(d_observed, noise_floor, noise_pct)
+        sigma = resolve_sigma(d_observed, noise_floor, noise_pct, detect_outliers=False)
         Wd = sp.diags(1.0 / sigma)
         G_w = Wd @ G_active
 
@@ -1945,10 +1886,11 @@ class MagnetometryInversion:
         # (idéntico al solver y a estimate_posterior_std: NO hay column scaling Ws
         # en el motor magnético; el "scaling" ES el depth weighting).
         z0 = 0.5 * self.dy
-        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
-        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
-        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
-        Wz_inv = sp.diags(wz_inv_diag)
+        _mw = build_model_weights(
+            MODEL_WEIGHT_DEPTH, depths=y_c_active - topo_depth[active_cells],
+            z0=z0, depth_beta=depth_beta)
+        wz_inv_diag = _mw.diag
+        Wz_inv = _mw.W
         G_scaled = (G_w @ Wz_inv).tocsr()
 
         # ── Operador de suavizado (I + γ L̃ᵀL̃) reducido a activas y escalado ───
@@ -1956,17 +1898,8 @@ class MagnetometryInversion:
         if smooth_strength and smooth_strength > 0:
             L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
             L_active = L_full.tocsr()[active_cells, :][:, active_cells]
-            L_scaled = (L_active @ Wz_inv).tocsr()
-            LtL = (L_scaled.T @ L_scaled).tocsr()
-            S = (sp.identity(n_active, format="csr") + float(smooth_strength) * LtL).tocsr()
-            diag_S = np.maximum(S.diagonal(), 1e-30)
-            M_s = _LO((n_active, n_active), matvec=lambda v: v / diag_S)
-
-            def _smooth(v):
-                x, _ = _cg(S, v, rtol=1e-6, atol=0.0, maxiter=cg_maxiter, M=M_s)
-                return x
-
-            smooth_op = _LO((n_active, n_active), matvec=_smooth)
+            smooth_op = build_smoothing_operator(
+                L_active, _mw, smooth_strength, n_active, cg_maxiter)
 
         # ── Direcciones de espacio nulo (matrix-free, reproducibles) ──────────
         directions, preserved, null_fraction = null_space_shuttle_directions(
@@ -1977,33 +1910,12 @@ class MagnetometryInversion:
         # ── Amplitud física por shuttle y construcción de alternativas ────────
         m0_active = m0[active_cells]
         # Escala robusta de la solución: MAD→σ, con piso por si el modelo es ~plano.
-        med = np.median(m0_active)
-        robust = 1.4826 * np.median(np.abs(m0_active - med))
-        amp_ref = max(robust, 1e-6)
-        amp = float(shuttle_scale) * amp_ref
+        amp = robust_amplitude(m0_active, shuttle_scale)
 
-        ensemble = np.full((int(n_shuttles), self.total_voxels), np.nan, dtype=np.float64)
-        for k in range(int(n_shuttles)):
-            # direction está en espacio escalado (m̃ = Wz·m); a físico vía Wz_inv.
-            d_phys = wz_inv_diag * directions[k]
-            peak = np.max(np.abs(d_phys))
-            if peak > 1e-300:
-                d_phys = d_phys * (amp / peak)
-            member = m0_active + d_phys
-            if susceptibility_min is not None:
-                member = np.maximum(member, float(susceptibility_min))
-            if susceptibility_max is not None:
-                member = np.minimum(member, float(susceptibility_max))
-            ensemble[k, active_cells] = member
-
-        ens_active = ensemble[:, active_cells]
-        std_active = np.std(ens_active, axis=0)
-        mean_active = np.mean(ens_active, axis=0)
-
-        ensemble_std = np.full(self.total_voxels, np.nan, dtype=np.float64)
-        ensemble_mean = np.full(self.total_voxels, np.nan, dtype=np.float64)
-        ensemble_std[active_cells] = std_active
-        ensemble_mean[active_cells] = mean_active
+        ensemble, ensemble_std, ensemble_mean = assemble_shuttle_ensemble(
+            m0_active, directions, _mw, amp, total_voxels=self.total_voxels,
+            active_cells=active_cells, lo=susceptibility_min, hi=susceptibility_max)
+        std_active = ensemble_std[active_cells]
 
         preserved_mean = float(np.mean(preserved))
         null_fraction_mean = float(np.mean(null_fraction))
@@ -2086,33 +1998,16 @@ class MagnetometryInversion:
         new_sensor_coords = np.atleast_2d(np.asarray(new_sensor_coords, dtype=np.float64))
         new_d_observed = np.atleast_1d(np.asarray(new_d_observed, dtype=np.float64)).ravel()
 
-        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
-            raise ValueError(
-                "live_update_add_data requiere forward_model, sensor_coords, x_c, z_c."
-            )
-        if m0.shape[0] != self.total_voxels:
-            raise ValueError(
-                f"m0 debe tener total_voxels={self.total_voxels} elementos, tiene {m0.shape[0]}."
-            )
-        if lambda_mag <= 0:
-            raise ValueError("lambda_mag debe ser > 0 (garantiza A SPD).")
-        k = new_sensor_coords.shape[0]
-        if new_d_observed.shape[0] != k:
-            raise ValueError(
-                f"new_d_observed debe tener {k} elementos (uno por sensor nuevo), "
-                f"tiene {new_d_observed.shape[0]}."
-            )
+        k = validate_live_update_args(
+            m0, total_voxels=self.total_voxels, forward_model=forward_model,
+            sensor_coords=sensor_coords, x_c=x_c, z_c=z_c, lambda_mag=lambda_mag,
+            nombre="live_update_add_data", new_sensor_coords=new_sensor_coords,
+            new_obs=new_d_observed)
 
         # ── Máscara de celdas activas (idéntica a estimate_posterior_std) ─────
-        if topography_elevations is None:
-            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
-        else:
-            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
-        voxel_top = y_c - (self.dy / 2.0)
-        active_cells = voxel_top >= topo_depth
-        n_active = int(np.sum(active_cells))
-        if n_active == 0:
-            raise ValueError("[Live update MAG] No hay celdas activas bajo la topografía dada.")
+        topo_depth, active_cells, n_active = active_cells_from_topography(
+            y_c, self.dy, self.total_voxels, topography_elevations,
+            contexto="[Live update MAG] ")
 
         n_sensors = len(d_observed)
         y_c_active = y_c[active_cells]
@@ -2131,18 +2026,16 @@ class MagnetometryInversion:
             G_active = forward_model._build_sparse_kernel(
                 x_c_arr, y_c_active, z_c_arr, np.asarray(sensor_coords, dtype=np.float64),
             )
-        if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma, _ = _sigma_adaptive(d_observed, detect_outliers=False)
-        else:
-            sigma = sigma_parametric(d_observed, noise_floor, noise_pct)
+        sigma = resolve_sigma(d_observed, noise_floor, noise_pct, detect_outliers=False)
         Wd = sp.diags(1.0 / sigma)
         G_w = Wd @ G_active
 
         z0 = 0.5 * self.dy
-        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
-        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
-        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
-        Wz_inv = sp.diags(wz_inv_diag)
+        _mw = build_model_weights(
+            MODEL_WEIGHT_DEPTH, depths=y_c_active - topo_depth[active_cells],
+            z0=z0, depth_beta=depth_beta)
+        wz_inv_diag = _mw.diag
+        Wz_inv = _mw.W
         G_scaled = (G_w @ Wz_inv).tocsr()
 
         L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
@@ -2150,44 +2043,21 @@ class MagnetometryInversion:
         L_scaled = (L_active @ Wz_inv).tocsr()
 
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
-        A = (
-            (G_scaled.T @ G_scaled)
-            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
-            + (float(lambda_mag) ** 2) * sp.identity(n_active, format="csr", dtype=np.float64)
-        ).tocsr()
+        A = normal_equations(G_scaled, L_scaled, lambda_spatial, lambda_mag, n_active)
 
-        # ── m0 físico → m̃0 escalado (m = Wz_inv·m̃ ⇒ m̃ = m / wz_inv_diag) ────
         m0_active = m0[active_cells]
-        m_tilde0 = m0_active / wz_inv_diag
 
-        # ── Filas nuevas Ũ = Wd_new·G_new·Wz_inv y dato nuevo escalado ────────
+        # ── Filas nuevas: mismo W que produjo A (por eso A queda congelada) ───
         G_new = forward_model._build_sparse_kernel(
             x_c_arr, y_c_active, z_c_arr, new_sensor_coords,
         )                                                  # (k, n_active), física
-        sigma_new = sigma_parametric(new_d_observed, noise_floor, noise_pct)
-        U_scaled = ((sp.diags(1.0 / sigma_new) @ G_new) @ Wz_inv).toarray()   # (k, n_active)
-        d_tilde_new = new_d_observed / sigma_new
-
-        # ── Misfit en el dato nuevo ANTES (kernel físico sin escalar) ─────────
-        G_new_phys = G_new.tocsr()
-        d_norm = max(float(np.linalg.norm(new_d_observed)), 1e-30)
-        pred_before = G_new_phys @ m0_active
-        misfit_before = float(np.linalg.norm(pred_before - new_d_observed)) / d_norm
-
-        # ── Update de Woodbury rango-k (k resoluciones CG contra A congelada) ─
-        m_tilde1, info = woodbury_low_rank_update(
-            A, m_tilde0, U_scaled, d_tilde_new,
+        m1_active, info, misfit_before, misfit_after = woodbury_update_from_new_rows(
+            A, m0_active, _mw, G_new, new_d_observed,
+            noise_floor=noise_floor, noise_pct=noise_pct,
             cg_maxiter=cg_maxiter, cg_rtol=cg_rtol,
+            lo=susceptibility_min, hi=susceptibility_max,
+            woodbury_fn=woodbury_low_rank_update,
         )
-
-        m1_active = wz_inv_diag * m_tilde1
-        if susceptibility_min is not None:
-            m1_active = np.maximum(m1_active, float(susceptibility_min))
-        if susceptibility_max is not None:
-            m1_active = np.minimum(m1_active, float(susceptibility_max))
-
-        pred_after = G_new_phys @ m1_active
-        misfit_after = float(np.linalg.norm(pred_after - new_d_observed)) / d_norm
 
         model_full = np.array(m0, dtype=np.float64, copy=True)
         model_full[active_cells] = m1_active
@@ -2266,31 +2136,17 @@ class MagnetometryInversion:
         d_observed = np.asarray(d_observed, dtype=np.float64)
         y_c = np.asarray(y_c, dtype=np.float64)
 
-        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
-            raise ValueError(
-                "live_update_suboctree requiere forward_model, sensor_coords, x_c, z_c."
-            )
-        if m0.shape[0] != self.total_voxels:
-            raise ValueError(
-                f"m0 debe tener total_voxels={self.total_voxels} elementos, tiene {m0.shape[0]}."
-            )
-        if lambda_mag <= 0:
-            raise ValueError("lambda_mag debe ser > 0 (garantiza A SPD).")
-        if region_mask is None and (region_center is None or region_radius is None):
-            raise ValueError(
-                "Define la sub-región: 'region_mask' (bool) o 'region_center'+'region_radius'."
-            )
+        validate_live_update_args(
+            m0, total_voxels=self.total_voxels, forward_model=forward_model,
+            sensor_coords=sensor_coords, x_c=x_c, z_c=z_c, lambda_mag=lambda_mag,
+            nombre="live_update_suboctree", exigir_region=True,
+            region_mask=region_mask, region_center=region_center,
+            region_radius=region_radius)
 
         # ── Máscara de celdas activas ─────────────────────────────────────────
-        if topography_elevations is None:
-            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
-        else:
-            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
-        voxel_top = y_c - (self.dy / 2.0)
-        active_cells = voxel_top >= topo_depth
-        n_active = int(np.sum(active_cells))
-        if n_active == 0:
-            raise ValueError("[Sub-octree MAG] No hay celdas activas bajo la topografía dada.")
+        topo_depth, active_cells, n_active = active_cells_from_topography(
+            y_c, self.dy, self.total_voxels, topography_elevations,
+            contexto="[Sub-octree MAG] ")
 
         x_arr = np.asarray(x_c, dtype=np.float64)
         z_arr = np.asarray(z_c, dtype=np.float64)
@@ -2314,39 +2170,26 @@ class MagnetometryInversion:
             raise ValueError("[Sub-octree MAG] La sub-región no contiene celdas activas.")
 
         # ── Dato combinado (existente + nuevo) ────────────────────────────────
-        sensors = np.asarray(sensor_coords, dtype=np.float64)
-        data = d_observed
-        if new_sensor_coords is not None and new_d_observed is not None:
-            new_sensor_coords = np.atleast_2d(np.asarray(new_sensor_coords, dtype=np.float64))
-            new_d_observed = np.atleast_1d(np.asarray(new_d_observed, dtype=np.float64)).ravel()
-            if new_d_observed.shape[0] != new_sensor_coords.shape[0]:
-                raise ValueError("new_d_observed debe tener un valor por sensor nuevo.")
-            sensors = np.vstack([sensors, new_sensor_coords])
-            data = np.concatenate([d_observed, new_d_observed])
+        sensors, data = combine_existing_and_new_data(
+            sensor_coords, d_observed, new_sensor_coords, new_d_observed)
 
         # ── Kernel sobre TODAS las activas, columnas S vs fondo ───────────────
         G_all = forward_model._build_sparse_kernel(x_a, y_a, z_a, sensors).tocsc()
-        G_S = G_all[:, S_local].tocsr()
         m0_active = m0[active_cells]
-        bg_local = ~S_local
-        d_bg = G_all[:, bg_local] @ m0_active[bg_local]
-        d_res = data - d_bg
+        G_S, d_res = split_region_response(G_all, S_local, m0_active, data)
 
         # ── Wd (frozen) ───────────────────────────────────────────────────────
-        if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma, _ = _sigma_adaptive(data, detect_outliers=False)
-        else:
-            sigma = sigma_parametric(data, noise_floor, noise_pct)
+        sigma = resolve_sigma(data, noise_floor, noise_pct, detect_outliers=False)
         Wd = sp.diags(1.0 / sigma)
         G_Sw = Wd @ G_S
 
         # ── Cambio de variable Li & Oldenburg local a S (Wz_inv, NO Ws) ───────
         z0 = 0.5 * self.dy
-        true_depth = np.clip(y_a[S_local] - topo_depth[active_cells][S_local],
-                             a_min=1.0, a_max=None)
-        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
-        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
-        Wz_inv = sp.diags(wz_inv_diag)
+        _mw = build_model_weights(
+            MODEL_WEIGHT_DEPTH, depths=y_a[S_local] - topo_depth[active_cells][S_local],
+            z0=z0, depth_beta=depth_beta)
+        wz_inv_diag = _mw.diag
+        Wz_inv = _mw.W
         G_scaled = (G_Sw @ Wz_inv).tocsr()
 
         # ── Laplaciano restringido a S y escalado: L̃_S = L_S·Wz_inv ──────────
@@ -2359,33 +2202,20 @@ class MagnetometryInversion:
         lambda_anchor = float(anchor_strength) * float(lambda_mag) ** 0.5 + float(lambda_mag)
 
         m_tilde0_S = m0_active[S_local] / wz_inv_diag
-        A_S = (
-            (G_scaled.T @ G_scaled)
-            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
-            + (lambda_anchor ** 2) * sp.identity(n_S, format="csr", dtype=np.float64)
-        ).tocsr()
+        A_S = normal_equations(G_scaled, L_scaled, lambda_spatial, lambda_anchor, n_S)
         b_S = (
             G_scaled.T @ (Wd @ d_res)
             + (lambda_anchor ** 2) * m_tilde0_S
         )
 
-        diagA = np.maximum(A_S.diagonal(), 1e-30)
-        M = _LO((n_S, n_S), matvec=lambda v: v / diagA)
-        m_tilde1_S, _info = _cg(A_S, b_S, rtol=cg_rtol, atol=0.0, maxiter=cg_maxiter, M=M)
+        m1_S = solve_local_region_cg(
+            A_S, b_S, _mw, n_S, cg_rtol=cg_rtol, cg_maxiter=cg_maxiter,
+            lo=susceptibility_min, hi=susceptibility_max)
 
-        m1_S = wz_inv_diag * m_tilde1_S
-        if susceptibility_min is not None:
-            m1_S = np.maximum(m1_S, float(susceptibility_min))
-        if susceptibility_max is not None:
-            m1_S = np.minimum(m1_S, float(susceptibility_max))
-
-        Wd_data_norm = max(float(np.linalg.norm(Wd @ data)), 1e-30)
-        pred_before = G_all @ m0_active
-        misfit_before = float(np.linalg.norm(Wd @ (pred_before - data))) / Wd_data_norm
+        misfit_before = relative_misfit(G_all @ m0_active, data, weight=Wd)
         m1_active = m0_active.copy()
         m1_active[S_local] = m1_S
-        pred_after = G_all @ m1_active
-        misfit_after = float(np.linalg.norm(Wd @ (pred_after - data))) / Wd_data_norm
+        misfit_after = relative_misfit(G_all @ m1_active, data, weight=Wd)
 
         model_full = np.array(m0, dtype=np.float64, copy=True)
         full_S = np.zeros(self.total_voxels, dtype=bool)
@@ -2527,10 +2357,11 @@ class MagnetometryInversion:
         # ── Depth weighting (cambio de variable Li & Oldenburg) por componente ─
         # Mismo Wz_inv para las 3 componentes (la profundidad es la misma).
         z0 = 0.5 * self.dy
-        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
-        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
-        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
-        Wz_inv = sp.diags(wz_inv_diag)
+        _mw = build_model_weights(
+            MODEL_WEIGHT_DEPTH, depths=y_c_active - topo_depth[active_cells],
+            z0=z0, depth_beta=depth_beta)
+        wz_inv_diag = _mw.diag
+        Wz_inv = _mw.W
 
         # ── Bloque de datos:  Wd · [Gx·Wz_inv | Gy·Wz_inv | Gz·Wz_inv] ───────
         Gx_s = (Wd @ Gx) @ Wz_inv
@@ -2782,10 +2613,11 @@ class MagnetometryInversion:
 
         # ── Depth weighting (cambio de variable Li & Oldenburg) ──────────────
         z0 = 0.5 * self.dy
-        true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
-        wz_inv_diag = (true_depth + z0) ** (0.5 * float(depth_beta))
-        wz_inv_diag = wz_inv_diag / np.mean(wz_inv_diag)
-        Wz_inv = sp.diags(wz_inv_diag)
+        _mw = build_model_weights(
+            MODEL_WEIGHT_DEPTH, depths=y_c_active - topo_depth[active_cells],
+            z0=z0, depth_beta=depth_beta)
+        wz_inv_diag = _mw.diag
+        Wz_inv = _mw.W
 
         # ── Suavidad (Laplaciano) escalada por Wz_inv ────────────────────────
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)

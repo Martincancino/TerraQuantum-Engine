@@ -1,0 +1,296 @@
+{
+  "filas": [
+    {
+      "depth_m": 150.0,
+      "n_body_cells": 12,
+      "lambda_escaner": 0.316,
+      "chi2_prometido_por_escaner": 1.0887197311765093,
+      "chi2_real_del_solve": 1.6529466604705338,
+      "ratio_real_sobre_prometido": 1.5182480974091475,
+      "chi2_real_sin_box": 1.0887197311810766,
+      "ratio_sin_box": 1.000000000004195,
+      "lambda_optimo_del_solver_real": 0.316,
+      "chi2_en_ese_lambda": 1.6529466604705338,
+      "el_escaner_acerto_el_lambda": true,
+      "barrido_solver": [
+        {
+          "lambda": 0.01,
+          "chi2_solver": 0.27650192685367914
+        },
+        {
+          "lambda": 0.0316,
+          "chi2_solver": 0.2781504440474584
+        },
+        {
+          "lambda": 0.1,
+          "chi2_solver": 0.42031437247980213
+        },
+        {
+          "lambda": 0.316,
+          "chi2_solver": 1.6529466604705338
+        },
+        {
+          "lambda": 1.0,
+          "chi2_solver": 14.67410330749378
+        },
+        {
+          "lambda": 3.16,
+          "chi2_solver": 48.5303768282419
+        },
+        {
+          "lambda": 10.0,
+          "chi2_solver": 74.58861815729308
+        }
+      ],
+      "trials_escaner": [
+        {
+          "lambda": 0.01,
+          "chi2_escaner": 0.00047229218931928147
+        },
+        {
+          "lambda": 0.0316,
+          "chi2_escaner": 0.003959254153174675
+        },
+        {
+          "lambda": 0.1,
+          "chi2_escaner": 0.0818982335342825
+        },
+        {
+          "lambda": 0.316,
+          "chi2_escaner": 1.0887197311765093
+        },
+        {
+          "lambda": 1.0,
+          "chi2_escaner": 11.470928366166941
+        },
+        {
+          "lambda": 3.16,
+          "chi2_escaner": 45.44702576610723
+        },
+        {
+          "lambda": 10.0,
+          "chi2_escaner": 74.4990132948646
+        }
+      ]
+    },
+    {
+      "depth_m": 350.0,
+      "n_body_cells": 12,
+      "lambda_escaner": 0.316,
+      "chi2_prometido_por_escaner": 0.33920380762506913,
+      "chi2_real_del_solve": 0.578028022287651,
+      "ratio_real_sobre_prometido": 1.704072918092242,
+      "chi2_real_sin_box": 0.33920380765691727,
+      "ratio_sin_box": 1.000000000093891,
+      "lambda_optimo_del_solver_real": 0.316,
+      "chi2_en_ese_lambda": 0.578028022287651,
+      "el_escaner_acerto_el_lambda": true,
+      "barrido_solver": [
+        {
+          "lambda": 0.01,
+          "chi2_solver": 0.008187130148098066
+        },
+        {
+          "lambda": 0.0316,
+          "chi2_solver": 0.032643589038806674
+        },
+        {
+          "lambda": 0.1,
+          "chi2_solver": 0.1614093837085095
+        },
+        {
+          "lambda": 0.316,
+          "chi2_solver": 0.578028022287651
+        },
+        {
+          "lambda": 1.0,
+          "chi2_solver": 5.587359628373789
+        },
+        {
+          "lambda": 3.16,
+          "chi2_solver": 43.37668919244464
+        },
+        {
+          "lambda": 10.0,
+          "chi2_solver": 128.4909462467089
+        }
+      ],
+      "trials_escaner": [
+        {
+          "lambda": 0.01,
+          "chi2_escaner": 8.102872273012101e-05
+        },
+        {
+          "lambda": 0.0316,
+          "chi2_escaner": 0.002742399477536382
+        },
+        {
+          "lambda": 0.1,
+          "chi2_escaner": 0.05328856537299524
+        },
+        {
+          "lambda": 0.316,
+          "chi2_escaner": 0.33920380762506913
+        },
+        {
+          "lambda": 1.0,
+          "chi2_escaner": 3.99489999803912
+        },
+        {
+          "lambda": 3.16,
+          "chi2_escaner": 39.746482733456205
+        },
+        {
+          "lambda": 10.0,
+          "chi2_escaner": 128.47834113329827
+        }
+      ]
+    },
+    {
+      "depth_m": 550.0,
+      "n_body_cells": 12,
+      "lambda_escaner": 1.0,
+      "chi2_prometido_por_escaner": 1.6413220149885073,
+      "chi2_real_del_solve": 2.2532016248864237,
+      "ratio_real_sobre_prometido": 1.372796809102814,
+      "chi2_real_sin_box": 1.6413220149833792,
+      "ratio_sin_box": 0.9999999999968756,
+      "lambda_optimo_del_solver_real": 1.0,
+      "chi2_en_ese_lambda": 2.2532016248864237,
+      "el_escaner_acerto_el_lambda": true,
+      "barrido_solver": [
+        {
+          "lambda": 0.01,
+          "chi2_solver": 0.0005977381456599601
+        },
+        {
+          "lambda": 0.0316,
+          "chi2_solver": 0.015652094033009482
+        },
+        {
+          "lambda": 0.1,
+          "chi2_solver": 0.12791510127463482
+        },
+        {
+          "lambda": 0.316,
+          "chi2_solver": 0.4210825170870493
+        },
+        {
+          "lambda": 1.0,
+          "chi2_solver": 2.2532016248864237
+        },
+        {
+          "lambda": 3.16,
+          "chi2_solver": 19.983119171963622
+        },
+        {
+          "lambda": 10.0,
+          "chi2_solver": 165.69838864208504
+        }
+      ],
+      "trials_escaner": [
+        {
+          "lambda": 0.01,
+          "chi2_escaner": 7.214762420207794e-05
+        },
+        {
+          "lambda": 0.0316,
+          "chi2_escaner": 0.0027076730846926677
+        },
+        {
+          "lambda": 0.1,
+          "chi2_escaner": 0.05228241479651105
+        },
+        {
+          "lambda": 0.316,
+          "chi2_escaner": 0.27703862823067454
+        },
+        {
+          "lambda": 1.0,
+          "chi2_escaner": 1.6413220149885073
+        },
+        {
+          "lambda": 3.16,
+          "chi2_escaner": 19.235054098927392
+        },
+        {
+          "lambda": 10.0,
+          "chi2_escaner": 165.69838864208444
+        }
+      ]
+    },
+    {
+      "depth_m": 750.0,
+      "n_body_cells": 12,
+      "lambda_escaner": 1.0,
+      "chi2_prometido_por_escaner": 0.8285815853480538,
+      "chi2_real_del_solve": 0.9284228321123184,
+      "ratio_real_sobre_prometido": 1.1204965793710286,
+      "chi2_real_sin_box": 0.8285815855268376,
+      "ratio_sin_box": 1.000000000215771,
+      "lambda_optimo_del_solver_real": 1.0,
+      "chi2_en_ese_lambda": 0.9284228321123184,
+      "el_escaner_acerto_el_lambda": true,
+      "barrido_solver": [
+        {
+          "lambda": 0.01,
+          "chi2_solver": 0.00044428904125512096
+        },
+        {
+          "lambda": 0.0316,
+          "chi2_solver": 0.012775135747401474
+        },
+        {
+          "lambda": 0.1,
+          "chi2_solver": 0.11515433480288398
+        },
+        {
+          "lambda": 0.316,
+          "chi2_solver": 0.3518189112854638
+        },
+        {
+          "lambda": 1.0,
+          "chi2_solver": 0.9284228321123184
+        },
+        {
+          "lambda": 3.16,
+          "chi2_solver": 8.795029945875989
+        },
+        {
+          "lambda": 10.0,
+          "chi2_solver": 204.49698130315767
+        }
+      ],
+      "trials_escaner": [
+        {
+          "lambda": 0.01,
+          "chi2_escaner": 7.11397004062248e-05
+        },
+        {
+          "lambda": 0.0316,
+          "chi2_escaner": 0.002702819406255735
+        },
+        {
+          "lambda": 0.1,
+          "chi2_escaner": 0.05207861412347758
+        },
+        {
+          "lambda": 0.316,
+          "chi2_escaner": 0.2638728545928015
+        },
+        {
+          "lambda": 1.0,
+          "chi2_escaner": 0.8285815853480538
+        },
+        {
+          "lambda": 3.16,
+          "chi2_escaner": 8.777009375282876
+        },
+        {
+          "lambda": 10.0,
+          "chi2_escaner": 204.49698130315758
+        }
+      ]
+    }
+  ]
+}

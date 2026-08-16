@@ -64,11 +64,17 @@ jobs:
         #    porque cuatro de sus tests llevan marca `slow` (invierten de verdad para
         #    demostrar que las perillas del solver no son decorativas) y `-m "not slow"`
         #    los deselecciona. Sin filtro corren, y el archivo entero mide 1 min 38 s.
+        #  · duplicación estructural (Fase 7, H-9): mide las ventanas duplicadas entre
+        #    los dos motores de física y falla si suben. La fase las bajó de 192 a 20;
+        #    el criterio de aceptación era <40. El gate existe porque el informe citaba
+        #    un `study_duplication.py` que NUNCA estuvo en el repositorio: sin medidor,
+        #    el criterio no era verificable y la duplicación podía volver sin ruido.
         run: |
           python scripts/ci/ast_budgets.py
           python scripts/ci/validation_inventory.py
           python scripts/ci/deps_closure.py
-          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py tests/test_fase5_superficie_config.py -q
+          python scripts/ci/study_duplication.py --gate
+          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py tests/test_fase5_superficie_config.py tests/test_fase7_nucleo_compartido.py tests/test_fase8_espina_dorsal.py -q
 
       - name: Canario de física (regresión W_z sobre esfera sintética)
         # H-4: la regresión física NUNCA corría automáticamente. Y el arreglo no
@@ -192,6 +198,31 @@ jobs:
           TQ_RUN_VALIDATION: "1"
         timeout-minutes: 45
         run: pytest tests/test_depth_prior_service.py -m validation -q
+
+      - name: Byte-identidad de los dos motores (Fase 7)
+        # Criterio de aceptación (b) de la Fase 7: «un solo bit de diferencia ⇒
+        # revertir». 34 configuraciones que recorren las ramas que la extracción
+        # compartida toca en los DOS motores —incluidas las rutas A y B del funcional
+        # magnético (H-33) y el solver Octree—, comparadas por SHA-256 sobre los bits
+        # de float64. Va en el nocturno y no en el job de PR porque re-invierte de
+        # verdad; en la máquina de desarrollo se corre a mano antes de tocar el motor:
+        #     python scripts/validation/fase7_byte_identity.py --check
+        # Una tolerancia esconderia justo el error que esta fase podia introducir
+        # (reordenar una multiplicacion cambia el ultimo bit, no el tercer decimal).
+        timeout-minutes: 30
+        run: python scripts/validation/fase7_byte_identity.py --check
+
+      - name: Byte-identidad del orquestador y del endpoint (Fase 8)
+        # El arnés de la Fase 7 mide los MOTORES y NO defiende lo que la Fase 8
+        # toca: se comprobó mutilando `run_geophysics_inversion` y dio 34/34 en
+        # verde. Éste llama al servicio y al endpoint reales sobre 28
+        # configuraciones y compara SHA-256 del payload canonicalizado Y de los
+        # bits de las columnas numéricas del parquet que queda en disco.
+        # Aísla el disco con TERRAQUANTUM_DATA_DIR y neutraliza el enriquecimiento
+        # R3 (sale a la red por el DEM): un gate de byte-identidad que depende de
+        # internet cría lobos y acaba desactivado.
+        timeout-minutes: 45
+        run: python scripts/validation/fase8_byte_identity.py --check
 
       - name: Gate F9 (re-invierte el motor real sobre los datasets canónicos)
         env:

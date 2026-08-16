@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 import numpy as np
@@ -10,6 +11,35 @@ from scipy.sparse.linalg import lsqr
 from scipy.spatial import cKDTree  # F0.2: HPC KDTree kernel híbrido
 
 from exploration.geophysics_weights import sigma_parametric as _shared_sigma_parametric
+from exploration.potential_field_core import (
+    MODEL_WEIGHT_SENSITIVITY,
+    SMALLNESS_IDENTITY_IN_TILDE,
+    SMALLNESS_SCALED_BY_W,
+    active_cells_from_topography,
+    build_model_weights,
+    declare_functional,
+    depth_row_weights,
+    estimate_cond_from_columns,
+    initial_irls_eps,
+    irls_focus_weights,
+    assemble_shuttle_ensemble,
+    build_smoothing_operator,
+    map_intervals_to_cells,
+    normal_equations,
+    observable_domain_mask,
+    relative_misfit,
+    combine_existing_and_new_data,
+    inject_extra_reg_blocks,
+    select_subregion,
+    split_region_response,
+    solve_local_region_cg,
+    validate_live_update_args,
+    woodbury_update_from_new_rows,
+    resolve_reference_model,
+    resolve_sigma,
+    robust_amplitude,
+)
+from exploration.potential_field_core import sigma_adaptive as _shared_sigma_adaptive
 
 logger = logging.getLogger(__name__)
 
@@ -96,34 +126,14 @@ def _sigma_adaptive(
     -------
     sigma : np.ndarray
     is_outlier : np.ndarray[bool]  — True for sensors flagged as outliers
+
+    FASE 7 (H-9): la aritmética vive ahora una sola vez, en
+    :func:`exploration.potential_field_core.sigma_adaptive`, compartida con el motor
+    magnético — que la tenía clonada línea a línea. Este wrapper conserva el defecto
+    `detect_outliers=True` de gravimetría, distinto del magnético (`False`), para que
+    la asimetría siga siendo visible en vez de esconderse dentro de la función común.
     """
-    g = np.asarray(g_observed, dtype=np.float64)
-
-    if detect_outliers:
-        median = np.median(g)
-        mad = np.median(np.abs(g - median))
-        sigma_est = 1.4826 * mad
-        outlier_threshold = 3.0 * sigma_est
-        is_outlier = np.abs(g - median) > outlier_threshold
-
-        if is_outlier.any():
-            clean_data = g[~is_outlier]
-            data_range = max(
-                float(np.percentile(clean_data, 95) - np.percentile(clean_data, 5)),
-                1e-30,
-            )
-        else:
-            data_range = max(float(np.max(g) - np.min(g)), 1e-30)
-    else:
-        data_range = max(float(np.max(g) - np.min(g)), 1e-30)
-        is_outlier = np.zeros(len(g), dtype=bool)
-
-    sigma = np.maximum(0.02 * np.abs(g), 0.01 * data_range)
-
-    if is_outlier.any():
-        sigma[is_outlier] = 10.0 * sigma[is_outlier]
-
-    return np.maximum(sigma, 1e-30), is_outlier
+    return _shared_sigma_adaptive(g_observed, detect_outliers=detect_outliers)
 
 
 def _sigma_parametric(g_observed: np.ndarray, noise_floor: float, noise_pct: float) -> np.ndarray:
@@ -1129,6 +1139,121 @@ class GravimetryForward:
         return kernel_sparse
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# FASE 8 — el solver partido
+# ═════════════════════════════════════════════════════════════════════════════
+# `solve_inversion_lsqr` medía 1.046 líneas, CC 124 y 38 argumentos. La auditoría
+# lo llama «el más delicado» de la fase y pone la condición: extraer **sin tocar
+# la aritmética**. Por eso los cuerpos de los helpers son las MISMAS líneas, no
+# una reescritura: un refactor que reordene una multiplicación cambia el último
+# bit, y aquí el criterio de aceptación es que no cambie ninguno.
+#
+# `_CfgLSQR` agrupa las perillas (lo que se pide) y `_EstadoLSQR` el estado
+# intermedio (lo que se va construyendo). Es la separación que pedía el paso 3
+# —«los mismos objetos de configuración del paso 2»— y lo que baja la firma de 38
+# argumentos a un puñado por helper.
+
+
+@dataclass
+class _CfgLSQR:
+    """Perillas de la corrida: fijas durante todo el solve."""
+    lambda_mag: float
+    alpha_spatial: float
+    density_min: float
+    density_max: float
+    noise_floor: float
+    noise_pct: float
+    detect_outliers: bool
+    padding_kappa: float
+    anchor_kappa: float
+    laplacian_relax_alpha: float
+    anchor_mode: str
+    auto_kappa: bool
+    regularization_norm: str
+    compact_eps: float
+    compact_max_irls: int
+    compact_tol: float
+    prune_observable_domain: bool
+    cut_cell_topography: bool
+    cutcell_min_fraction: float
+
+
+@dataclass
+class _EstadoLSQR:
+    """Lo que cada etapa construye para la siguiente.
+
+    Nombres SIN guion bajo inicial: dentro de los helpers se desempaquetan a los
+    locales originales (`_padding_active`, `_n_dead`, …) para que el cuerpo
+    copiado siga siendo el mismo texto.
+    """
+    # máscara activa
+    topo_depth: object = None
+    active_cells: object = None
+    n_active: int = 0
+    cell_fraction: object = None
+    cut_cell: bool = False
+    padding_active: object = None
+    padding_active_full: object = None
+    # kernel
+    G_active: object = None
+    n_sensors: int = 0
+    y_c_active: object = None
+    x_c_arr: object = None
+    z_c_arr: object = None
+    # anclajes y litología
+    anchor_active: object = None
+    anchor_contrast_active: object = None
+    litho_lb_active: object = None
+    litho_ub_active: object = None
+    has_anchors: bool = False
+    anchor_mode: str = "soft"
+    hard_anchor: bool = False
+    # poda del dominio observable
+    obs_in_active: object = None
+    n_dead: int = 0
+    n_obs_domain: int = 0
+    n_active_sol: int = 0
+    n_dead_core_a: int = 0
+    n_dead_pad_a: int = 0
+    topo_sol: object = None
+    # cadena de pesos
+    sigma: object = None
+    d_w: object = None
+    G_scaled: object = None
+    L_active: object = None
+    L_scaled: object = None
+    Ws: object = None
+    mw: object = None
+    lb_tilde: object = None
+    ub_tilde: object = None
+    normalized_sensitivity_active: object = None
+    # sistema aumentado
+    G_aug: object = None
+    d_aug: object = None
+    lambda_spatial: float = 0.0
+    lambda_mag_eff: float = 0.0
+    small_target: object = None
+    reg_norm: str = "l2"
+    # solución
+    m_tilde: object = None
+    acond: float = float("nan")
+    cond_A_est: object = None
+    lsqr_istop: object = None
+    lsqr_iters: object = None
+    compact_hist: object = None
+    padding_kappa_used: float = 0.0
+    anchor_kappa_used: float = 0.0
+    eps_floor: float = 0.0
+    # despacho REAL del solver (Fase 5: lo que pasó, no lo que se pidió)
+    solver_path_usado: object = None
+    bounded_usado: bool = False
+    bounded_pedido: bool = False
+    lsmr_usado: bool = False
+    proyectado_usado: bool = False
+    #: `solver_meta` del caller: el bucle IRLS escribe ahí el diagnóstico de FISTA
+    solver_meta_ref: object = None
+
+
 class GravimetryInversion:
     """
     INVERSE MODEL:
@@ -1279,9 +1404,8 @@ class GravimetryInversion:
         L  = self._build_laplacian()     # siempre uniforme en esta ruta legado
         z0 = self.dy / 2.0
         if y_c is not None:
-            w_depth = (np.asarray(y_c, dtype=np.float64) + z0) ** 2.0  # Li & Oldenburg 1998: β=2
-            w_reg   = 1.0 / w_depth
-            w_reg   = w_reg / np.mean(w_reg)
+            # Ruta legado: la profundidad es y_c crudo (sin restar topografía ni recortar).
+            w_reg = depth_row_weights(np.asarray(y_c, dtype=np.float64), z0, beta=2.0)
         else:
             w_reg = np.ones(self.total_voxels, dtype=np.float64)
         return sp.diags(w_reg) @ L
@@ -1364,44 +1488,39 @@ class GravimetryInversion:
 
         # ── Formal data weighting Wd — R-04: sigma adaptivo ──────────────────
         # Si el caller pasa valores distintos al default problemático, se respetan.
-        if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma, _ = _sigma_adaptive(g_observed, detect_outliers=False)
-        else:
-            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
+        sigma = resolve_sigma(g_observed, noise_floor, noise_pct, detect_outliers=False)
         Wd    = _sp.diags(1.0 / sigma)
         G_w   = Wd @ G_active
         d_w   = Wd @ g_observed
 
         # ── Column scaling Ws ─────────────────────────────────────────────────
-        col_norms = np.sqrt(G_w.power(2).sum(axis=0)).A1
-        col_norms = np.maximum(col_norms, 1e-12)
-        Ws        = _sp.diags(1.0 / col_norms)
+        _mw       = build_model_weights(MODEL_WEIGHT_SENSITIVITY, G_w=G_w)
+        col_norms = 1.0 / _mw.diag
+        Ws        = _mw.W
         G_scaled  = G_w @ Ws
 
-        # ── Laplaciano + depth weighting reducidos a celdas activas ───────────
+        # ── Laplaciano reducido a celdas activas ──────────────────────────────
         L_full   = self._build_laplacian(hx=hx, hy=hy, hz=hz)
         L_active = L_full.tocsr()[active_cells, :][:, active_cells]
-
-        z0 = self.dy / 2.0
-        true_depth = y_c_active - topo_depth[active_cells]
-        true_depth = np.clip(true_depth, a_min=1.0, a_max=None)
-        w_depth    = (true_depth + z0) ** 2.0   # Li & Oldenburg 1998: β=2 estándar industrial
-        w_reg      = 1.0 / w_depth
-        w_reg      = w_reg / np.mean(w_reg)
-        W_m        = _sp.diags(w_reg) @ L_active
-        L_scaled   = W_m @ Ws
+        L_scaled = L_active @ Ws
 
         n_sensors      = len(g_observed)
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
 
-        # ── H3 (causa J): trial consistente con solve_inversion_lsqr (tras H2) ──
-        # solve penaliza la smallness con diag(lambda_mag·w_reg)·m (mismo depth
-        # weighting que la suavidad). El trial de la L-curve debe usar la MISMA
-        # regularización: bloque diag(lam·w_reg)·Ws con damp=0, no damp=lam uniforme.
-        # La parte fija (datos + suavidad, no depende de lam) se construye una vez.
-        _Ws_wreg = _sp.diags(w_reg) @ Ws         # diag(w_reg)·Ws (smallness sin lam)
+        # ── FASE 7: el trial usa EL funcional que `solve_inversion_lsqr` resuelve ─
+        # Aquí vivía el bloque «H3 (causa J)», que alineaba el trial a la smallness
+        # `diag(lam·w_reg)·Ws` del solver *de entonces*. La Fase 4 la sustituyó por
+        # identidad en m̃ y este escáner se quedó atrás — el mismo desfase medido en
+        # `select_lambda_chi2_target` (ratio χ² de 23× a 12.700× según profundidad,
+        # `scripts/validation/fase7_lambda_identity_probe.py`).
+        #
+        # Con la smallness ya en identidad, la parte fija del sistema pasa a incluir
+        # datos y suavidad, y cada trial sólo apila `λ_eff·I` — con la calibración
+        # N_CALIB=256 que el solver aplica y este escáner ignoraba.
+        _N_CALIB_SCAN = 256
         _G_fixed = _sp.vstack([G_scaled, lambda_spatial * L_scaled]).tocsr()
         _d_fixed = np.concatenate([d_w, np.zeros(n_active, dtype=np.float64)])
+        _eye_n   = _sp.identity(n_active, format="csr", dtype=np.float64)
 
         # ── Barrido logarítmico de lambdas ────────────────────────────────────
         lambdas = np.logspace(
@@ -1415,7 +1534,8 @@ class GravimetryInversion:
 
         trials = []
         for lam in lambdas:
-            G_aug = _sp.vstack([_G_fixed, float(lam) * _Ws_wreg]).tocsr()
+            _lam_eff = float(lam) * np.sqrt(float(n_active) / _N_CALIB_SCAN)
+            G_aug = _sp.vstack([_G_fixed, _lam_eff * _eye_n]).tocsr()
             d_aug = np.concatenate([_d_fixed, np.zeros(n_active, dtype=np.float64)])
 
             res = lsqr(G_aug, d_aug, damp=0.0, iter_lim=150, show=False)
@@ -1426,11 +1546,15 @@ class GravimetryInversion:
             g_pred       = G_active @ m_phys
             misfit_norm  = float(np.linalg.norm(g_observed - g_pred))
 
-            # Roughness = seminorma del término que lam penaliza: ‖diag(w_reg)·m‖
-            # (smallness depth-weighted). Antes se medía ‖L_active·m‖ (suavidad,
-            # penalizada por lambda_spatial FIJO) — inconsistente con el parámetro
-            # lam que se varía, de modo que la esquina elegía un λ no-óptimo.
-            roughness_norm = float(np.linalg.norm(w_reg * m_phys))
+            # Roughness = seminorma del término que lam penaliza. Debe seguir al
+            # funcional: la smallness es identidad en m̃, y m̃ = diag(‖col_j‖)·m, así
+            # que en espacio físico el término penalizado es ‖col_j(W_d·G)‖·m_j — la
+            # ponderación por sensibilidad que la Fase 4 midió. Antes se medía
+            # ‖diag(w_reg)·m‖, coherente con un funcional que el solver ya no usa;
+            # y antes de eso, ‖L·m‖, penalizada por un λ_spatial FIJO que el barrido
+            # no varía. La esquina de la L-curve sólo significa algo si la seminorma
+            # es la del parámetro que se está moviendo.
+            roughness_norm = float(np.linalg.norm(col_norms * m_phys))
 
             logger.info(
                 f"  lambda={lam:.2e} | misfit={misfit_norm:.4e} | roughness={roughness_norm:.4e}"
@@ -1560,6 +1684,16 @@ class GravimetryInversion:
         hx=None, hy=None, hz=None,
         padding_mask=None,
         padding_kappa: float = 1e5,
+        # ── FASE 7: el sigma dejó de estar cableado ──────────────────────────
+        # El escáner llamaba a `_sigma_adaptive` sin pasar por los parámetros de
+        # ruido, así que su chi² se calculaba con un sigma distinto del que usa el
+        # solve — y chi² es literalmente `Σ(r/σ)²/n`. Los defaults son el centinela
+        # histórico `(0.02, 0.02)`, de modo que quien no los pase obtiene el sigma
+        # adaptativo de siempre; quien declare su ruido obtiene el mismo sigma que
+        # el solver, que es la condición para que los dos chi² sean comparables.
+        noise_floor: float = 0.02,
+        noise_pct: float = 0.02,
+        detect_outliers: bool = False,
     ) -> dict:
         """
         R-A2 — Selección de lambda por target chi² (post-auditoría).
@@ -1604,9 +1738,7 @@ class GravimetryInversion:
         )
 
         # ── R-05: Observable Domain (mismo filtro que solve_inversion_lsqr) ──
-        _col_sens_r05  = np.asarray(G_active.power(2).sum(axis=0)).ravel()
-        _sens_thr_r05  = 1e-6 * max(float(np.max(_col_sens_r05)), 1e-30)
-        _obs_in_active = _col_sens_r05 > _sens_thr_r05
+        _obs_in_active = observable_domain_mask(G_active)
         _n_obs_domain  = int(np.sum(_obs_in_active))
         _n_dead        = n_active - _n_obs_domain
         if _n_dead > 0:
@@ -1619,30 +1751,24 @@ class GravimetryInversion:
             _n_active_sol = n_active
 
         # ── Data weighting — R-04 sigma adaptivo ─────────────────────────────
-        sigma, _ = _sigma_adaptive(g_observed, detect_outliers=False)
+        sigma   = resolve_sigma(g_observed, noise_floor, noise_pct,
+                                detect_outliers=detect_outliers)
         Wd      = _sp.diags(1.0 / sigma)
         G_w     = Wd @ G_active
         d_w     = Wd @ g_observed
 
         # ── Column scaling ────────────────────────────────────────────────────
-        col_norms = np.sqrt(G_w.power(2).sum(axis=0)).A1
-        col_norms = np.maximum(col_norms, 1e-12)
-        Ws        = _sp.diags(1.0 / col_norms)
+        _mw       = build_model_weights(MODEL_WEIGHT_SENSITIVITY, G_w=G_w)
+        col_norms = 1.0 / _mw.diag
+        Ws        = _mw.W
         G_scaled  = G_w @ Ws
 
-        # ── Laplaciano + depth weighting reducidos a activas/observables ──────
+        # ── Laplaciano reducido a activas/observables ─────────────────────────
         L_full   = self._build_laplacian(hx=hx, hy=hy, hz=hz)
         L_active = L_full.tocsr()[active_cells, :][:, active_cells]
         if _n_dead > 0:
             L_active = L_active.tocsr()[_obs_in_active, :][:, _obs_in_active]
-        z0           = self.dy / 2.0
-        true_depth   = y_c_active - _topo_sol
-        true_depth   = np.clip(true_depth, a_min=1.0, a_max=None)
-        w_depth      = (true_depth + z0) ** 2.0
-        w_reg        = 1.0 / w_depth
-        w_reg        = w_reg / np.mean(w_reg)
-        W_m          = _sp.diags(w_reg) @ L_active
-        L_scaled     = W_m @ Ws
+        L_scaled     = L_active @ Ws
 
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
         G_aug = _sp.vstack([G_scaled, lambda_spatial * L_scaled]).tocsr()
@@ -1661,17 +1787,45 @@ class GravimetryInversion:
             f"chi²_target={chi2_target:.1f} | cond_max={cond_max:.0e}"
         )
 
-        # H3b (causa J): el trial debe usar la MISMA smallness depth-weighted que
-        # solve_inversion_lsqr (tras H2): diag(lam·w_reg)·Ws con damp=0. Antes el
-        # core usaba damp=lam (smallness uniforme) → el χ² del trial divergía ~700×
-        # del χ² real del solve, invalidando la calibración por chi²-target.
-        # padding conserva peso ABSOLUTO (padding_kappa·lam), no se relaja por prof.
+        # ── FASE 7: el escáner escanea EL funcional que el solver resuelve ────
+        # Aquí vivía el bloque «H3b (causa J)», que alineaba el trial a la smallness
+        # `diag(lam·w_reg)·Ws` del solver *de entonces* y dejaba escrito que sin esa
+        # alineación «el χ² del trial divergía ~700× del χ² real del solve».
+        #
+        # La Fase 4 quitó `w_reg` del solver —midió que ahí `Ws` cancelaba el peso—
+        # y NADIE actualizó este escáner: el desajuste que ese comentario documenta
+        # haber arreglado había vuelto, callado, por el mismo mecanismo.
+        #
+        # [MEDIDO, `scripts/validation/fase7_lambda_identity_probe.py`] antes de este
+        # cambio, con cuerpo sintético y Morozov re-eligiendo λ en cada profundidad:
+        #
+        #     prof     χ² prometido   χ² real del solve      ratio
+        #     150 m       2,084             48,53             23×
+        #     350 m       0,444            128,5             289×
+        #     550 m       0,0724           165,7           2.290×
+        #     750 m       0,0161           204,5          12.700×
+        #
+        # y en 0 de 4 casos el λ elegido fue el que el solver real habría elegido.
+        # El error CRECE con la profundidad, que es justo donde los dos funcionales
+        # más difieren — el mecanismo que §9D.2 planteó como hipótesis no descartada.
+        #
+        # Ahora el trial arma exactamente los tres bloques de `solve_inversion_lsqr`:
+        # datos `Wd·G·Ws`, suavidad `λ_sp·L·Ws` (sin `w_reg`) y smallness IDENTIDAD
+        # en m̃ con `λ_eff = λ·√(n/256)` — incluida la calibración N_CALIB, que el
+        # escáner tampoco aplicaba. `padding` conserva su peso absoluto `κ·λ_eff`.
+        #
+        # NOTA DE ALCANCE: producción NO usa este selector (lo rodea desde Tier 1 A2,
+        # escaneando con el solver real). Esto arregla el INSTRUMENTO DE DIAGNÓSTICO,
+        # que es lo que H-25 dejó abierto: un instrumento que mide con el operador
+        # equivocado es una trampa, no un instrumento.
+        _N_CALIB_SCAN = 256
         trials = []
         for lam in lambda_candidates:
-            _w_sm = float(lam) * w_reg
+            _lam_eff = float(lam) * np.sqrt(float(_n_active_sol) / _N_CALIB_SCAN)
+            _w_sm = np.full(_n_active_sol, _lam_eff, dtype=np.float64)
             if _padding_active is not None:
-                _w_sm = np.where(_padding_active, float(padding_kappa) * float(lam), _w_sm)
-            _sb   = _sp.diags(_w_sm) @ Ws
+                _w_sm = np.where(_padding_active, float(padding_kappa) * _lam_eff, _w_sm)
+            _sb   = _sp.diags(_w_sm)
             A_sys = _sp.vstack([G_aug, _sb]).tocsr()
             b_sys = np.concatenate([d_aug, np.zeros(_n_active_sol, dtype=np.float64)])
             res   = lsqr(A_sys, b_sys, damp=0.0,
@@ -1724,6 +1878,1154 @@ class GravimetryInversion:
                 f"cond(A)~{best['cond_A']:.2e} ({'OK' if best['feasible'] else 'COND_FAIL'})"
             ),
         }
+
+
+    def _lsqr_mascara_activa(self, cfg: "_CfgLSQR", est: "_EstadoLSQR", y_c,
+                             topography_elevations, kernel_sparse, sensor_coords,
+                             padding_mask):
+        """Topografía → celdas activas (binaria o cut-cell) y máscara de padding."""
+        cut_cell_topography = cfg.cut_cell_topography
+        cutcell_min_fraction = cfg.cutcell_min_fraction
+        padding_kappa = cfg.padding_kappa
+
+        # ── Máscara de celdas activas (topografía F0.8) ───────────────────────
+        if topography_elevations is None:
+            # Topografía plana en y=0: todas las celdas son subsuperficie
+            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
+        else:
+            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
+            if topo_depth.shape[0] != self.total_voxels:
+                raise ValueError(
+                    f"topography_elevations debe tener {self.total_voxels} elementos, "
+                    f"got {topo_depth.shape[0]}."
+                )
+
+        # y positivo hacia abajo: TECHO del vóxel = y_center - dy/2
+        # Activo (binario) = techo del vóxel a la misma profundidad o bajo la superficie.
+        voxel_top = y_c - (self.dy / 2.0)
+        _cut_cell = (
+            bool(cut_cell_topography)
+            and topography_elevations is not None
+            and kernel_sparse is None
+        )
+        cell_fraction = None
+        if _cut_cell:
+            # FASE 24B Tarea 4: topografía fraccionaria (cut-cell, anti-staircase).
+            # frac = porción del volumen de la celda que queda BAJO la superficie ∈[0,1].
+            # Interior (frac=1) idéntico al caso binario; celdas de borde (0<frac<1)
+            # entran como activas con peso parcial (antes eran 100% aire o 100% roca).
+            voxel_bottom = y_c + (self.dy / 2.0)
+            frac = np.clip((voxel_bottom - topo_depth) / float(self.dy), 0.0, 1.0)
+            active_cells = frac > float(cutcell_min_fraction)
+            cell_fraction = frac
+        else:
+            active_cells = voxel_top >= topo_depth
+        n_active = int(np.sum(active_cells))
+        n_air = self.total_voxels - n_active
+
+        if n_active == 0:
+            raise ValueError(
+                "Ningún vóxel activo bajo la topografía dada. "
+                "Revisa topography_elevations y la grilla."
+            )
+
+        # ── Fase 14: Sensores dentro de la malla (solo celdas activas) ──────────
+        # sensor_coords[:, 1] es la profundidad Y del sensor (positiva hacia abajo).
+        # Si y_sensor > (min_voxel_top + dy) el sensor está debajo del fondo de la
+        # capa más superficial → está claramente dentro del dominio → error.
+        # Umbral = top + dy (= fondo de la primera capa) para evitar falsos positivos
+        # cuando los sensores están al mismo nivel que el centro de la primera celda.
+        _sc_chk = np.asarray(sensor_coords, dtype=np.float64)
+        if _sc_chk.ndim == 2 and _sc_chk.shape[1] >= 3 and n_active > 0:
+            _sy = _sc_chk[:, 1]
+            _min_active_top = float(np.min(voxel_top[active_cells]))
+            _inside_thr = _min_active_top + float(self.dy)  # = fondo de primera capa
+            _n_inside = int(np.sum(_sy > _inside_thr))
+            if _n_inside > 0:
+                raise ValueError(
+                    f"{_n_inside} sensor(es) tienen coordenada Y "
+                    f"({float(np.max(_sy[_sy > _inside_thr])):.1f} m) "
+                    f"mayor que el fondo de la primera capa activa ({_inside_thr:.1f} m). "
+                    "Los sensores deben estar en la superficie, sobre la malla."
+                )
+
+        logger.info(
+            f"[INVERSIÓN F0.2] Active cells: {n_active:,} / {self.total_voxels:,} "
+            f"({100.0 * n_active / self.total_voxels:.1f}% activo, "
+            f"{n_air:,} celdas de aire enmascaradas)"
+        )
+
+        # ── R-02: Máscara de celdas de padding activas ───────────────────────
+        _padding_active = None
+        if padding_mask is not None:
+            _pm = np.asarray(padding_mask, dtype=bool)
+            if _pm.shape[0] != self.total_voxels:
+                raise ValueError(
+                    f"padding_mask debe tener longitud {self.total_voxels}, "
+                    f"got {_pm.shape[0]}."
+                )
+            _padding_active = _pm[active_cells]   # shape=(n_active,)
+            _n_pad_active  = int(np.sum(_padding_active))
+            _n_core_active = n_active - _n_pad_active
+            logger.info(
+                f"[R-02] Penalización diferencial padding: "
+                f"core={_n_core_active:,} | padding={_n_pad_active:,} | kappa={padding_kappa:.0e}"
+            )
+
+        est.topo_depth = topo_depth
+        est.active_cells = active_cells
+        est.n_active = n_active
+        est.cell_fraction = cell_fraction
+        est.cut_cell = _cut_cell
+        est.padding_active = _padding_active
+
+    def _lsqr_kernel_activo(self, est: "_EstadoLSQR", g_observed, y_c, x_c, z_c,
+                            kernel_sparse, forward_model, sensor_coords):
+        """G sobre celdas activas: kernel cacheado (joint) o construido con KDTree."""
+        active_cells = est.active_cells
+        cell_fraction = est.cell_fraction
+
+        n_sensors = len(g_observed)
+        y_c_active = y_c[active_cells]
+
+        # ── F0.2 HPC: G_active directamente sobre celdas activas ─────────────
+        # KDTree construido SOLO sobre celdas activas — sin fancy indexing global
+        x_c_arr = np.asarray(x_c, dtype=np.float64)
+        z_c_arr = np.asarray(z_c, dtype=np.float64)
+        if kernel_sparse is not None:
+            G_active = kernel_sparse
+            logger.debug("[GRAV] Usando kernel cacheado (sin reconstrucción).")
+        else:
+            G_active = forward_model._build_sparse_kernel(
+                x_c_arr[active_cells],
+                y_c_active,
+                z_c_arr[active_cells],
+                np.asarray(sensor_coords, dtype=np.float64),
+            )
+            if cell_fraction is not None:
+                # Cut-cell: cada columna del kernel se pondera por la fracción de
+                # volumen rocoso de su celda (la celda aporta proporcional a su masa).
+                _frac_active = cell_fraction[active_cells]
+                G_active = (G_active @ sp.diags(_frac_active)).tocsr()
+                _n_partial = int(np.sum((_frac_active > 0.0) & (_frac_active < 1.0)))
+                logger.info(f"[FASE 24B T4] cut-cell activo: {_n_partial:,} celdas fraccionarias ponderadas.")
+
+        est.n_sensors = n_sensors
+        est.y_c_active = y_c_active
+        est.x_c_arr = x_c_arr
+        est.z_c_arr = z_c_arr
+        est.G_active = G_active
+
+    def _lsqr_mapear_intervalos(self, est: "_EstadoLSQR", y_c, boreholes,
+                                lithology_bounds):
+        """Sondajes → celdas ancladas; litología → box por unidad. Mismo mapeo."""
+        active_cells = est.active_cells
+        x_c_arr = est.x_c_arr
+        z_c_arr = est.z_c_arr
+
+        # ── FASE 8 (Q4): Mapeo de vóxeles anclados por sondaje (full → active) ─
+        # Para cada intervalo se localiza la COLUMNA (x,z) cuyos centros caen dentro
+        # de la huella del vóxel (tolerancia dx/2) y luego el SEGMENTO vertical cuyos
+        # centros y_c ∈ [y_from, y_to]. Si el intervalo es más corto que dy (ningún
+        # centro cae dentro), se selecciona el vóxel de la columna más cercano al punto
+        # medio del intervalo (garantiza ≥1 vóxel anclado por intervalo válido).
+        _anchor_active = None
+        _anchor_contrast_active = None
+        if boreholes is not None and len(boreholes) > 0:
+            _bh = np.asarray(boreholes, dtype=np.float64)
+            if _bh.ndim != 2 or _bh.shape[1] != 5:
+                raise ValueError(
+                    "boreholes debe tener shape (n,5): "
+                    "[x_m, z_m, y_from_m, y_to_m, density_t_m3]."
+                )
+            _anchor_mask_full     = np.zeros(self.total_voxels, dtype=bool)
+            _anchor_contrast_full = np.zeros(self.total_voxels, dtype=np.float64)
+            for _seg, _val in map_intervals_to_cells(
+                boreholes, x_c_arr, y_c, z_c_arr,
+                total_voxels=self.total_voxels, tol_xz=self.dx / 2.0, n_cols=5,
+                nombre="boreholes",
+                mensaje_shape=("boreholes debe tener shape (n,5): "
+                               "[x_m, z_m, y_from_m, y_to_m, density_t_m3]."),
+            ):
+                _anchor_mask_full[_seg] = True
+                _anchor_contrast_full[_seg] = float(_val[0]) - self.base_density
+            _anchor_active          = _anchor_mask_full[active_cells]
+            _anchor_contrast_active = _anchor_contrast_full[active_cells]
+
+        # ── FASE 2.3: mapear bounds litológicos por unidad a celdas ───────────
+        # Espeja el mapeo de boreholes (misma tolerancia de columna + segmento
+        # vertical + fallback al vóxel más cercano). NaN = celda sin restricción
+        # litológica (usa el bound escalar global).
+        _litho_lb_active = None
+        _litho_ub_active = None
+        if lithology_bounds is not None and len(lithology_bounds) > 0:
+            _lba = np.asarray(lithology_bounds, dtype=np.float64)
+            if _lba.ndim != 2 or _lba.shape[1] != 6:
+                raise ValueError(
+                    "lithology_bounds debe tener shape (n,6): "
+                    "[x_m, z_m, y_from_m, y_to_m, dens_min, dens_max]."
+                )
+            _litho_lb_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
+            _litho_ub_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
+            for _seg, _val in map_intervals_to_cells(
+                lithology_bounds, x_c_arr, y_c, z_c_arr,
+                total_voxels=self.total_voxels, tol_xz=self.dx / 2.0, n_cols=6,
+                nombre="lithology_bounds",
+                mensaje_shape=("lithology_bounds debe tener shape (n,6): "
+                               "[x_m, z_m, y_from_m, y_to_m, dens_min, dens_max]."),
+            ):
+                _pmin, _pmax = float(_val[0]), float(_val[1])
+                if _pmax < _pmin:
+                    _pmin, _pmax = _pmax, _pmin
+                _litho_lb_full[_seg] = _pmin
+                _litho_ub_full[_seg] = _pmax
+            _litho_lb_active = _litho_lb_full[active_cells]
+            _litho_ub_active = _litho_ub_full[active_cells]
+
+        est.anchor_active = _anchor_active
+        est.anchor_contrast_active = _anchor_contrast_active
+        est.litho_lb_active = _litho_lb_active
+        est.litho_ub_active = _litho_ub_active
+
+    def _lsqr_podar_dominio(self, cfg: "_CfgLSQR", est: "_EstadoLSQR"):
+        """R-05: fuera las celdas con sensibilidad cero para TODOS los sensores."""
+        prune_observable_domain = cfg.prune_observable_domain
+        G_active = est.G_active
+        n_active = est.n_active
+        y_c_active = est.y_c_active
+        topo_depth = est.topo_depth
+        active_cells = est.active_cells
+        _padding_active = est.padding_active
+        _anchor_active = est.anchor_active
+        _anchor_contrast_active = est.anchor_contrast_active
+        _litho_lb_active = est.litho_lb_active
+        _litho_ub_active = est.litho_ub_active
+
+        # ── Solver Sanity Check ───────────────────────────────────────────────
+        if G_active.nnz == 0:
+            raise ValueError(
+                "Kernel vacío. Ningún vóxel activo tiene sensibilidad a los sensores. "
+                "Revisa el Bounding Box o la Topografía."
+            )
+
+        # ── R-05: Observable Domain — excluir vóxeles con sensibilidad cero ──
+        # Vóxeles más allá del cutoff_radius para TODOS los sensores tienen columnas
+        # cero en G_active. Incluirlos produce plateau de chi² por mínima norma y
+        # saturación espuria en density_min (confirmado auditoría R-05).
+        _col_sens_r05  = np.asarray(G_active.power(2).sum(axis=0)).ravel()
+        _sens_thr_r05  = 1e-6 * max(float(np.max(_col_sens_r05)), 1e-30)
+        if prune_observable_domain:
+            _obs_in_active = _col_sens_r05 > _sens_thr_r05    # (n_active,)
+        else:
+            # FASE 9C-1: poda desactivada (inversión conjunta). Toda celda activa se
+            # considera observable, de modo que el modelo conserva el tamaño completo
+            # de la malla activa y los bloques cross-gradient (sized a n_active) conforman.
+            _obs_in_active = np.ones(n_active, dtype=bool)
+        _dead_in_active = ~_obs_in_active
+        _n_obs_domain   = int(np.sum(_obs_in_active))
+        _n_dead         = n_active - _n_obs_domain
+
+        # Preservar máscara de padding COMPLETA para diagnóstico de saturación post-solver
+        _padding_active_full = _padding_active.copy() if _padding_active is not None else None
+        if _n_dead > 0:
+            # Conteo de muertos por zona (para solver_meta)
+            if _padding_active is not None:
+                _n_dead_core_a = int(np.sum(_dead_in_active & ~_padding_active))
+                _n_dead_pad_a  = int(np.sum(_dead_in_active &  _padding_active))
+            else:
+                _n_dead_core_a = _n_dead
+                _n_dead_pad_a  = 0
+            logger.info(
+                f"[R-05] Observable Domain: {_n_obs_domain:,}/{n_active:,} "
+                f"({100.0*_n_obs_domain/n_active:.1f}%) | "
+                f"Muertos (sens=0): {_n_dead:,} ({100.0*_n_dead/n_active:.1f}%) -> excluidos del solver"
+            )
+            G_active        = G_active[:, _obs_in_active]
+            y_c_active      = y_c_active[_obs_in_active]
+            _topo_sol       = topo_depth[active_cells][_obs_in_active]
+            if _padding_active is not None:
+                _padding_active = _padding_active[_obs_in_active]
+            if _anchor_active is not None:
+                _anchor_active          = _anchor_active[_obs_in_active]
+                _anchor_contrast_active = _anchor_contrast_active[_obs_in_active]
+            if _litho_lb_active is not None:
+                _litho_lb_active = _litho_lb_active[_obs_in_active]
+                _litho_ub_active = _litho_ub_active[_obs_in_active]
+            _n_active_sol   = _n_obs_domain
+        else:
+            _n_dead_core_a  = 0
+            _n_dead_pad_a   = 0
+            _topo_sol       = topo_depth[active_cells]
+            _n_active_sol   = n_active
+
+        est.G_active = G_active
+        est.y_c_active = y_c_active
+        est.topo_sol = _topo_sol
+        est.padding_active = _padding_active
+        est.padding_active_full = _padding_active_full
+        est.anchor_active = _anchor_active
+        est.anchor_contrast_active = _anchor_contrast_active
+        est.litho_lb_active = _litho_lb_active
+        est.litho_ub_active = _litho_ub_active
+        est.obs_in_active = _obs_in_active
+        est.n_dead = _n_dead
+        est.n_obs_domain = _n_obs_domain
+        est.n_active_sol = _n_active_sol
+        est.n_dead_core_a = _n_dead_core_a
+        est.n_dead_pad_a = _n_dead_pad_a
+
+    def _lsqr_cadena_de_pesos(self, cfg: "_CfgLSQR", est: "_EstadoLSQR", g_observed,
+                              hx, hy, hz):
+        """σ → W_d → peso de modelo → Laplaciano → bounds. La cadena que la Fase 4 midió."""
+        noise_floor = cfg.noise_floor
+        noise_pct = cfg.noise_pct
+        detect_outliers = cfg.detect_outliers
+        density_min = cfg.density_min
+        density_max = cfg.density_max
+        laplacian_relax_alpha = cfg.laplacian_relax_alpha
+        G_active = est.G_active
+        n_active = est.n_active
+        active_cells = est.active_cells
+        _n_dead = est.n_dead
+        _obs_in_active = est.obs_in_active
+        _has_anchors = est.has_anchors
+        _n_active_sol = est.n_active_sol
+        _anchor_active = est.anchor_active
+        _litho_lb_active = est.litho_lb_active
+        _litho_ub_active = est.litho_ub_active
+
+        # ── Formal Data Weighting Wd — R-04: Sigma Adaptivo ─────────────────
+        # noise_floor=0.02 en SI (m/s²) ≈ 2000 mGal >> señal típica (0.001–0.1 mGal).
+        # Se reemplaza por sigma_i = max(0.02·|d_i|, 0.01·data_range) — invariante
+        # de escala, basado en Li & Oldenburg 1998 / SimPEG noise_floor+relative_error.
+        # FASE 18: detect_outliers activa MAD; solo en el path sentinel (adaptive).
+        # Se respetan valores explícitos del caller (benchmark, L-curve) para backward compat.
+        if noise_floor == 0.02 and noise_pct == 0.02:
+            sigma, _is_outlier = _sigma_adaptive(g_observed, detect_outliers=detect_outliers)
+            if detect_outliers and _is_outlier.any():
+                logger.info(
+                    f"[SIGMA] Detected {int(_is_outlier.sum())} outliers "
+                    f"(MAD > 3σ). Downweighting by 10×"
+                )
+        else:
+            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
+        Wd    = sp.diags(1.0 / sigma)
+        G_w   = Wd @ G_active
+        d_w   = Wd @ g_observed
+
+        # ── Sensitivity DOI proxy (solo celdas observables) ─────────────────
+        _sensitivity_obs = np.sqrt(G_w.power(2).sum(axis=0)).A1   # shape (_n_active_sol,)
+        max_sens = float(np.max(_sensitivity_obs)) if len(_sensitivity_obs) > 0 else 0.0
+        _norm_sens_obs = _sensitivity_obs / max_sens if max_sens > 0 else np.zeros_like(_sensitivity_obs)
+        if _n_dead > 0:
+            sensitivity_active = np.zeros(n_active, dtype=np.float64)
+            sensitivity_active[_obs_in_active] = _sensitivity_obs
+            normalized_sensitivity_active = np.zeros(n_active, dtype=np.float64)
+            normalized_sensitivity_active[_obs_in_active] = _norm_sens_obs
+        else:
+            sensitivity_active = _sensitivity_obs
+            normalized_sensitivity_active = _norm_sens_obs
+
+        # ── Laplaciano no-uniforme reducido a celdas activas — F0.9 ──────────
+        # Si hx/hy/hz provienen del tensor mesh, los pesos reales de arista
+        # se propagan al Laplaciano, disipando correctamente en el padding.
+        L_full   = self._build_laplacian(hx=hx, hy=hy, hz=hz)
+        L_active = L_full.tocsr()[active_cells, :][:, active_cells]
+        if _n_dead > 0:
+            L_active = L_active.tocsr()[_obs_in_active, :][:, _obs_in_active]
+
+        # ── FASE 8: relajación local del Laplaciano en vóxeles anclados ───────
+        # Escalar las FILAS de los vóxeles anclados por alpha (<1) reduce el
+        # acoplamiento de suavidad que imponen sobre sus vecinos, mitigando halos /
+        # bullseyes; el valor del sondaje queda fijado por el strong soft constraint
+        # (smallness × kappa), no por el suavizado. row-scaling diagonal: diag(s)·L
+        # conserva la estructura CSR y no altera cond(A) materialmente.
+        if _has_anchors:
+            _lap_row_scale = np.ones(_n_active_sol, dtype=np.float64)
+            _lap_row_scale[_anchor_active] = float(laplacian_relax_alpha)
+            L_active = (sp.diags(_lap_row_scale) @ L_active).tocsr()
+
+        # ── Peso de modelo: ponderación por SENSIBILIDAD ─────────────────────────
+        # Aquí vivía un bloque titulado "H-A0 Bug 1: W_z formal (Li & Oldenburg 1998)"
+        # que decía implementar el depth weighting estándar con el parámetro
+        # `depth_beta`. La FASE 4 (auditoría 06 §10, hallazgo H-1) midió que no lo
+        # implementaba, y por qué. Esta es la demostración, en tres líneas:
+        #
+        #     Wz_inv   = diag((z+z0)^{+β/2})                     ← "depth weighting"
+        #     Ws       = diag(1/‖col_j(G_w·Wz_inv)‖)             ← se calculaba DESPUÉS
+        #              = diag(1/(w_j·‖col_j(G_w)‖))
+        #     Wz_inv·Ws = diag(1/‖col_j(G_w)‖)                   ← w_j se cancela
+        #
+        # `Ws` se computaba sobre el kernel YA pesado por `Wz`, así que deshacía
+        # exactamente lo que `Wz` acababa de hacer: la columna j del sistema quedaba en
+        # g_j/‖g_j‖, sin rastro de β. También los bounds: (d−base)/w_j · w_j‖g_j‖.
+        # Medido a precisión de máquina (1,7e-16) y luego E2E: mover β de 0 a 4 cambiaba
+        # la solución 2,5e-04 con TRF y 5,2e-06 con LSQR+GPCG — es decir, un residuo de
+        # PARADA TEMPRANA (depende del solver), no un efecto físico.
+        #
+        # LO QUE EL CÓDIGO APLICA DE VERDAD, y que este comentario ahora sí describe:
+        # el bloque de smallness penaliza ‖m̃‖² con m̃ = diag(‖col_j(W_d·G)‖)·m, o sea
+        #
+        #     φ_smallness = λ_eff² · Σ_j ( ‖col_j(W_d·G)‖ · m_j )²
+        #
+        # una ponderación por SENSIBILIDAD. Medida sobre la malla del producto, esa
+        # norma de columna resulta ser una ley de potencia limpia (desviación máx 5,3 %)
+        # equivalente a un Li & Oldenburg de **β ≈ 2,63** — la misma familia que el
+        # estándar industrial β=2, algo más agresiva. El problema que H-1 nombra no es
+        # que el peso tenga mala forma: es que **no es ajustable y no está declarado**,
+        # lo fija el kernel y no una decisión.
+        #
+        # `Ws` conserva además su papel algebraico legítimo: sin él λ=3.0 domina los
+        # datos ~14 000× (magnitudes SI) y se pierde la calibración N_CALIB=256.
+        # m̃ NO tiene interpretación física directa: m = Ws @ m̃.
+        #
+        # La Fase 4 midió la alternativa (separar `Ws` como precondicionador global y
+        # meter `(z+z0)^{−β/2}` como peso explícito) en 576 inversiones con Morozov
+        # re-eligiendo λ en cada brazo, y decidió NO cablearla — ver el registro de la
+        # fase. Instrumento: scripts/validation/wz_separation_probe.py.
+        # Invariante ejecutable: tests/test_fase4_depth_weighting.py.
+        _mw = build_model_weights(MODEL_WEIGHT_SENSITIVITY, G_w=G_w)
+        _col_norms_wz = 1.0 / _mw.diag              # ‖col_j(W_d·G)‖, acotada a 1e-12
+        Ws        = _mw.W                           # m = Ws @ m_tilde
+        G_scaled  = G_w @ Ws
+        L_scaled  = L_active @ Ws
+        # Bounds: el box físico [density_min, density_max] llevado a m̃ con la MISMA
+        # biyección que recupera la densidad (m̃_j = ‖col_j‖ · m_j). Es exacta.
+        _lb_tilde = (float(density_min) - self.base_density) * _col_norms_wz
+        _ub_tilde = (float(density_max) - self.base_density) * _col_norms_wz
+
+        # ── FASE 2.3: override de bounds por unidad litológica (membership dura) ─
+        # En las celdas con litología conocida, reemplaza el box escalar global por
+        # el box [dens_min, dens_max] de su unidad, transformado al espacio m_tilde
+        # con la MISMA transformación que el bound global. El solver con bounds
+        # (TRF/FISTA proyectado) lo impone satisfaciendo KKT por celda.
+        if _litho_lb_active is not None:
+            _ml = np.isfinite(_litho_lb_active)
+            if _ml.any():
+                _cn_l = _col_norms_wz[_ml]
+                _lb_tilde[_ml] = (_litho_lb_active[_ml] - self.base_density) * _cn_l
+                _ub_tilde[_ml] = (_litho_ub_active[_ml] - self.base_density) * _cn_l
+                logger.info(
+                    f"[FASE 2.3] Bounds litológicos por unidad aplicados a "
+                    f"{int(_ml.sum()):,} celda(s) (membership dura, KKT)."
+                )
+
+        est.sigma = sigma
+        est.d_w = d_w
+        est.normalized_sensitivity_active = normalized_sensitivity_active
+        est.L_active = L_active
+        est.mw = _mw
+        est.Ws = Ws
+        est.G_scaled = G_scaled
+        est.L_scaled = L_scaled
+        est.lb_tilde = _lb_tilde
+        est.ub_tilde = _ub_tilde
+
+    def _lsqr_ensamblar_sistema(self, cfg: "_CfgLSQR", est: "_EstadoLSQR", m_ref,
+                                extra_reg_blocks, extra_reg_rhs):
+        """G_aug / d_aug: datos + suavidad + bloques externos + anclaje duro."""
+        alpha_spatial = cfg.alpha_spatial
+        lambda_mag = cfg.lambda_mag
+        regularization_norm = cfg.regularization_norm
+        n_sensors = est.n_sensors
+        n_active = est.n_active
+        active_cells = est.active_cells
+        _obs_in_active = est.obs_in_active
+        _n_dead = est.n_dead
+        _has_anchors = est.has_anchors
+        _hard_anchor = est.hard_anchor
+        _anchor_active = est.anchor_active
+        _anchor_contrast_active = est.anchor_contrast_active
+        _n_active_sol = est.n_active_sol
+        L_active = est.L_active
+        G_scaled = est.G_scaled
+        L_scaled = est.L_scaled
+        d_w = est.d_w
+        _mw = est.mw
+        Ws = est.Ws
+
+        # ── Sistema augmentado ────────────────────────────────────────────────
+        lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
+
+        # ── Modelo de referencia m_ref (Li & Oldenburg 1999) ──────────────────
+        # L_scaled = L_active @ Ws; m = Ws @ m_tilde.
+        # Residual de regularización: λ_spatial · L_active · (m − m_ref).
+        # RHS de las filas de regularización: λ_spatial · L_active · m_ref.
+        # m_ref is None → d_reg = 0 → idéntico al solver sin referencia.
+        # m_ref_sol vive en espacio observable (densidad contraste).
+        m_ref_sol = resolve_reference_model(
+            m_ref, total_voxels=self.total_voxels, n_active=n_active,
+            active_cells=active_cells, obs_in_active=_obs_in_active, n_dead=_n_dead)
+
+        # FASE 8: inyectar anclajes de sondaje en la referencia (override por celda).
+        #   m_ref[j] = densidad_sondaje - base_density  para los vóxeles anclados.
+        # Esto desplaza el RHS de la regularización (suavidad) hacia el valor del
+        # sondaje; el smallness con κ (abajo) lo fija con fuerza.
+        if _has_anchors:
+            if m_ref_sol is None:
+                m_ref_sol = np.zeros(_n_active_sol, dtype=np.float64)
+            else:
+                m_ref_sol = m_ref_sol.copy()
+            m_ref_sol[_anchor_active] = _anchor_contrast_active[_anchor_active]
+
+        if m_ref_sol is None:
+            d_reg = np.zeros(_n_active_sol, dtype=np.float64)
+        else:
+            d_reg = lambda_spatial * (L_active @ m_ref_sol)
+
+        G_aug = sp.vstack([G_scaled, lambda_spatial * L_scaled]).tocsr()
+        d_aug = np.concatenate([d_w, d_reg])
+
+        # ── FASE 9C-1: inyección de regularización externa (cross-gradient) ───
+        # Los bloques llegan en ESPACIO FÍSICO del modelo (m); el solver trabaja en
+        # la variable escalada m_tilde con m = Ws·m_tilde, de modo que cada bloque B
+        # se convierte vía B·Ws (igual que L_scaled = L_active·Ws). El RHS se apila tal
+        # cual (vive en el espacio de residual del bloque). Joint v1.1: el caller
+        # recorta B[:, obs_mask] antes de pasar → B.shape[1] = n_active_sol (post-poda).
+        if extra_reg_blocks:
+            G_aug, d_aug = inject_extra_reg_blocks(
+                G_aug, d_aug, extra_reg_blocks, extra_reg_rhs, _mw,
+                hint_mask="obs_mask_g")
+            logger.info(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
+
+        # H-A0 Bug 2: lambda scaling con n_active (calibrado a N_CALIB=256).
+        # La smallness es uniforme en m_tilde; solo se escala la magnitud.
+        _N_CALIB = 256
+        lambda_mag_eff = float(lambda_mag) * np.sqrt(float(_n_active_sol) / _N_CALIB)
+
+        logger.info(
+            f"[INVERSIÓN F0.2] Ejecutando LSQR. "
+            f"lambda_mag={lambda_mag:.2e} | lambda_mag_eff={lambda_mag_eff:.2e} "
+            f"| lambda_spatial={lambda_spatial:.2e}"
+        )
+
+        # ── Regularización compuesta ─────────────────────────────────────────
+        #   φ_m = ‖ lambda_spatial · L_active · Ws · (m_tilde − m_ref_tilde) ‖²   (suavidad)
+        #       + ‖ diag(lambda_mag_eff) · m_tilde ‖²   (smallness en espacio transformado)
+        # La suavidad opera sobre el contraste FÍSICO (L_active·Ws·m̃ = L_active·m).
+        # La smallness es identidad en m̃, que en espacio físico equivale a pesar por
+        # ‖col_j(W_d·G)‖ — la ponderación por sensibilidad descrita arriba.
+        # padding (R-02) y anclajes (FASE 8) usan RHS en espacio m_tilde.
+        # RHS de smallness: 0 (core/padding → hacia base_density) excepto celdas
+        # ancladas, que apuntan al contraste medido del sondaje. El residual de la
+        # fila i es w_i·(contraste_i − target_i), por lo que d_small_i = w_i·target_i.
+        _small_target = np.zeros(_n_active_sol, dtype=np.float64)
+        if _has_anchors:
+            # FASE 25B: el target de anclaje vive en CONTRASTE FÍSICO (t/m³), pero el
+            # bloque smallness opera en m_tilde con  m = base_density + Ws·m_tilde.
+            # Para que la densidad recuperada en la celda anclada sea
+            #   base_density + contraste_medido
+            # el target en m_tilde debe ser  contraste / diag(Ws)  usando el MISMO
+            # Ws que mapea m_tilde→m. Es exactamente la misma transformación que los
+            # bounds de arriba: bound_tilde = (densidad − base) · ‖col_j‖. Sin ella,
+            # anclar m_tilde→contraste deja la densidad en base + diag·contraste ≈ base
+            # — el bug medido E2E en Fase 25.
+            # NOTA: NO se toca m_ref_sol: la suavidad opera como
+            # L_active·(Ws·m_tilde − m_ref) = L_active·(m_phys − m_ref), por lo que
+            # ahí el contraste físico es el espacio CORRECTO.
+            _ws_diag = np.asarray(Ws.diagonal(), dtype=np.float64)
+            # Protección contra división por cero: diag(Ws) = 1/‖col_j‖ es estrictamente
+            # > 0 por construcción (‖col‖ está acotada a 1e-12), pero se blinda igual.
+            _wz_safe = np.where(np.abs(_ws_diag) < 1e-12, 1e-12, _ws_diag)
+            _small_target[_anchor_active] = (
+                _anchor_contrast_active[_anchor_active] / _wz_safe[_anchor_active]
+            )
+
+        # ── FASE 2.1: Anclaje DURO (hard constraint por eliminación de variables) ─
+        # En modo "hard" las celdas ancladas se FIJAN exactamente a su valor de
+        # sondaje: el valor objetivo en m_tilde es _small_target (= contraste/diag(Ws),
+        # de modo que Ws·m_tilde = contraste exacto). Se elimina la celda del sistema
+        # moviendo su contribución G_aug[:,j]·target al RHS y anulando la columna j; tras
+        # resolver se reinyecta el valor exacto. Sin error residual de smallness (~2% soft).
+        if _hard_anchor:
+            _anchor_idx = np.where(_anchor_active)[0]
+            _t_fix = _small_target[_anchor_idx]
+            d_aug = d_aug - np.asarray(G_aug[:, _anchor_idx] @ _t_fix).ravel()
+            _keep_cols = sp.diags((~_anchor_active).astype(np.float64))
+            G_aug = (G_aug @ _keep_cols).tocsr()
+            logger.info(
+                f"[FASE 2.1] Anclaje DURO: {_anchor_idx.size:,} celda(s) eliminada(s) "
+                f"del sistema (valor exacto del sondaje, sin smallness soft)."
+            )
+
+        # ── FASE 24B Tarea 1: control de norma de regularización ──────────────
+        # L2 → un único solve idéntico al motor histórico (n_irls=1, focus=None).
+        # compact/mixed → bucle IRLS de minimum support sobre la smallness.
+        _reg_norm = str(regularization_norm).lower()
+        if _reg_norm not in ("l2", "compact", "mixed"):
+            raise ValueError(
+                f"regularization_norm inválido: {regularization_norm!r}. "
+                f"Use 'L2', 'compact' o 'mixed'."
+            )
+
+        est.lambda_spatial = lambda_spatial
+        est.G_aug = G_aug
+        est.d_aug = d_aug
+        est.lambda_mag_eff = lambda_mag_eff
+        est.small_target = _small_target
+        est.reg_norm = _reg_norm
+
+    def _lsqr_despachar_solver(self, cfg: "_CfgLSQR", est: "_EstadoLSQR",
+                               _G_aug_sm, _d_aug_sm, _flags, _irls_it,
+                               _lsqr_istop, _lsqr_iters):
+        """Elige y corre el solver: TRF/bounded, LSMR o LSQR+clip, y luego FISTA.
+
+        Vive aparte porque es la única parte del bucle IRLS que decide ALGO: qué
+        maquinaria resuelve. `_lsqr_istop`/`_lsqr_iters` entran y salen como
+        parámetros —y no por el contenedor— porque en el original persisten entre
+        iteraciones del IRLS: sólo la rama LSQR los escribe, y las otras conservan
+        el valor anterior. Sembrarlos con `None` en cada vuelta habría cambiado el
+        `lsqr_converged` que publica la corrida.
+        """
+        _USE_BC, _USE_LSMR, _LSMR_THRESH, _USE_PGD = _flags
+        _n_active_sol = est.n_active_sol
+        _reg_norm = est.reg_norm
+        lambda_mag_eff = est.lambda_mag_eff
+        _lb_tilde = est.lb_tilde
+        _ub_tilde = est.ub_tilde
+        solver_meta = est.solver_meta_ref
+        _proyectado_usado = False
+
+        # Benchmark empírico (2026-06-01): TRF+LSMR ~40s con NNZ≈213K y n_active≈14K;
+        # LSQR <0.1s. Umbral 8000 (HITO 5): demo (~800), medium CSV (~5K) y DOI test
+        # (~5K) usan TRF bounded; auto_grid (>8K) usa LSQR+clip como fallback.
+        # Fase 10: LSMR para n_active > 50K (mejor convergencia en sistemas mal condicionados).
+        _use_trf = _USE_BC and _n_active_sol <= 8_000
+        _use_lsmr = (not _use_trf) and _USE_LSMR and (_n_active_sol > _LSMR_THRESH)
+        if _use_trf:
+            _solver_label = "TRF/bounded"
+        elif _use_lsmr:
+            _solver_label = f"LSMR (Fase10, n>{_LSMR_THRESH:,})"
+        else:
+            _solver_label = "LSQR+clip"
+        # Fase 5 (H-11): recordar el despacho REAL para publicarlo abajo.
+        # El reporte del servicio traía `bounded_solver_active` calculado con
+        # `os.getenv("USE_BOUNDED_SOLVER")`, que es lo que se PIDIÓ. Medido con
+        # 8.712 celdas activas y la variable sin tocar: el solver despachó
+        # `LSQR+clip` y el reporte afirmaba `true`. Y no es un caso de borde —
+        # el umbral son 8.000 celdas y el producto declara mallas de 30k-100k
+        # vóxeles, así que en el régimen normal el campo estaba SIEMPRE mal.
+        # `validation/runner.py` lo lee para caracterizar cada corrida: era
+        # evidencia de validación contaminada.
+        #
+        # Se anota en LOCALES, no en `solver_meta` aquí: un `if solver_meta is
+        # not None` en este punto añadía una rama a `solve_inversion_lsqr`, que
+        # ya tiene CC=143 y es la función que la Fase 8 tiene que partir. El
+        # bloque de más abajo ya está guardado; escribir allí cuesta cero ramas.
+        # (El bucle IRLS corre siempre al menos una vez —`_n_irls = max(1, …)`—
+        # así que estos nombres existen después, con el despacho de la última
+        # iteración, que es el que produjo el modelo que se devuelve.)
+        _solver_path_usado   = _solver_label
+        _bounded_usado       = bool(_use_trf)
+        _bounded_pedido      = bool(_USE_BC)
+        _lsmr_usado          = bool(_use_lsmr)
+        _proyectado_usado    = False   # FISTA corre después del solve; lo pone a True
+        _norm_tag = f"norm={_reg_norm}" + (f"/irls{_irls_it}" if _reg_norm != "l2" else "")
+        logger.info(
+            f"[SOLVER] G_aug=({_G_aug_sm.shape[0]:,}×{_G_aug_sm.shape[1]:,}) "
+            f"n_active_sol={_n_active_sol:,} NNZ={_G_aug_sm.nnz:,} "
+            f"smallness=sensibilidad(||col_j||) lambda_eff={lambda_mag_eff:.2e} "
+            f"{_norm_tag} -> {_solver_label}"
+        )
+        _t_solve = time.perf_counter()
+        if _use_trf:
+            from scipy.optimize import lsq_linear as _lsq_linear
+            _bc = _lsq_linear(
+                _G_aug_sm, _d_aug_sm,
+                bounds=(_lb_tilde, _ub_tilde),
+                method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
+            )
+            m_tilde = _bc.x
+            _acond = float('nan')
+            logger.info(f"[SOLVER] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
+        else:
+            # Fase 6 (H-2): aquí vivía el path `USE_SPARSE_DIRECT` (SuperLU sobre
+            # ecuaciones normales, Sprint 5A). Llamaba a `solve_sparse_normal_equations`,
+            # un símbolo que NO existe en el repositorio: con el flag en true la
+            # inversión abortaba con NameError después de construir el kernel.
+            # Se borró en vez de repararse: formar A^T A eleva cond(A) al cuadrado
+            # (la "lección Sprint 5A" que el propio comentario de LSMR cita más abajo).
+            if _use_lsmr:
+                # Fase 10: LSMR para n_active > 50K.
+                # Fong & Saunders (2011): residuo ||r|| monotónicamente decreciente,
+                # mejor estabilidad numérica que LSQR para sistemas mal condicionados.
+                # NO forma A^T A explícitamente (lección Sprint 5A).
+                from exploration.solver_preconditioned import solve_inversion_lsmr as _lsmr_solve
+                m_tilde, _acond = _lsmr_solve(
+                    _G_aug_sm, _d_aug_sm, _lb_tilde, _ub_tilde,
+                    maxiter=1000, tol=1e-8,
+                )
+                logger.info(
+                    f"[SOLVER] LSMR (Fase 10) convergido en "
+                    f"{time.perf_counter()-_t_solve:.1f}s. "
+                    f"cond(A)~{_acond:.2e}"
+                )
+            else:
+                result = lsqr(
+                    _G_aug_sm, _d_aug_sm,
+                    damp=0.0,
+                    iter_lim=500, atol=1e-8, btol=1e-8, show=False,
+                )
+                m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
+                _acond = result[6]
+                # FASE 7: `istop`/`itn` se tiraban. `istop=7` = se agoto el limite
+                # de iteraciones, o sea una corrida que NO convergio; publicarlo es
+                # la diferencia entre "el solver llego" y "el solver se rindio".
+                _lsqr_istop, _lsqr_iters = int(result[1]), int(result[2])
+                logger.info(
+                    f"[SOLVER] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
+                    f"cond(A)~{_acond:.2e}"
+                )
+
+            # ── Tier 1 A1: FISTA proyectado (bounds reales para n>8K) ─────
+            # El clip post-hoc descarta masa fuera del box sin redistribuir
+            # (misfit degradado ~35% en cuerpos compactos). FISTA parte del
+            # clip como warm start → el objetivo solo puede mejorar; rollback
+            # exacto con USE_PROJECTED_SOLVER=false.
+            if _USE_PGD:
+                from exploration.solver_preconditioned import solve_inversion_pgd_fista
+                _t_pgd = time.perf_counter()
+                m_tilde, _pgd_info = solve_inversion_pgd_fista(
+                    _G_aug_sm, _d_aug_sm, _lb_tilde, _ub_tilde, x0=m_tilde,
+                )
+                logger.info(
+                    f"[SOLVER] FISTA proyectado en {time.perf_counter()-_t_pgd:.1f}s "
+                    f"(post-{'LSMR' if _use_lsmr else 'LSQR'}+warm-start)."
+                )
+                _proyectado_usado = True   # Fase 5: lo que PASÓ, no lo que se pidió
+                if solver_meta is not None:
+                    solver_meta["pgd"] = _pgd_info
+
+        return (m_tilde, _acond, _lsqr_istop, _lsqr_iters, _solver_path_usado,
+                _bounded_usado, _bounded_pedido, _lsmr_usado, _proyectado_usado)
+
+
+    def _lsqr_resolver_irls(self, cfg: "_CfgLSQR", est: "_EstadoLSQR"):
+        """Bucle IRLS + despacho del solver (TRF / LSMR / LSQR+clip → FISTA).
+
+        Las closures `_mk_small` y `_assemble` se quedan CON el bucle a propósito:
+        leen `_focus_w` del scope y el bucle lo reasigna en cada reponderación.
+        Sacarlas obligaría a parametrizarlas — o sea, a reescribir el ensamblado,
+        que es justo lo que esta fase no puede hacer.
+        """
+        padding_kappa = cfg.padding_kappa
+        anchor_kappa = cfg.anchor_kappa
+        auto_kappa = cfg.auto_kappa
+        compact_eps = cfg.compact_eps
+        compact_tol = cfg.compact_tol
+        compact_max_irls = cfg.compact_max_irls
+        lambda_mag = cfg.lambda_mag
+        density_min = cfg.density_min
+        density_max = cfg.density_max
+        solver_meta = est.solver_meta_ref
+        _n_active_sol = est.n_active_sol
+        _padding_active = est.padding_active
+        _has_anchors = est.has_anchors
+        _hard_anchor = est.hard_anchor
+        _anchor_active = est.anchor_active
+        lambda_spatial = est.lambda_spatial
+        lambda_mag_eff = est.lambda_mag_eff
+        L_scaled = est.L_scaled
+        G_aug = est.G_aug
+        d_aug = est.d_aug
+        _small_target = est.small_target
+        _reg_norm = est.reg_norm
+        _lb_tilde = est.lb_tilde
+        _ub_tilde = est.ub_tilde
+        Ws = est.Ws
+
+        _n_irls = 1 if _reg_norm == "l2" else max(1, int(compact_max_irls))
+
+        # Celdas "libres" del núcleo: el foco minimum-support se aplica SOLO aquí.
+        # Padding (R-02) y anclajes (FASE 8) conservan su rol de restricción fuerte L2.
+        _free_mask = np.ones(_n_active_sol, dtype=bool)
+        if _padding_active is not None:
+            _free_mask &= ~_padding_active
+        if _has_anchors:
+            _free_mask &= ~_anchor_active
+
+        # Operador de suavidad para edge-focusing en modo "mixed".
+        _smooth_op_mixed = (lambda_spatial * L_scaled).tocsr()
+
+        _focus_w = None      # foco minimum-support (smallness); None ≡ L2
+        _srw     = None      # peso edge-preserving de suavidad (solo "mixed")
+        _eps     = None
+        _eps_floor = max(float(compact_eps), 1e-3)
+
+        def _mk_small(_pk, _ak):
+            """Smallness en m_tilde: lambda_mag_eff con kappas y foco IRLS.
+            Lee _focus_w del scope (se reasigna por iteración)."""
+            w = np.full(_n_active_sol, lambda_mag_eff, dtype=np.float64)
+            if _padding_active is not None:
+                w = np.where(_padding_active, float(_pk) * lambda_mag_eff, w)
+            if _has_anchors:
+                # FASE 2.1: en modo hard la celda anclada ya fue eliminada (columna
+                # nula); su smallness debe ser 0 (no penalizar un DOF inexistente).
+                _aw = 0.0 if _hard_anchor else float(_ak) * lambda_mag_eff
+                w = np.where(_anchor_active, _aw, w)
+            if _focus_w is not None:
+                w = np.where(_free_mask, w * _focus_w, w)
+            return w
+
+        def _assemble(_pk, _ak):
+            """Ensambla (_G_aug_sm, _d_aug_sm) con smallness + (mixed) suavidad enfocada."""
+            _ws = _mk_small(_pk, _ak)
+            _stack = [G_aug, sp.diags(_ws)]
+            _rhs   = [d_aug, _ws * _small_target]
+            if _reg_norm == "mixed" and _srw is not None:
+                # Edge-preserving (experimental): refuerza la suavidad donde el modelo
+                # es plano y la relaja en los bordes. Factor 0.5 evita sobre-suavizar
+                # (la suavidad base ya vive en G_aug). RHS = 0 (rugosidad → 0).
+                _stack.append(0.5 * (sp.diags(_srw) @ _smooth_op_mixed))
+                _rhs.append(np.zeros(_smooth_op_mixed.shape[0], dtype=np.float64))
+            return sp.vstack(_stack).tocsr(), np.concatenate(_rhs), _ws
+
+        # ── FASE 8, paso 4: la configuración se resuelve UNA VEZ, aquí arriba ──
+        # Antes estos tres `from core.config import ...` vivían DENTRO del bucle
+        # IRLS: se re-ejecutaban en cada reponderación y ataban el despacho del
+        # solver a un import escondido a 700 líneas de la firma.
+        #
+        # No suben a nivel de MÓDULO, y no es olvido: `wz_separation_probe.py`,
+        # `wz_beta_liveness_gravimetry.py`, `fase7_byte_identity.py`,
+        # `tests/generate_validation_report.py` y `test_benchmark_checkerboard.py`
+        # fijan estas perillas escribiendo el ATRIBUTO de `core.config` justo antes
+        # de llamar (uno de ellos hasta lo documenta: «gravimetry lo importa dentro
+        # del bucle»). Un import a nivel de módulo congelaría el valor en el
+        # arranque y esas sondas medirían en silencio la configuración equivocada
+        # — el mismo modo de fallo que la Fase 5 encontró en `bounded_solver_active`.
+        # Leerlo una vez por llamada conserva ese contrato y saca el import del
+        # interior del solver, que es lo que pedía la fase.
+        from core.config import USE_BOUNDED_SOLVER as _USE_BC
+        from core.config import USE_LSMR_LARGE as _USE_LSMR, LSMR_THRESHOLD_N_ACTIVE as _LSMR_THRESH
+        from core.config import USE_PROJECTED_SOLVER as _USE_PGD
+
+        # Diagnósticos de la última iteración (expuestos vía solver_meta).
+        _padding_kappa_used = float(padding_kappa)
+        _anchor_kappa_used  = float(anchor_kappa)
+        cond_A_est          = None
+        _lsqr_istop         = None
+        _lsqr_iters         = None
+        m_tilde             = None
+        _acond              = float("nan")
+        _compact_hist: list = []
+
+        for _irls_it in range(_n_irls):
+            _G_aug_sm, _d_aug_sm, _w_small = _assemble(padding_kappa, anchor_kappa)
+
+            # ── FASE 16: Dynamic Kappa Adaptation ─────────────────────────────
+            # Estima cond(A) por ratio max/min de normas-columna al cuadrado
+            # (O(nnz), sin SVD). Si cond > 1e12 y auto_kappa=True, escala kappas.
+            _padding_kappa_used = float(padding_kappa)
+            _anchor_kappa_used  = float(anchor_kappa)
+            cond_A_est          = None
+            cond_A_est = estimate_cond_from_columns(_G_aug_sm)
+            if auto_kappa and cond_A_est is not None and cond_A_est > 1e12:
+                _scale = 1e12 / cond_A_est
+                _padding_kappa_used = float(padding_kappa) * _scale
+                _anchor_kappa_used  = float(anchor_kappa) * _scale
+                logger.info(
+                    f"[FASE 16] cond(A)~{cond_A_est:.2e} > 1e12: "
+                    f"kappas escalados ×{_scale:.2e} "
+                    f"(padding {padding_kappa:.0e}→{_padding_kappa_used:.2e}, "
+                    f"anchor {anchor_kappa:.0e}→{_anchor_kappa_used:.2e})"
+                )
+                _G_aug_sm, _d_aug_sm, _w_small = _assemble(
+                    _padding_kappa_used, _anchor_kappa_used
+                )
+
+            (m_tilde, _acond, _lsqr_istop, _lsqr_iters, _solver_path_usado,
+             _bounded_usado, _bounded_pedido, _lsmr_usado,
+             _proyectado_usado) = self._lsqr_despachar_solver(
+                cfg, est, _G_aug_sm, _d_aug_sm,
+                (_USE_BC, _USE_LSMR, _LSMR_THRESH, _USE_PGD), _irls_it,
+                _lsqr_istop, _lsqr_iters)
+            # FASE 2.1: reinyecta el valor EXACTO en las celdas de anclaje duro.
+            # Sus columnas fueron eliminadas → el solver las dejó en 0; se restaura
+            # m_tilde[j] = target para que Ws·m_tilde = contraste medido exacto
+            # (también antes del reweighting IRLS, que lee Ws·m_tilde).
+            if _hard_anchor:
+                m_tilde[_anchor_active] = _small_target[_anchor_active]
+
+            # ── Reponderación IRLS minimum-support (compact/mixed) ─────────────
+            # Foco sobre el CONTRASTE FÍSICO c = Ws·m_tilde (t/m³). Peso
+            # f_i = 1/sqrt(c_i² + ε²) normalizado a media 1 sobre celdas libres:
+            # concentra la penalización donde c≈0 (vacía el fondo) y la relaja
+            # donde hay cuerpo (lo deja crecer) → cuerpos compactos y nítidos.
+            # La normalización media-1 conserva la magnitud global de la
+            # regularización → no degrada el misfit, solo redistribuye el foco.
+            # ε se enfría por iteración para endurecer progresivamente el foco.
+            if _reg_norm == "l2":
+                break
+            _c = Ws @ m_tilde
+            _c_free = np.abs(_c[_free_mask]) if _free_mask.any() else np.abs(_c)
+            if _eps is None:
+                _eps = initial_irls_eps(_c_free, _eps_floor)
+            _fw_new = irls_focus_weights(_c, _free_mask, _eps)
+            _delta = (
+                float(np.linalg.norm(_fw_new - _focus_w) / max(np.linalg.norm(_fw_new), 1e-12))
+                if _focus_w is not None else 1.0
+            )
+            _focus_w = _fw_new
+            if _reg_norm == "mixed":
+                _g = _smooth_op_mixed @ m_tilde
+                _rraw = 1.0 / np.sqrt(_g ** 2 + _eps ** 2)
+                _rden = float(np.mean(_rraw)) or 1.0
+                _srw = np.clip(_rraw / (_rden if _rden > 1e-12 else 1.0), 0.05, 20.0)
+            _compact_hist.append({"iter": _irls_it, "eps": float(_eps), "focus_delta": _delta})
+            _eps = max(_eps * 0.7, _eps_floor)
+            if _irls_it > 0 and _delta < float(compact_tol):
+                break
+
+        if _reg_norm != "l2":
+            logger.info(
+                f"[FASE 24B] norma '{_reg_norm}': {len(_compact_hist)} iter IRLS, "
+                f"delta_focus_final={_compact_hist[-1]['focus_delta']:.2e} "
+                f"eps_floor={_eps_floor:.3f}"
+            )
+        if np.isfinite(_acond) and _acond > 1e12:
+            logger.info(
+                f"[SOLVER] WARN cond(A)={_acond:.2e} > 1e12. "
+                f"Revisar padding_kappa={padding_kappa:.0e}, anchor_kappa={anchor_kappa:.0e} "
+                f"o lambda_mag={lambda_mag:.2e}."
+            )
+
+        est.m_tilde = m_tilde
+        est.acond = _acond
+        est.cond_A_est = cond_A_est
+        est.lsqr_istop = _lsqr_istop
+        est.lsqr_iters = _lsqr_iters
+        est.compact_hist = _compact_hist
+        est.padding_kappa_used = _padding_kappa_used
+        est.anchor_kappa_used = _anchor_kappa_used
+        est.eps_floor = _eps_floor
+        est.solver_path_usado = _solver_path_usado
+        est.bounded_usado = _bounded_usado
+        est.bounded_pedido = _bounded_pedido
+        est.lsmr_usado = _lsmr_usado
+        est.proyectado_usado = _proyectado_usado
+
+    def _lsqr_reconstruir_salida(self, cfg: "_CfgLSQR", est: "_EstadoLSQR",
+                                 g_observed, solver_meta, sensor_coords):
+        """De m̃ a densidad física: bounds, misfit, score, χ² y `solver_meta`."""
+        lambda_mag = cfg.lambda_mag
+        density_min = cfg.density_min
+        density_max = cfg.density_max
+        padding_kappa = cfg.padding_kappa
+        anchor_kappa = cfg.anchor_kappa
+        auto_kappa = cfg.auto_kappa
+        laplacian_relax_alpha = cfg.laplacian_relax_alpha
+        anchor_mode = cfg.anchor_mode
+        active_cells = est.active_cells
+        n_active = est.n_active
+        _cut_cell = est.cut_cell
+        _n_dead = est.n_dead
+        _n_obs_domain = est.n_obs_domain
+        _n_active_sol = est.n_active_sol
+        _n_dead_core_a = est.n_dead_core_a
+        _n_dead_pad_a = est.n_dead_pad_a
+        _obs_in_active = est.obs_in_active
+        _padding_active_full = est.padding_active_full
+        _anchor_active = est.anchor_active
+        _anchor_mode = est.anchor_mode
+        _has_anchors = est.has_anchors
+        _hard_anchor = est.hard_anchor
+        _litho_lb_active = est.litho_lb_active
+        G_active = est.G_active
+        Ws = est.Ws
+        _mw = est.mw
+        m_tilde = est.m_tilde
+        _acond = est.acond
+        cond_A_est = est.cond_A_est
+        _lsqr_istop = est.lsqr_istop
+        _lsqr_iters = est.lsqr_iters
+        _compact_hist = est.compact_hist
+        _padding_kappa_used = est.padding_kappa_used
+        _anchor_kappa_used = est.anchor_kappa_used
+        _eps_floor = est.eps_floor
+        _reg_norm = est.reg_norm
+        lambda_mag_eff = est.lambda_mag_eff
+        normalized_sensitivity_active = est.normalized_sensitivity_active
+        sigma = est.sigma
+        y_c_active = est.y_c_active
+        _topo_sol = est.topo_sol
+        _solver_path_usado = est.solver_path_usado
+        _bounded_usado = est.bounded_usado
+        _bounded_pedido = est.bounded_pedido
+        _lsmr_usado = est.lsmr_usado
+        _proyectado_usado = est.proyectado_usado
+
+        density_contrast_active = Ws @ m_tilde
+
+        if len(density_contrast_active) != _n_active_sol:
+            raise RuntimeError("LSQR devolvió un vector de densidad activo con tamaño incorrecto.")
+        if not np.isfinite(density_contrast_active).all():
+            raise RuntimeError("LSQR devolvió densidades no finitas.")
+
+        # R-05: expandir contraste desde espacio observable al espacio activo completo.
+        # Vóxeles muertos reciben contraste=0 → density=base_density (no D_min por bound).
+        if _n_dead > 0:
+            _contrast_sol = density_contrast_active
+            density_contrast_active = np.zeros(n_active, dtype=np.float64)
+            density_contrast_active[_obs_in_active] = _contrast_sol
+
+        # ── Reconstrucción física: NaN para celdas de aire ────────────────────
+        # Bound petrofísico EXPLÍCITO [density_min, density_max]. Diagnóstico de
+        # saturación: si una fracción alta de celdas toca el bound, el dato "quería"
+        # salir del rango y la restricción está enmascarando contraste real → señal
+        # de que el bound debe revisarse para el depósito en cuestión (no es silencioso).
+        density_raw = self.base_density + density_contrast_active
+        _sat_lower_active = density_raw < density_min
+        _sat_upper_active = density_raw > density_max
+        n_sat_lower = int(np.sum(_sat_lower_active))
+        n_sat_upper = int(np.sum(_sat_upper_active))
+        n_clipped = n_sat_lower + n_sat_upper
+        clip_fraction = n_clipped / max(1, n_active)
+        estimated_density_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
+        estimated_density_full[active_cells] = np.clip(density_raw, density_min, density_max)
+        if clip_fraction > 0.0:
+            logger.info(
+                f"[INVERSION F0.2] Bound petrofisico [{density_min:.2f}, {density_max:.2f}] t/m3: "
+                f"{n_clipped:,}/{n_active:,} saturadas (low={n_sat_lower} high={n_sat_upper}) "
+                f"= {clip_fraction:.1%}."
+                + (" WARN alta saturacion: revisar lambda/kappa." if clip_fraction > 0.10 else "")
+            )
+
+        normalized_sensitivity = np.full(self.total_voxels, np.nan, dtype=np.float64)
+        normalized_sensitivity[active_cells] = normalized_sensitivity_active
+
+        # ── Misfit (F0.2: G_active cubre solo celdas observables) ────────────
+        # Usar [_obs_in_active] garantiza shapes consistentes cuando n_dead > 0:
+        # G_active es (n_obs, _n_obs_domain); density_contrast_active es (n_active,).
+        g_model = G_active @ density_contrast_active[_obs_in_active]
+        residual_sensor = g_observed - g_model
+        _voxel_err_obs = np.abs(G_active.T @ residual_sensor)   # shape (_n_obs_domain,)
+        if _n_dead > 0:
+            voxel_error_active = np.zeros(n_active, dtype=np.float64)
+            voxel_error_active[_obs_in_active] = _voxel_err_obs
+        else:
+            voxel_error_active = _voxel_err_obs
+
+        residual_error = float(np.linalg.norm(residual_sensor))
+        observed_norm = float(np.linalg.norm(g_observed))
+        if observed_norm <= 0 or not np.isfinite(observed_norm):
+            # Datos degenerados (vacíos o planos): reportar NaN en vez de fingir ajuste perfecto.
+            misfit_percent = float("nan")
+        else:
+            misfit_percent = float((residual_error / observed_norm) * 100.0)
+
+        # ── Score relativo de objetivo por vóxel (solo celdas activas) ────────
+        # ADVERTENCIA: esto NO es una probabilidad estadística. Es un score de
+        # ranking normalizado [0,1] derivado del residual proyectado al modelo:
+        #     score_j = 1 − |Gᵀ·residual|_j / max_j |Gᵀ·residual|
+        # Mide cuán bien explicado queda cada vóxel por el ajuste, relativo al peor
+        # vóxel; sirve para ordenar objetivos, no para afirmar confianza estadística.
+        # La incertidumbre estadística real (posterior) es el upgrade de la Fase 3
+        # (estimador de Hutchinson). El segundo elemento del retorno se mapea en la
+        # capa de servicio tanto a `relative_target_score` (canónico) como a
+        # `probability` (clave legada, conservada por compatibilidad de front-end).
+        max_voxel_error = float(np.max(voxel_error_active)) if n_active > 0 else 0.0
+
+        relative_score_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
+        if max_voxel_error <= 0 or not np.isfinite(max_voxel_error):
+            # Datos degenerados: NaN en vez de score=1.0 que finge calidad máxima.
+            relative_score_full[active_cells] = np.nan
+        else:
+            relative_active = 1.0 - (voxel_error_active / max_voxel_error)
+            relative_score_full[active_cells] = np.clip(relative_active, 0.0, 1.0)
+
+        # ── chi² reducido final ────────────────────────────────────────────────
+        # Reusa sigma ya computado (con outlier detection si aplica).
+        _phi_d = float(np.sum((residual_sensor / sigma) ** 2))
+        _chi2_final = _phi_d / max(len(g_observed), 1)
+
+        logger.info(
+            f"[INVERSION F0.2] Convergencia alcanzada. "
+            f"Error residual L2: {residual_error:.4e} | Misfit: {misfit_percent:.2f}% | "
+            f"chi2_final={_chi2_final:.4f} | cond(A)~{_acond:.2e}"
+        )
+
+        # ── Exponer diagnósticos numéricos al caller vía solver_meta ──────────
+        if solver_meta is not None:
+            solver_meta["acond"]         = float(_acond)
+            solver_meta["chi2_final"]    = float(_chi2_final)
+            # Fase 5 (H-11): qué solver corrió DE VERDAD, frente a cuál se pidió.
+            solver_meta["solver_path"]               = _solver_path_usado
+            solver_meta["bounded_solver_used"]       = _bounded_usado
+            solver_meta["bounded_solver_requested"]  = _bounded_pedido
+            solver_meta["lsmr_used"]                 = _lsmr_usado
+            solver_meta["projected_solver_used"]     = _proyectado_usado
+            # FASE 24B: norma de regularización usada + diagnóstico IRLS compacto
+            # ── FASE 7, criterio (d): la corrida DECLARA su funcional ─────────
+            # Aquí la smallness es SIEMPRE identidad en `m̃` (`sp.diags(_ws)`, sin
+            # `Ws`), así que el peso de modelo entra en el funcional: la corrida
+            # penaliza ‖col_j(W_d·G)‖·m_j — ponderación por SENSIBILIDAD, no un
+            # depth weighting ajustable (H-1, medido en la Fase 4). La declaración
+            # incluye a qué Li & Oldenburg equivale ESA malla (la Fase 4 midió
+            # β≈2,63 una vez, a mano; ahora lo mide cada corrida sobre su propia
+            # geometría y publica también cuán limpia es la ley de potencia).
+            solver_meta["regularization_functional"] = declare_functional(
+                _mw,
+                smallness=SMALLNESS_IDENTITY_IN_TILDE,
+                depths=y_c_active - _topo_sol,
+                depth_beta_solicitado=None,
+                smoothness_row_weight=False,
+                lsqr_istop=_lsqr_istop, lsqr_iters=_lsqr_iters,
+            )
+            solver_meta["lsqr_istop"] = _lsqr_istop
+            solver_meta["lsqr_iters"] = _lsqr_iters
+            solver_meta["lsqr_converged"] = (
+                None if _lsqr_istop is None else int(_lsqr_istop) not in (3, 7)
+            )
+            solver_meta["regularization_norm"] = _reg_norm
+            solver_meta["compact_irls_iters"]  = len(_compact_hist)
+            solver_meta["compact_eps_floor"]   = float(_eps_floor) if _reg_norm != "l2" else None
+            solver_meta["cut_cell_topography"] = bool(_cut_cell)
+            solver_meta["n_sat_lower"]   = n_sat_lower
+            solver_meta["n_sat_upper"]   = n_sat_upper
+            solver_meta["n_sat_total"]   = n_clipped
+            solver_meta["n_active"]      = n_active
+            solver_meta["sat_fraction"]  = float(clip_fraction)
+            solver_meta["density_min"]   = float(density_min)
+            solver_meta["density_max"]   = float(density_max)
+            # R-05: campos de dominio observable (para diagnóstico en el servicio)
+            solver_meta["n_dead_voxels"]      = _n_dead
+            solver_meta["n_dead_core_active"] = _n_dead_core_a
+            solver_meta["n_dead_pad_active"]  = _n_dead_pad_a
+            solver_meta["n_observable"]       = _n_obs_domain
+            solver_meta["observable_ratio"]   = round(float(_n_obs_domain) / max(n_active, 1), 4)
+            # Si padding_mask está activo, desglosar saturación por core/padding
+            # Usa _padding_active_full (n_active) en lugar de _padding_active (n_active_sol)
+            if _padding_active_full is not None:
+                solver_meta["n_sat_lower_core"] = int(np.sum(_sat_lower_active & ~_padding_active_full))
+                solver_meta["n_sat_lower_pad"]  = int(np.sum(_sat_lower_active & _padding_active_full))
+                solver_meta["n_sat_upper_core"] = int(np.sum(_sat_upper_active & ~_padding_active_full))
+                solver_meta["n_sat_upper_pad"]  = int(np.sum(_sat_upper_active & _padding_active_full))
+            # FASE 8: anclajes de sondaje aplicados
+            solver_meta["n_anchored_voxels"]    = int(np.sum(_anchor_active)) if _anchor_active is not None else 0
+            solver_meta["anchor_mode"]          = _anchor_mode if _has_anchors else None
+            solver_meta["anchor_kappa"]         = float(anchor_kappa) if (_has_anchors and not _hard_anchor) else None
+            solver_meta["laplacian_relax_alpha"] = float(laplacian_relax_alpha) if _has_anchors else None
+            solver_meta["n_lithology_bounded"]  = (
+                int(np.sum(np.isfinite(_litho_lb_active))) if _litho_lb_active is not None else 0
+            )
+            solver_meta["lambda_effective"]      = float(lambda_mag_eff)
+            # FASE 16: diagnósticos de kappa adaptation
+            solver_meta["cond_a_estimated"]     = float(cond_A_est) if cond_A_est is not None else None
+            solver_meta["padding_kappa_used"]   = _padding_kappa_used
+            solver_meta["anchor_kappa_used"]    = _anchor_kappa_used
+            solver_meta["auto_kappa_adjusted"]  = (
+                auto_kappa
+                and cond_A_est is not None
+                and cond_A_est > 1e12
+            )
+            # H-C1: datos observed vs calculated para persistir en obs_vs_calc.parquet
+            solver_meta["d_obs"]          = g_observed
+            solver_meta["d_pred"]         = g_model
+            solver_meta["residuals"]      = residual_sensor
+            solver_meta["rmse"]           = float(np.sqrt(np.mean(residual_sensor ** 2)))
+            solver_meta["station_coords"] = sensor_coords  # (n_sensors, 3) or None
+
+        return estimated_density_full, relative_score_full, misfit_percent, normalized_sensitivity
 
     def solve_inversion_lsqr(
         self,
@@ -1886,246 +3188,33 @@ class GravimetryInversion:
         if alpha_spatial < 0:
             raise ValueError("alpha_spatial no puede ser negativo.")
 
-        # ── Máscara de celdas activas (topografía F0.8) ───────────────────────
-        if topography_elevations is None:
-            # Topografía plana en y=0: todas las celdas son subsuperficie
-            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
-        else:
-            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
-            if topo_depth.shape[0] != self.total_voxels:
-                raise ValueError(
-                    f"topography_elevations debe tener {self.total_voxels} elementos, "
-                    f"got {topo_depth.shape[0]}."
-                )
-
-        # y positivo hacia abajo: TECHO del vóxel = y_center - dy/2
-        # Activo (binario) = techo del vóxel a la misma profundidad o bajo la superficie.
-        voxel_top = y_c - (self.dy / 2.0)
-        _cut_cell = (
-            bool(cut_cell_topography)
-            and topography_elevations is not None
-            and kernel_sparse is None
+        # ── FASE 8: la corrida se cuenta en etapas con nombre ─────────────────
+        cfg = _CfgLSQR(
+            lambda_mag=lambda_mag, alpha_spatial=alpha_spatial,
+            density_min=density_min, density_max=density_max,
+            noise_floor=noise_floor, noise_pct=noise_pct,
+            detect_outliers=detect_outliers, padding_kappa=padding_kappa,
+            anchor_kappa=anchor_kappa,
+            laplacian_relax_alpha=laplacian_relax_alpha, anchor_mode=anchor_mode,
+            auto_kappa=auto_kappa, regularization_norm=regularization_norm,
+            compact_eps=compact_eps, compact_max_irls=compact_max_irls,
+            compact_tol=compact_tol,
+            prune_observable_domain=prune_observable_domain,
+            cut_cell_topography=cut_cell_topography,
+            cutcell_min_fraction=cutcell_min_fraction,
         )
-        cell_fraction = None
-        if _cut_cell:
-            # FASE 24B Tarea 4: topografía fraccionaria (cut-cell, anti-staircase).
-            # frac = porción del volumen de la celda que queda BAJO la superficie ∈[0,1].
-            # Interior (frac=1) idéntico al caso binario; celdas de borde (0<frac<1)
-            # entran como activas con peso parcial (antes eran 100% aire o 100% roca).
-            voxel_bottom = y_c + (self.dy / 2.0)
-            frac = np.clip((voxel_bottom - topo_depth) / float(self.dy), 0.0, 1.0)
-            active_cells = frac > float(cutcell_min_fraction)
-            cell_fraction = frac
-        else:
-            active_cells = voxel_top >= topo_depth
-        n_active = int(np.sum(active_cells))
-        n_air = self.total_voxels - n_active
+        est = _EstadoLSQR()
+        est.solver_meta_ref = solver_meta
 
-        if n_active == 0:
-            raise ValueError(
-                "Ningún vóxel activo bajo la topografía dada. "
-                "Revisa topography_elevations y la grilla."
-            )
-
-        # ── Fase 14: Sensores dentro de la malla (solo celdas activas) ──────────
-        # sensor_coords[:, 1] es la profundidad Y del sensor (positiva hacia abajo).
-        # Si y_sensor > (min_voxel_top + dy) el sensor está debajo del fondo de la
-        # capa más superficial → está claramente dentro del dominio → error.
-        # Umbral = top + dy (= fondo de la primera capa) para evitar falsos positivos
-        # cuando los sensores están al mismo nivel que el centro de la primera celda.
-        _sc_chk = np.asarray(sensor_coords, dtype=np.float64)
-        if _sc_chk.ndim == 2 and _sc_chk.shape[1] >= 3 and n_active > 0:
-            _sy = _sc_chk[:, 1]
-            _min_active_top = float(np.min(voxel_top[active_cells]))
-            _inside_thr = _min_active_top + float(self.dy)  # = fondo de primera capa
-            _n_inside = int(np.sum(_sy > _inside_thr))
-            if _n_inside > 0:
-                raise ValueError(
-                    f"{_n_inside} sensor(es) tienen coordenada Y "
-                    f"({float(np.max(_sy[_sy > _inside_thr])):.1f} m) "
-                    f"mayor que el fondo de la primera capa activa ({_inside_thr:.1f} m). "
-                    "Los sensores deben estar en la superficie, sobre la malla."
-                )
-
-        logger.info(
-            f"[INVERSIÓN F0.2] Active cells: {n_active:,} / {self.total_voxels:,} "
-            f"({100.0 * n_active / self.total_voxels:.1f}% activo, "
-            f"{n_air:,} celdas de aire enmascaradas)"
-        )
-
-        # ── R-02: Máscara de celdas de padding activas ───────────────────────
-        _padding_active = None
-        if padding_mask is not None:
-            _pm = np.asarray(padding_mask, dtype=bool)
-            if _pm.shape[0] != self.total_voxels:
-                raise ValueError(
-                    f"padding_mask debe tener longitud {self.total_voxels}, "
-                    f"got {_pm.shape[0]}."
-                )
-            _padding_active = _pm[active_cells]   # shape=(n_active,)
-            _n_pad_active  = int(np.sum(_padding_active))
-            _n_core_active = n_active - _n_pad_active
-            logger.info(
-                f"[R-02] Penalización diferencial padding: "
-                f"core={_n_core_active:,} | padding={_n_pad_active:,} | kappa={padding_kappa:.0e}"
-            )
-
-        n_sensors = len(g_observed)
-        y_c_active = y_c[active_cells]
-
-        # ── F0.2 HPC: G_active directamente sobre celdas activas ─────────────
-        # KDTree construido SOLO sobre celdas activas — sin fancy indexing global
-        x_c_arr = np.asarray(x_c, dtype=np.float64)
-        z_c_arr = np.asarray(z_c, dtype=np.float64)
-        if kernel_sparse is not None:
-            G_active = kernel_sparse
-            logger.debug("[GRAV] Usando kernel cacheado (sin reconstrucción).")
-        else:
-            G_active = forward_model._build_sparse_kernel(
-                x_c_arr[active_cells],
-                y_c_active,
-                z_c_arr[active_cells],
-                np.asarray(sensor_coords, dtype=np.float64),
-            )
-            if cell_fraction is not None:
-                # Cut-cell: cada columna del kernel se pondera por la fracción de
-                # volumen rocoso de su celda (la celda aporta proporcional a su masa).
-                _frac_active = cell_fraction[active_cells]
-                G_active = (G_active @ sp.diags(_frac_active)).tocsr()
-                _n_partial = int(np.sum((_frac_active > 0.0) & (_frac_active < 1.0)))
-                logger.info(f"[FASE 24B T4] cut-cell activo: {_n_partial:,} celdas fraccionarias ponderadas.")
-
-        # ── FASE 8 (Q4): Mapeo de vóxeles anclados por sondaje (full → active) ─
-        # Para cada intervalo se localiza la COLUMNA (x,z) cuyos centros caen dentro
-        # de la huella del vóxel (tolerancia dx/2) y luego el SEGMENTO vertical cuyos
-        # centros y_c ∈ [y_from, y_to]. Si el intervalo es más corto que dy (ningún
-        # centro cae dentro), se selecciona el vóxel de la columna más cercano al punto
-        # medio del intervalo (garantiza ≥1 vóxel anclado por intervalo válido).
-        _anchor_active = None
-        _anchor_contrast_active = None
-        if boreholes is not None and len(boreholes) > 0:
-            _bh = np.asarray(boreholes, dtype=np.float64)
-            if _bh.ndim != 2 or _bh.shape[1] != 5:
-                raise ValueError(
-                    "boreholes debe tener shape (n,5): "
-                    "[x_m, z_m, y_from_m, y_to_m, density_t_m3]."
-                )
-            _anchor_mask_full     = np.zeros(self.total_voxels, dtype=bool)
-            _anchor_contrast_full = np.zeros(self.total_voxels, dtype=np.float64)
-            _tol_xz = self.dx / 2.0
-            for _bx, _bz, _yf, _yt, _brho in _bh:
-                if _yt < _yf:
-                    _yf, _yt = _yt, _yf
-                _col = (np.abs(x_c_arr - _bx) <= _tol_xz) & (np.abs(z_c_arr - _bz) <= _tol_xz)
-                if not np.any(_col):
-                    continue
-                _seg = _col & (y_c >= _yf) & (y_c <= _yt)
-                if not np.any(_seg):
-                    # Intervalo más corto que dy → vóxel de la columna más cercano al midpoint.
-                    _ymid = 0.5 * (_yf + _yt)
-                    _cidx = np.where(_col)[0]
-                    _near = int(_cidx[int(np.argmin(np.abs(y_c[_cidx] - _ymid)))])
-                    _seg = np.zeros(self.total_voxels, dtype=bool)
-                    _seg[_near] = True
-                _anchor_mask_full[_seg] = True
-                _anchor_contrast_full[_seg] = float(_brho) - self.base_density
-            _anchor_active          = _anchor_mask_full[active_cells]
-            _anchor_contrast_active = _anchor_contrast_full[active_cells]
-
-        # ── FASE 2.3: mapear bounds litológicos por unidad a celdas ───────────
-        # Espeja el mapeo de boreholes (misma tolerancia de columna + segmento
-        # vertical + fallback al vóxel más cercano). NaN = celda sin restricción
-        # litológica (usa el bound escalar global).
-        _litho_lb_active = None
-        _litho_ub_active = None
-        if lithology_bounds is not None and len(lithology_bounds) > 0:
-            _lba = np.asarray(lithology_bounds, dtype=np.float64)
-            if _lba.ndim != 2 or _lba.shape[1] != 6:
-                raise ValueError(
-                    "lithology_bounds debe tener shape (n,6): "
-                    "[x_m, z_m, y_from_m, y_to_m, dens_min, dens_max]."
-                )
-            _litho_lb_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
-            _litho_ub_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
-            _tol_xz_l = self.dx / 2.0
-            for _bx, _bz, _yf, _yt, _pmin, _pmax in _lba:
-                if _yt < _yf:
-                    _yf, _yt = _yt, _yf
-                if _pmax < _pmin:
-                    _pmin, _pmax = _pmax, _pmin
-                _col = (np.abs(x_c_arr - _bx) <= _tol_xz_l) & (np.abs(z_c_arr - _bz) <= _tol_xz_l)
-                if not np.any(_col):
-                    continue
-                _seg = _col & (y_c >= _yf) & (y_c <= _yt)
-                if not np.any(_seg):
-                    _ymid = 0.5 * (_yf + _yt)
-                    _cidx = np.where(_col)[0]
-                    _near = int(_cidx[int(np.argmin(np.abs(y_c[_cidx] - _ymid)))])
-                    _seg = np.zeros(self.total_voxels, dtype=bool)
-                    _seg[_near] = True
-                _litho_lb_full[_seg] = float(_pmin)
-                _litho_ub_full[_seg] = float(_pmax)
-            _litho_lb_active = _litho_lb_full[active_cells]
-            _litho_ub_active = _litho_ub_full[active_cells]
-
-        # ── Solver Sanity Check ───────────────────────────────────────────────
-        if G_active.nnz == 0:
-            raise ValueError(
-                "Kernel vacío. Ningún vóxel activo tiene sensibilidad a los sensores. "
-                "Revisa el Bounding Box o la Topografía."
-            )
-
-        # ── R-05: Observable Domain — excluir vóxeles con sensibilidad cero ──
-        # Vóxeles más allá del cutoff_radius para TODOS los sensores tienen columnas
-        # cero en G_active. Incluirlos produce plateau de chi² por mínima norma y
-        # saturación espuria en density_min (confirmado auditoría R-05).
-        _col_sens_r05  = np.asarray(G_active.power(2).sum(axis=0)).ravel()
-        _sens_thr_r05  = 1e-6 * max(float(np.max(_col_sens_r05)), 1e-30)
-        if prune_observable_domain:
-            _obs_in_active = _col_sens_r05 > _sens_thr_r05    # (n_active,)
-        else:
-            # FASE 9C-1: poda desactivada (inversión conjunta). Toda celda activa se
-            # considera observable, de modo que el modelo conserva el tamaño completo
-            # de la malla activa y los bloques cross-gradient (sized a n_active) conforman.
-            _obs_in_active = np.ones(n_active, dtype=bool)
-        _dead_in_active = ~_obs_in_active
-        _n_obs_domain   = int(np.sum(_obs_in_active))
-        _n_dead         = n_active - _n_obs_domain
-
-        # Preservar máscara de padding COMPLETA para diagnóstico de saturación post-solver
-        _padding_active_full = _padding_active.copy() if _padding_active is not None else None
-        if _n_dead > 0:
-            # Conteo de muertos por zona (para solver_meta)
-            if _padding_active is not None:
-                _n_dead_core_a = int(np.sum(_dead_in_active & ~_padding_active))
-                _n_dead_pad_a  = int(np.sum(_dead_in_active &  _padding_active))
-            else:
-                _n_dead_core_a = _n_dead
-                _n_dead_pad_a  = 0
-            logger.info(
-                f"[R-05] Observable Domain: {_n_obs_domain:,}/{n_active:,} "
-                f"({100.0*_n_obs_domain/n_active:.1f}%) | "
-                f"Muertos (sens=0): {_n_dead:,} ({100.0*_n_dead/n_active:.1f}%) -> excluidos del solver"
-            )
-            G_active        = G_active[:, _obs_in_active]
-            y_c_active      = y_c_active[_obs_in_active]
-            _topo_sol       = topo_depth[active_cells][_obs_in_active]
-            if _padding_active is not None:
-                _padding_active = _padding_active[_obs_in_active]
-            if _anchor_active is not None:
-                _anchor_active          = _anchor_active[_obs_in_active]
-                _anchor_contrast_active = _anchor_contrast_active[_obs_in_active]
-            if _litho_lb_active is not None:
-                _litho_lb_active = _litho_lb_active[_obs_in_active]
-                _litho_ub_active = _litho_ub_active[_obs_in_active]
-            _n_active_sol   = _n_obs_domain
-        else:
-            _n_dead_core_a  = 0
-            _n_dead_pad_a   = 0
-            _topo_sol       = topo_depth[active_cells]
-            _n_active_sol   = n_active
+        self._lsqr_mascara_activa(cfg, est, y_c, topography_elevations,
+                                  kernel_sparse, sensor_coords, padding_mask)
+        self._lsqr_kernel_activo(est, g_observed, y_c, x_c, z_c, kernel_sparse,
+                                 forward_model, sensor_coords)
+        self._lsqr_mapear_intervalos(est, y_c, boreholes, lithology_bounds)
+        self._lsqr_podar_dominio(cfg, est)
 
         # FASE 8: ¿hay vóxeles anclados observables tras las reducciones?
+        _anchor_active = est.anchor_active
         _has_anchors = _anchor_active is not None and bool(np.any(_anchor_active))
         # FASE 2.1: modo de anclaje (soft histórico / hard por eliminación).
         _anchor_mode = str(anchor_mode).lower()
@@ -2140,665 +3229,17 @@ class GravimetryInversion:
                 f"modo={_anchor_mode} | "
                 f"kappa={anchor_kappa:.0e} | lap_relax={laplacian_relax_alpha}"
             )
+        est.has_anchors = _has_anchors
+        est.anchor_mode = _anchor_mode
+        est.hard_anchor = _hard_anchor
 
-        # ── Formal Data Weighting Wd — R-04: Sigma Adaptivo ─────────────────
-        # noise_floor=0.02 en SI (m/s²) ≈ 2000 mGal >> señal típica (0.001–0.1 mGal).
-        # Se reemplaza por sigma_i = max(0.02·|d_i|, 0.01·data_range) — invariante
-        # de escala, basado en Li & Oldenburg 1998 / SimPEG noise_floor+relative_error.
-        # FASE 18: detect_outliers activa MAD; solo en el path sentinel (adaptive).
-        # Se respetan valores explícitos del caller (benchmark, L-curve) para backward compat.
-        if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma, _is_outlier = _sigma_adaptive(g_observed, detect_outliers=detect_outliers)
-            if detect_outliers and _is_outlier.any():
-                logger.info(
-                    f"[SIGMA] Detected {int(_is_outlier.sum())} outliers "
-                    f"(MAD > 3σ). Downweighting by 10×"
-                )
-        else:
-            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
-        Wd    = sp.diags(1.0 / sigma)
-        G_w   = Wd @ G_active
-        d_w   = Wd @ g_observed
+        self._lsqr_cadena_de_pesos(cfg, est, g_observed, hx, hy, hz)
+        self._lsqr_ensamblar_sistema(cfg, est, m_ref, extra_reg_blocks,
+                                     extra_reg_rhs)
+        self._lsqr_resolver_irls(cfg, est)
+        return self._lsqr_reconstruir_salida(cfg, est, g_observed, solver_meta,
+                                             sensor_coords)
 
-        # ── Sensitivity DOI proxy (solo celdas observables) ─────────────────
-        _sensitivity_obs = np.sqrt(G_w.power(2).sum(axis=0)).A1   # shape (_n_active_sol,)
-        max_sens = float(np.max(_sensitivity_obs)) if len(_sensitivity_obs) > 0 else 0.0
-        _norm_sens_obs = _sensitivity_obs / max_sens if max_sens > 0 else np.zeros_like(_sensitivity_obs)
-        if _n_dead > 0:
-            sensitivity_active = np.zeros(n_active, dtype=np.float64)
-            sensitivity_active[_obs_in_active] = _sensitivity_obs
-            normalized_sensitivity_active = np.zeros(n_active, dtype=np.float64)
-            normalized_sensitivity_active[_obs_in_active] = _norm_sens_obs
-        else:
-            sensitivity_active = _sensitivity_obs
-            normalized_sensitivity_active = _norm_sens_obs
-
-        # ── Laplaciano no-uniforme reducido a celdas activas — F0.9 ──────────
-        # Si hx/hy/hz provienen del tensor mesh, los pesos reales de arista
-        # se propagan al Laplaciano, disipando correctamente en el padding.
-        L_full   = self._build_laplacian(hx=hx, hy=hy, hz=hz)
-        L_active = L_full.tocsr()[active_cells, :][:, active_cells]
-        if _n_dead > 0:
-            L_active = L_active.tocsr()[_obs_in_active, :][:, _obs_in_active]
-
-        # ── FASE 8: relajación local del Laplaciano en vóxeles anclados ───────
-        # Escalar las FILAS de los vóxeles anclados por alpha (<1) reduce el
-        # acoplamiento de suavidad que imponen sobre sus vecinos, mitigando halos /
-        # bullseyes; el valor del sondaje queda fijado por el strong soft constraint
-        # (smallness × kappa), no por el suavizado. row-scaling diagonal: diag(s)·L
-        # conserva la estructura CSR y no altera cond(A) materialmente.
-        if _has_anchors:
-            _lap_row_scale = np.ones(_n_active_sol, dtype=np.float64)
-            _lap_row_scale[_anchor_active] = float(laplacian_relax_alpha)
-            L_active = (sp.diags(_lap_row_scale) @ L_active).tocsr()
-
-        # ── Peso de modelo: ponderación por SENSIBILIDAD ─────────────────────────
-        # Aquí vivía un bloque titulado "H-A0 Bug 1: W_z formal (Li & Oldenburg 1998)"
-        # que decía implementar el depth weighting estándar con el parámetro
-        # `depth_beta`. La FASE 4 (auditoría 06 §10, hallazgo H-1) midió que no lo
-        # implementaba, y por qué. Esta es la demostración, en tres líneas:
-        #
-        #     Wz_inv   = diag((z+z0)^{+β/2})                     ← "depth weighting"
-        #     Ws       = diag(1/‖col_j(G_w·Wz_inv)‖)             ← se calculaba DESPUÉS
-        #              = diag(1/(w_j·‖col_j(G_w)‖))
-        #     Wz_inv·Ws = diag(1/‖col_j(G_w)‖)                   ← w_j se cancela
-        #
-        # `Ws` se computaba sobre el kernel YA pesado por `Wz`, así que deshacía
-        # exactamente lo que `Wz` acababa de hacer: la columna j del sistema quedaba en
-        # g_j/‖g_j‖, sin rastro de β. También los bounds: (d−base)/w_j · w_j‖g_j‖.
-        # Medido a precisión de máquina (1,7e-16) y luego E2E: mover β de 0 a 4 cambiaba
-        # la solución 2,5e-04 con TRF y 5,2e-06 con LSQR+GPCG — es decir, un residuo de
-        # PARADA TEMPRANA (depende del solver), no un efecto físico.
-        #
-        # LO QUE EL CÓDIGO APLICA DE VERDAD, y que este comentario ahora sí describe:
-        # el bloque de smallness penaliza ‖m̃‖² con m̃ = diag(‖col_j(W_d·G)‖)·m, o sea
-        #
-        #     φ_smallness = λ_eff² · Σ_j ( ‖col_j(W_d·G)‖ · m_j )²
-        #
-        # una ponderación por SENSIBILIDAD. Medida sobre la malla del producto, esa
-        # norma de columna resulta ser una ley de potencia limpia (desviación máx 5,3 %)
-        # equivalente a un Li & Oldenburg de **β ≈ 2,63** — la misma familia que el
-        # estándar industrial β=2, algo más agresiva. El problema que H-1 nombra no es
-        # que el peso tenga mala forma: es que **no es ajustable y no está declarado**,
-        # lo fija el kernel y no una decisión.
-        #
-        # `Ws` conserva además su papel algebraico legítimo: sin él λ=3.0 domina los
-        # datos ~14 000× (magnitudes SI) y se pierde la calibración N_CALIB=256.
-        # m̃ NO tiene interpretación física directa: m = Ws @ m̃.
-        #
-        # La Fase 4 midió la alternativa (separar `Ws` como precondicionador global y
-        # meter `(z+z0)^{−β/2}` como peso explícito) en 576 inversiones con Morozov
-        # re-eligiendo λ en cada brazo, y decidió NO cablearla — ver el registro de la
-        # fase. Instrumento: scripts/validation/wz_separation_probe.py.
-        # Invariante ejecutable: tests/test_fase4_depth_weighting.py.
-        _col_norms_wz = np.sqrt(G_w.power(2).sum(axis=0)).A1
-        _col_norms_wz = np.maximum(_col_norms_wz, 1e-12)
-        Ws        = sp.diags(1.0 / _col_norms_wz)   # m = Ws @ m_tilde
-        G_scaled  = G_w @ Ws
-        L_scaled  = L_active @ Ws
-        # Bounds: el box físico [density_min, density_max] llevado a m̃ con la MISMA
-        # biyección que recupera la densidad (m̃_j = ‖col_j‖ · m_j). Es exacta.
-        _lb_tilde = (float(density_min) - self.base_density) * _col_norms_wz
-        _ub_tilde = (float(density_max) - self.base_density) * _col_norms_wz
-
-        # ── FASE 2.3: override de bounds por unidad litológica (membership dura) ─
-        # En las celdas con litología conocida, reemplaza el box escalar global por
-        # el box [dens_min, dens_max] de su unidad, transformado al espacio m_tilde
-        # con la MISMA transformación que el bound global. El solver con bounds
-        # (TRF/FISTA proyectado) lo impone satisfaciendo KKT por celda.
-        if _litho_lb_active is not None:
-            _ml = np.isfinite(_litho_lb_active)
-            if _ml.any():
-                _cn_l = _col_norms_wz[_ml]
-                _lb_tilde[_ml] = (_litho_lb_active[_ml] - self.base_density) * _cn_l
-                _ub_tilde[_ml] = (_litho_ub_active[_ml] - self.base_density) * _cn_l
-                logger.info(
-                    f"[FASE 2.3] Bounds litológicos por unidad aplicados a "
-                    f"{int(_ml.sum()):,} celda(s) (membership dura, KKT)."
-                )
-
-        # ── Sistema augmentado ────────────────────────────────────────────────
-        lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
-
-        # ── Modelo de referencia m_ref (Li & Oldenburg 1999) ──────────────────
-        # L_scaled = L_active @ Ws; m = Ws @ m_tilde.
-        # Residual de regularización: λ_spatial · L_active · (m − m_ref).
-        # RHS de las filas de regularización: λ_spatial · L_active · m_ref.
-        # m_ref is None → d_reg = 0 → idéntico al solver sin referencia.
-        # m_ref_sol vive en espacio observable (densidad contraste).
-        if m_ref is None:
-            m_ref_sol = None
-        else:
-            m_ref = np.asarray(m_ref, dtype=np.float64)
-            if m_ref.shape[0] == self.total_voxels:
-                m_ref_active = m_ref[active_cells]
-            elif m_ref.shape[0] == n_active:
-                m_ref_active = m_ref
-            else:
-                raise ValueError(
-                    f"m_ref debe tener longitud {self.total_voxels} (grilla completa) "
-                    f"o {n_active} (celdas activas), got {m_ref.shape[0]}."
-                )
-            if _n_dead > 0:
-                m_ref_active = m_ref_active[_obs_in_active]
-            if not np.isfinite(m_ref_active).all():
-                raise ValueError("m_ref contiene NaN o Inf.")
-            m_ref_sol = m_ref_active
-
-        # FASE 8: inyectar anclajes de sondaje en la referencia (override por celda).
-        #   m_ref[j] = densidad_sondaje - base_density  para los vóxeles anclados.
-        # Esto desplaza el RHS de la regularización (suavidad) hacia el valor del
-        # sondaje; el smallness con κ (abajo) lo fija con fuerza.
-        if _has_anchors:
-            if m_ref_sol is None:
-                m_ref_sol = np.zeros(_n_active_sol, dtype=np.float64)
-            else:
-                m_ref_sol = m_ref_sol.copy()
-            m_ref_sol[_anchor_active] = _anchor_contrast_active[_anchor_active]
-
-        if m_ref_sol is None:
-            d_reg = np.zeros(_n_active_sol, dtype=np.float64)
-        else:
-            d_reg = lambda_spatial * (L_active @ m_ref_sol)
-
-        G_aug = sp.vstack([G_scaled, lambda_spatial * L_scaled]).tocsr()
-        d_aug = np.concatenate([d_w, d_reg])
-
-        # ── FASE 9C-1: inyección de regularización externa (cross-gradient) ───
-        # Los bloques llegan en ESPACIO FÍSICO del modelo (m); el solver trabaja en
-        # la variable escalada m_tilde con m = Ws·m_tilde, de modo que cada bloque B
-        # se convierte vía B·Ws (igual que L_scaled = L_active·Ws). El RHS se apila tal
-        # cual (vive en el espacio de residual del bloque). Joint v1.1: el caller
-        # recorta B[:, obs_mask] antes de pasar → B.shape[1] = n_active_sol (post-poda).
-        if extra_reg_blocks:
-            _xg_mats = [G_aug]
-            _xg_rhs  = [d_aug]
-            for _bi, _blk in enumerate(extra_reg_blocks):
-                _blk = sp.csr_matrix(_blk)
-                if _blk.shape[1] != Ws.shape[0]:
-                    raise ValueError(
-                        f"extra_reg_blocks[{_bi}] tiene {_blk.shape[1]} columnas; "
-                        f"se esperaban {Ws.shape[0]} (modelo activo post-poda). "
-                        f"Recorta columnas al dominio observable: B[:, obs_mask_g]."
-                    )
-                _xg_mats.append(_blk @ Ws)
-                if extra_reg_rhs is not None and _bi < len(extra_reg_rhs):
-                    _xg_rhs.append(np.asarray(extra_reg_rhs[_bi], dtype=np.float64).ravel())
-                else:
-                    _xg_rhs.append(np.zeros(_blk.shape[0], dtype=np.float64))
-            G_aug = sp.vstack(_xg_mats).tocsr()
-            d_aug = np.concatenate(_xg_rhs)
-            logger.info(f"[FASE 9C-1] Inyectados {len(extra_reg_blocks)} bloque(s) cross-gradient en G_aug.")
-
-        # H-A0 Bug 2: lambda scaling con n_active (calibrado a N_CALIB=256).
-        # La smallness es uniforme en m_tilde; solo se escala la magnitud.
-        _N_CALIB = 256
-        lambda_mag_eff = float(lambda_mag) * np.sqrt(float(_n_active_sol) / _N_CALIB)
-
-        logger.info(
-            f"[INVERSIÓN F0.2] Ejecutando LSQR. "
-            f"lambda_mag={lambda_mag:.2e} | lambda_mag_eff={lambda_mag_eff:.2e} "
-            f"| lambda_spatial={lambda_spatial:.2e}"
-        )
-
-        # ── Regularización compuesta ─────────────────────────────────────────
-        #   φ_m = ‖ lambda_spatial · L_active · Ws · (m_tilde − m_ref_tilde) ‖²   (suavidad)
-        #       + ‖ diag(lambda_mag_eff) · m_tilde ‖²   (smallness en espacio transformado)
-        # La suavidad opera sobre el contraste FÍSICO (L_active·Ws·m̃ = L_active·m).
-        # La smallness es identidad en m̃, que en espacio físico equivale a pesar por
-        # ‖col_j(W_d·G)‖ — la ponderación por sensibilidad descrita arriba.
-        # padding (R-02) y anclajes (FASE 8) usan RHS en espacio m_tilde.
-        # RHS de smallness: 0 (core/padding → hacia base_density) excepto celdas
-        # ancladas, que apuntan al contraste medido del sondaje. El residual de la
-        # fila i es w_i·(contraste_i − target_i), por lo que d_small_i = w_i·target_i.
-        _small_target = np.zeros(_n_active_sol, dtype=np.float64)
-        if _has_anchors:
-            # FASE 25B: el target de anclaje vive en CONTRASTE FÍSICO (t/m³), pero el
-            # bloque smallness opera en m_tilde con  m = base_density + Ws·m_tilde.
-            # Para que la densidad recuperada en la celda anclada sea
-            #   base_density + contraste_medido
-            # el target en m_tilde debe ser  contraste / diag(Ws)  usando el MISMO
-            # Ws que mapea m_tilde→m. Es exactamente la misma transformación que los
-            # bounds de arriba: bound_tilde = (densidad − base) · ‖col_j‖. Sin ella,
-            # anclar m_tilde→contraste deja la densidad en base + diag·contraste ≈ base
-            # — el bug medido E2E en Fase 25.
-            # NOTA: NO se toca m_ref_sol: la suavidad opera como
-            # L_active·(Ws·m_tilde − m_ref) = L_active·(m_phys − m_ref), por lo que
-            # ahí el contraste físico es el espacio CORRECTO.
-            _ws_diag = np.asarray(Ws.diagonal(), dtype=np.float64)
-            # Protección contra división por cero: diag(Ws) = 1/‖col_j‖ es estrictamente
-            # > 0 por construcción (‖col‖ está acotada a 1e-12), pero se blinda igual.
-            _wz_safe = np.where(np.abs(_ws_diag) < 1e-12, 1e-12, _ws_diag)
-            _small_target[_anchor_active] = (
-                _anchor_contrast_active[_anchor_active] / _wz_safe[_anchor_active]
-            )
-
-        # ── FASE 2.1: Anclaje DURO (hard constraint por eliminación de variables) ─
-        # En modo "hard" las celdas ancladas se FIJAN exactamente a su valor de
-        # sondaje: el valor objetivo en m_tilde es _small_target (= contraste/diag(Ws),
-        # de modo que Ws·m_tilde = contraste exacto). Se elimina la celda del sistema
-        # moviendo su contribución G_aug[:,j]·target al RHS y anulando la columna j; tras
-        # resolver se reinyecta el valor exacto. Sin error residual de smallness (~2% soft).
-        if _hard_anchor:
-            _anchor_idx = np.where(_anchor_active)[0]
-            _t_fix = _small_target[_anchor_idx]
-            d_aug = d_aug - np.asarray(G_aug[:, _anchor_idx] @ _t_fix).ravel()
-            _keep_cols = sp.diags((~_anchor_active).astype(np.float64))
-            G_aug = (G_aug @ _keep_cols).tocsr()
-            logger.info(
-                f"[FASE 2.1] Anclaje DURO: {_anchor_idx.size:,} celda(s) eliminada(s) "
-                f"del sistema (valor exacto del sondaje, sin smallness soft)."
-            )
-
-        # ── FASE 24B Tarea 1: control de norma de regularización ──────────────
-        # L2 → un único solve idéntico al motor histórico (n_irls=1, focus=None).
-        # compact/mixed → bucle IRLS de minimum support sobre la smallness.
-        _reg_norm = str(regularization_norm).lower()
-        if _reg_norm not in ("l2", "compact", "mixed"):
-            raise ValueError(
-                f"regularization_norm inválido: {regularization_norm!r}. "
-                f"Use 'L2', 'compact' o 'mixed'."
-            )
-        _n_irls = 1 if _reg_norm == "l2" else max(1, int(compact_max_irls))
-
-        # Celdas "libres" del núcleo: el foco minimum-support se aplica SOLO aquí.
-        # Padding (R-02) y anclajes (FASE 8) conservan su rol de restricción fuerte L2.
-        _free_mask = np.ones(_n_active_sol, dtype=bool)
-        if _padding_active is not None:
-            _free_mask &= ~_padding_active
-        if _has_anchors:
-            _free_mask &= ~_anchor_active
-
-        # Operador de suavidad para edge-focusing en modo "mixed".
-        _smooth_op_mixed = (lambda_spatial * L_scaled).tocsr()
-
-        _focus_w = None      # foco minimum-support (smallness); None ≡ L2
-        _srw     = None      # peso edge-preserving de suavidad (solo "mixed")
-        _eps     = None
-        _eps_floor = max(float(compact_eps), 1e-3)
-
-        def _mk_small(_pk, _ak):
-            """Smallness en m_tilde: lambda_mag_eff con kappas y foco IRLS.
-            Lee _focus_w del scope (se reasigna por iteración)."""
-            w = np.full(_n_active_sol, lambda_mag_eff, dtype=np.float64)
-            if _padding_active is not None:
-                w = np.where(_padding_active, float(_pk) * lambda_mag_eff, w)
-            if _has_anchors:
-                # FASE 2.1: en modo hard la celda anclada ya fue eliminada (columna
-                # nula); su smallness debe ser 0 (no penalizar un DOF inexistente).
-                _aw = 0.0 if _hard_anchor else float(_ak) * lambda_mag_eff
-                w = np.where(_anchor_active, _aw, w)
-            if _focus_w is not None:
-                w = np.where(_free_mask, w * _focus_w, w)
-            return w
-
-        def _assemble(_pk, _ak):
-            """Ensambla (_G_aug_sm, _d_aug_sm) con smallness + (mixed) suavidad enfocada."""
-            _ws = _mk_small(_pk, _ak)
-            _stack = [G_aug, sp.diags(_ws)]
-            _rhs   = [d_aug, _ws * _small_target]
-            if _reg_norm == "mixed" and _srw is not None:
-                # Edge-preserving (experimental): refuerza la suavidad donde el modelo
-                # es plano y la relaja en los bordes. Factor 0.5 evita sobre-suavizar
-                # (la suavidad base ya vive en G_aug). RHS = 0 (rugosidad → 0).
-                _stack.append(0.5 * (sp.diags(_srw) @ _smooth_op_mixed))
-                _rhs.append(np.zeros(_smooth_op_mixed.shape[0], dtype=np.float64))
-            return sp.vstack(_stack).tocsr(), np.concatenate(_rhs), _ws
-
-        # Diagnósticos de la última iteración (expuestos vía solver_meta).
-        _padding_kappa_used = float(padding_kappa)
-        _anchor_kappa_used  = float(anchor_kappa)
-        cond_A_est          = None
-        m_tilde             = None
-        _acond              = float("nan")
-        _compact_hist: list = []
-
-        for _irls_it in range(_n_irls):
-            _G_aug_sm, _d_aug_sm, _w_small = _assemble(padding_kappa, anchor_kappa)
-
-            # ── FASE 16: Dynamic Kappa Adaptation ─────────────────────────────
-            # Estima cond(A) por ratio max/min de normas-columna al cuadrado
-            # (O(nnz), sin SVD). Si cond > 1e12 y auto_kappa=True, escala kappas.
-            _padding_kappa_used = float(padding_kappa)
-            _anchor_kappa_used  = float(anchor_kappa)
-            cond_A_est          = None
-            _col_norms_sq = np.array(_G_aug_sm.power(2).sum(axis=0)).ravel()
-            _nonzero_mask = _col_norms_sq > 0.0
-            if _nonzero_mask.any():
-                _max_sq = float(np.max(_col_norms_sq))
-                _min_sq = float(np.min(_col_norms_sq[_nonzero_mask]))
-                if _min_sq > 0.0:
-                    cond_A_est = float(np.sqrt(_max_sq / _min_sq))
-            if auto_kappa and cond_A_est is not None and cond_A_est > 1e12:
-                _scale = 1e12 / cond_A_est
-                _padding_kappa_used = float(padding_kappa) * _scale
-                _anchor_kappa_used  = float(anchor_kappa) * _scale
-                logger.info(
-                    f"[FASE 16] cond(A)~{cond_A_est:.2e} > 1e12: "
-                    f"kappas escalados ×{_scale:.2e} "
-                    f"(padding {padding_kappa:.0e}→{_padding_kappa_used:.2e}, "
-                    f"anchor {anchor_kappa:.0e}→{_anchor_kappa_used:.2e})"
-                )
-                _G_aug_sm, _d_aug_sm, _w_small = _assemble(
-                    _padding_kappa_used, _anchor_kappa_used
-                )
-
-            from core.config import USE_BOUNDED_SOLVER as _USE_BC
-            from core.config import USE_LSMR_LARGE as _USE_LSMR, LSMR_THRESHOLD_N_ACTIVE as _LSMR_THRESH
-            # Benchmark empírico (2026-06-01): TRF+LSMR ~40s con NNZ≈213K y n_active≈14K;
-            # LSQR <0.1s. Umbral 8000 (HITO 5): demo (~800), medium CSV (~5K) y DOI test
-            # (~5K) usan TRF bounded; auto_grid (>8K) usa LSQR+clip como fallback.
-            # Fase 10: LSMR para n_active > 50K (mejor convergencia en sistemas mal condicionados).
-            _use_trf = _USE_BC and _n_active_sol <= 8_000
-            _use_lsmr = (not _use_trf) and _USE_LSMR and (_n_active_sol > _LSMR_THRESH)
-            if _use_trf:
-                _solver_label = "TRF/bounded"
-            elif _use_lsmr:
-                _solver_label = f"LSMR (Fase10, n>{_LSMR_THRESH:,})"
-            else:
-                _solver_label = "LSQR+clip"
-            # Fase 5 (H-11): recordar el despacho REAL para publicarlo abajo.
-            # El reporte del servicio traía `bounded_solver_active` calculado con
-            # `os.getenv("USE_BOUNDED_SOLVER")`, que es lo que se PIDIÓ. Medido con
-            # 8.712 celdas activas y la variable sin tocar: el solver despachó
-            # `LSQR+clip` y el reporte afirmaba `true`. Y no es un caso de borde —
-            # el umbral son 8.000 celdas y el producto declara mallas de 30k-100k
-            # vóxeles, así que en el régimen normal el campo estaba SIEMPRE mal.
-            # `validation/runner.py` lo lee para caracterizar cada corrida: era
-            # evidencia de validación contaminada.
-            #
-            # Se anota en LOCALES, no en `solver_meta` aquí: un `if solver_meta is
-            # not None` en este punto añadía una rama a `solve_inversion_lsqr`, que
-            # ya tiene CC=143 y es la función que la Fase 8 tiene que partir. El
-            # bloque de más abajo ya está guardado; escribir allí cuesta cero ramas.
-            # (El bucle IRLS corre siempre al menos una vez —`_n_irls = max(1, …)`—
-            # así que estos nombres existen después, con el despacho de la última
-            # iteración, que es el que produjo el modelo que se devuelve.)
-            _solver_path_usado   = _solver_label
-            _bounded_usado       = bool(_use_trf)
-            _bounded_pedido      = bool(_USE_BC)
-            _lsmr_usado          = bool(_use_lsmr)
-            _proyectado_usado    = False   # FISTA corre después del solve; lo pone a True
-            _norm_tag = f"norm={_reg_norm}" + (f"/irls{_irls_it}" if _reg_norm != "l2" else "")
-            logger.info(
-                f"[SOLVER] G_aug=({_G_aug_sm.shape[0]:,}×{_G_aug_sm.shape[1]:,}) "
-                f"n_active_sol={_n_active_sol:,} NNZ={_G_aug_sm.nnz:,} "
-                f"smallness=sensibilidad(||col_j||) lambda_eff={lambda_mag_eff:.2e} "
-                f"{_norm_tag} -> {_solver_label}"
-            )
-            _t_solve = time.perf_counter()
-            if _use_trf:
-                from scipy.optimize import lsq_linear as _lsq_linear
-                _bc = _lsq_linear(
-                    _G_aug_sm, _d_aug_sm,
-                    bounds=(_lb_tilde, _ub_tilde),
-                    method='trf', lsq_solver='lsmr', tol=1e-6, max_iter=300,
-                )
-                m_tilde = _bc.x
-                _acond = float('nan')
-                logger.info(f"[SOLVER] TRF finalizado en {time.perf_counter()-_t_solve:.1f}s.")
-            else:
-                # Fase 6 (H-2): aquí vivía el path `USE_SPARSE_DIRECT` (SuperLU sobre
-                # ecuaciones normales, Sprint 5A). Llamaba a `solve_sparse_normal_equations`,
-                # un símbolo que NO existe en el repositorio: con el flag en true la
-                # inversión abortaba con NameError después de construir el kernel.
-                # Se borró en vez de repararse: formar A^T A eleva cond(A) al cuadrado
-                # (la "lección Sprint 5A" que el propio comentario de LSMR cita más abajo).
-                if _use_lsmr:
-                    # Fase 10: LSMR para n_active > 50K.
-                    # Fong & Saunders (2011): residuo ||r|| monotónicamente decreciente,
-                    # mejor estabilidad numérica que LSQR para sistemas mal condicionados.
-                    # NO forma A^T A explícitamente (lección Sprint 5A).
-                    from exploration.solver_preconditioned import solve_inversion_lsmr as _lsmr_solve
-                    m_tilde, _acond = _lsmr_solve(
-                        _G_aug_sm, _d_aug_sm, _lb_tilde, _ub_tilde,
-                        maxiter=1000, tol=1e-8,
-                    )
-                    logger.info(
-                        f"[SOLVER] LSMR (Fase 10) convergido en "
-                        f"{time.perf_counter()-_t_solve:.1f}s. "
-                        f"cond(A)~{_acond:.2e}"
-                    )
-                else:
-                    result = lsqr(
-                        _G_aug_sm, _d_aug_sm,
-                        damp=0.0,
-                        iter_lim=500, atol=1e-8, btol=1e-8, show=False,
-                    )
-                    m_tilde = np.clip(result[0], _lb_tilde, _ub_tilde)
-                    _acond = result[6]
-                    logger.info(
-                        f"[SOLVER] LSQR convergido en {time.perf_counter()-_t_solve:.1f}s. "
-                        f"cond(A)~{_acond:.2e}"
-                    )
-
-                # ── Tier 1 A1: FISTA proyectado (bounds reales para n>8K) ─────
-                # El clip post-hoc descarta masa fuera del box sin redistribuir
-                # (misfit degradado ~35% en cuerpos compactos). FISTA parte del
-                # clip como warm start → el objetivo solo puede mejorar; rollback
-                # exacto con USE_PROJECTED_SOLVER=false.
-                from core.config import USE_PROJECTED_SOLVER as _USE_PGD
-                if _USE_PGD:
-                    from exploration.solver_preconditioned import solve_inversion_pgd_fista
-                    _t_pgd = time.perf_counter()
-                    m_tilde, _pgd_info = solve_inversion_pgd_fista(
-                        _G_aug_sm, _d_aug_sm, _lb_tilde, _ub_tilde, x0=m_tilde,
-                    )
-                    logger.info(
-                        f"[SOLVER] FISTA proyectado en {time.perf_counter()-_t_pgd:.1f}s "
-                        f"(post-{'LSMR' if _use_lsmr else 'LSQR'}+warm-start)."
-                    )
-                    _proyectado_usado = True   # Fase 5: lo que PASÓ, no lo que se pidió
-                    if solver_meta is not None:
-                        solver_meta["pgd"] = _pgd_info
-
-            # FASE 2.1: reinyecta el valor EXACTO en las celdas de anclaje duro.
-            # Sus columnas fueron eliminadas → el solver las dejó en 0; se restaura
-            # m_tilde[j] = target para que Ws·m_tilde = contraste medido exacto
-            # (también antes del reweighting IRLS, que lee Ws·m_tilde).
-            if _hard_anchor:
-                m_tilde[_anchor_active] = _small_target[_anchor_active]
-
-            # ── Reponderación IRLS minimum-support (compact/mixed) ─────────────
-            # Foco sobre el CONTRASTE FÍSICO c = Ws·m_tilde (t/m³). Peso
-            # f_i = 1/sqrt(c_i² + ε²) normalizado a media 1 sobre celdas libres:
-            # concentra la penalización donde c≈0 (vacía el fondo) y la relaja
-            # donde hay cuerpo (lo deja crecer) → cuerpos compactos y nítidos.
-            # La normalización media-1 conserva la magnitud global de la
-            # regularización → no degrada el misfit, solo redistribuye el foco.
-            # ε se enfría por iteración para endurecer progresivamente el foco.
-            if _reg_norm == "l2":
-                break
-            _c = Ws @ m_tilde
-            _c_free = np.abs(_c[_free_mask]) if _free_mask.any() else np.abs(_c)
-            if _eps is None:
-                _eps = (
-                    max(_eps_floor, 0.5 * float(np.percentile(_c_free, 90)))
-                    if _c_free.size else _eps_floor
-                )
-            _raw = 1.0 / np.sqrt(_c ** 2 + _eps ** 2)
-            _den = float(np.mean(_raw[_free_mask])) if _free_mask.any() else float(np.mean(_raw))
-            _den = _den if _den > 1e-12 else 1.0
-            _fw_new = np.clip(_raw / _den, 0.05, 20.0)
-            _delta = (
-                float(np.linalg.norm(_fw_new - _focus_w) / max(np.linalg.norm(_fw_new), 1e-12))
-                if _focus_w is not None else 1.0
-            )
-            _focus_w = _fw_new
-            if _reg_norm == "mixed":
-                _g = _smooth_op_mixed @ m_tilde
-                _rraw = 1.0 / np.sqrt(_g ** 2 + _eps ** 2)
-                _rden = float(np.mean(_rraw)) or 1.0
-                _srw = np.clip(_rraw / (_rden if _rden > 1e-12 else 1.0), 0.05, 20.0)
-            _compact_hist.append({"iter": _irls_it, "eps": float(_eps), "focus_delta": _delta})
-            _eps = max(_eps * 0.7, _eps_floor)
-            if _irls_it > 0 and _delta < float(compact_tol):
-                break
-
-        if _reg_norm != "l2":
-            logger.info(
-                f"[FASE 24B] norma '{_reg_norm}': {len(_compact_hist)} iter IRLS, "
-                f"delta_focus_final={_compact_hist[-1]['focus_delta']:.2e} "
-                f"eps_floor={_eps_floor:.3f}"
-            )
-        if np.isfinite(_acond) and _acond > 1e12:
-            logger.info(
-                f"[SOLVER] WARN cond(A)={_acond:.2e} > 1e12. "
-                f"Revisar padding_kappa={padding_kappa:.0e}, anchor_kappa={anchor_kappa:.0e} "
-                f"o lambda_mag={lambda_mag:.2e}."
-            )
-
-        density_contrast_active = Ws @ m_tilde
-
-        if len(density_contrast_active) != _n_active_sol:
-            raise RuntimeError("LSQR devolvió un vector de densidad activo con tamaño incorrecto.")
-        if not np.isfinite(density_contrast_active).all():
-            raise RuntimeError("LSQR devolvió densidades no finitas.")
-
-        # R-05: expandir contraste desde espacio observable al espacio activo completo.
-        # Vóxeles muertos reciben contraste=0 → density=base_density (no D_min por bound).
-        if _n_dead > 0:
-            _contrast_sol = density_contrast_active
-            density_contrast_active = np.zeros(n_active, dtype=np.float64)
-            density_contrast_active[_obs_in_active] = _contrast_sol
-
-        # ── Reconstrucción física: NaN para celdas de aire ────────────────────
-        # Bound petrofísico EXPLÍCITO [density_min, density_max]. Diagnóstico de
-        # saturación: si una fracción alta de celdas toca el bound, el dato "quería"
-        # salir del rango y la restricción está enmascarando contraste real → señal
-        # de que el bound debe revisarse para el depósito en cuestión (no es silencioso).
-        density_raw = self.base_density + density_contrast_active
-        _sat_lower_active = density_raw < density_min
-        _sat_upper_active = density_raw > density_max
-        n_sat_lower = int(np.sum(_sat_lower_active))
-        n_sat_upper = int(np.sum(_sat_upper_active))
-        n_clipped = n_sat_lower + n_sat_upper
-        clip_fraction = n_clipped / max(1, n_active)
-        estimated_density_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
-        estimated_density_full[active_cells] = np.clip(density_raw, density_min, density_max)
-        if clip_fraction > 0.0:
-            logger.info(
-                f"[INVERSION F0.2] Bound petrofisico [{density_min:.2f}, {density_max:.2f}] t/m3: "
-                f"{n_clipped:,}/{n_active:,} saturadas (low={n_sat_lower} high={n_sat_upper}) "
-                f"= {clip_fraction:.1%}."
-                + (" WARN alta saturacion: revisar lambda/kappa." if clip_fraction > 0.10 else "")
-            )
-
-        normalized_sensitivity = np.full(self.total_voxels, np.nan, dtype=np.float64)
-        normalized_sensitivity[active_cells] = normalized_sensitivity_active
-
-        # ── Misfit (F0.2: G_active cubre solo celdas observables) ────────────
-        # Usar [_obs_in_active] garantiza shapes consistentes cuando n_dead > 0:
-        # G_active es (n_obs, _n_obs_domain); density_contrast_active es (n_active,).
-        g_model = G_active @ density_contrast_active[_obs_in_active]
-        residual_sensor = g_observed - g_model
-        _voxel_err_obs = np.abs(G_active.T @ residual_sensor)   # shape (_n_obs_domain,)
-        if _n_dead > 0:
-            voxel_error_active = np.zeros(n_active, dtype=np.float64)
-            voxel_error_active[_obs_in_active] = _voxel_err_obs
-        else:
-            voxel_error_active = _voxel_err_obs
-
-        residual_error = float(np.linalg.norm(residual_sensor))
-        observed_norm = float(np.linalg.norm(g_observed))
-        if observed_norm <= 0 or not np.isfinite(observed_norm):
-            # Datos degenerados (vacíos o planos): reportar NaN en vez de fingir ajuste perfecto.
-            misfit_percent = float("nan")
-        else:
-            misfit_percent = float((residual_error / observed_norm) * 100.0)
-
-        # ── Score relativo de objetivo por vóxel (solo celdas activas) ────────
-        # ADVERTENCIA: esto NO es una probabilidad estadística. Es un score de
-        # ranking normalizado [0,1] derivado del residual proyectado al modelo:
-        #     score_j = 1 − |Gᵀ·residual|_j / max_j |Gᵀ·residual|
-        # Mide cuán bien explicado queda cada vóxel por el ajuste, relativo al peor
-        # vóxel; sirve para ordenar objetivos, no para afirmar confianza estadística.
-        # La incertidumbre estadística real (posterior) es el upgrade de la Fase 3
-        # (estimador de Hutchinson). El segundo elemento del retorno se mapea en la
-        # capa de servicio tanto a `relative_target_score` (canónico) como a
-        # `probability` (clave legada, conservada por compatibilidad de front-end).
-        max_voxel_error = float(np.max(voxel_error_active)) if n_active > 0 else 0.0
-
-        relative_score_full = np.full(self.total_voxels, np.nan, dtype=np.float64)
-        if max_voxel_error <= 0 or not np.isfinite(max_voxel_error):
-            # Datos degenerados: NaN en vez de score=1.0 que finge calidad máxima.
-            relative_score_full[active_cells] = np.nan
-        else:
-            relative_active = 1.0 - (voxel_error_active / max_voxel_error)
-            relative_score_full[active_cells] = np.clip(relative_active, 0.0, 1.0)
-
-        # ── chi² reducido final ────────────────────────────────────────────────
-        # Reusa sigma ya computado (con outlier detection si aplica).
-        _phi_d = float(np.sum((residual_sensor / sigma) ** 2))
-        _chi2_final = _phi_d / max(len(g_observed), 1)
-
-        logger.info(
-            f"[INVERSION F0.2] Convergencia alcanzada. "
-            f"Error residual L2: {residual_error:.4e} | Misfit: {misfit_percent:.2f}% | "
-            f"chi2_final={_chi2_final:.4f} | cond(A)~{_acond:.2e}"
-        )
-
-        # ── Exponer diagnósticos numéricos al caller vía solver_meta ──────────
-        if solver_meta is not None:
-            solver_meta["acond"]         = float(_acond)
-            solver_meta["chi2_final"]    = float(_chi2_final)
-            # Fase 5 (H-11): qué solver corrió DE VERDAD, frente a cuál se pidió.
-            solver_meta["solver_path"]               = _solver_path_usado
-            solver_meta["bounded_solver_used"]       = _bounded_usado
-            solver_meta["bounded_solver_requested"]  = _bounded_pedido
-            solver_meta["lsmr_used"]                 = _lsmr_usado
-            solver_meta["projected_solver_used"]     = _proyectado_usado
-            # FASE 24B: norma de regularización usada + diagnóstico IRLS compacto
-            solver_meta["regularization_norm"] = _reg_norm
-            solver_meta["compact_irls_iters"]  = len(_compact_hist)
-            solver_meta["compact_eps_floor"]   = float(_eps_floor) if _reg_norm != "l2" else None
-            solver_meta["cut_cell_topography"] = bool(_cut_cell)
-            solver_meta["n_sat_lower"]   = n_sat_lower
-            solver_meta["n_sat_upper"]   = n_sat_upper
-            solver_meta["n_sat_total"]   = n_clipped
-            solver_meta["n_active"]      = n_active
-            solver_meta["sat_fraction"]  = float(clip_fraction)
-            solver_meta["density_min"]   = float(density_min)
-            solver_meta["density_max"]   = float(density_max)
-            # R-05: campos de dominio observable (para diagnóstico en el servicio)
-            solver_meta["n_dead_voxels"]      = _n_dead
-            solver_meta["n_dead_core_active"] = _n_dead_core_a
-            solver_meta["n_dead_pad_active"]  = _n_dead_pad_a
-            solver_meta["n_observable"]       = _n_obs_domain
-            solver_meta["observable_ratio"]   = round(float(_n_obs_domain) / max(n_active, 1), 4)
-            # Si padding_mask está activo, desglosar saturación por core/padding
-            # Usa _padding_active_full (n_active) en lugar de _padding_active (n_active_sol)
-            if _padding_active_full is not None:
-                solver_meta["n_sat_lower_core"] = int(np.sum(_sat_lower_active & ~_padding_active_full))
-                solver_meta["n_sat_lower_pad"]  = int(np.sum(_sat_lower_active & _padding_active_full))
-                solver_meta["n_sat_upper_core"] = int(np.sum(_sat_upper_active & ~_padding_active_full))
-                solver_meta["n_sat_upper_pad"]  = int(np.sum(_sat_upper_active & _padding_active_full))
-            # FASE 8: anclajes de sondaje aplicados
-            solver_meta["n_anchored_voxels"]    = int(np.sum(_anchor_active)) if _anchor_active is not None else 0
-            solver_meta["anchor_mode"]          = _anchor_mode if _has_anchors else None
-            solver_meta["anchor_kappa"]         = float(anchor_kappa) if (_has_anchors and not _hard_anchor) else None
-            solver_meta["laplacian_relax_alpha"] = float(laplacian_relax_alpha) if _has_anchors else None
-            solver_meta["n_lithology_bounded"]  = (
-                int(np.sum(np.isfinite(_litho_lb_active))) if _litho_lb_active is not None else 0
-            )
-            solver_meta["lambda_effective"]      = float(lambda_mag_eff)
-            # FASE 16: diagnósticos de kappa adaptation
-            solver_meta["cond_a_estimated"]     = float(cond_A_est) if cond_A_est is not None else None
-            solver_meta["padding_kappa_used"]   = _padding_kappa_used
-            solver_meta["anchor_kappa_used"]    = _anchor_kappa_used
-            solver_meta["auto_kappa_adjusted"]  = (
-                auto_kappa
-                and cond_A_est is not None
-                and cond_A_est > 1e12
-            )
-            # H-C1: datos observed vs calculated para persistir en obs_vs_calc.parquet
-            solver_meta["d_obs"]          = g_observed
-            solver_meta["d_pred"]         = g_model
-            solver_meta["residuals"]      = residual_sensor
-            solver_meta["rmse"]           = float(np.sqrt(np.mean(residual_sensor ** 2)))
-            solver_meta["station_coords"] = sensor_coords  # (n_sensors, 3) or None
-
-        return estimated_density_full, relative_score_full, misfit_percent, normalized_sensitivity
 
     def estimate_posterior_std(
         self,
@@ -2858,15 +3299,8 @@ class GravimetryInversion:
             )
 
         # ── Máscara de celdas activas (idéntica a solve_inversion_lsqr) ───────
-        if topography_elevations is None:
-            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
-        else:
-            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
-        voxel_top = y_c - (self.dy / 2.0)
-        active_cells = voxel_top >= topo_depth
-        n_active = int(np.sum(active_cells))
-        if n_active == 0:
-            raise ValueError("[UQ] No hay celdas activas bajo la topografía dada.")
+        topo_depth, active_cells, n_active = active_cells_from_topography(
+            y_c, self.dy, self.total_voxels, topography_elevations, contexto="[UQ] ")
 
         n_sensors = len(g_observed)
         y_c_active = y_c[active_cells]
@@ -2879,16 +3313,12 @@ class GravimetryInversion:
         )
 
         # ── Data weighting Wd + column scaling Ws (igual que el solver) — R-04 ─
-        if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma, _ = _sigma_adaptive(g_observed, detect_outliers=False)
-        else:
-            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
+        sigma = resolve_sigma(g_observed, noise_floor, noise_pct, detect_outliers=False)
         Wd = sp.diags(1.0 / sigma)
         G_w = Wd @ G_active
-        col_norms = np.sqrt(G_w.power(2).sum(axis=0)).A1
-        col_norms = np.maximum(col_norms, 1e-12)
-        ws_diag = 1.0 / col_norms
-        Ws = sp.diags(ws_diag)
+        _mw = build_model_weights(MODEL_WEIGHT_SENSITIVITY, G_w=G_w)
+        ws_diag = _mw.diag
+        Ws = _mw.W
         G_scaled = (G_w @ Ws).tocsr()
 
         # ── Laplaciano + depth weighting, reducido a activas y escalado ───────
@@ -2896,19 +3326,13 @@ class GravimetryInversion:
         L_active = L_full.tocsr()[active_cells, :][:, active_cells]
         z0 = self.dy / 2.0
         true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
-        w_depth = (true_depth + z0) ** 2.0   # Li & Oldenburg 1998: β=2
-        w_reg = 1.0 / w_depth
-        w_reg = w_reg / np.mean(w_reg)
+        w_reg = depth_row_weights(true_depth, z0, beta=2.0)   # Li & Oldenburg 1998: β=2
         L_scaled = ((sp.diags(w_reg) @ L_active) @ Ws).tocsr()
 
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
 
         # ── Matriz de información posterior (SPD por el término λ_mag²·I) ─────
-        A = (
-            (G_scaled.T @ G_scaled)
-            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
-            + (float(lambda_mag) ** 2) * sp.identity(n_active, format="csr", dtype=np.float64)
-        ).tocsr()
+        A = normal_equations(G_scaled, L_scaled, lambda_spatial, lambda_mag, n_active)
 
         diag_C = hutchinson_diag_inv(
             A, n_probes=n_probes, cg_maxiter=cg_maxiter, cg_rtol=cg_rtol, seed=seed
@@ -2994,15 +3418,8 @@ class GravimetryInversion:
             )
 
         # ── Máscara de celdas activas (idéntica a estimate_posterior_std) ─────
-        if topography_elevations is None:
-            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
-        else:
-            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
-        voxel_top = y_c - (self.dy / 2.0)
-        active_cells = voxel_top >= topo_depth
-        n_active = int(np.sum(active_cells))
-        if n_active == 0:
-            raise ValueError("[UQ shuttle] No hay celdas activas bajo la topografía dada.")
+        topo_depth, active_cells, n_active = active_cells_from_topography(
+            y_c, self.dy, self.total_voxels, topography_elevations, contexto="[UQ shuttle] ")
 
         n_sensors = len(g_observed)
         y_c_active = y_c[active_cells]
@@ -3015,16 +3432,12 @@ class GravimetryInversion:
         )
 
         # ── Wd + column scaling Ws (igual que el solver / la σ posterior) ─────
-        if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma, _ = _sigma_adaptive(g_observed, detect_outliers=False)
-        else:
-            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
+        sigma = resolve_sigma(g_observed, noise_floor, noise_pct, detect_outliers=False)
         Wd = sp.diags(1.0 / sigma)
         G_w = Wd @ G_active
-        col_norms = np.sqrt(G_w.power(2).sum(axis=0)).A1
-        col_norms = np.maximum(col_norms, 1e-12)
-        ws_diag = 1.0 / col_norms
-        Ws = sp.diags(ws_diag)
+        _mw = build_model_weights(MODEL_WEIGHT_SENSITIVITY, G_w=G_w)
+        ws_diag = _mw.diag
+        Ws = _mw.W
         G_scaled = (G_w @ Ws).tocsr()
 
         # ── Operador de suavizado (I + γ LᵀL) reducido a activas y escalado ───
@@ -3033,17 +3446,8 @@ class GravimetryInversion:
         if smooth_strength and smooth_strength > 0:
             L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
             L_active = L_full.tocsr()[active_cells, :][:, active_cells]
-            L_scaled = (L_active @ Ws).tocsr()
-            LtL = (L_scaled.T @ L_scaled).tocsr()
-            S = (sp.identity(n_active, format="csr") + float(smooth_strength) * LtL).tocsr()
-            diag_S = np.maximum(S.diagonal(), 1e-30)
-            M_s = _LO((n_active, n_active), matvec=lambda v: v / diag_S)
-
-            def _smooth(v):
-                x, _ = _cg(S, v, rtol=1e-6, atol=0.0, maxiter=cg_maxiter, M=M_s)
-                return x
-
-            smooth_op = _LO((n_active, n_active), matvec=_smooth)
+            smooth_op = build_smoothing_operator(
+                L_active, _mw, smooth_strength, n_active, cg_maxiter)
 
         # ── Direcciones de espacio nulo (matrix-free, reproducibles) ──────────
         directions, preserved, null_fraction = null_space_shuttle_directions(
@@ -3054,33 +3458,12 @@ class GravimetryInversion:
         # ── Amplitud física por shuttle y construcción de alternativas ────────
         m0_active = m0[active_cells]
         # Escala robusta de la solución: MAD→σ, con piso por si el modelo es ~plano.
-        med = np.median(m0_active)
-        robust = 1.4826 * np.median(np.abs(m0_active - med))
-        amp_ref = max(robust, 1e-6)
-        amp = float(shuttle_scale) * amp_ref
+        amp = robust_amplitude(m0_active, shuttle_scale)
 
-        ensemble = np.full((int(n_shuttles), self.total_voxels), np.nan, dtype=np.float64)
-        for k in range(int(n_shuttles)):
-            # direction está en espacio escalado (m̃); a físico vía Ws.
-            d_phys = ws_diag * directions[k]
-            peak = np.max(np.abs(d_phys))
-            if peak > 1e-300:
-                d_phys = d_phys * (amp / peak)
-            member = m0_active + d_phys
-            if density_min is not None:
-                member = np.maximum(member, float(density_min))
-            if density_max is not None:
-                member = np.minimum(member, float(density_max))
-            ensemble[k, active_cells] = member
-
-        ens_active = ensemble[:, active_cells]
-        std_active = np.std(ens_active, axis=0)
-        mean_active = np.mean(ens_active, axis=0)
-
-        ensemble_std = np.full(self.total_voxels, np.nan, dtype=np.float64)
-        ensemble_mean = np.full(self.total_voxels, np.nan, dtype=np.float64)
-        ensemble_std[active_cells] = std_active
-        ensemble_mean[active_cells] = mean_active
+        ensemble, ensemble_std, ensemble_mean = assemble_shuttle_ensemble(
+            m0_active, directions, _mw, amp, total_voxels=self.total_voxels,
+            active_cells=active_cells, lo=density_min, hi=density_max)
+        std_active = ensemble_std[active_cells]
 
         preserved_mean = float(np.mean(preserved))
         null_fraction_mean = float(np.mean(null_fraction))
@@ -3159,33 +3542,15 @@ class GravimetryInversion:
         new_sensor_coords = np.atleast_2d(np.asarray(new_sensor_coords, dtype=np.float64))
         new_g_observed = np.atleast_1d(np.asarray(new_g_observed, dtype=np.float64)).ravel()
 
-        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
-            raise ValueError(
-                "live_update_add_data requiere forward_model, sensor_coords, x_c, z_c."
-            )
-        if m0.shape[0] != self.total_voxels:
-            raise ValueError(
-                f"m0 debe tener total_voxels={self.total_voxels} elementos, tiene {m0.shape[0]}."
-            )
-        if lambda_mag <= 0:
-            raise ValueError("lambda_mag debe ser > 0 (garantiza A SPD).")
-        k = new_sensor_coords.shape[0]
-        if new_g_observed.shape[0] != k:
-            raise ValueError(
-                f"new_g_observed debe tener {k} elementos (uno por sensor nuevo), "
-                f"tiene {new_g_observed.shape[0]}."
-            )
+        k = validate_live_update_args(
+            m0, total_voxels=self.total_voxels, forward_model=forward_model,
+            sensor_coords=sensor_coords, x_c=x_c, z_c=z_c, lambda_mag=lambda_mag,
+            nombre="live_update_add_data", new_sensor_coords=new_sensor_coords,
+            new_obs=new_g_observed)
 
         # ── Máscara de celdas activas (idéntica a estimate_posterior_std) ─────
-        if topography_elevations is None:
-            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
-        else:
-            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
-        voxel_top = y_c - (self.dy / 2.0)
-        active_cells = voxel_top >= topo_depth
-        n_active = int(np.sum(active_cells))
-        if n_active == 0:
-            raise ValueError("[Live update] No hay celdas activas bajo la topografía dada.")
+        topo_depth, active_cells, n_active = active_cells_from_topography(
+            y_c, self.dy, self.total_voxels, topography_elevations, contexto="[Live update] ")
 
         n_sensors = len(g_observed)
         y_c_active = y_c[active_cells]
@@ -3196,64 +3561,37 @@ class GravimetryInversion:
         G_active = forward_model._build_sparse_kernel(
             x_c_arr, y_c_active, z_c_arr, np.asarray(sensor_coords, dtype=np.float64),
         )
-        if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma, _ = _sigma_adaptive(g_observed, detect_outliers=False)
-        else:
-            sigma = _sigma_parametric(g_observed, noise_floor, noise_pct)
+        sigma = resolve_sigma(g_observed, noise_floor, noise_pct, detect_outliers=False)
         Wd = sp.diags(1.0 / sigma)
         G_w = Wd @ G_active
-        col_norms = np.maximum(np.sqrt(G_w.power(2).sum(axis=0)).A1, 1e-12)
-        ws_diag = 1.0 / col_norms
-        Ws = sp.diags(ws_diag)
+        _mw = build_model_weights(MODEL_WEIGHT_SENSITIVITY, G_w=G_w)
+        ws_diag = _mw.diag
+        Ws = _mw.W
         G_scaled = (G_w @ Ws).tocsr()
 
         L_full = self._build_laplacian(hx=hx, hy=hy, hz=hz)
         L_active = L_full.tocsr()[active_cells, :][:, active_cells]
         z0 = self.dy / 2.0
         true_depth = np.clip(y_c_active - topo_depth[active_cells], a_min=1.0, a_max=None)
-        w_reg = 1.0 / ((true_depth + z0) ** 2.0)
-        w_reg = w_reg / np.mean(w_reg)
+        w_reg = depth_row_weights(true_depth, z0, beta=2.0)
         L_scaled = ((sp.diags(w_reg) @ L_active) @ Ws).tocsr()
 
         lambda_spatial = float(alpha_spatial) * (n_sensors / n_active)
-        A = (
-            (G_scaled.T @ G_scaled)
-            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
-            + (float(lambda_mag) ** 2) * sp.identity(n_active, format="csr", dtype=np.float64)
-        ).tocsr()
+        A = normal_equations(G_scaled, L_scaled, lambda_spatial, lambda_mag, n_active)
 
         # ── m0 físico → m̃0 escalado (m = Ws·m̃ ⇒ m̃ = m / ws_diag) ───────────
         m0_active = m0[active_cells]
-        m_tilde0 = m0_active / ws_diag
 
-        # ── Filas nuevas Ũ = Wd_new·G_new·Ws y dato nuevo escalado ────────────
+        # ── Filas nuevas: mismo W que produjo A (por eso A queda congelada) ───
         G_new = forward_model._build_sparse_kernel(
             x_c_arr, y_c_active, z_c_arr, new_sensor_coords,
         )                                                  # (k, n_active), física
-        sigma_new = _sigma_parametric(new_g_observed, noise_floor, noise_pct)
-        U_scaled = ((sp.diags(1.0 / sigma_new) @ G_new) @ Ws).toarray()   # (k, n_active)
-        d_tilde_new = new_g_observed / sigma_new
-
-        # ── Misfit en el dato nuevo ANTES (kernel físico sin escalar) ─────────
-        G_new_phys = G_new.tocsr()
-        d_norm = max(float(np.linalg.norm(new_g_observed)), 1e-30)
-        pred_before = G_new_phys @ m0_active
-        misfit_before = float(np.linalg.norm(pred_before - new_g_observed)) / d_norm
-
-        # ── Update de Woodbury rango-k (k resoluciones CG contra A congelada) ─
-        m_tilde1, info = woodbury_low_rank_update(
-            A, m_tilde0, U_scaled, d_tilde_new,
-            cg_maxiter=cg_maxiter, cg_rtol=cg_rtol,
+        m1_active, info, misfit_before, misfit_after = woodbury_update_from_new_rows(
+            A, m0_active, _mw, G_new, new_g_observed,
+            noise_floor=noise_floor, noise_pct=noise_pct,
+            cg_maxiter=cg_maxiter, cg_rtol=cg_rtol, lo=density_min, hi=density_max,
+            woodbury_fn=woodbury_low_rank_update,
         )
-
-        m1_active = ws_diag * m_tilde1
-        if density_min is not None:
-            m1_active = np.maximum(m1_active, float(density_min))
-        if density_max is not None:
-            m1_active = np.minimum(m1_active, float(density_max))
-
-        pred_after = G_new_phys @ m1_active
-        misfit_after = float(np.linalg.norm(pred_after - new_g_observed)) / d_norm
 
         model_full = np.array(m0, dtype=np.float64, copy=True)
         model_full[active_cells] = m1_active
@@ -3336,31 +3674,16 @@ class GravimetryInversion:
         g_observed = np.asarray(g_observed, dtype=np.float64)
         y_c = np.asarray(y_c, dtype=np.float64)
 
-        if forward_model is None or sensor_coords is None or x_c is None or z_c is None:
-            raise ValueError(
-                "live_update_suboctree requiere forward_model, sensor_coords, x_c, z_c."
-            )
-        if m0.shape[0] != self.total_voxels:
-            raise ValueError(
-                f"m0 debe tener total_voxels={self.total_voxels} elementos, tiene {m0.shape[0]}."
-            )
-        if lambda_mag <= 0:
-            raise ValueError("lambda_mag debe ser > 0 (garantiza A SPD).")
-        if region_mask is None and (region_center is None or region_radius is None):
-            raise ValueError(
-                "Define la sub-región: 'region_mask' (bool) o 'region_center'+'region_radius'."
-            )
+        validate_live_update_args(
+            m0, total_voxels=self.total_voxels, forward_model=forward_model,
+            sensor_coords=sensor_coords, x_c=x_c, z_c=z_c, lambda_mag=lambda_mag,
+            nombre="live_update_suboctree", exigir_region=True,
+            region_mask=region_mask, region_center=region_center,
+            region_radius=region_radius)
 
         # ── Máscara de celdas activas (idéntica a estimate_posterior_std) ─────
-        if topography_elevations is None:
-            topo_depth = np.zeros(self.total_voxels, dtype=np.float64)
-        else:
-            topo_depth = np.asarray(topography_elevations, dtype=np.float64)
-        voxel_top = y_c - (self.dy / 2.0)
-        active_cells = voxel_top >= topo_depth
-        n_active = int(np.sum(active_cells))
-        if n_active == 0:
-            raise ValueError("[Sub-octree] No hay celdas activas bajo la topografía dada.")
+        topo_depth, active_cells, n_active = active_cells_from_topography(
+            y_c, self.dy, self.total_voxels, topography_elevations, contexto="[Sub-octree] ")
 
         x_arr = np.asarray(x_c, dtype=np.float64)
         z_arr = np.asarray(z_c, dtype=np.float64)
@@ -3369,50 +3692,26 @@ class GravimetryInversion:
         z_a = z_arr[active_cells]
 
         # ── Sub-región S (en índices LOCALES dentro de las activas) ───────────
-        if region_mask is not None:
-            region_mask = np.asarray(region_mask, dtype=bool).ravel()
-            if region_mask.shape[0] != self.total_voxels:
-                raise ValueError("region_mask debe tener total_voxels elementos.")
-            in_S_full = region_mask & active_cells
-            S_local = in_S_full[active_cells]
-        else:
-            cx, cy, cz = (float(region_center[0]), float(region_center[1]),
-                          float(region_center[2]))
-            r2 = float(region_radius) ** 2
-            S_local = ((x_a - cx) ** 2 + (y_a - cy) ** 2 + (z_a - cz) ** 2) <= r2
-        n_S = int(np.sum(S_local))
-        if n_S == 0:
-            raise ValueError("[Sub-octree] La sub-región no contiene celdas activas.")
+        S_local, n_S = select_subregion(
+            region_mask, region_center, region_radius, x_a=x_a, y_a=y_a, z_a=z_a,
+            active_cells=active_cells, total_voxels=self.total_voxels, contexto="[Sub-octree] ")
 
         # ── Dato combinado (existente + nuevo) y geometría de sensores ────────
-        sensors = np.asarray(sensor_coords, dtype=np.float64)
-        data = g_observed
-        if new_sensor_coords is not None and new_g_observed is not None:
-            new_sensor_coords = np.atleast_2d(np.asarray(new_sensor_coords, dtype=np.float64))
-            new_g_observed = np.atleast_1d(np.asarray(new_g_observed, dtype=np.float64)).ravel()
-            if new_g_observed.shape[0] != new_sensor_coords.shape[0]:
-                raise ValueError("new_g_observed debe tener un valor por sensor nuevo.")
-            sensors = np.vstack([sensors, new_sensor_coords])
-            data = np.concatenate([g_observed, new_g_observed])
+        sensors, data = combine_existing_and_new_data(
+            sensor_coords, g_observed, new_sensor_coords, new_g_observed)
 
         # ── Kernel sobre TODAS las activas, columnas S vs fondo ───────────────
         G_all = forward_model._build_sparse_kernel(x_a, y_a, z_a, sensors).tocsc()
-        G_S = G_all[:, S_local].tocsr()
         m0_active = m0[active_cells]
-        bg_local = ~S_local
-        d_bg = G_all[:, bg_local] @ m0_active[bg_local]      # respuesta del fondo congelado
-        d_res = data - d_bg
+        G_S, d_res = split_region_response(G_all, S_local, m0_active, data)
 
         # ── Wd + column scaling Ws (frozen, local a S) ────────────────────────
-        if noise_floor == 0.02 and noise_pct == 0.02:
-            sigma, _ = _sigma_adaptive(data, detect_outliers=False)
-        else:
-            sigma = _sigma_parametric(data, noise_floor, noise_pct)
+        sigma = resolve_sigma(data, noise_floor, noise_pct, detect_outliers=False)
         Wd = sp.diags(1.0 / sigma)
         G_Sw = Wd @ G_S
-        col_norms = np.maximum(np.sqrt(G_Sw.power(2).sum(axis=0)).A1, 1e-12)
-        ws_diag = 1.0 / col_norms
-        Ws = sp.diags(ws_diag)
+        _mw = build_model_weights(MODEL_WEIGHT_SENSITIVITY, G_w=G_Sw)
+        ws_diag = _mw.diag
+        Ws = _mw.W
         G_scaled = (G_Sw @ Ws).tocsr()
 
         # ── Laplaciano restringido a S + depth weighting, escalado ────────────
@@ -3422,8 +3721,7 @@ class GravimetryInversion:
         z0 = self.dy / 2.0
         true_depth = np.clip(y_a[S_local] - topo_depth[active_cells][S_local],
                              a_min=1.0, a_max=None)
-        w_reg = 1.0 / ((true_depth + z0) ** 2.0)
-        w_reg = w_reg / np.mean(w_reg)
+        w_reg = depth_row_weights(true_depth, z0, beta=2.0)
         L_scaled = ((sp.diags(w_reg) @ L_S) @ Ws).tocsr()
 
         lambda_spatial = float(alpha_spatial) * (len(data) / n_S)
@@ -3431,35 +3729,21 @@ class GravimetryInversion:
 
         # ── Normal SPD pequeña en S + término de ancla hacia m0_S ─────────────
         m_tilde0_S = m0_active[S_local] / ws_diag        # prior en espacio escalado
-        A_S = (
-            (G_scaled.T @ G_scaled)
-            + (lambda_spatial ** 2) * (L_scaled.T @ L_scaled)
-            + (lambda_anchor ** 2) * sp.identity(n_S, format="csr", dtype=np.float64)
-        ).tocsr()
+        A_S = normal_equations(G_scaled, L_scaled, lambda_spatial, lambda_anchor, n_S)
         b_S = (
             G_scaled.T @ (Wd @ d_res)
             + (lambda_anchor ** 2) * m_tilde0_S
         )
 
-        from scipy.sparse.linalg import cg as _cg, LinearOperator as _LO
-        diagA = np.maximum(A_S.diagonal(), 1e-30)
-        M = _LO((n_S, n_S), matvec=lambda v: v / diagA)
-        m_tilde1_S, _info = _cg(A_S, b_S, rtol=cg_rtol, atol=0.0, maxiter=cg_maxiter, M=M)
-
-        m1_S = ws_diag * m_tilde1_S
-        if density_min is not None:
-            m1_S = np.maximum(m1_S, float(density_min))
-        if density_max is not None:
-            m1_S = np.minimum(m1_S, float(density_max))
+        m1_S = solve_local_region_cg(
+            A_S, b_S, _mw, n_S, cg_rtol=cg_rtol, cg_maxiter=cg_maxiter,
+            lo=density_min, hi=density_max)
 
         # ── Misfit ponderado del dato (exist.+nuevo) antes/después ────────────
-        Wd_data_norm = max(float(np.linalg.norm(Wd @ data)), 1e-30)
-        pred_before = G_all @ m0_active
-        misfit_before = float(np.linalg.norm(Wd @ (pred_before - data))) / Wd_data_norm
+        misfit_before = relative_misfit(G_all @ m0_active, data, weight=Wd)
         m1_active = m0_active.copy()
         m1_active[S_local] = m1_S
-        pred_after = G_all @ m1_active
-        misfit_after = float(np.linalg.norm(Wd @ (pred_after - data))) / Wd_data_norm
+        misfit_after = relative_misfit(G_all @ m1_active, data, weight=Wd)
 
         model_full = np.array(m0, dtype=np.float64, copy=True)
         # Solo S cambia; el resto queda BYTE-IDÉNTICO a m0 (incluidas celdas de aire).
@@ -3658,10 +3942,10 @@ def solve_inversion_treemesh(
     d_w = Wd @ g_observed
     G_w = (Wd @ G).tocsr()
 
-    # ── Column scaling (Ws) ───────────────────────────────────────────────────
-    col_norms = np.sqrt(G_w.power(2).sum(axis=0)).A1
-    col_norms = np.maximum(col_norms, 1e-12)
-    Ws = sp.diags(1.0 / col_norms)
+    # ── Peso de modelo (FASE 7: el mismo constructor que el resto del motor) ──
+    _mw = build_model_weights(MODEL_WEIGHT_SENSITIVITY, G_w=G_w)
+    col_norms = 1.0 / _mw.diag
+    Ws = _mw.W
     G_scaled = G_w @ Ws
 
     _lb_tilde = (float(density_min) - float(base_density)) * col_norms
@@ -3673,10 +3957,12 @@ def solve_inversion_treemesh(
     # z0 = media de la semi-altura de celda en profundidad (análogo a dy/2 regular,
     # robusto a celdas variables).
     z0 = 0.5 * float(np.mean(sizes[:, 1]))
+    # Peso de FILA por profundidad. A diferencia del solver de grilla regular, aquí
+    # `w_reg` NO se cancela: se aplica sólo a la smallness y a la suavidad, no al
+    # bloque de datos, así que `depth_beta` está VIVO (la Fase 4 lo midió: 8.125×).
+    # Producción conmuta a este solver SOLA con >50.000 celdas o >50 km de survey.
     true_depth = np.clip(depths, a_min=1.0, a_max=None)
-    w_depth = (true_depth + z0) ** depth_beta
-    w_reg = 1.0 / w_depth
-    w_reg = w_reg / np.mean(w_reg)
+    w_reg = depth_row_weights(true_depth, z0, beta=depth_beta)
 
     # ── Smallness (depth-weighted, H2) ────────────────────────────────────────
     _w_small = float(lambda_mag) * w_reg
@@ -3767,6 +4053,39 @@ def solve_inversion_treemesh(
         solver_meta["itn"] = int(_itn)
         solver_meta["chi2_final"] = float(_chi2_final)
         solver_meta["misfit_percent"] = misfit_percent
+        # ── FASE 7, criterio (d): también este solver declara su funcional ────
+        # La auditoría (§9.1884) señaló que producción conmuta a Octree SOLA con
+        # >50.000 celdas o >50 km de survey, de modo que «la misma configuración
+        # nominal aplica un depth weighting o ninguno según el tamaño del
+        # levantamiento, y nada en la salida lo declara». Ahora sí: aquí el peso de
+        # profundidad `w_reg` va SÓLO en la smallness y la suavidad, no en el bloque
+        # de datos, así que `depth_beta` está VIVO — al revés que en el solver de
+        # grilla regular. Que las dos corridas lo digan es lo que hace comparables
+        # dos resultados del mismo producto.
+        solver_meta["regularization_functional"] = declare_functional(
+            _mw,
+            smallness=SMALLNESS_SCALED_BY_W,   # el bloque es diags(λ·w_reg)·Ws
+            depths=depths,
+            depth_beta_solicitado=float(depth_beta),
+            smoothness_row_weight=bool(alpha_spatial > 0),
+        ) | {
+            # El peso de PROFUNDIDAD de este solver no es el peso de modelo `Ws`:
+            # es un peso de fila independiente que NO se cancela. Se declara aparte
+            # para no forzar la regla general a describir un tercer caso.
+            "depth_row_weight_kind": "inverse_depth_row",
+            "depth_beta_declared": float(depth_beta),
+            "depth_beta_has_effect": True,
+            "depth_weighting_active": True,
+            "effect_mechanism": "row_weight_on_smallness_and_smoothness",
+            "explanation_es": (
+                f"Solver Octree: el peso de profundidad (beta={depth_beta}) se aplica "
+                f"como peso de FILA sobre la smallness y la suavidad, no sobre el "
+                f"bloque de datos, asi que NO se cancela y beta esta VIVO (medido en "
+                f"la Fase 4: 8.125x). Es el funcional opuesto al del solver de grilla "
+                f"regular, y produccion elige entre los dos por TAMANO de la malla "
+                f"(>50.000 celdas o >50 km), no por decision del usuario."
+            ),
+        }
         solver_meta["n_cells"] = n_cells
         solver_meta["n_sat_lower"] = n_sat_lower
         solver_meta["n_sat_upper"] = n_sat_upper
