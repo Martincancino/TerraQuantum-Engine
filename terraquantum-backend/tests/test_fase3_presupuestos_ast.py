@@ -61,11 +61,20 @@ def test_the_measurement_is_not_empty(medido):
     """Canario: el backend tiene monstruos medidos; si no salen, el medidor miente.
 
     MEDIDO 2026-08-11: `services/geophysics_service.py::run_geophysics_inversion`
-    tiene 2.013 LOC y complejidad ciclomática 183 — es la espina dorsal que la
-    Fase 8 va a partir. Mientras siga ahí, este número tiene que aparecer.
+    tenía 2.013 LOC y CC 183 — la espina dorsal que la Fase 8 iba a partir, y este
+    canario exigía ver ese número «mientras siga ahí».
+
+    **ACTUALIZADO 2026-08-16: ya no está ahí.** La Fase 8 lo dejó en 152 LOC y
+    CC 12 con byte-identidad verificada, así que el umbral de 1.000 LOC dejó de
+    describir el repositorio y pasó a describir el pasado. Se baja a 300 —el techo
+    que la propia Fase 8 fija para el camino crítico— porque el canario existe para
+    detectar que el MEDIDOR se rompió (devolvería ceros), no para exigir que el
+    monolito siga vivo. Hoy el máximo de `services` es
+    `gravity_import_service.py::_import_gravity_csv_v1_impl` (777 LOC, CC 181), que
+    la Fase 8 dejó fuera a propósito por no ser la espina de inversión.
     """
     assert medido["services"]["cc_max"] > 100, medido["services"]
-    assert medido["services"]["func_loc_max"] > 1000, medido["services"]
+    assert medido["services"]["func_loc_max"] > 300, medido["services"]
     assert medido["exploration"]["loc"] > 5000
     assert medido["core"]["cc_max"] < 40, (
         "el Core dejó de ser simple: mira qué entró"
