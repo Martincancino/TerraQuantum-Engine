@@ -23,12 +23,30 @@ from services.block_model_store import (
     list_project_runs,
 )
 from core.utils import sanitize_nan
+from schemas.system_schema import (
+    ConnectivitySummaryResponse,
+    HealthResponse,
+    SystemStatusResponse,
+)
 
 
 router = APIRouter()
 
 
-@router.get("/health")
+# FASE 10 — `/project-runs`, `/project-run-detail` y `/compare-runs` NO llevan
+# `response_model`: devuelven el reporte persistido tal cual, cuya forma la fija
+# la corrida (métricas y diagnósticos varían por física y por ruta). Declarar un
+# esquema ahí sería inventar una estructura fija sobre algo que no la tiene; el
+# frontend los consume como JSON abierto y así está declarado. `/export-run`
+# devuelve un ZIP.
+#
+# `response_model_exclude_unset=True` NO es decoración. MEDIDO al escribir esta
+# fase: un `response_model` a secas **inyecta** los opcionales que el servicio no
+# emitió (`user_supplied_key: null` apareció en 3 de las 4 features de
+# conectividad, donde antes la clave sencillamente no estaba). Declarar un
+# contrato no puede cambiar el payload; con `exclude_unset` la respuesta sale
+# clave a clave idéntica, y hay un test que lo comprueba contra el servicio.
+@router.get("/health", response_model=HealthResponse, response_model_exclude_unset=True)
 async def health():
     """Latido + IDENTIDAD del proceso (Fase 2, H-19).
 
@@ -52,7 +70,8 @@ async def health():
     return payload
 
 
-@router.get("/system-status")
+@router.get("/system-status", response_model=SystemStatusResponse,
+            response_model_exclude_unset=True)
 async def system_status():
     return {
         "status": "ok",
@@ -77,7 +96,8 @@ async def system_status():
     }
 
 
-@router.get("/system/connectivity")
+@router.get("/system/connectivity", response_model=ConnectivitySummaryResponse,
+            response_model_exclude_unset=True)
 async def system_connectivity(probe: bool = False):
     """F7 — Honestidad offline: qué features necesitan internet y confirmación de
     que el camino dorado (ingesta→inversión→3D→export) funciona sin conexión.

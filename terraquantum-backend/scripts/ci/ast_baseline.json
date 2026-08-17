@@ -1,13 +1,13 @@
 {
   "api": {
     "files": 22,
-    "loc": 6556,
+    "loc": 6620,
     "func_loc_max": 374,
-    "func_loc_max_where": "api/gravity_import_api.py:1252 enrich_package_endpoint",
+    "func_loc_max_where": "api/gravity_import_api.py:1263 enrich_package_endpoint",
     "cc_max": 79,
-    "cc_max_where": "api/gravity_import_api.py:1252 enrich_package_endpoint",
+    "cc_max_where": "api/gravity_import_api.py:1263 enrich_package_endpoint",
     "args_max": 22,
-    "args_max_where": "api/gravity_import_api.py:677 invert_with_corrections"
+    "args_max_where": "api/gravity_import_api.py:684 invert_with_corrections"
   },
   "core": {
     "files": 11,
@@ -50,8 +50,8 @@
     "args_max_where": "reporting/report_generator.py:155 generate_technical_report_html"
   },
   "schemas": {
-    "files": 9,
-    "loc": 2278,
+    "files": 11,
+    "loc": 2850,
     "func_loc_max": 19,
     "func_loc_max_where": "schemas/geophysics_schema.py:893 _validate_grid_bounds",
     "cc_max": 7,
@@ -61,7 +61,7 @@
   },
   "services": {
     "files": 54,
-    "loc": 28169,
+    "loc": 28217,
     "func_loc_max": 777,
     "func_loc_max_where": "services/gravity_import_service.py:898 _import_gravity_csv_v1_impl",
     "cc_max": 181,

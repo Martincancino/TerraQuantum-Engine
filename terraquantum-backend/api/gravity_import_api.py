@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Form, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ValidationError
 from typing import Optional
 
@@ -29,6 +30,12 @@ from services.geo_utils import compute_footprint_from_center, extract_utm_zone_s
 from schemas.geophysics_schema import GeophysicsInvertInput
 from schemas.gravity_import_schema import SpatialReadiness, RegionalScalePreflight
 from schemas.response_schema import GravityImportPreviewResponse, GravityImportInvertResponse
+from schemas.ingest_contracts_schema import (
+    AnalyzeColumnsResponse,
+    EnrichPackageResponse,
+    LoadPackageResponse,
+    ParseRowsResponse,
+)
 from services.gravity_import_service import (
     import_gravity_csv_v1,
     read_csv_headers,
@@ -805,7 +812,7 @@ async def invert_with_corrections(
                 pass
 
 
-@router_v2.post("/export-clean-csv")
+@router_v2.post("/export-clean-csv", response_class=PlainTextResponse)
 @limiter.limit("10/minute")
 async def export_clean_csv(
     request: Request,
@@ -892,7 +899,11 @@ async def export_clean_csv(
 #   y emite UN CSV con encabezado de metadatos. load-package: lo lee y rutea al
 #   solver correcto (grav/mag/joint/+sondajes) reusando run_geophysics_inversion.
 # ═════════════════════════════════════════════════════════════════════════════
-@router_v2.post("/build-package")
+# FASE 10 — `response_class` y no `response_model`: esta ruta devuelve el CSV del
+# paquete como **texto**, no JSON. Sin esta línea el OpenAPI declaraba
+# `application/json` para un `text/csv`, y cualquier generador de tipos habría
+# fabricado un objeto que nadie devuelve nunca.
+@router_v2.post("/build-package", response_class=PlainTextResponse)
 @limiter.limit("10/minute")
 async def build_package(
     request: Request,
@@ -1106,7 +1117,7 @@ async def build_package(
                     pass
 
 
-@router_v2.post("/analyze-columns")
+@router_v2.post("/analyze-columns", response_model=AnalyzeColumnsResponse)
 @limiter.limit("30/minute")
 async def analyze_columns_endpoint(
     request: Request,
@@ -1187,7 +1198,7 @@ async def analyze_columns_endpoint(
                 pass
 
 
-@router_v2.post("/parse-rows")
+@router_v2.post("/parse-rows", response_model=ParseRowsResponse)
 @limiter.limit("30/minute")
 async def parse_rows_endpoint(
     request: Request,
@@ -1247,7 +1258,7 @@ async def parse_rows_endpoint(
                 pass
 
 
-@router_v2.post("/enrich-package")
+@router_v2.post("/enrich-package", response_model=EnrichPackageResponse)
 @limiter.limit("10/minute")
 async def enrich_package_endpoint(
     request: Request,
@@ -1625,7 +1636,12 @@ async def enrich_package_endpoint(
                     pass
 
 
-@router_v2.post("/load-package")
+# `exclude_unset` es OBLIGATORIO aquí: esta ruta tiene TRES respuestas
+# (error/queued/done) y el modelo declara la unión de las tres. Sin él, una
+# respuesta `queued` saldría con `inversionResult: null` — un campo que ese caso
+# nunca tuvo y que el frontend usa para discriminar.
+@router_v2.post("/load-package", response_model=LoadPackageResponse,
+                response_model_exclude_unset=True)
 @limiter.limit("10/minute")
 async def load_package(
     request: Request,

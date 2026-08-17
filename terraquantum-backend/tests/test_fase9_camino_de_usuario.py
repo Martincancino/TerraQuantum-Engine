@@ -104,6 +104,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+#: Archivos que NOMBRAN rutas sin llamarlas. La Fase 10 genera
+#: `types/backend-contracts.generated.ts` desde el OpenAPI, y su cabecera lleva
+#: la tabla «qué ruta devuelve qué tipo». Contarlo como consumidor rompería la
+#: pregunta que este guard hace: *declarar el tipo de una respuesta no le da a
+#: nadie forma de llegar al endpoint*. Si se contara, las 10 rutas de scripting
+#: toleradas parecerían tener UI de golpe — y la excusa escrita se volvería
+#: mentira sin que nadie tocara una línea de interfaz.
+_ARCHIVOS_QUE_NO_SON_CONSUMIDORES = ("backend-contracts.generated.ts",)
+
+
 def _leer_web(dirs: tuple[str, ...]) -> list[tuple[pathlib.Path, str]]:
     salida: list[tuple[pathlib.Path, str]] = []
     for d in dirs:
@@ -114,6 +124,8 @@ def _leer_web(dirs: tuple[str, ...]) -> list[tuple[pathlib.Path, str]]:
             if f.suffix not in _WEB_SUFFIXES:
                 continue
             if "node_modules" in f.parts or ".next" in f.parts:
+                continue
+            if f.name in _ARCHIVOS_QUE_NO_SON_CONSUMIDORES:
                 continue
             salida.append((f, f.read_text(encoding="utf-8", errors="ignore")))
     return salida
