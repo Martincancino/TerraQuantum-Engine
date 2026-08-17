@@ -187,6 +187,11 @@ def _comentario(texto: str | None, sangria: str = "") -> str:
     if not texto:
         return ""
     lineas = [l.rstrip() for l in texto.strip().split("\n")]
+    # Pydantic entrega `description=` como UN párrafo largo; sin envolver, el
+    # archivo generado sale con líneas de 300 caracteres que nadie lee.
+    if len(lineas) == 1 and len(lineas[0]) > 92 - len(sangria):
+        import textwrap
+        lineas = textwrap.wrap(lineas[0], width=88 - len(sangria))
     if len(lineas) == 1:
         return f"{sangria}/** {lineas[0]} */\n"
     cuerpo = "\n".join(f"{sangria} *{(' ' + l) if l else ''}" for l in lineas)

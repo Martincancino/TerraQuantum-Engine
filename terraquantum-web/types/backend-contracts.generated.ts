@@ -245,9 +245,19 @@ export type ConnectivityFeature = {
   key: string;
   requires_internet: boolean;
   required_for_golden_path: boolean;
+  /**
+   * ¿Está lista para usarse? OJO: para el copiloto la clave la pone el usuario (BYO-key),
+   * así que `configured:false` NO significa «no disponible» — hay que mirar
+   * `user_supplied_key`.
+   */
   configured: boolean;
+  /** Hay una alternativa local que no necesita internet. */
   local_fallback: boolean;
   message: string;
+  /**
+   * La clave la aporta el usuario desde la interfaz. Sin este campo, `configured:false` se
+   * lee como «no disponible», que es falso.
+   */
   user_supplied_key?: boolean | null;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
@@ -263,10 +273,17 @@ export type ConnectivityFeature = {
  * `?probe=true`.
  */
 export type ConnectivitySummaryResponse = {
+  /** El camino dorado (ingesta→inversión→3D→export) funciona sin conexión. */
   golden_path_offline: boolean;
   golden_path_note: string;
+  /**
+   * SIEMPRE `false`: este resumen no abre un socket jamás. Antes devolvía `true` sin tocar
+   * la red (defecto medido en la Fase 9).
+   */
   probed?: boolean;
+  /** El cliente pidió `?probe=true`. */
   probe_requested?: boolean | null;
+  /** Por qué no se sondeó pese a pedirlo. */
   probe_note?: string | null;
   online_features?: ConnectivityFeature[];
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
@@ -619,6 +636,10 @@ export type HealthResponse = {
 export type HistoryRun = {
   project_id: string;
   run_id: string;
+  /**
+   * `done` | `error` | `cancelled`, y también la corrida interrumpida por un cierre del
+   * proceso: sobrevive a reinicios del backend.
+   */
   status: string;
   source?: string | null;
   route?: string | null;
@@ -723,6 +744,12 @@ export type LicenseActivationResponse = {
   source?: string;
   effective_tier: string;
   limits?: LicenseLimits | null;
+  /**
+   * LA condición de éxito. Un token inválido responde HTTP 200 con `activated:false`, así
+   * que mirar el código de estado no basta. Y existe `valid:true` + `activated:false`:
+   * licencia buena que no se pudo escribir en disco, con `reason` sobreescrito por el
+   * motivo.
+   */
   activated: boolean;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
@@ -737,6 +764,10 @@ export type LicenseActivationResponse = {
  * existe.
  */
 export type LicenseLimits = {
+  /**
+   * Lo DECLARA el token; hoy ninguna inversión lo comprueba (`check_voxel_budget` no tiene
+   * llamador de producción, medido en la Fase 9). No prometer un tope que no se aplica.
+   */
   max_voxels?: number | null;
   watermark?: boolean;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
@@ -752,16 +783,29 @@ export type LicenseLimits = {
  */
 export type LicenseStatusResponse = {
   valid: boolean;
+  /**
+   * Cadena LIBRE dentro del token firmado: el backend no la valida contra un enumerado y
+   * sólo hay límites tabulados para `local`/`pro`/`free`. Cerrarla en el cliente sería
+   * inventar.
+   */
   tier: string;
+  /** Motivo en español escrito por el backend: la única explicación del estado. */
   reason: string;
   licensee?: string | null;
   product?: string | null;
   issued_at?: string | null;
+  /** ISO-8601, o `null` = licencia perpetua. */
   expires_at?: string | null;
   expired?: boolean;
+  /**
+   * De dónde salió el token vigente: `env` | `file` | `none`. `env` GANA sobre el archivo
+   * que escribe /license/activate, así que activar desde la UI puede quedar anulado en
+   * silencio — el panel lo avisa.
+   */
   source?: string;
   effective_tier: string;
   limits?: LicenseLimits | null;
+  /** `licensed` | `local_free`. SÓLO en /status: /license/activate no devuelve este campo. */
   mode: string;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;

@@ -106,13 +106,24 @@ class ConnectivityFeature(BaseModel):
     key: str
     requires_internet: bool
     required_for_golden_path: bool
-    #: Fase 9: `configured` responde «¿está lista para usarse?». Para el copiloto
-    #: la clave la pone el usuario (BYO-key), así que `configured:false` NO
-    #: significa «no disponible» — de ahí `user_supplied_key`.
-    configured: bool
-    local_fallback: bool
+    configured: bool = Field(
+        ...,
+        description=(
+            "¿Está lista para usarse? OJO: para el copiloto la clave la pone el "
+            "usuario (BYO-key), así que `configured:false` NO significa «no "
+            "disponible» — hay que mirar `user_supplied_key`."
+        ),
+    )
+    local_fallback: bool = Field(
+        ..., description="Hay una alternativa local que no necesita internet.")
     message: str
-    user_supplied_key: Optional[bool] = None
+    user_supplied_key: Optional[bool] = Field(
+        default=None,
+        description=(
+            "La clave la aporta el usuario desde la interfaz. Sin este campo, "
+            "`configured:false` se lee como «no disponible», que es falso."
+        ),
+    )
 
 
 class ConnectivitySummaryResponse(BaseModel):
@@ -126,11 +137,24 @@ class ConnectivitySummaryResponse(BaseModel):
     """
     model_config = ConfigDict(extra="allow")
 
-    golden_path_offline: bool
+    golden_path_offline: bool = Field(
+        ...,
+        description=(
+            "El camino dorado (ingesta→inversión→3D→export) funciona sin conexión."
+        ),
+    )
     golden_path_note: str
-    probed: bool = False
-    probe_requested: Optional[bool] = None
-    probe_note: Optional[str] = None
+    probed: bool = Field(
+        default=False,
+        description=(
+            "SIEMPRE `false`: este resumen no abre un socket jamás. Antes "
+            "devolvía `true` sin tocar la red (defecto medido en la Fase 9)."
+        ),
+    )
+    probe_requested: Optional[bool] = Field(
+        default=None, description="El cliente pidió `?probe=true`.")
+    probe_note: Optional[str] = Field(
+        default=None, description="Por qué no se sondeó pese a pedirlo.")
     online_features: List[ConnectivityFeature] = Field(default_factory=list)
 
 
@@ -148,7 +172,14 @@ class LicenseLimits(BaseModel):
     """
     model_config = ConfigDict(extra="allow")
 
-    max_voxels: Optional[int] = None
+    max_voxels: Optional[int] = Field(
+        default=None,
+        description=(
+            "Lo DECLARA el token; hoy ninguna inversión lo comprueba "
+            "(`check_voxel_budget` no tiene llamador de producción, medido en la "
+            "Fase 9). No prometer un tope que no se aplica."
+        ),
+    )
     watermark: bool = False
 
 
@@ -162,22 +193,41 @@ class LicenseStatusResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     valid: bool
-    tier: str
-    #: Motivo en español escrito por el backend: la única explicación del estado.
-    reason: str
+    tier: str = Field(
+        ...,
+        description=(
+            "Cadena LIBRE dentro del token firmado: el backend no la valida "
+            "contra un enumerado y sólo hay límites tabulados para "
+            "`local`/`pro`/`free`. Cerrarla en el cliente sería inventar."
+        ),
+    )
+    reason: str = Field(
+        ...,
+        description="Motivo en español escrito por el backend: la única explicación del estado.",
+    )
     licensee: Optional[str] = None
     product: Optional[str] = None
     issued_at: Optional[str] = None
-    #: ISO-8601, o `null` = licencia perpetua.
-    expires_at: Optional[str] = None
+    expires_at: Optional[str] = Field(
+        default=None, description="ISO-8601, o `null` = licencia perpetua.")
     expired: bool = False
-    #: De dónde salió el token vigente. `env` GANA sobre `file`: activar desde la
-    #: UI puede quedar anulado en silencio, y el panel lo avisa.
-    source: str = "none"
+    source: str = Field(
+        default="none",
+        description=(
+            "De dónde salió el token vigente: `env` | `file` | `none`. `env` GANA "
+            "sobre el archivo que escribe /license/activate, así que activar "
+            "desde la UI puede quedar anulado en silencio — el panel lo avisa."
+        ),
+    )
     effective_tier: str
     limits: Optional[LicenseLimits] = None
-    #: `licensed` | `local_free`. **Sólo en /status** — ver cabecera del módulo.
-    mode: str
+    mode: str = Field(
+        ...,
+        description=(
+            "`licensed` | `local_free`. SÓLO en /status: /license/activate no "
+            "devuelve este campo."
+        ),
+    )
 
 
 class LicenseActivationResponse(BaseModel):
@@ -202,7 +252,15 @@ class LicenseActivationResponse(BaseModel):
     source: str = "none"
     effective_tier: str
     limits: Optional[LicenseLimits] = None
-    activated: bool
+    activated: bool = Field(
+        ...,
+        description=(
+            "LA condición de éxito. Un token inválido responde HTTP 200 con "
+            "`activated:false`, así que mirar el código de estado no basta. Y "
+            "existe `valid:true` + `activated:false`: licencia buena que no se "
+            "pudo escribir en disco, con `reason` sobreescrito por el motivo."
+        ),
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -243,7 +301,13 @@ class HistoryRun(BaseModel):
 
     project_id: str
     run_id: str
-    status: str
+    status: str = Field(
+        ...,
+        description=(
+            "`done` | `error` | `cancelled`, y también la corrida interrumpida "
+            "por un cierre del proceso: sobrevive a reinicios del backend."
+        ),
+    )
     source: Optional[str] = None
     route: Optional[str] = None
     error: Optional[str] = None
