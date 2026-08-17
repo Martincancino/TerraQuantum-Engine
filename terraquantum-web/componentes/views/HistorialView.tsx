@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useReducer } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import {
   compareRuns,
@@ -132,6 +132,127 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
   );
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FASE 10 — El estado de la vista, explícito.
+// Cinco flujos asíncronos independientes; cada uno con su propio final.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type HistorialState = {
+  projectRuns: ProjectRunsViewData | null;
+  loading: boolean;
+  loadError: string | null;
+  loadingRunKey: string | null;
+  runError: string | null;
+  detailKey: string | null;
+  detailLoading: string | null;
+  runDetails: Record<string, ProjectRunDetail>;
+  detailError: string | null;
+  baseRun: SelectedRun | null;
+  compareRun: SelectedRun | null;
+  loadingCompare: boolean;
+  compareError: string | null;
+  compareResult: CompareResult | null;
+  deletingKey: string | null;
+  deleteError: string | null;
+  confirmDelete: { projectId: string; runId: string } | null;
+};
+
+const historialInicial: HistorialState = {
+  projectRuns: null, loading: true, loadError: null,
+  loadingRunKey: null, runError: null,
+  detailKey: null, detailLoading: null, runDetails: {}, detailError: null,
+  baseRun: null, compareRun: null, loadingCompare: false,
+  compareError: null, compareResult: null,
+  deletingKey: null, deleteError: null, confirmDelete: null,
+};
+
+type HistorialAction =
+  | { type: "CAMPO"; campo: keyof HistorialState; valor: HistorialState[keyof HistorialState] }
+  | { type: "CATALOGO_PEDIDO" }
+  | { type: "CATALOGO_OK"; datos: ProjectRunsViewData | null }
+  | { type: "CATALOGO_FALLO"; mensaje: string }
+  | { type: "MODELO_ABRIENDO"; clave: string }
+  | { type: "MODELO_FALLO"; mensaje: string }
+  | { type: "MODELO_LISTO" }
+  | { type: "DETALLE_CERRADO" }
+  | { type: "DETALLE_PEDIDO"; clave: string }
+  | { type: "DETALLE_OK"; clave: string; detalle: ProjectRunDetail }
+  | { type: "DETALLE_FALLO"; mensaje: string }
+  | { type: "BASE_ELEGIDA"; seleccion: SelectedRun }
+  | { type: "COMPARACION_INICIADA"; seleccion: SelectedRun }
+  | { type: "COMPARACION_OK"; resultado: CompareResult | null }
+  | { type: "COMPARACION_FALLO"; mensaje: string }
+  | { type: "COMPARACION_TERMINADA" }
+  | { type: "BORRADO_INICIADO"; clave: string }
+  | { type: "BORRADO_FALLO"; mensaje: string }
+  | { type: "BORRADO_TERMINADO" };
+
+function historialReducer(estado: HistorialState, accion: HistorialAction): HistorialState {
+  switch (accion.type) {
+    case "CAMPO":
+      return { ...estado, [accion.campo]: accion.valor };
+    case "CATALOGO_PEDIDO":
+      return { ...estado, loading: true, loadError: null };
+    case "CATALOGO_OK":
+      // `parseProjectRuns` devuelve `null` si el payload no tiene la forma
+      // esperada. Eso NO es una carga con éxito y vacía: es un formato que no se
+      // entendió, y decirlo es más útil que pintar una lista vacía.
+      return accion.datos
+        ? { ...estado, projectRuns: accion.datos, loading: false, loadError: null }
+        : { ...estado, projectRuns: null, loading: false,
+            loadError: "El historial llegó con un formato que no se pudo leer." };
+    case "CATALOGO_FALLO":
+      return { ...estado, loading: false, loadError: accion.mensaje };
+    case "MODELO_ABRIENDO":
+      return { ...estado, loadingRunKey: accion.clave, runError: null };
+    case "MODELO_FALLO":
+      // El indicador se apaga EN LA MISMA transición que pone el error: eran dos
+      // llamadas separadas repetidas en tres sitios.
+      return { ...estado, runError: accion.mensaje, loadingRunKey: null };
+    case "MODELO_LISTO":
+      return { ...estado, loadingRunKey: null };
+    case "DETALLE_CERRADO":
+      return { ...estado, detailKey: null };
+    case "DETALLE_PEDIDO":
+      return { ...estado, detailKey: accion.clave, detailLoading: accion.clave, detailError: null };
+    case "DETALLE_OK":
+      return {
+        ...estado,
+        runDetails: { ...estado.runDetails, [accion.clave]: accion.detalle },
+        detailLoading: null,
+      };
+    case "DETALLE_FALLO":
+      return { ...estado, detailError: accion.mensaje, detailLoading: null };
+    case "BASE_ELEGIDA":
+      return { ...estado, baseRun: accion.seleccion, compareError: null };
+    case "COMPARACION_INICIADA":
+      return { ...estado, compareRun: accion.seleccion, loadingCompare: true, compareError: null };
+    case "COMPARACION_OK":
+      return {
+        ...estado,
+        compareResult: accion.resultado,
+        compareError: accion.resultado ? null : "Resultado de comparación con formato inválido.",
+      };
+    case "COMPARACION_FALLO":
+      return { ...estado, compareResult: null, compareError: accion.mensaje };
+    case "COMPARACION_TERMINADA":
+      return { ...estado, loadingCompare: false };
+    case "BORRADO_INICIADO":
+      // Confirmar y empezar a borrar es UN movimiento: el diálogo no puede
+      // quedarse abierto sobre una corrida que ya se está borrando.
+      return { ...estado, deletingKey: accion.clave, deleteError: null, confirmDelete: null };
+    case "BORRADO_FALLO":
+      return { ...estado, deleteError: accion.mensaje };
+    case "BORRADO_TERMINADO":
+      return { ...estado, deletingKey: null };
+    default: {
+      const _exhaustivo: never = accion;
+      return _exhaustivo;
+    }
+  }
+}
+
 export default function HistorialView() {
   const {
     setModel, setView, setActiveRun, setShow3D,
@@ -139,34 +260,35 @@ export default function HistorialView() {
     setGeorefState, georefConfidence, crsInfo, hasElevationData,
   } = useAppStore();
 
-  const [projectRuns,    setProjectRuns]    = useState<ProjectRunsViewData | null>(null);
-  const [loading,        setLoading]        = useState(true);
-  const [loadError,      setLoadError]      = useState<string | null>(null);
-  const [loadingRunKey,  setLoadingRunKey]  = useState<string | null>(null);
-  const [runError,       setRunError]       = useState<string | null>(null);
-  const [detailKey,      setDetailKey]      = useState<string | null>(null);
-  const [detailLoading,  setDetailLoading]  = useState<string | null>(null);
-  const [runDetails,     setRunDetails]     = useState<Record<string, ProjectRunDetail>>({});
-  const [detailError,    setDetailError]    = useState<string | null>(null);
-  const [baseRun,        setBaseRun]        = useState<SelectedRun | null>(null);
-  const [compareRun,     setCompareRun]     = useState<SelectedRun | null>(null);
-  const [loadingCompare, setLoadingCompare] = useState(false);
-  const [compareError,   setCompareError]   = useState<string | null>(null);
-  const [compareResult,  setCompareResult]  = useState<CompareResult | null>(null);
-  const [deletingKey,    setDeletingKey]    = useState<string | null>(null);
-  const [deleteError,    setDeleteError]    = useState<string | null>(null);
-  const [confirmDelete,  setConfirmDelete]  = useState<{ projectId: string; runId: string } | null>(null);
+  // ── FASE 10 (H-16) — 17 `useState` → una máquina con transiciones con nombre ──
+  //
+  // Esta vista hace CINCO cosas asíncronas a la vez (listar, abrir un modelo,
+  // pedir un detalle, comparar, borrar) y cada una tiene su trío
+  // pidiendo/ok/fallo. Con 17 piezas sueltas nada impedía dejar un `loading` en
+  // true tras un fallo, o mostrar el error de un borrado junto al resultado de
+  // una comparación que sí funcionó. Aquí cada final apaga su propio indicador
+  // porque la transición lo hace, no porque alguien se acuerde.
+  const [ui, dispatch] = useReducer(historialReducer, historialInicial);
+  const {
+    projectRuns, loading, loadError, loadingRunKey, runError,
+    detailKey, detailLoading, runDetails, detailError,
+    baseRun, compareRun, loadingCompare, compareError, compareResult,
+    deletingKey, deleteError, confirmDelete,
+  } = ui;
+  const setCompareError = (mensaje: string | null) =>
+    dispatch({ type: "CAMPO", campo: "compareError", valor: mensaje });
+  const setConfirmDelete = (valor: { projectId: string; runId: string } | null) =>
+    dispatch({ type: "CAMPO", campo: "confirmDelete", valor });
 
   const loadRuns = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
+    dispatch({ type: "CATALOGO_PEDIDO" });
     const result = await getProjectRuns();
     if (result.ok && result.data) {
-      setProjectRuns(parseProjectRuns(result.data));
+      dispatch({ type: "CATALOGO_OK", datos: parseProjectRuns(result.data) });
     } else {
-      setLoadError(result.error || "No se pudieron cargar los proyectos.");
+      dispatch({ type: "CATALOGO_FALLO", mensaje: result.error || "No se pudieron cargar los proyectos." });
     }
-    setLoading(false);
+
   }, []);
 
   // Carga inicial y cuando cambia la corrida activa
@@ -177,8 +299,7 @@ export default function HistorialView() {
 
   const handleLoadModel = async (projectId: string, runId: string) => {
     const key = buildRunKey(projectId, runId);
-    setLoadingRunKey(key);
-    setRunError(null);
+    dispatch({ type: "MODELO_ABRIENDO", clave: key });
     setIsBlockModelLoading(true);
 
     const result = await getExplorationBlockModelForRun(
@@ -187,16 +308,14 @@ export default function HistorialView() {
     );
 
     if (!result.ok || !result.data) {
-      setRunError(result.error || "No se pudo cargar el modelo 3D.");
-      setLoadingRunKey(null);
+      dispatch({ type: "MODELO_FALLO", mensaje: result.error || "No se pudo cargar el modelo 3D." });
       setIsBlockModelLoading(false);
       return;
     }
 
     const model = parseBlockModel(result.data);
     if (!model) {
-      setRunError("La corrida no devolvió celdas válidas.");
-      setLoadingRunKey(null);
+      dispatch({ type: "MODELO_FALLO", mensaje: "La corrida no devolvió celdas válidas." });
       setIsBlockModelLoading(false);
       return;
     }
@@ -212,7 +331,7 @@ export default function HistorialView() {
     setModel(model);
     setShow3D(true);
     setView("figura 3d");
-    setLoadingRunKey(null);
+    dispatch({ type: "MODELO_LISTO" });
     setIsBlockModelLoading(false);
 
     fetchProjectFootprint(projectId).then((fp) => {
@@ -237,40 +356,33 @@ export default function HistorialView() {
   const handleLoadDetail = async (projectId: string, runId: string) => {
     const key = buildRunKey(projectId, runId);
     if (detailKey === key) {
-      setDetailKey(null);
+      dispatch({ type: "DETALLE_CERRADO" });
       return;
     }
-    setDetailKey(key);
-    setDetailLoading(key);
-    setDetailError(null);
+    dispatch({ type: "DETALLE_PEDIDO", clave: key });
 
     const result = await getProjectRunDetail(projectId, runId);
     if (!result.ok || !result.data) {
-      setDetailError(result.error || "No se pudo cargar el detalle.");
-      setDetailLoading(null);
+      dispatch({ type: "DETALLE_FALLO", mensaje: result.error || "No se pudo cargar el detalle." });
       return;
     }
     const detail = parseProjectRunDetail(result.data);
     if (!detail) {
-      setDetailError("Detalle con formato inválido.");
-      setDetailLoading(null);
+      dispatch({ type: "DETALLE_FALLO", mensaje: "Detalle con formato inválido." });
       return;
     }
-    setRunDetails(prev => ({ ...prev, [key]: detail }));
-    setDetailLoading(null);
+    dispatch({ type: "DETALLE_OK", clave: key, detalle: detail });
   };
 
   const handleDelete = async () => {
     if (!confirmDelete) return;
     const { projectId, runId } = confirmDelete;
     const key = buildRunKey(projectId, runId);
-    setDeletingKey(key);
-    setDeleteError(null);
-    setConfirmDelete(null);
+    dispatch({ type: "BORRADO_INICIADO", clave: key });
 
     const result = await deleteRun(projectId, runId);
     if (!result.ok) {
-      setDeleteError(result.error || "No se pudo eliminar la corrida.");
+      dispatch({ type: "BORRADO_FALLO", mensaje: result.error || "No se pudo eliminar la corrida." });
     } else {
       // Si la corrida eliminada es la activa, limpiarla
       if (activeRun.projectId === projectId && activeRun.runId === runId) {
@@ -280,7 +392,7 @@ export default function HistorialView() {
       }
       await loadRuns();
     }
-    setDeletingKey(null);
+    dispatch({ type: "BORRADO_TERMINADO" });
   };
 
   const handleCompare = async (projectId: string, runId: string) => {
@@ -288,9 +400,7 @@ export default function HistorialView() {
       setCompareError("Selecciona una corrida base primero.");
       return;
     }
-    setCompareRun({ projectId, runId });
-    setLoadingCompare(true);
-    setCompareError(null);
+    dispatch({ type: "COMPARACION_INICIADA", seleccion: { projectId, runId } });
 
     const result = await compareRuns({
       baseProjectId: baseRun.projectId, baseRunId: baseRun.runId,
@@ -298,14 +408,12 @@ export default function HistorialView() {
     });
 
     if (!result.ok || !result.data) {
-      setCompareResult(null);
-      setCompareError(result.error || "No se pudieron comparar las corridas.");
+      dispatch({ type: "COMPARACION_FALLO", mensaje: result.error || "No se pudieron comparar las corridas." });
     } else {
       const parsed = parseCompareResult(result.data);
-      setCompareResult(parsed);
-      if (!parsed) setCompareError("Resultado de comparación con formato inválido.");
+      dispatch({ type: "COMPARACION_OK", resultado: parsed });
     }
-    setLoadingCompare(false);
+    dispatch({ type: "COMPARACION_TERMINADA" });
   };
 
   const isActiveRun = (projectId: string, runId: string) =>
@@ -545,7 +653,7 @@ export default function HistorialView() {
                           {/* Usar como base para comparación */}
                           <button
                             type="button"
-                            onClick={() => { setBaseRun({ projectId: project.projectId, runId: run.runId }); setCompareError(null); }}
+                            onClick={() => dispatch({ type: "BASE_ELEGIDA", seleccion: { projectId: project.projectId, runId: run.runId } })}
                             className={`text-[8px] uppercase tracking-widest px-3 py-1.5 rounded-lg border transition-colors ${
                               baseRun?.runId === run.runId && baseRun?.projectId === project.projectId
                                 ? "border-blue-500/50 bg-blue-900/20 text-blue-400"

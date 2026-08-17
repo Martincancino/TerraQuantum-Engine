@@ -1,16 +1,24 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect } from "react";
-import { previewGravityCsv, GravityCsvInvertPayload, getExplorationBlockModelForRunWithArrow, CoordinateTransformData, SpatialReadiness, RegionalScalePreflight, GravityCorrectionReport, exportCleanCsv, type GravityImportPreviewResponse } from "../lib/terraquantum/frontendApi";
+import { useMemo, useRef, useEffect, useReducer } from "react";
+import { previewGravityCsv, GravityCsvInvertPayload, getExplorationBlockModelForRunWithArrow, CoordinateTransformData, SpatialReadiness, RegionalScalePreflight, exportCleanCsv, type GravityImportPreviewResponse } from "../lib/terraquantum/frontendApi";
 import WarningBanner from "./WarningBanner";
 import ErrorModal from "./ErrorModal";
 import { TQErrorView, errorViewFromString } from "../lib/terraquantum/errorContract";
 import { useAppStore } from "../store/useAppStore";
 import GravityCorrectionWizard from "./GravityCorrectionWizard";
-import { type VoxelMineralModel, type VoxelData } from "../lib/terraQuantumGeology";
+import { type VoxelData } from "../lib/terraQuantumGeology";
 import { isJsonObject, readStringField, readNumberField } from "./datos/helpers";
-import { PgiParamsForm, type PgiParamsUI } from "./PgiParamsForm";
-import { MagneticRemanenceForm, type MagneticRemanenceParamsUI } from "./MagneticRemanenceForm";
+import type { BackendVoxelModel } from "./datos/types";
+import {
+  avanzadoInicial, avanzadoReducer,
+  contextoInicial, contextoReducer,
+  operacionInicial, operacionReducer,
+  parametrosInicial, parametrosReducer,
+  type CsvIssue, type CsvValidationResult, type DensityPreset, type LambdaMode,
+} from "./prep/prepPanelState";
+import { PgiParamsForm } from "./PgiParamsForm";
+import { MagneticRemanenceForm } from "./MagneticRemanenceForm";
 import { buildPackage, type BuildPackageConfig } from "../lib/terraquantum/frontendApi";
 
 // ─── Georef UX helpers (R1-FE-3) ──────────────────────────────────────────
@@ -117,7 +125,9 @@ function boolLabel(value?: boolean): string {
 // ──────────────────────────────────────────────────────────────────────────
 
 type JsonObject = Record<string, unknown>;
-type BackendVoxelModel = VoxelMineralModel & { visualMode?: string };
+// FASE 10: `BackendVoxelModel` estaba declarado aquí y en otros 3 sitios, con
+// formas distintas. Vive una sola vez, derivado del contrato generado.
+
 
 type GeorefBadge = { label: string; classes: string; desc: string };
 
@@ -155,14 +165,8 @@ function getGeorefBadge(ct: CoordinateTransformData | null | undefined): GeorefB
 
 // ─── Fase 14: Client-side CSV Validation ─────────────────────────────────
 
-type CsvIssue = { type: "error" | "warning"; message: string };
-
-interface CsvValidationResult {
-  status: "ok" | "warning" | "invalid";
-  issues: CsvIssue[];
-  n_sensors: number;
-  can_invert: boolean;
-}
+// `CsvValidationResult` y `CsvIssue` viven en `prep/prepPanelState.ts` (FASE 10):
+// son parte del estado del panel, no de este archivo.
 
 function parseCsvForValidation(text: string): CsvValidationResult {
   const issues: CsvIssue[] = [];
@@ -376,50 +380,96 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
 
   const file = fileGravimetry; // Retrocompatibilidad para endpoints que solo toman 'file'
 
-  const [strict, setStrict] = useState(true);
-  const [allowGRaw, setAllowGRaw] = useState(false);
-  const [previewLimit, setPreviewLimit] = useState(20);
+  // ── FASE 10 (H-16) — 41 `useState` → 4 máquinas con transiciones con nombre ──
+  //
+  // El estado vive en `prep/prepPanelState.ts`, agrupado por MOTIVO DE CAMBIO y no
+  // por orden de aparición. Lo que se gana no es estética: los movimientos que
+  // tocan varias piezas a la vez (cambiar de archivo, aplicar un preset de
+  // densidad, fallar al generar el paquete) pasan a ser UNA transición atómica.
+  // H-29 fue justo un movimiento de ésos, hecho a mano en dos sitios que
+  // divergieron.
+  //
+  // Los `set*` de abajo son atajos: existen para que las ~1.500 líneas de JSX de
+  // este archivo NO se toquen. Mover el estado y reescribir la vista a la vez
+  // haría imposible saber cuál de los dos cambios rompió algo — la misma
+  // disciplina con la que la Fase 8 partió la espina dorsal del backend.
+  const [operacion, dispatchOperacion] = useReducer(operacionReducer, operacionInicial);
+  const [contexto, dispatchContexto] = useReducer(contextoReducer, contextoInicial);
+  const [parametros, dispatchParametros] = useReducer(parametrosReducer, parametrosInicial);
+  const [avanzado, dispatchAvanzado] = useReducer(avanzadoReducer, avanzadoInicial);
 
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const {
+    loading, errorMsg, cleanCsvLoading, cleanCsvError,
+    packageMessage, packageErrorView, packageModalOpen, geoError, csvValidation,
+  } = operacion;
+  const {
+    expectedRock, expectedDepth, dataType, inclinationDeg, declinationDeg,
+    fieldIntensityNt, suscMin, suscMax, utmZone, gravimeterType,
+  } = contexto;
+  const {
+    strict, allowGRaw, previewLimit, densityMin, densityMax, densityPreset,
+    lambdaMode, lambdaCustom, showAdvancedKappas, paddingKappaLog, anchorKappaLog,
+    autoKappa, enableDepthPrior, acknowledgeSpatialRisk, acknowledgeRegionalScale,
+  } = parametros;
+  const {
+    showCorrectionWizard, correctedFile, correctionReport,
+    showPgiModal, pgiParams, showRemanenceModal, remanenceParams,
+  } = avanzado;
 
-  // FASE 19 — Descarga de "CSV limpio".
-  const [cleanCsvLoading, setCleanCsvLoading] = useState(false);
-  const [cleanCsvError, setCleanCsvError] = useState<string | null>(null);
-  // FASE R3 — Generación del "paquete CSV" (CSV limpio + parámetros) para LoadPanel.
-  const [packageMessage, setPackageMessage] = useState<string | null>(null);
-  // FASE 23 — error accionable del backend (build-package) normalizado a TQErrorView
-  // y mostrado en ErrorModal (RESUMEN/DETALLES/ACCIÓN) en vez de un mensaje plano.
-  const [packageErrorView, setPackageErrorView] = useState<TQErrorView | null>(null);
-  const [packageModalOpen, setPackageModalOpen] = useState(false);
-  const clearPackageError = () => { setPackageErrorView(null); setPackageModalOpen(false); };
-  // FASE 19 — Contexto del survey (alimenta el ruteo multimodal / interpretación).
-  const [expectedRock, setExpectedRock] = useState<string>("");
-  const [expectedDepth, setExpectedDepth] = useState<string>("");
+  const setExpectedRock = (valor: string) => dispatchContexto({ type: "CAMPO", campo: "expectedRock", valor });
+  const setExpectedDepth = (valor: string) => dispatchContexto({ type: "CAMPO", campo: "expectedDepth", valor });
+  // HALLAZGO de la FASE 10, y lo destapó este refactor: `inclinationDeg`,
+  // `declinationDeg`, `fieldIntensityNt`, `suscMin` y `suscMax` **no tienen
+  // ningún setter llamado en todo el archivo**. Su comentario decía «el usuario
+  // puede ajustarlos según la región del survey» y NO hay un solo input que lo
+  // permita: los defaults del norte de Chile viajan al motor magnético tal cual
+  // (líneas ~1070). Eran constantes disfrazadas de estado, y `useState` lo
+  // escondía — al volverse atajos sin llamador, el linter los delató.
+  //
+  // No se inventa aquí la interfaz que falta: son parámetros físicos y ponerlos
+  // a mano sin validación es peor que no tenerlos. Queda DICHO en vez de
+  // prometido, y los valores siguen en `contextoInicial` con su fuente.
+  const setUtmZone = (valor: string) => dispatchContexto({ type: "CAMPO", campo: "utmZone", valor });
+  const setGravimeterType = (valor: string) => dispatchContexto({ type: "CAMPO", campo: "gravimeterType", valor });
 
-  // Fase 9A — Magnetometría: "gravity" (default) | "magnetic". Lo fija el input
-  // de archivo usado; en modo magnetic la inversión rutea al motor de susceptibilidad.
-  const [dataType, setDataType] = useState<"gravity" | "magnetic">("gravity");
-  // Parámetros del campo geomagnético inducido (defaults norte de Chile). El backend
-  // los valida; el usuario puede ajustarlos según la región del survey.
-  const [inclinationDeg, setInclinationDeg] = useState<number>(-30);
-  const [declinationDeg, setDeclinationDeg] = useState<number>(2);
-  const [fieldIntensityNt, setFieldIntensityNt] = useState<number>(23500);
-  const [suscMin, setSuscMin] = useState<string>("0.0");
-  const [suscMax, setSuscMax] = useState<string>("1.0");
+  const setStrict = (valor: boolean) => dispatchParametros({ type: "CAMPO", campo: "strict", valor });
+  const setAllowGRaw = (valor: boolean) => dispatchParametros({ type: "CAMPO", campo: "allowGRaw", valor });
+  const setPreviewLimit = (valor: number) => dispatchParametros({ type: "CAMPO", campo: "previewLimit", valor });
+  const setDensityMin = (valor: string) => dispatchParametros({ type: "CAMPO", campo: "densityMin", valor });
+  const setDensityMax = (valor: string) => dispatchParametros({ type: "CAMPO", campo: "densityMax", valor });
+  const setLambdaMode = (valor: LambdaMode) => dispatchParametros({ type: "CAMPO", campo: "lambdaMode", valor });
+  const setLambdaCustom = (valor: string) => dispatchParametros({ type: "CAMPO", campo: "lambdaCustom", valor });
+  const setShowAdvancedKappas = (valor: boolean) => dispatchParametros({ type: "CAMPO", campo: "showAdvancedKappas", valor });
+  const setPaddingKappaLog = (valor: number) => dispatchParametros({ type: "CAMPO", campo: "paddingKappaLog", valor });
+  const setAnchorKappaLog = (valor: number) => dispatchParametros({ type: "CAMPO", campo: "anchorKappaLog", valor });
+  const setAutoKappa = (valor: boolean) => dispatchParametros({ type: "CAMPO", campo: "autoKappa", valor });
+  const setEnableDepthPrior = (valor: boolean) => dispatchParametros({ type: "CAMPO", campo: "enableDepthPrior", valor });
+  const setAcknowledgeSpatialRisk = (valor: boolean) => dispatchParametros({ type: "CAMPO", campo: "acknowledgeSpatialRisk", valor });
+  const setAcknowledgeRegionalScale = (valor: boolean) => dispatchParametros({ type: "CAMPO", campo: "acknowledgeRegionalScale", valor });
 
-  const [showCorrectionWizard, setShowCorrectionWizard] = useState(false);
-  const [correctedFile, setCorrectedFile] = useState<File | null>(null);
-  const [correctionReport, setCorrectionReport] = useState<GravityCorrectionReport | null>(null);
-
-  // Fase 7B — Advanced inversion params
-  const [showPgiModal, setShowPgiModal] = useState(false);
-  const [pgiParams, setPgiParams] = useState<PgiParamsUI | null>(null);
-  const [showRemanenceModal, setShowRemanenceModal] = useState(false);
-  const [remanenceParams, setRemanenceParams] = useState<MagneticRemanenceParamsUI | null>(null);
-
-  // Fase 14: client-side CSV validation
-  const [csvValidation, setCsvValidation] = useState<CsvValidationResult | null>(null);
+  const setLoading = (v: boolean) =>
+    dispatchOperacion({ type: v ? "VALIDACION_INICIADA" : "VALIDACION_TERMINADA" });
+  const setErrorMsg = (m: string | null) =>
+    dispatchOperacion(m === null ? { type: "ERROR_DESCARTADO" } : { type: "VALIDACION_FALLO", mensaje: m });
+  const setGeoError = (m: string | null) =>
+    dispatchOperacion(m === null ? { type: "COORDENADAS_OK" } : { type: "COORDENADAS_INVALIDAS", mensaje: m });
+  const setPackageModalOpen = (abierto: boolean) =>
+    dispatchOperacion({ type: abierto ? "PAQUETE_ERROR_REABIERTO" : "PAQUETE_ERROR_CERRADO" });
+  const clearPackageError = () => dispatchOperacion({ type: "PAQUETE_ERROR_CERRADO" });
+  const setShowCorrectionWizard = (abierto: boolean) =>
+    dispatchAvanzado({ type: abierto ? "ASISTENTE_CORRECCIONES_ABIERTO" : "ASISTENTE_CORRECCIONES_CERRADO" });
+  const setShowPgiModal = (abierto: boolean) => dispatchAvanzado({ type: "MODAL_PGI", abierto });
+  const setShowRemanenceModal = (abierto: boolean) =>
+    dispatchAvanzado({ type: "MODAL_REMANENCIA", abierto });
+  const setCsvValidation = (resultado: CsvValidationResult | null) =>
+    dispatchOperacion({ type: "CSV_VALIDADO_LOCALMENTE", resultado });
+  const setCleanCsvLoading = (v: boolean) =>
+    dispatchOperacion({ type: v ? "CSV_LIMPIO_INICIADO" : "CSV_LIMPIO_TERMINADO" });
+  const setCleanCsvError = (m: string | null) => {
+    if (m !== null) dispatchOperacion({ type: "CSV_LIMPIO_FALLO", mensaje: m });
+  };
+  const setPackageMessage = (m: string | null) =>
+    dispatchOperacion(m === null ? { type: "PAQUETE_INICIADO" } : { type: "PAQUETE_PROGRESO", mensaje: m });
 
   // FASE 1 (H-29): la validación local cubre TODOS los archivos que entrarán al
   // paquete, no sólo el activo. El botón de generar paquete se apoya en
@@ -446,32 +496,16 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
     return () => { cancelled = true; };
   }, [file, fileMagnetometry, correctedFile, dataType]);
 
-  const [utmZone, setUtmZone] = useState<string>("");
-  // Tier 1 B6 — controles físicos. El frontend solo recolecta y valida forma;
-  // la física (bounds, sigma, selección de λ) la resuelve el backend.
-  const [densityMin, setDensityMin] = useState<string>("0.0");
-  const [densityMax, setDensityMax] = useState<string>("5.5");
-  const [densityPreset, setDensityPreset] = useState<"granite" | "magnetite" | "copper" | "custom">("custom");
-  const [gravimeterType, setGravimeterType] = useState<string>("unknown");
-  const [lambdaMode, setLambdaMode] = useState<"auto" | "custom">("auto");
-  const [lambdaCustom, setLambdaCustom] = useState<string>("0.1");
-  // FASE 16 — Kappas configurables (sliders en escala log, ocultos por defecto)
-  const [showAdvancedKappas, setShowAdvancedKappas] = useState(false);
-  const [paddingKappaLog, setPaddingKappaLog] = useState<number>(5); // log10(1e5)
-  const [anchorKappaLog, setAnchorKappaLog] = useState<number>(4);   // log10(1e4)
-  const [autoKappa, setAutoKappa] = useState(true);
-  // Prior de profundidad opt-in (docs/05 Parte B). Default OFF = comportamiento intacto.
-  const [enableDepthPrior, setEnableDepthPrior] = useState(false);
-  const [acknowledgeSpatialRisk, setAcknowledgeSpatialRisk] = useState(false);
-  const [acknowledgeRegionalScale, setAcknowledgeRegionalScale] = useState(false);
+  // Tier 1 B6 — controles físicos (viven en `parametros`, arriba). El frontend
+  // sólo recolecta y valida FORMA; la física (bounds, sigma, selección de λ) la
+  // resuelve el backend.
 
   // FASE 16 — Aplica preset de bounds de densidad según litología
-  const applyDensityPreset = (preset: "granite" | "magnetite" | "copper" | "custom") => {
-    setDensityPreset(preset);
-    if (preset === "granite")   { setDensityMin("2.6"); setDensityMax("3.0"); }
-    if (preset === "magnetite") { setDensityMin("4.5"); setDensityMax("5.5"); }
-    if (preset === "copper")    { setDensityMin("4.3"); setDensityMax("4.8"); }
-  };
+  // FASE 16 — Aplica preset de bounds de densidad segun litologia.
+  // FASE 10: eran hasta 3 `setState` sueltos; ahora es UNA transicion, asi que no
+  // existe el estado intermedio "preset nuevo con bounds viejos".
+  const applyDensityPreset = (preset: DensityPreset) =>
+    dispatchParametros({ type: "PRESET_DENSIDAD", preset });
 
   const utmZoneError = useMemo(() => validateUtmZone(utmZone), [utmZone]);
   const derivedEpsg = useMemo(() => deriveEpsgFromUtmZone(utmZone), [utmZone]);
@@ -503,12 +537,11 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
       if (m) useAppStore.getState().setModel(m);
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayResolutionFactor]);
   const clearActiveRun = useAppStore(state => state.clearActiveRun);
 
-  // Se han eliminado userLat y userLon en favor del Bounding Box en Zustand
-  const [geoError, setGeoError] = useState<string | null>(null);
+  // Se han eliminado userLat y userLon en favor del Bounding Box en Zustand.
+  // `geoError` vive en la maquina `operacion` (FASE 10).
 
   // ---------------------------------------------------------------------------
   // Helpers locales — devuelven Record<string, unknown> | null, sin usar any
@@ -549,19 +582,16 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   // del archivo A viajaba al backend como si el usuario hubiera aceptado el de la
   // configuración nueva. Una sola función para los dos manejadores elimina la
   // posibilidad de que vuelvan a divergir.
+  //
+  // FASE 10: eran once `setState` que habia que acordarse de escribir enteros.
+  // Ahora son tres transiciones que se llaman IGUAL en las tres maquinas, y cada
+  // una sabe que de lo suyo caduca. Anadir estado nuevo que dependa del archivo
+  // ya no obliga a volver aqui: obliga a tratarlo en su reducer, donde vive.
   const resetOnFileChange = () => {
     setResult(null);
-    setErrorMsg(null);
-    clearPackageError();
-    setPackageMessage(null);
-    setGeoError(null);
-    // Puertas de seguridad: un reconocimiento SIEMPRE se refiere a un conjunto de
-    // archivos concreto. Si el conjunto cambia, el reconocimiento caduca.
-    setAcknowledgeSpatialRisk(false);
-    setAcknowledgeRegionalScale(false);
-    setCorrectedFile(null);
-    setCorrectionReport(null);
-    setShowCorrectionWizard(false);
+    dispatchOperacion({ type: "ARCHIVOS_CAMBIARON" });
+    dispatchParametros({ type: "ARCHIVOS_CAMBIARON" });
+    dispatchAvanzado({ type: "ARCHIVOS_CAMBIARON" });
     // H-28: invalida también modelo/vista 3D (la limpieza vive en el store).
     clearActiveRun();
   };
@@ -569,8 +599,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   const handleFileGravimetryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       setFileGravimetry(e.target.files[0]);
-      setDataType("gravity");
-      setUtmZone("");
+      dispatchContexto({ type: "ARCHIVO_GRAVIMETRIA_CARGADO" });
       resetOnFileChange();
     }
   };
@@ -578,7 +607,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   const handleFileMagnetometryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       setFileMagnetometry(e.target.files[0]);
-      setDataType("magnetic");
+      dispatchContexto({ type: "ARCHIVO_MAGNETOMETRIA_CARGADO" });
       resetOnFileChange();
     }
   };
@@ -952,11 +981,11 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   // La vista 3D (LoadPanel) lo sube y el backend corre la inversión. No invierte
   // ni calcula física aquí: solo recolecta y manda los datos preparados.
   // Normaliza y muestra un error del paso «generar paquete» en el ErrorModal.
-  const raisePackageError = (msg: string) => {
-    setPackageMessage(null);
-    setPackageErrorView(errorViewFromString(msg, "No se pudo generar el paquete CSV."));
-    setPackageModalOpen(true);
-  };
+  const raisePackageError = (msg: string) =>
+    dispatchOperacion({
+      type: "PAQUETE_FALLO",
+      error: errorViewFromString(msg, "No se pudo generar el paquete CSV."),
+    });
 
   // ── FASE 1 (§9H.2): invalidación "stale" ───────────────────────────────────
   // Misma familia que H-28 ("mostrar algo que ya no corresponde"), un escalón más
@@ -1164,8 +1193,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
                 </div>
                 <button
                   onClick={() => {
-                    setCorrectedFile(null);
-                    setCorrectionReport(null);
+                    dispatchAvanzado({ type: "ARCHIVOS_CAMBIARON" });
                     setResult(null);
                   }}
                   className="text-[10px] text-neutral-500 hover:text-red-400 shrink-0 px-1.5 py-0.5 border border-neutral-700/40 rounded"
@@ -1192,9 +1220,9 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
           <GravityCorrectionWizard
             file={file}
             onComplete={(corrFile, report) => {
-              setCorrectedFile(corrFile);
-              setCorrectionReport(report);
-              setShowCorrectionWizard(false);
+              dispatchAvanzado({
+                type: "CORRECCIONES_APLICADAS", archivo: corrFile, reporte: report,
+              });
               setResult(null);
               setErrorMsg(null);
             }}
@@ -1247,7 +1275,10 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
                 type="number"
                 step="0.05"
                 value={densityMin}
-                onChange={(e) => { setDensityMin(e.target.value); setDensityPreset("custom"); }}
+                onChange={(e) => {
+                  dispatchParametros({ type: "PRESET_DENSIDAD", preset: "custom" });
+                  setDensityMin(e.target.value);
+                }}
                 title="Bound inferior absoluto. < 2.6 permite contrastes negativos (magma, sal, cavidades)."
                 className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
               />
@@ -1260,7 +1291,10 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
                 type="number"
                 step="0.05"
                 value={densityMax}
-                onChange={(e) => { setDensityMax(e.target.value); setDensityPreset("custom"); }}
+                onChange={(e) => {
+                  dispatchParametros({ type: "PRESET_DENSIDAD", preset: "custom" });
+                  setDensityMax(e.target.value);
+                }}
                 title="Bound superior absoluto. 5.5 cubre magnetita/cromita/pirita masiva."
                 className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
               />
@@ -1285,7 +1319,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
           <div>
             <button
               type="button"
-              onClick={() => setShowAdvancedKappas(v => !v)}
+              onClick={() => setShowAdvancedKappas(!showAdvancedKappas)}
               className="text-[9px] uppercase text-neutral-500 tracking-widest hover:text-neutral-300 flex items-center gap-1"
             >
               <span>{showAdvancedKappas ? "▾" : "▸"}</span>
@@ -1967,7 +2001,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
                 <div onClick={(e) => e.stopPropagation()}>
                   <PgiParamsForm
                     initialParams={pgiParams ?? undefined}
-                    onSubmit={(p) => { setPgiParams(p); setShowPgiModal(false); }}
+                    onSubmit={(p) => dispatchAvanzado({ type: "PGI_GUARDADO", params: p })}
                     onCancel={() => setShowPgiModal(false)}
                   />
                 </div>
@@ -1978,7 +2012,7 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
                 <div onClick={(e) => e.stopPropagation()}>
                   <MagneticRemanenceForm
                     initialParams={remanenceParams ?? undefined}
-                    onSubmit={(p) => { setRemanenceParams(p); setShowRemanenceModal(false); }}
+                    onSubmit={(p) => dispatchAvanzado({ type: "REMANENCIA_GUARDADA", params: p })}
                     onCancel={() => setShowRemanenceModal(false)}
                   />
                 </div>

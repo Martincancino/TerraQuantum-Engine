@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useMemo, useReducer } from "react";
 import {
   applyGravityCorrections,
   nettletonAnalysis,
@@ -222,19 +222,105 @@ function NettletonSweepChart({ result }: { result: NettletonResult }) {
   );
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FASE 10 — Estado del asistente de correcciones.
+// Cada paso PRODUCE algo; avanzar y guardar lo producido es una sola transición,
+// para que no exista «paso 4 con la vista previa del mapeo anterior».
+// ─────────────────────────────────────────────────────────────────────────────
+
+type AsistenteState = {
+  step: 1 | 2 | 3 | 4;
+  csvHeaders: string[];
+  csvRows: CsvRow[];
+  sniff: SniffReport | null;
+  parseError: string | null;
+  colMap: ColMap;
+  gravityType: "g_raw" | "free_air_anomaly" | "bouguer_anomaly" | "complete_bouguer_anomaly";
+  params: GravityCorrectionParams;
+  nettleton: NettletonResult | null;
+  nettletonLoading: boolean;
+  nettletonError: string | null;
+  previewStations: GravityCorrectedStation[] | null;
+  previewOutputType: string;
+  previewLoading: boolean;
+  applyLoading: boolean;
+  apiError: string | null;
+};
+
+type AsistenteAction =
+  | { type: "CAMPO"; campo: keyof AsistenteState; valor: AsistenteState[keyof AsistenteState] }
+  | { type: "CSV_PARSEADO"; headers: string[]; rows: CsvRow[]; sniff: SniffReport | null }
+  | { type: "CSV_FALLO"; mensaje: string }
+  | { type: "VISTA_PREVIA_PEDIDA" }
+  | { type: "VISTA_PREVIA_OK"; estaciones: GravityCorrectedStation[]; tipoSalida: string }
+  | { type: "VISTA_PREVIA_FALLO"; mensaje: string }
+  | { type: "VISTA_PREVIA_DESCARTADA" }
+  | { type: "NETTLETON_PEDIDO" }
+  | { type: "NETTLETON_OK"; resultado: NettletonResult }
+  | { type: "NETTLETON_FALLO"; mensaje: string }
+  | { type: "APLICACION_PEDIDA" }
+  | { type: "APLICACION_TERMINADA" }
+  | { type: "OPERACION_FALLO"; mensaje: string }
+  | { type: "ERROR_DESCARTADO" };
+
+function asistenteReducer(estado: AsistenteState, accion: AsistenteAction): AsistenteState {
+  switch (accion.type) {
+    case "CAMPO":
+      return { ...estado, [accion.campo]: accion.valor };
+    case "CSV_PARSEADO":
+      return { ...estado, csvHeaders: accion.headers, csvRows: accion.rows,
+               sniff: accion.sniff, parseError: null };
+    case "CSV_FALLO":
+      return { ...estado, parseError: accion.mensaje };
+    case "VISTA_PREVIA_PEDIDA":
+      return { ...estado, previewLoading: true, apiError: null };
+    case "VISTA_PREVIA_OK":
+      // Avanzar al paso 4 va JUNTO a guardar el resultado: era la secuencia de
+      // tres `setState` donde podía colarse un paso 4 con datos viejos.
+      return { ...estado, previewLoading: false, previewStations: accion.estaciones,
+               previewOutputType: accion.tipoSalida, step: 4, apiError: null };
+    case "VISTA_PREVIA_FALLO":
+      return { ...estado, previewLoading: false, apiError: accion.mensaje };
+    case "VISTA_PREVIA_DESCARTADA":
+      // Volver a tocar los parámetros invalida la vista previa que produjeron.
+      return { ...estado, step: 3, previewStations: null, apiError: null };
+    case "NETTLETON_PEDIDO":
+      return { ...estado, nettletonLoading: true, nettletonError: null, nettleton: null };
+    case "NETTLETON_OK":
+      return { ...estado, nettletonLoading: false, nettleton: accion.resultado };
+    case "NETTLETON_FALLO":
+      return { ...estado, nettletonLoading: false, nettletonError: accion.mensaje };
+    case "APLICACION_PEDIDA":
+      return { ...estado, applyLoading: true, apiError: null };
+    case "APLICACION_TERMINADA":
+      return { ...estado, applyLoading: false };
+    case "OPERACION_FALLO":
+      return { ...estado, apiError: accion.mensaje };
+    case "ERROR_DESCARTADO":
+      return { ...estado, apiError: null };
+    default: {
+      const _exhaustivo: never = accion;
+      return _exhaustivo;
+    }
+  }
+}
+
 export default function GravityCorrectionWizard({ file, onComplete, onCancel }: Props) {
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
-  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
-  const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
-  const [sniff, setSniff] = useState<SniffReport | null>(null);
-  const [parseError, setParseError] = useState<string | null>(null);
-  const [colMap, setColMap] = useState<ColMap>({
+  // ── FASE 10 (H-16) — 16 `useState` → una máquina con transiciones con nombre ──
+  //
+  // Un asistente por pasos es el caso de libro: `step` y los datos que cada paso
+  // produce estaban sueltos, así que nada impedía llegar al paso 4 con la vista
+  // previa del mapeo ANTERIOR. Ahora avanzar de paso y guardar lo que ese paso
+  // produjo es una sola transición.
+  const [ui, dispatch] = useReducer(asistenteReducer, {
+    step: 1,
+    csvHeaders: [], csvRows: [], sniff: null, parseError: null,
+    colMap: {
     lat: "", lon: "", elev: "", g: "", id: "", time: "",
-  });
-  const [gravityType, setGravityType] = useState<
-    "g_raw" | "free_air_anomaly" | "bouguer_anomaly" | "complete_bouguer_anomaly"
-  >("g_raw");
-  const [params, setParams] = useState<GravityCorrectionParams>({
+  },
+    gravityType: "g_raw",
+    params: {
     reduction_density_gcc: 2.67,
     dem_type: "COP30",
     terrain_radius_m: 22000,
@@ -247,17 +333,24 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
     apply_drift: false,
     drift_method: "linear",
     base_station_id: "",
+  },
+    nettleton: null, nettletonLoading: false, nettletonError: null,
+    previewStations: null, previewOutputType: "", previewLoading: false,
+    applyLoading: false, apiError: null,
   });
-  // F2B — Nettleton (barrido calculado en el backend; aquí solo se muestra).
-  const [nettleton, setNettleton] = useState<NettletonResult | null>(null);
-  const [nettletonLoading, setNettletonLoading] = useState(false);
-  const [nettletonError, setNettletonError] = useState<string | null>(null);
-
-  const [previewStations, setPreviewStations] = useState<GravityCorrectedStation[] | null>(null);
-  const [previewOutputType, setPreviewOutputType] = useState<string>("");
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [applyLoading, setApplyLoading] = useState(false);
-  const [apiError, setApiError] = useState<string | null>(null);
+  const {
+    step, csvHeaders, csvRows, sniff, parseError, colMap, gravityType, params,
+    nettleton, nettletonLoading, nettletonError,
+    previewStations, previewOutputType, previewLoading, applyLoading, apiError,
+  } = ui;
+  const setStep = (valor: 1 | 2 | 3 | 4) => dispatch({ type: "CAMPO", campo: "step", valor });
+  const setColMap = (valor: ColMap) => dispatch({ type: "CAMPO", campo: "colMap", valor });
+  const setGravityType = (valor: "g_raw" | "free_air_anomaly" | "bouguer_anomaly" | "complete_bouguer_anomaly") =>
+    dispatch({ type: "CAMPO", campo: "gravityType", valor });
+  const setParams = (valor: GravityCorrectionParams) =>
+    dispatch({ type: "CAMPO", campo: "params", valor });
+  const setApiError = (mensaje: string | null) =>
+    dispatch(mensaje === null ? { type: "ERROR_DESCARTADO" } : { type: "OPERACION_FALLO", mensaje });
   // F2.5 (fix eslint react-hooks/set-state-in-effect): el conteo de estaciones
   // válidas es DERIVADO de rows+headers+mapa → useMemo, no estado + effect.
   const validStationCount = useMemo(
@@ -274,16 +367,14 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
     parseCsvRows({ file }).then((res) => {
       if (cancelled) return;
       if (!res.ok) {
-        setParseError(res.error || "No se pudo parsear el CSV en el backend.");
+        dispatch({ type: "CSV_FALLO", mensaje: res.error || "No se pudo parsear el CSV en el backend." });
         return;
       }
       if (res.headers.length === 0 || res.rows.length === 0) {
-        setParseError("El CSV no tiene columnas o filas legibles. Verifica el formato.");
+        dispatch({ type: "CSV_FALLO", mensaje: "El CSV no tiene columnas o filas legibles. Verifica el formato." });
         return;
       }
-      setCsvHeaders(res.headers);
-      setCsvRows(res.rows);
-      setSniff(res.sniffReport);
+      dispatch({ type: "CSV_PARSEADO", headers: res.headers, rows: res.rows, sniff: res.sniffReport });
       const detected = {
         lat: detectColumn(res.headers, LAT_ALIASES),
         lon: detectColumn(res.headers, LON_ALIASES),
@@ -315,40 +406,36 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
       setApiError("No se pudieron extraer estaciones válidas con el mapeo actual.");
       return;
     }
-    setPreviewLoading(true);
+    dispatch({ type: "VISTA_PREVIA_PEDIDA" });
     const res = await applyGravityCorrections({
       stations: preview,
       params,
       gravity_column: "g_obs_mgal",
       gravity_type_in: gravityType,
     });
-    setPreviewLoading(false);
     if (!res.ok || !res.data) {
-      setApiError(res.error || "Error al calcular correcciones de vista previa.");
+      dispatch({ type: "VISTA_PREVIA_FALLO", mensaje: res.error || "Error al calcular correcciones de vista previa." });
       return;
     }
-    setPreviewStations(res.data.corrected);
-    setPreviewOutputType(res.data.output_gravity_type);
-    setStep(4);
+    dispatch({ type: "VISTA_PREVIA_OK", estaciones: res.data.corrected,
+               tipoSalida: res.data.output_gravity_type });
   };
 
   // ─── F2B: Nettleton (el barrido lo hace el backend) ──────────────────────────
   const handleNettleton = async () => {
-    setNettletonError(null);
-    setNettleton(null);
+
     const stations = buildStations(csvRows, colMap);
     if (stations.length === 0) {
-      setNettletonError("No hay estaciones válidas con el mapeo actual.");
+      dispatch({ type: "NETTLETON_FALLO", mensaje: "No hay estaciones válidas con el mapeo actual." });
       return;
     }
-    setNettletonLoading(true);
+    dispatch({ type: "NETTLETON_PEDIDO" });
     const res = await nettletonAnalysis(stations);
-    setNettletonLoading(false);
     if (!res.ok || !res.data) {
-      setNettletonError(res.error ?? "No se pudo correr el análisis de Nettleton.");
+      dispatch({ type: "NETTLETON_FALLO", mensaje: res.error ?? "No se pudo correr el análisis de Nettleton." });
       return;
     }
-    setNettleton(res.data);
+    dispatch({ type: "NETTLETON_OK", resultado: res.data });
   };
 
   // ─── Final apply ─────────────────────────────────────────────────────────────
@@ -360,14 +447,14 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
       setApiError("No hay estaciones válidas para procesar.");
       return;
     }
-    setApplyLoading(true);
+    dispatch({ type: "APLICACION_PEDIDA" });
     const res = await applyGravityCorrections({
       stations: allStations,
       params,
       gravity_column: "g_obs_mgal",
       gravity_type_in: gravityType,
     });
-    setApplyLoading(false);
+    dispatch({ type: "APLICACION_TERMINADA" });
     if (!res.ok || !res.data) {
       setApiError(res.error || "Error al aplicar correcciones a las estaciones.");
       return;
@@ -909,9 +996,7 @@ export default function GravityCorrectionWizard({ file, onComplete, onCancel }: 
           <div className="flex gap-2 flex-wrap">
             <button
               onClick={() => {
-                setStep(3);
-                setPreviewStations(null);
-                setApiError(null);
+                dispatch({ type: "VISTA_PREVIA_DESCARTADA" });
               }}
               disabled={applyLoading}
               className="px-3 py-1.5 text-[11px] rounded bg-neutral-700 hover:bg-neutral-600 disabled:opacity-50 text-white"

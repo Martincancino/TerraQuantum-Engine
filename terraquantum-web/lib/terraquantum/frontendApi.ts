@@ -2,6 +2,15 @@ import type { TerrainResponse } from "../terraQuantumGeology";
 import type { FavorabilityResult } from "../../componentes/datos/favorability_types";
 import { useAppStore } from "../../store/useAppStore";
 import type { BlockModelDataMode } from "../../store/useAppStore";
+// FASE 10 (H-16) — los contratos de la cadena de ingesta ya no se escriben aquí:
+// los genera el backend desde su propio OpenAPI. Ver
+// `types/backend-contracts.generated.ts`.
+import type {
+  ColumnMappingPlanContract,
+  IngestQuestion as IngestQuestionContract,
+  SniffDetection as SniffDetectionContract,
+  SniffReportContract,
+} from "../../types/backend-contracts.generated";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Contrato de /api/geophysics-invert
@@ -1538,78 +1547,27 @@ export type ColumnRole =
 
 // F2 — SniffReport: detección física del CSV (encoding/separador/decimal/
 // preámbulo/filas rotas) CON EVIDENCIA. El backend detecta; aquí solo se muestra.
-export type SniffDetection = {
-  value: string;
-  confidence: "high" | "medium" | "low";
-  evidence: string;
-  discarded: { value: string; reason: string }[];
-};
-
-export type SniffReport = {
-  version: string;
-  filename: string;
-  encoding: SniffDetection;
-  separator: SniffDetection;
-  decimal: SniffDetection;
-  preamble_count: number;
-  preamble_lines: { line_number: number; text: string; reason: string }[];
-  header_line_number: number | null;
-  header_columns: string[];
-  broken_rows: {
-    line_number: number;
-    field_count: number;
-    expected_fields: number;
-    excerpt: string;
-  }[];
-  broken_row_count: number;
-  n_lines_sampled: number;
-  sample_truncated: boolean;
-  warnings: string[];
-};
+//
+// FASE 10: estos cuatro tipos se escribían a mano leyendo
+// `services/csv_sniffer_service.py` y `services/column_mapping_service.py`.
+// Ahora son alias de lo generado — un campo nuevo en el backend aparece aquí sin
+// que nadie lo copie, y uno que desaparezca rompe la compilación.
+//
+// Una precisión SE PERDIÓ y es deliberado: los tipos a mano declaraban
+// `confidence: "high" | "medium" | "low"`. El backend lo emite como cadena y NO
+// lo valida contra un enumerado. Cerrarlo en el Pydantic habría convertido un
+// valor inesperado en un HTTP 500 en plena ingesta; cerrarlo sólo en el frontend
+// es fingir que el cable está tipado. Se transporta `string` y se estrecha en el
+// punto donde se pinta (`SNIFF_CONFIDENCE_META`), que es donde hay algo sensato
+// que hacer con un valor desconocido.
+export type SniffDetection = SniffDetectionContract;
+export type SniffReport = SniffReportContract;
 
 // F2.4 — pregunta ESTRUCTURADA de ingesta (dato no-derivable → se pregunta,
 // jamás se adivina). La respuesta viaja como literal de column_map.
-export type IngestQuestion = {
-  key: string;
-  target: string;
-  kind: "choice" | "text";
-  blocking: boolean;
-  question: string;
-  options: { value: string; label: string }[];
-  reason: string;
-};
+export type IngestQuestion = IngestQuestionContract;
 
-export type ColumnMappingPlan = {
-  data_kind: string;
-  raw_columns: string[];
-  auto_detected: Record<string, string | null>;
-  roles: Record<string, string | null>;
-  overridden: Record<string, string>;
-  invalid_overrides: Record<string, string>;
-  required_roles: string[];
-  optional_roles: string[];
-  missing_required: string[];
-  needs_mapping: boolean;
-  confidence: "high" | "medium" | "low";
-  role_labels: Record<string, string>;
-  literals: Record<string, string>;
-  // F2 — heurística por RANGO físico (2ª opinión sobre el mapeo por nombre).
-  range_checks?: Record<string, { column: string; verdict: string; note: string | null }>;
-  suspicions?: {
-    role: string;
-    column: string;
-    kind: string;
-    user_mapped: boolean;
-    message: string;
-    suggested_role: string | null;
-  }[];
-  role_confidence?: Record<string, "high" | "medium" | "low">;
-  suggestions?: Record<string, { column: string; confidence: string; reason: string }>;
-  needs_confirmation?: boolean;
-  // F2.4 — preguntas tipadas + literales inferidos del header con evidencia.
-  questions?: IngestQuestion[];
-  inferred_literals?: Record<string, { value: string; source_column: string; note: string }>;
-};
+export type ColumnMappingPlan = ColumnMappingPlanContract;
 
 export type EnrichPackageResult =
   | {

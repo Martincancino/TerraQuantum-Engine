@@ -1,5 +1,6 @@
 import type { VoxelMineralModel } from "../../lib/terraQuantumGeology";
 import type { JsonValue } from "../../lib/terraquantum/frontendApi";
+import type { BlockModelResponse } from "../../types/backend-contracts.generated";
 
 export type { JsonValue };
 
@@ -29,7 +30,21 @@ export type ProjectRunsViewData = {
   projects: StoredProject[];
 };
 
-export type BackendVoxelModel = VoxelMineralModel & { visualMode?: string };
+/** El modelo 3D tal como lo deja el backend, listo para el visor.
+ *
+ *  FASE 10 — este tipo estaba declarado **cuatro veces** (aquí, en `PrepPanel`,
+ *  en `Exploration3DView` y en `packageInversion`) y las cuatro no coincidían:
+ *  tres decían `VoxelMineralModel & { visualMode? }` y la cuarta añadía
+ *  `densityMin`, `densityMax` y `mode`. Cuatro nombres iguales, cuatro formas
+ *  distintas, y el compilador tan contento: el caso exacto de H-16.
+ *
+ *  Ahora vive una sola vez y los campos que vienen del backend se toman del
+ *  contrato generado, así que no pueden derivar de lo que emite `/block-model`.
+ *  `VoxelMineralModel` sigue siendo del frontend: es lo que el visor necesita
+ *  para pintar, no lo que el motor calcula. */
+export type BackendVoxelModel = VoxelMineralModel &
+  Partial<Pick<BlockModelResponse, "visualMode" | "densityMin" | "densityMax" | "mode">>;
+
 export type JsonObject = { [key: string]: JsonValue };
 
 // ─── Tipos Fase 4.5 ───────────────────────────────────────────────────────────

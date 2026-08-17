@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useReducer } from "react";
 
 import {
   enrichPackage,
@@ -96,9 +96,136 @@ type Props = {
   boreholeNode?: React.ReactNode;
 };
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FASE 10 — Estado del panel de preparación con enriquecimiento.
+// Se mueve en BLOQUES: «hace falta mapeo» y «salió el paquete» son dos finales
+// distintos de la misma llamada, y cada uno apaga lo que el otro enciende.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PaqueteEnriquecido = {
+  filename: string;
+  packageText: string;
+  summary: EnrichmentSummary;
+  warnings: string[];
+  nStations: number;
+};
+
+type EnriquecerState = {
+  gravFile: File | null;
+  magFile: File | null;
+  utmZone: string;
+  gravimeterType: string;
+  surveyDate: string;
+  useHelmert: boolean;
+  ctrlPoints: ControlPointRow[];
+  loading: boolean;
+  error: string | null;
+  mappingPlan: ColumnMappingPlan | null;
+  columnMap: Record<string, string>;
+  sniffReport: SniffReport | null;
+  sampleRows: Record<string, string>[];
+  mapRoomStations: Record<string, number | string>[] | null;
+  mapRoomLoading: boolean;
+  mapRoomError: string | null;
+  result: PaqueteEnriquecido | null;
+};
+
+const enriquecerInicial: EnriquecerState = {
+  gravFile: null, magFile: null,
+  utmZone: "", gravimeterType: "unknown", surveyDate: "",
+  useHelmert: false,
+  ctrlPoints: [
+    { localX: "", localY: "", realE: "", realN: "" },
+    { localX: "", localY: "", realE: "", realN: "" },
+  ],
+  loading: false, error: null,
+  mappingPlan: null, columnMap: {}, sniffReport: null, sampleRows: [],
+  mapRoomStations: null, mapRoomLoading: false, mapRoomError: null,
+  result: null,
+};
+
+type EnriquecerAction =
+  | { type: "CAMPO"; campo: keyof EnriquecerState; valor: EnriquecerState[keyof EnriquecerState] }
+  | { type: "GENERACION_PEDIDA" }
+  | { type: "GENERACION_TERMINADA" }
+  | { type: "GENERACION_FALLO"; mensaje: string }
+  /** El backend no pudo con las columnas: hay que mapear antes de enriquecer. */
+  | { type: "HACE_FALTA_MAPEO"; plan: ColumnMappingPlan; sniff: SniffReport | null;
+      filas: Record<string, string>[]; mapaPrevio: Record<string, string>; mensaje: string | null }
+  | { type: "PAQUETE_LISTO"; paquete: PaqueteEnriquecido; sniff: SniffReport | null }
+  | { type: "MAPA_ACTUALIZADO"; mapa: Record<string, string> }
+  | { type: "SALA_DE_MAPAS_PEDIDA" }
+  | { type: "SALA_DE_MAPAS_OK"; estaciones: Record<string, number | string>[] }
+  | { type: "SALA_DE_MAPAS_FALLO"; mensaje: string };
+
+function enriquecerReducer(estado: EnriquecerState, accion: EnriquecerAction): EnriquecerState {
+  switch (accion.type) {
+    case "CAMPO":
+      return { ...estado, [accion.campo]: accion.valor };
+    case "GENERACION_PEDIDA":
+      // Empezar de nuevo borra el resultado anterior: dejarlo en pantalla
+      // mientras se recalcula es la forma más barata de mentir.
+      return { ...estado, loading: true, error: null, result: null };
+    case "GENERACION_TERMINADA":
+      return { ...estado, loading: false };
+    case "GENERACION_FALLO":
+      return { ...estado, loading: false, error: accion.mensaje };
+    case "HACE_FALTA_MAPEO":
+      return {
+        ...estado,
+        mappingPlan: accion.plan,
+        sniffReport: accion.sniff,
+        sampleRows: accion.filas,
+        columnMap: accion.mapaPrevio,
+        error: accion.mensaje,
+        result: null,
+      };
+    case "PAQUETE_LISTO":
+      // Y al revés: si salió el paquete, el paso de mapeo se cierra.
+      return { ...estado, mappingPlan: null, sniffReport: accion.sniff,
+               result: accion.paquete, error: null };
+    case "MAPA_ACTUALIZADO":
+      return { ...estado, columnMap: accion.mapa };
+    case "SALA_DE_MAPAS_PEDIDA":
+      return { ...estado, mapRoomLoading: true, mapRoomError: null };
+    case "SALA_DE_MAPAS_OK":
+      return { ...estado, mapRoomLoading: false, mapRoomStations: accion.estaciones };
+    case "SALA_DE_MAPAS_FALLO":
+      return { ...estado, mapRoomLoading: false, mapRoomError: accion.mensaje };
+    default: {
+      const _exhaustivo: never = accion;
+      return _exhaustivo;
+    }
+  }
+}
+
 export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
-  const [gravFile, setGravFile] = useState<File | null>(null);
-  const [magFile, setMagFile] = useState<File | null>(null);
+  // ── FASE 10 (H-16) — 17 `useState` → una máquina con transiciones con nombre ──
+  //
+  // Éste es el flujo PRINCIPAL de preparación, y su estado se mueve en bloques:
+  // «el backend pide mapeo» toca cuatro piezas a la vez, «el paquete salió» toca
+  // otras tres. Con piezas sueltas nada impedía mostrar el paso de mapeo Y el
+  // resultado de una generación anterior al mismo tiempo.
+  const [ui, dispatch] = useReducer(enriquecerReducer, enriquecerInicial);
+  const {
+    gravFile, magFile, utmZone, gravimeterType, surveyDate, useHelmert, ctrlPoints,
+    loading, error, mappingPlan, columnMap, sniffReport, sampleRows,
+    mapRoomStations, mapRoomLoading, mapRoomError, result,
+  } = ui;
+  const campo = <K extends keyof EnriquecerState>(c: K) =>
+    (valor: EnriquecerState[K]) => dispatch({ type: "CAMPO", campo: c, valor });
+  const setGravFile = campo("gravFile");
+  const setMagFile = campo("magFile");
+  const setUtmZone = campo("utmZone");
+  const setGravimeterType = campo("gravimeterType");
+  const setSurveyDate = campo("surveyDate");
+  const setUseHelmert = campo("useHelmert");
+  const setCtrlPoints = campo("ctrlPoints");
+  const setMappingPlan = campo("mappingPlan");
+  const setError = campo("error");
+  const setColumnMap = (mapa: Record<string, string>) =>
+    dispatch({ type: "MAPA_ACTUALIZADO", mapa });
 
   // ── FASE 1 (H-28) — este es el flujo PRINCIPAL de preparación ──────────────
   // La auditoría midió el bug en PrepPanel (el flujo clásico, hoy colapsado bajo
@@ -117,47 +244,21 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
     if (changed) clearActiveRun();
   };
 
-  const [utmZone, setUtmZone] = useState("");
-  const [gravimeterType, setGravimeterType] = useState("unknown");
-  const [surveyDate, setSurveyDate] = useState("");
 
   // FASE 19 (Caso B) — Puntos de control Helmert. SOLO para coords LOCALES: el
   // usuario activa la sección y declara ≥2 pares (x,y local ↔ E,N real). El front
   // NO calcula nada: solo recolecta los puntos; la transformada la resuelve el backend.
-  const [useHelmert, setUseHelmert] = useState(false);
-  const [ctrlPoints, setCtrlPoints] = useState<ControlPointRow[]>([
-    { localX: "", localY: "", realE: "", realN: "" },
-    { localX: "", localY: "", realE: "", realN: "" },
-  ]);
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   // PILAR 1 — MAPEO MANUAL de columnas. `mappingPlan` no-nulo → mostrar el paso de
   // mapeo; `columnMap` (rol → columna) se persiste y se envía en cada generación.
-  const [mappingPlan, setMappingPlan] = useState<ColumnMappingPlan | null>(null);
-  const [columnMap, setColumnMap] = useState<Record<string, string>>({});
+
   // F2 — SniffReport (detección física con evidencia) + preview de filas YA
   // parseadas. El backend detecta; aquí solo se muestran para CONFIRMAR.
-  const [sniffReport, setSniffReport] = useState<SniffReport | null>(null);
-  const [sampleRows, setSampleRows] = useState<Record<string, string>[]>([]);
+
   // F2B — "Sala de mapas": estaciones (lat/lon + valor) para regional-residual.
   // Se cargan bajo demanda con parse-rows (el backend parsea; aquí solo se
   // normalizan las claves de columna a lat_deg/lon_deg para el endpoint).
-  const [mapRoomStations, setMapRoomStations] = useState<
-    Record<string, number | string>[] | null
-  >(null);
-  const [mapRoomLoading, setMapRoomLoading] = useState(false);
-  const [mapRoomError, setMapRoomError] = useState<string | null>(null);
-  const [result, setResult] = useState<
-    | {
-        filename: string;
-        packageText: string;
-        summary: EnrichmentSummary;
-        warnings: string[];
-        nStations: number;
-      }
-    | null
-  >(null);
+
 
   const utmError = useMemo(() => {
     const raw = utmZone.trim();
@@ -187,14 +288,13 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         (hasBoreholes ? " + sondajes (anclaje)" : "");
 
   async function handleGenerate(mapOverride?: Record<string, string>) {
-    setError(null);
-    setResult(null);
+    dispatch({ type: "GENERACION_PEDIDA" });
     if (!gravFile && !magFile) {
-      setError("Sube al menos un CSV (gravimetría y/o magnetometría).");
+      dispatch({ type: "GENERACION_FALLO", mensaje: "Sube al menos un CSV (gravimetría y/o magnetometría)." });
       return;
     }
     if (utmError) {
-      setError(utmError);
+      dispatch({ type: "GENERACION_FALLO", mensaje: utmError });
       return;
     }
     const map = mapOverride ?? columnMap;
@@ -206,7 +306,6 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
       survey_date: surveyDate.trim() || null,
     };
 
-    setLoading(true);
     try {
       const res = await enrichPackage({
         gravityFile: gravFile,
@@ -217,44 +316,47 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         helmertControlPointsJson: buildHelmertJson(useHelmert, ctrlPoints),
       });
       if (!res.ok) {
-        setError(res.error);
+        dispatch({ type: "GENERACION_FALLO", mensaje: res.error });
         return;
       }
       // El backend pide MAPEO o CONFIRMACIÓN (F2: sospechas de rango o
       // preguntas blocking): mostrar el paso, el sniff y el preview parseado.
       if (res.needsMapping) {
-        setMappingPlan(res.mappingPlan);
-        setSniffReport(res.sniffReport ?? null);
-        setSampleRows(res.sampleRows ?? []);
-        setColumnMap((prev) => prefillMap(res.mappingPlan, { ...prev, ...map }));
-        setError(
-          res.message ??
-            "No se reconocieron todas las columnas requeridas. Asigna los roles abajo y vuelve a generar."
-        );
+        dispatch({
+          type: "HACE_FALTA_MAPEO",
+          plan: res.mappingPlan,
+          sniff: res.sniffReport ?? null,
+          filas: res.sampleRows ?? [],
+          mapaPrevio: prefillMap(res.mappingPlan, { ...columnMap, ...map }),
+          mensaje:
+            res.message ??
+            "No se reconocieron todas las columnas requeridas. Asigna los roles abajo y vuelve a generar.",
+        });
         return;
       }
-      setMappingPlan(null);
-      setSniffReport(res.sniffReport ?? null);
-      setResult({
-        filename: res.filename,
-        packageText: res.packageText,
-        summary: res.summary,
-        warnings: res.warnings,
-        nStations: res.nStations,
+      dispatch({
+        type: "PAQUETE_LISTO",
+        sniff: res.sniffReport ?? null,
+        paquete: {
+          filename: res.filename,
+          packageText: res.packageText,
+          summary: res.summary,
+          warnings: res.warnings,
+          nStations: res.nStations,
+        },
       });
     } finally {
-      setLoading(false);
+      dispatch({ type: "GENERACION_TERMINADA" });
     }
   }
 
   // Abrir el mapeo manual proactivamente (sin esperar a que el backend lo pida).
   async function handleOpenMapping() {
-    setError(null);
     if (!primaryFile) {
-      setError("Sube al menos un CSV para mapear sus columnas.");
+      dispatch({ type: "GENERACION_FALLO", mensaje: "Sube al menos un CSV para mapear sus columnas." });
       return;
     }
-    setLoading(true);
+    dispatch({ type: "GENERACION_PEDIDA" });
     try {
       const res = await analyzeColumns({
         file: primaryFile,
@@ -265,12 +367,17 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         setError(res.error);
         return;
       }
-      setMappingPlan(res.plan);
-      setSniffReport(res.sniffReport ?? null);
-      setSampleRows(res.sampleRows ?? []);
-      setColumnMap((prev) => prefillMap(res.plan, prev));
+      dispatch({
+        type: "HACE_FALTA_MAPEO",
+        plan: res.plan,
+        sniff: res.sniffReport ?? null,
+        filas: res.sampleRows ?? [],
+        mapaPrevio: prefillMap(res.plan, columnMap),
+        // Pedir el mapeo a propósito NO es un error: aquí el usuario lo pidió.
+        mensaje: null,
+      });
     } finally {
-      setLoading(false);
+      dispatch({ type: "GENERACION_TERMINADA" });
     }
   }
 
@@ -278,16 +385,15 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
   // parse-rows (el backend parsea con el sniffer) y remapea las claves de
   // columna a lat_deg/lon_deg + el valor gravimétrico según el columnMap.
   async function handleOpenMapRoom() {
-    setMapRoomError(null);
     if (!gravFile) {
-      setMapRoomError("La sala de mapas necesita el CSV de gravimetría cargado.");
+      dispatch({ type: "SALA_DE_MAPAS_FALLO", mensaje: "La sala de mapas necesita el CSV de gravimetría cargado." });
       return;
     }
-    setMapRoomLoading(true);
+    dispatch({ type: "SALA_DE_MAPAS_PEDIDA" });
     try {
       const res = await parseCsvRows({ file: gravFile });
       if (!res.ok) {
-        setMapRoomError(res.error || "No se pudieron leer las filas del CSV.");
+        dispatch({ type: "SALA_DE_MAPAS_FALLO", mensaje: res.error || "No se pudieron leer las filas del CSV." });
         return;
       }
       const roles = mappingPlan?.roles ?? {};
@@ -310,14 +416,15 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
         stations.push(st);
       }
       if (stations.length < 8) {
-        setMapRoomError(
-          "No se pudieron extraer ≥8 estaciones con lat/lon. Revisa el mapeo de columnas."
-        );
+        dispatch({
+          type: "SALA_DE_MAPAS_FALLO",
+          mensaje: "No se pudieron extraer ≥8 estaciones con lat/lon. Revisa el mapeo de columnas.",
+        });
         return;
       }
-      setMapRoomStations(stations);
+      dispatch({ type: "SALA_DE_MAPAS_OK", estaciones: stations });
     } finally {
-      setMapRoomLoading(false);
+
     }
   }
 

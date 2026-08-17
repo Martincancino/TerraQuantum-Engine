@@ -110,7 +110,11 @@ export default function ConnectivityPanel() {
           <p className="text-[9px] uppercase tracking-[0.16em] text-white/40">
             Funciones que usan internet
           </p>
-          {summary.online_features.map((f) => {
+          {/* Fase 10: el contrato declara `online_features` con default de lista
+              vacía, así que el backend PUEDE no mandarla. El tipo generado lo
+              dice y el compilador lo exigió; con el tipo escrito a mano esto
+              habría sido un `undefined.map` en pantalla. */}
+          {(summary.online_features ?? []).map((f) => {
             // Tres estados distintos, y confundirlos es la mentira que este panel
             // existe para evitar:
             //   · no necesita internet          → verde, nada que hacer

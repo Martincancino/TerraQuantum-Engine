@@ -142,14 +142,19 @@ export default function LicensePanel() {
             />
             <Row
               label="Origen"
-              value={status.source}
+              // `source` tiene default en el contrato ("none"): el backend puede
+              // omitirlo. Se muestra el guion, no la palabra inventada.
+              value={status.source ?? "—"}
               hint={
                 status.source === "env"
                   ? "La variable de entorno TQ_LICENSE tiene PRIORIDAD sobre el archivo: activar aquí no la reemplazará."
                   : undefined
               }
             />
-            {status.limits && status.limits.max_voxels !== null && (
+            {/* `max_voxels` es opcional Y anulable en el contrato: `null` = sin
+                tope, ausente = el backend no lo dijo. Los dos casos se tratan
+                igual —no se muestra la fila— pero hay que comprobar ambos. */}
+            {status.limits?.max_voxels != null && (
               <Row
                 label="Límite declarado"
                 value={`${status.limits.max_voxels.toLocaleString()} vóxeles`}

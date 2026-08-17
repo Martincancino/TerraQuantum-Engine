@@ -3,7 +3,6 @@
 import React, { Suspense, useEffect, useMemo } from "react";
 import { Canvas } from "@react-three/fiber";
 import { useAppStore } from "../../store/useAppStore";
-import { VoxelMineralModel } from "../../lib/terraQuantumGeology";
 
 import Scene3D from "../Scene3D";
 import LoadPanel from "../LoadPanel";
@@ -49,14 +48,11 @@ import {
 import { AppState, VoxelInfo, runKeyOf } from "../../store/useAppStore";
 import type { BlockModelDataMode } from "../../store/useAppStore";
 import type { VoxelData } from "../../lib/terraQuantumGeology";
+// FASE 10: una sola declaración de `BackendVoxelModel` (antes eran 4, y la de
+// este archivo era la única que incluía densityMin/densityMax/mode).
+import type { BackendVoxelModel } from "../datos/types";
 
-/** Extiende VoxelMineralModel con campos opcionales que devuelve el backend. */
-type BackendVoxelModel = VoxelMineralModel & {
-  visualMode?: string;
-  densityMin?: number;
-  densityMax?: number;
-  mode?: string;
-};
+
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;

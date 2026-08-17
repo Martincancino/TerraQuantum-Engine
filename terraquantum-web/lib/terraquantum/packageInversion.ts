@@ -15,11 +15,13 @@ import {
   type InversionBudget,
 } from "./frontendApi";
 import { isJsonObject, readStringField, readNumberField } from "../../componentes/datos/helpers";
-import type { VoxelMineralModel, VoxelData } from "../terraQuantumGeology";
+import type { VoxelData } from "../terraQuantumGeology";
 import { useAppStore } from "../../store/useAppStore";
 
 type JsonObject = Record<string, unknown>;
-type BackendVoxelModel = VoxelMineralModel & { visualMode?: string };
+// FASE 10: `BackendVoxelModel` estaba declarado 4 veces con 3 formas distintas.
+// Vive una sola vez, en `componentes/datos/types.ts`, derivado del contrato.
+import type { BackendVoxelModel } from "../../componentes/datos/types";
 
 // ─── Parsing del block model del backend (shape, no física) ──────────────────
 

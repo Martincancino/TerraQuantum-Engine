@@ -5,87 +5,63 @@
 // sin un solo consumidor. Su gate se declaró en verde midiendo el backend, no al
 // usuario. Este módulo es el cable que faltaba.
 //
-// Los tipos describen lo que el backend devuelve HOY (medido leyendo
-// `core/license_service.py`, `services/diagnostics_service.py` y
-// `services/connectivity_service.py`). No se normaliza ni se completa nada: si un
-// campo no viene, viene `undefined` y la UI lo dice. Regla de Oro — aquí no se
-// calcula nada, sólo se transporta.
+// FASE 10 — los contratos ya NO se escriben aquí a mano.
+//
+// Hasta la Fase 9 estos tipos se escribían leyendo `core/license_service.py`,
+// `services/diagnostics_service.py` y `services/connectivity_service.py`. Estaban
+// bien —se midieron— y aun así eran una bomba: el día que el backend añadiera un
+// campo, nada fallaba hasta que un consultor viera un dato vacío. Ahora vienen de
+// `types/backend-contracts.generated.ts`, que produce el backend desde su propio
+// OpenAPI, y un cambio de contrato rompe la COMPILACIÓN.
+//
+// Lo que sigue siendo local, y por qué: `BackendHealth` no es un contrato del
+// backend sino la forma que INVENTA el proxy `/api/backend-health`
+// (`online`, `backendStatus`, `backendUrl`). Generarlo sería mentir sobre su
+// origen; lo que sí se tipa con el contrato real es su carga útil.
 
 import type { FrontendApiResult } from "./frontendApi";
+import type {
+  ConnectivityFeature as ConnectivityFeatureContract,
+  ConnectivitySummaryResponse,
+  DiagnosticManifestResponse,
+  HealthResponse,
+  LicenseActivationResponse,
+  LicenseStatusResponse,
+} from "../../types/backend-contracts.generated";
 
-// ─── Contratos ────────────────────────────────────────────────────────────────
+// ─── Contratos (generados desde el OpenAPI del backend) ───────────────────────
 
-/** `GET /license/status` y `POST /license/activate` (mismo cuerpo + `activated`).
+/** `GET /license/status`. */
+export type LicenseStatus = LicenseStatusResponse;
+
+/** `POST /license/activate`.
  *
- *  `tier` es una cadena LIBRE dentro del token firmado: el backend no la valida
- *  contra un enumerado (`license_service.py`, `tier = str(payload.get("tier") …)`)
- *  y los límites sólo están tabulados para `local`/`pro`/`free`. Por eso aquí es
- *  `string` y no una unión: cerrarla en el frontend sería inventar un contrato. */
-export type LicenseStatus = {
-  valid: boolean;
-  tier: string;
-  /** Motivo en español, escrito por el backend. Es la única explicación del estado. */
-  reason: string;
-  licensee: string | null;
-  product: string | null;
-  issued_at: string | null;
-  /** ISO-8601, o `null` = licencia perpetua. */
-  expires_at: string | null;
-  expired: boolean;
-  /** De dónde salió el token vigente. `env` gana sobre `file` — ver aviso en el panel. */
-  source: "env" | "file" | "none" | string;
-  effective_tier: string;
-  limits: { max_voxels: number | null; watermark: boolean } | null;
-  mode: "licensed" | "local_free" | string;
-  /** Sólo en la respuesta de activación. Un token inválido devuelve HTTP 200
-   *  con `activated:false`: mirar el código de estado no basta. */
-  activated?: boolean;
-};
+ *  **No es el mismo tipo que `LicenseStatus`, y confundirlos era un bug latente:**
+ *  medido en la Fase 10, `activate_license()` NUNCA devuelve `mode`. Antes ambas
+ *  respuestas compartían un tipo con `mode` obligatorio, así que leer `.mode`
+ *  tras activar daba `undefined` sin una sola queja del compilador. Ahora son dos
+ *  contratos y `tsc` lo sabe. */
+export type LicenseActivation = LicenseActivationResponse;
 
-/** Una función que puede necesitar internet, tal como la declara el backend. */
-export type ConnectivityFeature = {
-  name: string;
-  key: string;
-  requires_internet: boolean;
-  required_for_golden_path: boolean;
-  configured: boolean;
-  local_fallback: boolean;
-  message: string;
-  /** Fase 9: la clave la pone el usuario en la interfaz (BYO-key). Sin este
-   *  campo, `configured:false` se lee como «no disponible», que es falso. */
-  user_supplied_key?: boolean;
-};
+export type ConnectivityFeature = ConnectivityFeatureContract;
 
 /** `GET /system/connectivity`. */
-export type ConnectivitySummary = {
-  golden_path_offline: boolean;
-  golden_path_note: string;
-  /** Siempre `false`: este resumen NUNCA sale a la red. */
-  probed: boolean;
-  probe_requested?: boolean;
-  probe_note?: string;
-  online_features: ConnectivityFeature[];
-};
+export type ConnectivitySummary = ConnectivitySummaryResponse;
 
 /** `GET /diagnostics/manifest` — lo que va dentro del ZIP, para poder mirarlo
  *  ANTES de descargarlo. Es lo que hace comprobable la promesa de que no sale
  *  ningún dato de survey. */
-export type DiagnosticManifest = {
-  system: Record<string, unknown>;
-  packages: Record<string, string>;
-  config_sanitized: Record<string, unknown>;
-  connectivity: ConnectivitySummary;
-  license: Record<string, unknown>;
-  recent_errors: unknown[];
-};
+export type DiagnosticManifest = DiagnosticManifestResponse;
 
-/** `GET /api/backend-health` — el proxy ya existía y no lo llamaba nadie. */
+/** `GET /api/backend-health`. **Esto lo fabrica el proxy de Next, no el backend**:
+ *  traduce «respondió / no respondió» a un booleano que la barra de estado puede
+ *  pintar. `data` sí es el contrato real de `GET /health`. */
 export type BackendHealth = {
   online: boolean;
   detail?: string;
   backendStatus?: number;
   backendUrl?: string;
-  data?: Record<string, unknown>;
+  data?: HealthResponse;
 };
 
 // ─── Transporte ───────────────────────────────────────────────────────────────
@@ -155,9 +131,13 @@ export async function getLicenseStatus() {
 }
 
 /** Activa por pegado de clave. OJO: un token inválido responde 200 con
- *  `activated:false` — la condición de éxito es `activated === true`, no `ok`. */
+ *  `activated:false` — la condición de éxito es `activated === true`, no `ok`.
+ *
+ *  Devuelve `LicenseActivation`, que **no trae `mode`**: para saber si la licencia
+ *  quedó activa hay que volver a leer `/license/status` (que además es lo correcto,
+ *  porque `TQ_LICENSE` del entorno puede anular lo que se acaba de escribir). */
 export async function activateLicense(token: string) {
-  return requestJson<LicenseStatus>(
+  return requestJson<LicenseActivation>(
     "/api/license/activate",
     {
       method: "POST",
