@@ -32,6 +32,7 @@ import inspect
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -451,6 +452,157 @@ def test_la_lista_de_rutas_del_cable_es_portante(app):
     assert not muertas, (
         "RUTAS_DEL_CABLE nombra rutas que ya no existen; el generador estaría "
         f"emitiendo tipos de un backend imaginario: {muertas}"
+    )
+
+
+# ── 4. El frontend: presupuesto de estado y contratos sin copiar ─────────────
+
+#: Techo de `useState` por componente (criterio de aceptación de la Fase 10).
+#: 12 no es un número redondo elegido al azar: es el de la auditoría, y el
+#: argumento es que por encima de ahí el número de combinaciones alcanzables deja
+#: de poder razonarse y de poder testearse.
+PRESUPUESTO_USE_STATE = 12
+
+_DECL_TS = re.compile(
+    r"^\s*(?:export\s+)?(?:type\s+([A-Za-z0-9_]+)\s*=\s*\{"
+    r"|interface\s+([A-Za-z0-9_]+)\s*(?:extends[^{]*)?\{)",
+    re.M,
+)
+
+#: Contratos generados que TODAVÍA tienen un cuerpo escrito a mano en el
+#: frontend. Es deuda MEDIDA, no una excusa abierta: la lista no puede crecer, y
+#: cada entrada dice por qué sigue ahí.
+#:
+#: Se intentó aliasarlos y `tsc` devolvió 20 errores de UNA sola causa:
+#: `default_factory` en esquemas de otras fases (convergencia, sondajes,
+#: correcciones) marca opcionales campos que el servicio emite siempre. Hacerlo
+#: bien exige tocar cinco esquemas más, con riesgo de HTTP 500 en rutas que sí
+#: validan. Dueña: **Fase 11**.
+CONTRATOS_AUN_A_MANO: dict[str, str] = {
+    "BlockModelResponse": (
+        "NO es deuda: el tipo del frontend es el NORMALIZADO. El adaptador de "
+        "`frontendApi` emite snake_case Y camelCase para que el visor no tenga "
+        "que saber de qué endpoint vino el modelo. Generarlo sería declarar como "
+        "contrato del backend algo que fabrica el cliente."
+    ),
+    "GravityImportPreviewResponse": "Diverge del backend a propósito (campos legacy camelCase). Dueña: Fase 11.",
+    "GravityImportMetadata": "Idem: metadatos con alias camelCase heredados. Dueña: Fase 11.",
+    "GeophysicsStatusResponse": "El frontend añade `metrics`/`heartbeat_at` del canal SSE. Dueña: Fase 11.",
+    "ApplyCorrectionsResponse": "`default_factory` la vuelve opcional; el servicio siempre la emite. Fase 11.",
+    "BoreholeSample": "Idem. Dueña: Fase 11.",
+    "BoreholeSurvey": "Idem (`holes` opcional en el contrato, siempre presente en la respuesta). Fase 11.",
+    "ConvergenceResponse": "Idem (`trials`, `lambda_selected`). Dueña: Fase 11.",
+    "ConvergenceTrial": "Idem. Dueña: Fase 11.",
+    "DataQualityScore": "Idem. Dueña: Fase 11.",
+    "HistoryRun": "Idem. Dueña: Fase 11.",
+    "MisfitResponse": "Idem. Dueña: Fase 11.",
+    "MisfitStationData": "Idem. Dueña: Fase 11.",
+    "MultimodalPlanResponse": "Idem. Dueña: Fase 11.",
+    "ParseBoreholeCsvResponse": "Idem. Dueña: Fase 11.",
+    "PercentileStats": "Idem. Dueña: Fase 11.",
+    "RegionalScalePreflight": "Idem. Dueña: Fase 11.",
+    "SpatialReadiness": "Idem. Dueña: Fase 11.",
+    "VoxelData": (
+        "Vive en `lib/terraQuantumGeology.ts`, que es código de RENDER: describe "
+        "lo que el visor necesita para pintar, no lo que el motor calcula. "
+        "Coinciden de nombre, no de propósito."
+    ),
+}
+
+
+def _ficheros_web(*dirs: str):
+    for d in dirs:
+        base = WEB_ROOT / d
+        if not base.is_dir():
+            continue
+        for f in base.rglob("*"):
+            if f.suffix not in (".ts", ".tsx") or "node_modules" in f.parts:
+                continue
+            yield f
+
+
+@pytest.mark.skipif(not _web_disponible(), reason="terraquantum-web no está presente.")
+def test_ningun_componente_supera_el_presupuesto_de_useState():
+    """El criterio de aceptación de la Fase 10, medido y no prometido.
+
+    `PrepPanel` llegó a tener 41 —el 24 % de todo el estado local del frontend en
+    un archivo—, y la auditoría lo llamó *«el candidato número uno a una máquina
+    de estados explícita»*. Este guard no defiende ese archivo concreto: mide
+    TODOS, así que también caza el próximo componente que crezca hasta ahí.
+    """
+    excesos = []
+    for f in _ficheros_web("componentes", "app", "lib", "store"):
+        n = len(re.findall(r"useState[<(]", f.read_text(encoding="utf-8", errors="ignore")))
+        if n > PRESUPUESTO_USE_STATE:
+            excesos.append(f"{n:3d}  {f.relative_to(WEB_ROOT).as_posix()}")
+
+    assert not excesos, (
+        f"Componentes con más de {PRESUPUESTO_USE_STATE} `useState`. Con ese "
+        "número de piezas independientes las combinaciones alcanzables dejan de "
+        "poder razonarse, y los bugs pasan a ser «en cierta secuencia de clics "
+        "queda inconsistente» (H-16, y H-29 fue uno).\n"
+        "Arreglo: agrupar en `useReducer` por MOTIVO DE CAMBIO, con transiciones "
+        "con nombre para los movimientos que tocan varias piezas.\n  "
+        + "\n  ".join(sorted(excesos, reverse=True))
+    )
+
+
+@pytest.mark.skipif(not _web_disponible(), reason="terraquantum-web no está presente.")
+def test_los_contratos_generados_no_se_reescriben_a_mano():
+    """H-16 en su forma medible: nadie vuelve a copiar un esquema del backend.
+
+    La regla mira CUERPOS, no nombres: `export type X = XContract;` es un alias
+    (bien) y `export type X = { … }` es una copia (mal). Y la lista de deuda no
+    puede crecer: si aparece un contrato copiado que no está declarado, esto cae.
+    """
+    generado = WEB_ROOT / "types" / "backend-contracts.generated.ts"
+    assert generado.exists(), (
+        "Falta el archivo de tipos generados. Corre "
+        "`python scripts/ci/generate_frontend_types.py`."
+    )
+    nombres_generados = set(
+        re.findall(r"^export type ([A-Za-z0-9_]+) =", generado.read_text(encoding="utf-8"), re.M)
+    )
+
+    copias: dict[str, list[str]] = {}
+    for f in _ficheros_web("componentes", "app", "lib", "store", "workers", "types"):
+        if f.name == generado.name:
+            continue
+        for m in _DECL_TS.finditer(f.read_text(encoding="utf-8", errors="ignore")):
+            nombre = m.group(1) or m.group(2)
+            if nombre in nombres_generados:
+                copias.setdefault(nombre, []).append(f.relative_to(WEB_ROOT).as_posix())
+
+    nuevas = sorted(set(copias) - set(CONTRATOS_AUN_A_MANO))
+    assert not nuevas, (
+        "Contratos del backend copiados a mano en el frontend sin declararlo. "
+        "Es la clase de bug de H-16: el backend cambia un campo y no falla nada "
+        "hasta que el usuario ve un dato vacío.\n"
+        "O se usa el tipo generado, o se añade a CONTRATOS_AUN_A_MANO con motivo "
+        "y fase dueña:\n  "
+        + "\n  ".join(f"{n} en {copias[n]}" for n in nuevas)
+    )
+
+    resueltas = sorted(set(CONTRATOS_AUN_A_MANO) - set(copias))
+    assert not resueltas, (
+        "Estos contratos YA no se declaran a mano: quítalos de "
+        f"CONTRATOS_AUN_A_MANO, la excusa dejó de describir la realidad: {resueltas}"
+    )
+
+
+@pytest.mark.skipif(not _web_disponible(), reason="terraquantum-web no está presente.")
+def test_el_frontend_consume_de_verdad_los_tipos_generados():
+    """Que el archivo exista no basta: la Fase 9 aprendió que «tener el cable»
+    y «estar enchufado» son cosas distintas. Un artefacto generado que nadie
+    importa es exactamente el mismo defecto con otro disfraz."""
+    importadores = [
+        f.relative_to(WEB_ROOT).as_posix()
+        for f in _ficheros_web("componentes", "lib", "store", "app")
+        if "backend-contracts.generated" in f.read_text(encoding="utf-8", errors="ignore")
+    ]
+    assert len(importadores) >= 3, (
+        "Casi nadie importa los tipos generados: el contrato existiría y el "
+        f"frontend seguiría escribiéndolo a mano. Importadores: {importadores}"
     )
 
 

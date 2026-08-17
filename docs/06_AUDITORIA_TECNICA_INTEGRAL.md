@@ -1461,7 +1461,9 @@ Ordenado por **valor estratégico**, no por facilidad. Esfuerzo en S/M/L/XL.
 
 · ✅ **Fase 9** (2026-08-16: H-10 cerrado — la superficie F7 entera pasa de **5 endpoints sin un solo consumidor** a tener camino de usuario, y los 3 paneles que la Fase 6 encontró escritos-y-sin-montar quedan montados: **componentes `.tsx` sin importador, 3 → 0**. Lo que no estaba en el plan y salió al medir: **cinco defectos de honestidad**, todos en el lado que la fase venía a hacer visible — `copilot_gemini.configured` era `False` **constante** porque leía un atributo inexistente tras un `hasattr`; `/system/connectivity` devolvía `probed: true` **sin haber tocado la red jamás**; el copiloto pintaba un «Online» **literal en el JSX**; el widget del solver afirmaba «≤150 iteraciones» justo cuando **no tenía el dato**, tapando el `500/500` que es la evidencia de no-convergencia; y `MultimodalComboPanel`, nunca ejecutado por nunca haber sido importado, **tumbaba la pestaña entera** ante un plan incompleto. El cambio de proceso se implementó **midiendo**: `test_fase9_camino_de_usuario.py` recorre los tres eslabones —endpoint → proxy/cliente → componente montado— con excepciones que llevan motivo y fase dueña, y verificado por mutación que la allowlist es portante. Y la **auditoría retroactiva de F5–F8 dio 4 de 4**: cada una de esas fases entregó algo que el usuario no podía ver — el caso más llamativo, los 6 campos de solver de la Fase 5, incluido su arreglo estrella de distinguir el solver *pedido* del *usado*, que aparecían en **0 archivos** del frontend).
 
-**CERRADAS: 1, 2, 3, 4, 5, 6, 7, 8 y 9. Siguiente: Fase 10** (contratos tipados — y hereda de la 9 los 5 endpoints de F7 sin `response_model`, cuyo esquema OpenAPI va vacío). La Fase 8 deja además, medido y con nombre, lo que NO entró en sus cuatro pasos: `solve_magnetic_inversion_lsqr` (812 LOC / CC 116), `_import_gravity_csv_v1_impl` (777 / CC 181), `run_joint_inversion` (736 / CC 87) y `run_magnetic_inversion` (616 / CC 73) — el mismo método mecánico se les aplica tal cual.
+· ✅ **Fase 10** (2026-08-17: H-16 cerrado — el contrato del camino dorado deja de escribirse a mano. **Medido antes de ejecutar, y la justificación de la fase estaba mal contada:** H-16 decía «40 nombres de tipo duplicados» y son **13**; `SniffReport ×3` y `BuildPackageConfig ×3` eran falsos —están declarados UNA vez y re-importados—, porque el contador tomaba las líneas `type X,` de un bloque `import` por declaraciones. **El problema real era otro y mayor:** de 65 rutas, **44 no declaraban esquema de respuesta**, incluida la cadena de ingesta completa, así que el OpenAPI del camino dorado iba vacío y no había *nada* que generar. Dos riesgos medidos al declararlo, y muerden en direcciones opuestas: un `response_model` **estricto borra en silencio** los campos que no declara, y uno **a secas inyecta** los opcionales que el endpoint no emitió —apareció `user_supplied_key: null` en 3 de las 4 features de conectividad—; la contra es `response_model_exclude_unset=True`, y hay test que compara la respuesta HTTP con la del servicio, clave a clave. **Tres hallazgos nuevos:** `POST /license/activate` **nunca devuelve `mode`** y `/license/status` sí, mientras el frontend usaba UN tipo con `mode` obligatorio para las dos; **en un contrato de respuesta un default es una promesa que nadie quiso hacer** (`default_factory` marcaba opcionales 25 campos que el servicio emite siempre, y el frontend se llenaba de guardas para casos imposibles); y `inclinationDeg`/`declinationDeg`/`fieldIntensityNt`/`suscMin`/`suscMax` **no tienen ningún setter**: el comentario prometía que el usuario podía ajustarlos y no hay un solo input — `useState` lo escondía y el paso a `useReducer` lo delató. Estado: **41 → 0 `useState`** en `PrepPanel`, y el máximo del frontend entero pasa de **41 a 9**. Gate: 15/15 del guard nuevo, tsc 0, eslint 0, **28/28 Playwright**, 6 mutaciones verificadas.)
+
+**CERRADAS: 1, 2, 3, 4, 5, 6, 7, 8, 9 y 10. Siguiente: Fase 11** (API de scripting — y hereda de la 10 los **19 contratos que siguen con cuerpo escrito a mano** en el frontend: se intentó aliasarlos y `tsc` devolvió 20 errores de una sola causa, `default_factory` en los esquemas de convergencia, sondajes y correcciones, cuyo arreglo exige tocar cinco esquemas más con riesgo de HTTP 500 en rutas que sí validan). La Fase 8 deja además, medido y con nombre, lo que NO entró en sus cuatro pasos: `solve_magnetic_inversion_lsqr` (812 LOC / CC 116), `_import_gravity_csv_v1_impl` (777 / CC 181), `run_joint_inversion` (736 / CC 87) y `run_magnetic_inversion` (616 / CC 73) — el mismo método mecánico se les aplica tal cual.
 
 ### Plantilla de gate de fase (obligatoria desde la Fase 9)
 
@@ -2572,6 +2574,110 @@ guard nuevo impide que se repita.
 **Criterios de aceptación.** `tsc --noEmit` limpio con los tipos generados; ningún componente con >12 `useState`; los recorridos Playwright verdes; ningún tipo del camino dorado declarado a mano.
 
 **Riesgo.** Medio. **Dependencia:** iteración separada de frontend. **No combinar con la Fase 13** (undo/redo) — ambas tocan el estado; hacer la Fase 10 primero deja el terreno mucho mejor para la 13.
+
+---
+
+### ✅ CERRADA 2026-08-17 — lo que se midió, y en qué se equivocaba el plan
+
+**Corrección a la justificación de esta fase.** El texto de arriba dice «40 nombres
+de tipo duplicados replicando esquemas Pydantic a mano (`BackendVoxelModel` ×4,
+`SniffReport` ×3, `BuildPackageConfig` ×3)». **Medido: son 13**, y dos de los tres
+ejemplos son falsos — `SniffReport` y `BuildPackageConfig` están declarados **una
+sola vez** en `frontendApi.ts` y re-importados; el contador de la auditoría tomaba
+las líneas `type X,` de un bloque `import` por declaraciones. *(El auditor que
+escribe esto cometió el mismo error de regex en su primera medición y lo detectó al
+comprobarlo contra el archivo.)*
+
+**Y el problema real era mayor que el que se contó.** La duplicación *dentro* del
+frontend es menor; lo grave es que **44 de 65 rutas no declaraban esquema de
+respuesta**, y entre ellas la cadena de ingesta entera (`analyze-columns`,
+`parse-rows`, `enrich-package`, `build-package`, `load-package`). El paso (1) del
+diseño —generar tipos desde OpenAPI— habría producido `unknown` justo en el camino
+dorado. Por eso la fase empieza declarando contratos en el backend.
+
+#### Los dos riesgos de declarar un contrato sobre un endpoint vivo
+
+**[MEDIDO]** con FastAPI 0.135.3 / Pydantic 2.13.0, y muerden en direcciones
+opuestas:
+
+| Qué se hace | Qué le pasa al payload |
+|---|---|
+| `response_model` **estricto** | **BORRA en silencio** los campos no declarados. Sobre un endpoint que lleva años emitiéndolos, eso no documenta: destruye datos que el frontend consume. |
+| `response_model` con `extra="allow"` | **INYECTA** los opcionales que el endpoint no emitió. Apareció `user_supplied_key: null` en 3 de las 4 features de conectividad, donde la clave no existía. |
+| `extra="allow"` + `response_model_exclude_unset=True` | Payload **idéntico clave a clave**. Es lo que se usa, y hay test que lo comprueba llamando a los endpoints y comparando con el servicio. |
+
+#### Tres hallazgos nuevos, ninguno en el plan
+
+1. **`POST /license/activate` no devuelve `mode`; `GET /license/status` sí.** El
+   frontend usaba **un solo tipo con `mode` obligatorio** para las dos respuestas:
+   leer `.mode` tras activar da `undefined` y TypeScript no dice nada. No se cambia
+   la conducta del backend —añadir un campo es decisión de producto—: se declaran
+   dos contratos y el compilador pasa a saberlo.
+2. **En un contrato de respuesta, un default es una promesa que nadie quiso hacer.**
+   `Field(default_factory=list)` hace que OpenAPI marque el campo opcional; el tipo
+   generado sale con `?` y el consumidor se llena de `?? []` para un caso que no
+   puede ocurrir — y esa maraña esconde los sitios donde el campo **sí** puede
+   faltar. Distinción hermana que Pydantic escribe igual: `Optional[str] = None`
+   dice «puede FALTAR», `Optional[str]` dice «viene siempre, puede ser `null`».
+   Efecto medido en el frontend al corregirlo: **25 errores de `tsc` → 1 → 0**.
+3. **Cinco parámetros del campo geomagnético no tienen setter en ninguna parte.**
+   `inclinationDeg`, `declinationDeg`, `fieldIntensityNt`, `suscMin` y `suscMax`
+   viajan al motor magnético con los defaults del norte de Chile, mientras su
+   comentario prometía que «el usuario puede ajustarlos según la región». No hay un
+   solo input. `useState` lo escondía; al pasar a transiciones, el linter los delató
+   como atajos sin llamador. **Queda dicho, no arreglado**: es interfaz de
+   parámetros físicos y ponerla sin validación es peor que no tenerla.
+
+#### El estado, y por qué no era estética
+
+`PrepPanel` **41 → 0** `useState`; `PrepEnrichPanel` 17 → 0;
+`GravityCorrectionWizard` 16 → 0; `HistorialView` 19 → 2. **Máximo del frontend
+entero: 41 → 9.** El argumento no es el número: **H-29 fue un movimiento
+multi-campo escrito a mano en dos sitios que divergieron** (al cambiar el CSV
+magnético no se reseteaban los reconocimientos de riesgo). Ahora
+`ARCHIVOS_CAMBIARON` es una transición en tres máquinas y cada una sabe qué de lo
+suyo caduca. Lo mismo con el preset de densidad (existía «preset nuevo con bounds
+viejos»), con el fallo al generar el paquete (mensaje de progreso y error
+conviviendo) y con el paso 4 del asistente (podía mostrar la vista previa del mapeo
+anterior). **El JSX no se reescribió**: atajos `set*` que despachan, igual que la
+Fase 8 movió cuerpos sin tocar el texto.
+
+#### Verificación por mutación (6 de 6)
+
+quitar un campo del espejo del sniffer → rojo · quitar `exclude_unset` de
+`/system/connectivity` → rojo · editar a mano el `.ts` generado → rojo · añadir un
+campo al backend sin regenerar → rojo · superar el presupuesto de `useState` → rojo
+· volver a copiar un contrato generado → rojo.
+
+#### Lo que queda fuera, a propósito y con nombre
+
+* **19 contratos siguen con cuerpo escrito a mano** en el frontend. Se intentó
+  aliasarlos y `tsc` devolvió 20 errores de **una sola causa**: `default_factory` en
+  los esquemas de convergencia, sondajes y correcciones marca opcionales campos que
+  el servicio emite siempre. Arreglarlo bien exige tocar cinco esquemas más, con
+  riesgo de HTTP 500 en rutas que **sí** validan. Revertido y declarado en
+  `CONTRATOS_AUN_A_MANO`, con la lista impedida de crecer. **Dueña: Fase 11.**
+* **`BlockModelResponse` del frontend no se genera, y es correcto**: es el tipo
+  *normalizado* (el adaptador emite snake_case y camelCase para que el visor no
+  tenga que saber de qué endpoint vino el modelo). Igual `BackendHealth`, que lo
+  fabrica el proxy de Next. Generarlos sería declarar como contrato del backend algo
+  que fabrica el cliente.
+* **No se usó `openapi-typescript`**, que era lo que sugería el informe: añadir una
+  dependencia npm necesita permiso expreso, el generador tiene que correr en el job
+  de **backend** (donde vive la app que produce el esquema y donde no hay Node), y lo
+  que hay que generar son ~30 tipos de un esquema que ya está en memoria.
+* **No se fabricaron enumerados que el código no tiene.** `confidence` se emite como
+  cadena libre; cerrarlo en Pydantic convertiría un valor inesperado en un **500 en
+  plena ingesta**. Se transporta `string` y se estrecha al pintarlo.
+
+**Gate:** 15/15 del guard nuevo · `tsc --noEmit` 0 · eslint 0 errores 0 warnings ·
+`next build` OK · **28/28 Playwright** (25 previos + 3 del recorrido con CSV sucio) ·
+guards de la Fase 9 en verde.
+
+**GOTCHA que costó una investigación:** el `webServer` de Playwright corre
+`npm run start` y **no reconstruye**. Comparar «con mis cambios» contra «sin mis
+cambios» sin un `npm run build` en medio mide **el mismo bundle**: un fallo se
+atribuyó a esta fase y la comparación era inválida.
 
 ---
 

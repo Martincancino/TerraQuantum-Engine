@@ -69,12 +69,22 @@ jobs:
         #    el criterio de aceptación era <40. El gate existe porque el informe citaba
         #    un `study_duplication.py` que NUNCA estuvo en el repositorio: sin medidor,
         #    el criterio no era verificable y la duplicación podía volver sin ruido.
+        #  · deriva de contratos (Fase 10, H-16): `--check` regenera los tipos del
+        #    frontend desde el OpenAPI y compara con lo commiteado. Va en el job de
+        #    BACKEND porque es aquí donde vive la app que produce el esquema (y donde
+        #    no hay Node). Rojo aquí = alguien cambió un contrato y los tipos del
+        #    frontend describen un backend que ya no existe. El resto de guardas de
+        #    esa fase (no filtrar/no inyectar campos, espejos del sniffer y del plan
+        #    de mapeo, presupuesto de `useState`, contratos sin copiar a mano) van en
+        #    el pytest de abajo, que también cruza a `terraquantum-web` como el de la
+        #    Fase 9.
         run: |
           python scripts/ci/ast_budgets.py
           python scripts/ci/validation_inventory.py
           python scripts/ci/deps_closure.py
           python scripts/ci/study_duplication.py --gate
-          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py tests/test_fase5_superficie_config.py tests/test_fase7_nucleo_compartido.py tests/test_fase8_espina_dorsal.py -q
+          python scripts/ci/generate_frontend_types.py --check
+          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py tests/test_fase5_superficie_config.py tests/test_fase7_nucleo_compartido.py tests/test_fase8_espina_dorsal.py tests/test_fase9_camino_de_usuario.py tests/test_fase10_contratos.py -q
 
       - name: Canario de física (regresión W_z sobre esfera sintética)
         # H-4: la regresión física NUNCA corría automáticamente. Y el arreglo no
