@@ -53,7 +53,7 @@
 //   POST /v2/gravity-import/load-package                 → LoadPackageResponse
 //   POST /v2/gravity-import/parse-rows                   → ParseRowsResponse
 //
-// 68 tipos, cierre transitivo de 22 contratos de respuesta.
+// 69 tipos, cierre transitivo de 22 contratos de respuesta.
 
 /**
  * El plan de mapeo SIN invertir ni fabricar nada: se leen encabezados, se
@@ -66,7 +66,7 @@
 export type AnalyzeColumnsResponse = {
   column_mapping: ColumnMappingPlanContract;
   sniff_report: SniffReportContract;
-  sample_rows?: Record<string, unknown>[];
+  sample_rows: Record<string, unknown>[];
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -185,25 +185,31 @@ export type BoreholeSurvey = {
  */
 export type ColumnMappingPlanContract = {
   data_kind: string;
-  raw_columns?: string[];
-  auto_detected?: Record<string, string | null>;
-  roles?: Record<string, string | null>;
-  overridden?: Record<string, string>;
-  invalid_overrides?: Record<string, string>;
-  required_roles?: string[];
-  optional_roles?: string[];
-  missing_required?: string[];
-  needs_mapping?: boolean;
-  confidence?: string;
-  role_labels?: Record<string, string>;
-  literals?: Record<string, unknown>;
-  range_checks?: Record<string, ColumnRangeCheck>;
-  suspicions?: ColumnSuspicion[];
-  role_confidence?: Record<string, string>;
-  suggestions?: Record<string, ColumnSuggestion>;
-  needs_confirmation?: boolean;
-  questions?: IngestQuestion[];
-  inferred_literals?: Record<string, InferredLiteral>;
+  raw_columns: string[];
+  auto_detected: Record<string, string | null>;
+  roles: Record<string, string | null>;
+  overridden: Record<string, string>;
+  invalid_overrides: Record<string, string>;
+  required_roles: string[];
+  optional_roles: string[];
+  missing_required: string[];
+  needs_mapping: boolean;
+  /**
+   * `high` | `medium` | `low`. Va como cadena y no como enumerado a propósito: el backend
+   * NO lo valida contra un dominio cerrado, y cerrarlo aquí convertiría un valor
+   * inesperado en un HTTP 500 en plena ingesta. Se estrecha al pintarlo, no al
+   * transportarlo.
+   */
+  confidence: string;
+  role_labels: Record<string, string>;
+  literals: Record<string, string>;
+  range_checks: Record<string, ColumnRangeCheck>;
+  suspicions: ColumnSuspicion[];
+  role_confidence: Record<string, string>;
+  suggestions: Record<string, ColumnSuggestion>;
+  needs_confirmation: boolean;
+  questions: IngestQuestion[];
+  inferred_literals: Record<string, InferredLiteral>;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -232,7 +238,7 @@ export type ColumnSuspicion = {
   role: string;
   column: string;
   kind: string;
-  user_mapped?: boolean;
+  user_mapped: boolean;
   message: string;
   suggested_role?: string | null;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
@@ -280,12 +286,12 @@ export type ConnectivitySummaryResponse = {
    * SIEMPRE `false`: este resumen no abre un socket jamás. Antes devolvía `true` sin tocar
    * la red (defecto medido en la Fase 9).
    */
-  probed?: boolean;
+  probed: boolean;
   /** El cliente pidió `?probe=true`. */
-  probe_requested?: boolean | null;
+  probe_requested: boolean | null;
   /** Por qué no se sondeó pese a pedirlo. */
-  probe_note?: string | null;
-  online_features?: ConnectivityFeature[];
+  probe_note: string | null;
+  online_features: ConnectivityFeature[];
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -439,12 +445,12 @@ export type DataQualityScore = {
  * aquí sería una lista que se queda vieja sin que nadie se entere.
  */
 export type DiagnosticManifestResponse = {
-  system?: Record<string, unknown>;
-  packages?: Record<string, string>;
-  config_sanitized?: Record<string, unknown>;
+  system: Record<string, unknown>;
+  packages: Record<string, string>;
+  config_sanitized: Record<string, unknown>;
   connectivity: ConnectivitySummaryResponse;
-  license?: Record<string, unknown>;
-  recent_errors?: Record<string, unknown>[];
+  license: Record<string, unknown>;
+  recent_errors: Record<string, unknown>[];
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -481,7 +487,7 @@ export type EnrichPackageResponse = {
   needs_context?: Record<string, unknown>[] | null;
   n_stations?: number | null;
   sniff_report?: SniffReportContract | null;
-  warnings?: string[];
+  warnings: string[];
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -658,15 +664,15 @@ export type HistoryRun = {
  * error: preguntar por una corrida que no existe no es fallar.
  */
 export type HistoryRunDetailResponse = {
-  run?: HistoryRun | null;
-  found?: boolean;
+  run: HistoryRun | null;
+  found: boolean;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
 
 export type HistoryRunsResponse = {
-  runs?: HistoryRun[];
-  count?: number;
+  runs: HistoryRun[];
+  count: number;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -695,10 +701,18 @@ export type IngestQuestion = {
   key: string;
   target: string;
   kind: string;
-  blocking?: boolean;
+  blocking: boolean;
   question: string;
-  options?: Record<string, unknown>[];
-  reason?: string;
+  options: IngestQuestionOption[];
+  reason: string;
+  /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
+  [key: string]: unknown;
+};
+
+/** Una opción de respuesta. El backend las emite como `{value, label}`. */
+export type IngestQuestionOption = {
+  value: string;
+  label: string;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -736,14 +750,14 @@ export type LicenseActivationResponse = {
   valid: boolean;
   tier: string;
   reason: string;
-  licensee?: string | null;
-  product?: string | null;
-  issued_at?: string | null;
-  expires_at?: string | null;
-  expired?: boolean;
-  source?: string;
+  licensee: string | null;
+  product: string | null;
+  issued_at: string | null;
+  expires_at: string | null;
+  expired: boolean;
+  source: string;
   effective_tier: string;
-  limits?: LicenseLimits | null;
+  limits: LicenseLimits | null;
   /**
    * LA condición de éxito. Un token inválido responde HTTP 200 con `activated:false`, así
    * que mirar el código de estado no basta. Y existe `valid:true` + `activated:false`:
@@ -791,20 +805,20 @@ export type LicenseStatusResponse = {
   tier: string;
   /** Motivo en español escrito por el backend: la única explicación del estado. */
   reason: string;
-  licensee?: string | null;
-  product?: string | null;
-  issued_at?: string | null;
+  licensee: string | null;
+  product: string | null;
+  issued_at: string | null;
   /** ISO-8601, o `null` = licencia perpetua. */
-  expires_at?: string | null;
-  expired?: boolean;
+  expires_at: string | null;
+  expired: boolean;
   /**
    * De dónde salió el token vigente: `env` | `file` | `none`. `env` GANA sobre el archivo
    * que escribe /license/activate, así que activar desde la UI puede quedar anulado en
    * silencio — el panel lo avisa.
    */
-  source?: string;
+  source: string;
   effective_tier: string;
-  limits?: LicenseLimits | null;
+  limits: LicenseLimits | null;
   /** `licensed` | `local_free`. SÓLO en /status: /license/activate no devuelve este campo. */
   mode: string;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
@@ -839,8 +853,8 @@ export type LoadPackageResponse = {
   budget?: Record<string, unknown> | null;
   poll?: LoadPackagePoll | null;
   inversionResult?: Record<string, unknown> | null;
-  warnings?: string[];
-  errors?: string[];
+  warnings: string[];
+  errors: string[];
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -899,10 +913,10 @@ export type ParseBoreholeCsvResponse = {
  * silencio) que ya costó una corrupción de datos medida.
  */
 export type ParseRowsResponse = {
-  headers?: string[];
-  rows?: Record<string, unknown>[];
-  n_rows?: number;
-  truncated?: boolean;
+  headers: string[];
+  rows: Record<string, unknown>[];
+  n_rows: number;
+  truncated: boolean;
   sniff_report: SniffReportContract;
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
@@ -985,7 +999,7 @@ export type SniffDetection = {
   value: string;
   confidence: string;
   evidence: string;
-  discarded?: SniffDiscarded[];
+  discarded: SniffDiscarded[];
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -1018,15 +1032,15 @@ export type SniffReportContract = {
   encoding: SniffDetection;
   separator: SniffDetection;
   decimal: SniffDetection;
-  preamble_count?: number;
-  preamble_lines?: SniffPreambleLine[];
-  header_line_number?: number | null;
-  header_columns?: string[];
-  broken_rows?: SniffBrokenRow[];
-  broken_row_count?: number;
-  n_lines_sampled?: number;
-  sample_truncated?: boolean;
-  warnings?: string[];
+  preamble_count: number;
+  preamble_lines: SniffPreambleLine[];
+  header_line_number: number | null;
+  header_columns: string[];
+  broken_rows: SniffBrokenRow[];
+  broken_row_count: number;
+  n_lines_sampled: number;
+  sample_truncated: boolean;
+  warnings: string[];
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };

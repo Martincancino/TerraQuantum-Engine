@@ -54,7 +54,7 @@ class SniffDetection(BaseModel):
     value: str
     confidence: str
     evidence: str
-    discarded: List[SniffDiscarded] = Field(default_factory=list)
+    discarded: List[SniffDiscarded]
 
 
 class SniffPreambleLine(BaseModel):
@@ -88,20 +88,29 @@ class SniffReportContract(BaseModel):
     encoding: SniffDetection
     separator: SniffDetection
     decimal: SniffDetection
-    preamble_count: int = 0
-    preamble_lines: List[SniffPreambleLine] = Field(default_factory=list)
-    header_line_number: Optional[int] = None
-    header_columns: List[str] = Field(default_factory=list)
-    broken_rows: List[SniffBrokenRow] = Field(default_factory=list)
-    broken_row_count: int = 0
-    n_lines_sampled: int = 0
-    sample_truncated: bool = False
-    warnings: List[str] = Field(default_factory=list)
+    preamble_count: int
+    preamble_lines: List[SniffPreambleLine]
+    #: `null` cuando no se pudo identificar la línea de encabezado.
+    header_line_number: Optional[int]
+    header_columns: List[str]
+    broken_rows: List[SniffBrokenRow]
+    broken_row_count: int
+    n_lines_sampled: int
+    sample_truncated: bool
+    warnings: List[str]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Plan de mapeo de columnas (PILAR 1 del blindaje de ingesta)
 # ─────────────────────────────────────────────────────────────────────────────
+
+class IngestQuestionOption(BaseModel):
+    """Una opción de respuesta. El backend las emite como `{value, label}`."""
+    model_config = ConfigDict(extra="allow")
+
+    value: str
+    label: str
+
 
 class IngestQuestion(BaseModel):
     """Pregunta ESTRUCTURADA (F2.4): un dato no-derivable se pregunta, jamás se
@@ -111,10 +120,10 @@ class IngestQuestion(BaseModel):
     key: str
     target: str
     kind: str
-    blocking: bool = False
+    blocking: bool
     question: str
-    options: List[Dict[str, Any]] = Field(default_factory=list)
-    reason: str = ""
+    options: List[IngestQuestionOption]
+    reason: str
 
 
 class ColumnRangeCheck(BaseModel):
@@ -133,7 +142,7 @@ class ColumnSuspicion(BaseModel):
     role: str
     column: str
     kind: str
-    user_mapped: bool = False
+    user_mapped: bool
     message: str
     suggested_role: Optional[str] = None
 
@@ -164,25 +173,37 @@ class ColumnMappingPlanContract(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     data_kind: str
-    raw_columns: List[str] = Field(default_factory=list)
-    auto_detected: Dict[str, Optional[str]] = Field(default_factory=dict)
-    roles: Dict[str, Optional[str]] = Field(default_factory=dict)
-    overridden: Dict[str, str] = Field(default_factory=dict)
-    invalid_overrides: Dict[str, str] = Field(default_factory=dict)
-    required_roles: List[str] = Field(default_factory=list)
-    optional_roles: List[str] = Field(default_factory=list)
-    missing_required: List[str] = Field(default_factory=list)
-    needs_mapping: bool = False
-    confidence: str = "low"
-    role_labels: Dict[str, str] = Field(default_factory=dict)
-    literals: Dict[str, Any] = Field(default_factory=dict)
-    range_checks: Dict[str, ColumnRangeCheck] = Field(default_factory=dict)
-    suspicions: List[ColumnSuspicion] = Field(default_factory=list)
-    role_confidence: Dict[str, str] = Field(default_factory=dict)
-    suggestions: Dict[str, ColumnSuggestion] = Field(default_factory=dict)
-    needs_confirmation: bool = False
-    questions: List[IngestQuestion] = Field(default_factory=list)
-    inferred_literals: Dict[str, InferredLiteral] = Field(default_factory=dict)
+    raw_columns: List[str]
+    auto_detected: Dict[str, Optional[str]]
+    roles: Dict[str, Optional[str]]
+    overridden: Dict[str, str]
+    invalid_overrides: Dict[str, str]
+    required_roles: List[str]
+    optional_roles: List[str]
+    missing_required: List[str]
+    needs_mapping: bool
+    confidence: str = Field(
+        ...,
+        description=(
+            "`high` | `medium` | `low`. Va como cadena y no como enumerado a "
+            "propósito: el backend NO lo valida contra un dominio cerrado, y "
+            "cerrarlo aquí convertiría un valor inesperado en un HTTP 500 en "
+            "plena ingesta. Se estrecha al pintarlo, no al transportarlo."
+        ),
+    )
+    role_labels: Dict[str, str]
+    #: `Dict[str, str]` y no `Any`: `build_column_mapping_plan` los construye del
+    #: propio `column_map`, que son cadenas (`literals: Dict[str, str]` en la
+    #: firma del servicio). Declararlo `Any` obligaba al frontend a castear para
+    #: pintar un literal que siempre fue texto.
+    literals: Dict[str, str]
+    range_checks: Dict[str, ColumnRangeCheck]
+    suspicions: List[ColumnSuspicion]
+    role_confidence: Dict[str, str]
+    suggestions: Dict[str, ColumnSuggestion]
+    needs_confirmation: bool
+    questions: List[IngestQuestion]
+    inferred_literals: Dict[str, InferredLiteral]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -201,7 +222,7 @@ class AnalyzeColumnsResponse(BaseModel):
 
     column_mapping: ColumnMappingPlanContract
     sniff_report: SniffReportContract
-    sample_rows: List[Dict[str, Any]] = Field(default_factory=list)
+    sample_rows: List[Dict[str, Any]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,10 +238,10 @@ class ParseRowsResponse(BaseModel):
     """
     model_config = ConfigDict(extra="allow")
 
-    headers: List[str] = Field(default_factory=list)
-    rows: List[Dict[str, Any]] = Field(default_factory=list)
-    n_rows: int = 0
-    truncated: bool = False
+    headers: List[str]
+    rows: List[Dict[str, Any]]
+    n_rows: int
+    truncated: bool
     sniff_report: SniffReportContract
 
 
@@ -261,7 +282,7 @@ class EnrichPackageResponse(BaseModel):
 
     # ── comunes ───────────────────────────────────────────────────────────────
     sniff_report: Optional[SniffReportContract] = None
-    warnings: List[str] = Field(default_factory=list)
+    warnings: List[str]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,5 +319,5 @@ class LoadPackageResponse(BaseModel):
     poll: Optional[LoadPackagePoll] = None
     #: camelCase heredado del contrato v1; el frontend lo consume así.
     inversionResult: Optional[Dict[str, Any]] = None
-    warnings: List[str] = Field(default_factory=list)
-    errors: List[str] = Field(default_factory=list)
+    warnings: List[str]
+    errors: List[str]

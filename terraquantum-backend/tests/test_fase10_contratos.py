@@ -290,6 +290,29 @@ def test_activate_no_promete_un_campo_que_nunca_manda(client):
 
 # ── 2. Los espejos no derivan ────────────────────────────────────────────────
 
+def _exigir_requeridos(modelo, claves_reales: set[str], quien: str) -> None:
+    """En un modelo de RESPUESTA, un default es una promesa que nadie quiso hacer.
+
+    Descubierto cableando el frontend: `Field(default_factory=list)` hace que
+    OpenAPI marque el campo como opcional, el tipo generado sale con `?`, y el
+    consumidor acaba con 25 `?? []` defensivos para un caso que **no puede
+    ocurrir** — porque el servicio emite ese campo siempre. Peor: la maraña
+    defensiva esconde los sitios donde el campo SÍ puede faltar de verdad.
+
+    La regla, entonces: lo que el servicio emite siempre, el contrato lo declara
+    obligatorio. Un default sólo se justifica si el campo puede no venir.
+    """
+    flojos = sorted(
+        nombre for nombre, campo in modelo.model_fields.items()
+        if nombre in claves_reales and not campo.is_required()
+    )
+    assert not flojos, (
+        f"{modelo.__name__} declara opcionales unos campos que {quien} emite "
+        f"SIEMPRE: {flojos}.\n"
+        "El tipo generado saldrá con `?` y el frontend se llenará de guardas "
+        "para un caso imposible. Quítales el default."
+    )
+
 def test_el_espejo_del_sniff_report_no_ha_derivado(tmp_path):
     """`SniffReportContract` describe el cable; la `@dataclass` del servicio hace
     el trabajo. Son dos declaraciones de la misma forma — exactamente lo que H-16
@@ -314,6 +337,7 @@ def test_el_espejo_del_sniff_report_no_ha_derivado(tmp_path):
         "El contrato declara campos que el sniffer ya no emite: el frontend los "
         f"cree garantizados y llegan `undefined`. Sobra {sorted(declarados - reales)}."
     )
+    _exigir_requeridos(SniffReportContract, reales, "el sniffer")
 
 
 def test_el_espejo_del_plan_de_mapeo_no_ha_derivado():
@@ -333,6 +357,40 @@ def test_el_espejo_del_plan_de_mapeo_no_ha_derivado():
     assert not (declarados - reales), (
         f"El contrato declara campos que el plan ya no emite: {sorted(declarados - reales)}."
     )
+    _exigir_requeridos(ColumnMappingPlanContract, reales, "el plan de mapeo")
+
+
+def test_los_contratos_de_sistema_no_declaran_opcional_lo_que_siempre_llega():
+    """Misma regla para la superficie F7, medida contra los servicios reales.
+
+    Es la que hizo falta para que `ConnectivityPanel` pudiera escribir
+    `summary.online_features.map(...)` sin una guarda para un `undefined` que el
+    backend no produce nunca.
+    """
+    from core import license_service
+    from services import diagnostics_service, project_store
+    from services.connectivity_service import connectivity_summary
+    from schemas.system_schema import (
+        ConnectivitySummaryResponse,
+        DiagnosticManifestResponse,
+        HistoryRunsResponse,
+        LicenseStatusResponse,
+    )
+
+    casos = [
+        (LicenseStatusResponse, set(license_service.get_license_status()), "license_service"),
+        (ConnectivitySummaryResponse, set(connectivity_summary(probe=False)),
+         "connectivity_service"),
+        (DiagnosticManifestResponse, set(diagnostics_service.diagnostic_manifest()),
+         "diagnostics_service"),
+        (HistoryRunsResponse, {"runs", "count"}, "history_api"),
+    ]
+    for modelo, reales, quien in casos:
+        sin_declarar = reales - set(modelo.model_fields)
+        assert not sin_declarar, (
+            f"{quien} emite {sorted(sin_declarar)} y {modelo.__name__} no lo declara."
+        )
+        _exigir_requeridos(modelo, reales, quien)
 
 
 def test_las_variantes_de_load_package_existen_en_el_contrato(app):

@@ -145,17 +145,19 @@ class ConnectivitySummaryResponse(BaseModel):
     )
     golden_path_note: str
     probed: bool = Field(
-        default=False,
+        ...,
         description=(
             "SIEMPRE `false`: este resumen no abre un socket jamás. Antes "
             "devolvía `true` sin tocar la red (defecto medido en la Fase 9)."
         ),
     )
+    # El servicio los emite SIEMPRE (aunque `probe` sea false): son la
+    # explicación de por qué no se sondeó, no un extra.
     probe_requested: Optional[bool] = Field(
-        default=None, description="El cliente pidió `?probe=true`.")
+        ..., description="El cliente pidió `?probe=true`.")
     probe_note: Optional[str] = Field(
-        default=None, description="Por qué no se sondeó pese a pedirlo.")
-    online_features: List[ConnectivityFeature] = Field(default_factory=list)
+        ..., description="Por qué no se sondeó pese a pedirlo.")
+    online_features: List[ConnectivityFeature]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -205,14 +207,17 @@ class LicenseStatusResponse(BaseModel):
         ...,
         description="Motivo en español escrito por el backend: la única explicación del estado.",
     )
-    licensee: Optional[str] = None
-    product: Optional[str] = None
-    issued_at: Optional[str] = None
+    # `Optional[...]` SIN default: la clave viene SIEMPRE, el valor puede ser
+    # `null`. `= None` diría "puede faltar", que es otra cosa y obliga al
+    # frontend a distinguir `undefined` de `null` sin motivo.
+    licensee: Optional[str]
+    product: Optional[str]
+    issued_at: Optional[str]
     expires_at: Optional[str] = Field(
-        default=None, description="ISO-8601, o `null` = licencia perpetua.")
-    expired: bool = False
+        ..., description="ISO-8601, o `null` = licencia perpetua.")
+    expired: bool
     source: str = Field(
-        default="none",
+        ...,
         description=(
             "De dónde salió el token vigente: `env` | `file` | `none`. `env` GANA "
             "sobre el archivo que escribe /license/activate, así que activar "
@@ -220,7 +225,7 @@ class LicenseStatusResponse(BaseModel):
         ),
     )
     effective_tier: str
-    limits: Optional[LicenseLimits] = None
+    limits: Optional[LicenseLimits]
     mode: str = Field(
         ...,
         description=(
@@ -244,14 +249,17 @@ class LicenseActivationResponse(BaseModel):
     valid: bool
     tier: str
     reason: str
-    licensee: Optional[str] = None
-    product: Optional[str] = None
-    issued_at: Optional[str] = None
-    expires_at: Optional[str] = None
-    expired: bool = False
-    source: str = "none"
+    # `Optional[...]` SIN default: la clave viene SIEMPRE, el valor puede ser
+    # `null`. `= None` diría "puede faltar", que es otra cosa y obliga al
+    # frontend a distinguir `undefined` de `null` sin motivo.
+    licensee: Optional[str]
+    product: Optional[str]
+    issued_at: Optional[str]
+    expires_at: Optional[str]
+    expired: bool
+    source: str
     effective_tier: str
-    limits: Optional[LicenseLimits] = None
+    limits: Optional[LicenseLimits]
     activated: bool = Field(
         ...,
         description=(
@@ -278,12 +286,12 @@ class DiagnosticManifestResponse(BaseModel):
     """
     model_config = ConfigDict(extra="allow")
 
-    system: Dict[str, Any] = Field(default_factory=dict)
-    packages: Dict[str, str] = Field(default_factory=dict)
-    config_sanitized: Dict[str, Any] = Field(default_factory=dict)
+    system: Dict[str, Any]
+    packages: Dict[str, str]
+    config_sanitized: Dict[str, Any]
     connectivity: ConnectivitySummaryResponse
-    license: Dict[str, Any] = Field(default_factory=dict)
-    recent_errors: List[Dict[str, Any]] = Field(default_factory=list)
+    license: Dict[str, Any]
+    recent_errors: List[Dict[str, Any]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,8 +329,8 @@ class HistoryRun(BaseModel):
 class HistoryRunsResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    runs: List[HistoryRun] = Field(default_factory=list)
-    count: int = 0
+    runs: List[HistoryRun]
+    count: int
 
 
 class HistoryRunDetailResponse(BaseModel):
@@ -330,5 +338,5 @@ class HistoryRunDetailResponse(BaseModel):
     error: preguntar por una corrida que no existe no es fallar."""
     model_config = ConfigDict(extra="allow")
 
-    run: Optional[HistoryRun] = None
-    found: bool = False
+    run: Optional[HistoryRun]
+    found: bool
