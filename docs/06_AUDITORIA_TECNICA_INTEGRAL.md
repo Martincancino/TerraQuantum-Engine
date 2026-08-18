@@ -1463,7 +1463,9 @@ Ordenado por **valor estratégico**, no por facilidad. Esfuerzo en S/M/L/XL.
 
 · ✅ **Fase 10** (2026-08-17: H-16 cerrado — el contrato del camino dorado deja de escribirse a mano. **Medido antes de ejecutar, y la justificación de la fase estaba mal contada:** H-16 decía «40 nombres de tipo duplicados» y son **13**; `SniffReport ×3` y `BuildPackageConfig ×3` eran falsos —están declarados UNA vez y re-importados—, porque el contador tomaba las líneas `type X,` de un bloque `import` por declaraciones. **El problema real era otro y mayor:** de 65 rutas, **44 no declaraban esquema de respuesta**, incluida la cadena de ingesta completa, así que el OpenAPI del camino dorado iba vacío y no había *nada* que generar. Dos riesgos medidos al declararlo, y muerden en direcciones opuestas: un `response_model` **estricto borra en silencio** los campos que no declara, y uno **a secas inyecta** los opcionales que el endpoint no emitió —apareció `user_supplied_key: null` en 3 de las 4 features de conectividad—; la contra es `response_model_exclude_unset=True`, y hay test que compara la respuesta HTTP con la del servicio, clave a clave. **Tres hallazgos nuevos:** `POST /license/activate` **nunca devuelve `mode`** y `/license/status` sí, mientras el frontend usaba UN tipo con `mode` obligatorio para las dos; **en un contrato de respuesta un default es una promesa que nadie quiso hacer** (`default_factory` marcaba opcionales 25 campos que el servicio emite siempre, y el frontend se llenaba de guardas para casos imposibles); y `inclinationDeg`/`declinationDeg`/`fieldIntensityNt`/`suscMin`/`suscMax` **no tienen ningún setter**: el comentario prometía que el usuario podía ajustarlos y no hay un solo input — `useState` lo escondía y el paso a `useReducer` lo delató. Estado: **41 → 0 `useState`** en `PrepPanel`, y el máximo del frontend entero pasa de **41 a 9**. Gate: 15/15 del guard nuevo, tsc 0, eslint 0, **28/28 Playwright**, 6 mutaciones verificadas.)
 
-**CERRADAS: 1, 2, 3, 4, 5, 6, 7, 8, 9 y 10. Siguiente: Fase 11** (API de scripting — y hereda de la 10 los **19 contratos que siguen con cuerpo escrito a mano** en el frontend: se intentó aliasarlos y `tsc` devolvió 20 errores de una sola causa, `default_factory` en los esquemas de convergencia, sondajes y correcciones, cuyo arreglo exige tocar cinco esquemas más con riesgo de HTTP 500 en rutas que sí validan). La Fase 8 deja además, medido y con nombre, lo que NO entró en sus cuatro pasos: `solve_magnetic_inversion_lsqr` (812 LOC / CC 116), `_import_gravity_csv_v1_impl` (777 / CC 181), `run_joint_inversion` (736 / CC 87) y `run_magnetic_inversion` (616 / CC 73) — el mismo método mecánico se les aplica tal cual.
+· ✅ **Fase 11** (2026-08-17: la API de scripting existe y el camino dorado deja de exigir una interfaz. **La decisión de diseño se tomó midiendo**: la API llama a los ENDPOINTS y monta la app en el propio proceso —sin servidor, sin puerto, sin red— porque el camino dorado **no vive entero en `services/`**: `load-package` tiene ~250 líneas de orquestación en el handler HTTP (grilla efectiva, ruteo magnético, σ por estación, topografía condicional, sondajes persistidos, presupuesto de vóxeles), y reconstruir eso desde los servicios habría sido una segunda implementación del camino dorado — H-29 otra vez. Hay un test que compara el payload de la API con el del endpoint llamado a mano, byte a byte, **con un control que demuestra que la comparación sabe distinguirlos**. **El hallazgo de la fase**: por el camino natural, «procesa estos 12 surveys» —la frase con la que el informe la justifica— **falla en el survey 11** con `429` (10/minuto en `enrich-package` y `load-package`) y la respuesta **no trae `Retry-After`**, así que ningún cliente puede saber cuánto esperar; `Session` lo resuelve con política explícita (`reset` en proceso, donde el limitador no protege ningún perímetro porque el «cliente remoto» ES el script; `wait` remoto con backoff declarado ciego; `raise` para medirlo). **Y tres defectos del backend que destapó la propia API el primer día**, ninguno arreglado allí a propósito y los tres pinchados por tests de caracterización que se pondrán rojos el día que alguien los arregle: **H-F11-1** (🔴) un CSV `X,Y,Z` —el encabezado de los DOS benchmarks magnéticos publicados— automapea el **northing al rol PROFUNDIDAD**, y la guarda que existe para esto (`northing_in_depth_slot`) exige `>1e5 m`, así que caza a DO-27 (7,1e6) y **no a Raglan** (4,1e4, coordenadas locales), que pasa con `needs_mapping=False`, `needs_confirmation=False` y `suspicions=[]` para morir después con «el kernel magnético G_active quedó vacío», que apunta al sitio equivocado; **H-F11-2** (🟠) el auto-grid propone `nx=82`/`nz=81` y el esquema exige `≤80` → error CRUDO de Pydantic con URL de `errors.pydantic.dev`, y la asimetría está a la vista en `_eff_dim`, que acota el valor del USUARIO y devuelve el AUTOMÁTICO sin acotar; **H-F11-3** (🟠) la rama **síncrona** —la que el endpoint recomienda para scripts— no llama a `project_store.record_run`, así que **doce surveys procesados desde un script no aparecen en la pantalla «Historial»** (con `wait=False` sí: medido en los dos sentidos). Criterio de aceptación cumplido: `examples/01` reproduce el camino dorado completo sobre **Laguna del Maule desde el CSV crudo de un Excel chileno** (preámbulo, `;`, coma decimal, cabeceras en español) en ~20 líneas; versión declarada **v0** y promesa de estabilidad escrita en `docs/08_API_SCRIPTING.md`, con lo que haría falta para llamarla v1. De los 4 datasets canónicos, **3 completan la ruta del usuario** y San Nicolás queda declarado **no evaluable** —su dato es un `.mat` sin versionar y no hay conversor— con la disciplina de `DatosNoVersionados`. **La deuda heredada se cierra midiendo:** los 17 contratos con `?` no eran opcionalidad sino **serialización** —si la ruta no usa `exclude_unset`, FastAPI serializa el modelo entero y el campo viaja siempre—, así que `json_schema_serialization_defaults_required` lo declara **sin quitar un solo default** (cero riesgo de 500, que fue lo que hizo revertir el intento de la Fase 10): **78 campos pierden el `?`**, `CONTRATOS_AUN_A_MANO` baja de **19 a 4** y ninguna de las 4 es «todavía no lo hice». También se mide lo que la Fase 10 dejó como no-medible: la inyección de `/preview` son **2 claves** y la de `/invert` **4**, todas gemelas snake_case de campos camelCase reales. Gate: **31/31** de la suite nueva · **7 de 7 mutaciones cazadas** · tsc **43 → 0** · `next build` OK · guards de las Fases 3, 9 y 10 en verde.)
+
+**CERRADAS: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 y 11. Siguiente: Fase 12** (OMF: dejar de ser una isla). La Fase 11 deja con nombre lo que NO arregló: los tres defectos H-F11-1/2/3 de arriba (ingesta, esquema y persistencia — tocarlos cambia el camino dorado de todos los usuarios y no era su alcance), y **20 modelos de respuesta** que cumplen la condición para declarar sus defaults como serializados y quedan fuera por no ser deuda de esta fase (`Project*`, `Spectral*`, `Terrain*`, `Favorability*`, `VoxelData`, `BlockModelResponse`): hacerlos todos habría sido el refactor global que el repositorio prohíbe. La Fase 8 deja además, medido y con nombre, lo que NO entró en sus cuatro pasos: `solve_magnetic_inversion_lsqr` (812 LOC / CC 116), `_import_gravity_csv_v1_impl` (777 / CC 181
 
 ### Plantilla de gate de fase (obligatoria desde la Fase 9)
 
@@ -2702,6 +2704,56 @@ atribuyó a esta fase y la comparación era inválida.
 **Criterios de aceptación.** Un cuaderno o script de ~20 líneas reproduce el camino dorado completo sobre Laguna del Maule sin tocar la UI. La API tiene versión declarada y una promesa de estabilidad escrita.
 
 **Riesgo.** Bajo, con una advertencia real: **publicar una API es un compromiso**. Conviene marcarla `v0` explícitamente hasta después de la Fase 8, para no congelar firmas que el refactor va a cambiar.
+
+---
+
+### ✅ CERRADA 2026-08-17 — cómo respondió las cuatro preguntas del gate
+
+**Commits:** `84f42d9` backend (la API) · `f969702` backend (contratos: serialización) · `e4150d9` backend (cierre transitivo) · `75b70ad` frontend (15 alias) · proceso/docs (éste).
+
+**1. ¿Qué puede hacer o ver un usuario que antes no podía?**
+Procesar el pipeline entero desde Python sin abrir la interfaz — que en esta fase
+*es* la superficie de usuario, no un subproducto. Medido con los dos ejemplos, que
+la suite ejecuta: `examples/01` va del **CSV crudo de un Excel chileno** (191
+estaciones reales de Laguna del Maule, con preámbulo, `;` y coma decimal) a modelo
+3D, veredicto reconciliado, blanco recomendado, honestidad de profundidad, paquete
+reproducible y ZIP de entrega, en ~20 líneas. `examples/02` recorre los canónicos.
+Y `tq.batch([...12 surveys...], config=…)` es literalmente la frase con la que el
+informe justificó la fase, con un test que corre doce.
+
+**2. ¿Todo lo que la fase publica tiene consumidor?**
+Sí, y de las dos deudas heredadas. De las 6 rutas que la Fase 9 toleró con «Dueña:
+Fase 11», **5 tienen ahora consumidor de scripting** (`invert_field_csv`,
+`invert_direct`, `estimate_depth`, `Run.profile`, `admin.create_api_key`) y un test
+lo mide **sobre cadenas de código, no sobre texto** — los docstrings de la API citan
+cada endpoint que envuelven, y contarlos sería el guard que se anula a sí mismo de
+la Fase 6. La sexta, `/gravity-import/invert`, se toleraba «por compatibilidad de
+scripts»: **medido, no hay ningún script de usuario**; la mantienen 13 tests de
+contrato y el arnés `fase8_byte_identity.py`. La excusa nombraba al dueño
+equivocado y queda contada. Además, `__all__` entero está ejercitado o declarado
+con dónde.
+
+**3. ¿Cada valor de cada enumerado nuevo está ejercitado?**
+Sí, patrón de `test_fase1_literal_dispatch`: los tres valores de
+`RATE_LIMIT_POLICIES` (`reset`/`wait`/`raise`) y los dos de `DATA_TYPES`, más el
+rechazo del valor inválido. Un valor nuevo sin ejercitar rompe la suite.
+
+**4. ¿El gate falla si se rompe lo que dice defender? — verificado por MUTACIÓN.**
+**7 de 7 cazadas**: subir la versión a v1 sin escribir la promesa · meter un
+default de física en la capa de scripting · exportar un símbolo sin ejercitarlo ·
+dejar de usar una ruta declarada de scripting · perder la configuración del usuario
+al hablar con el endpoint (divergencia H-29) · dejar de comprobar que el CSV existe
+· fingir que el reset del limitador funciona contra un backend remoto.
+**Dos de esas mutaciones encontraron el guard flojo antes que el usuario**: la de
+la ruta pasaba porque un docstring que la nombra contaba como consumidor (se
+cambió a análisis AST), y la de la divergencia porque el probe era inerte para esa
+fixture (se añadió el control que demuestra que la comparación discrimina).
+
+**Lo que NO se hizo, con nombre:** los tres defectos H-F11-1/2/3, los 20 modelos de
+respuesta fuera del cierre de la deuda, y un modo silencioso para la API — **no se
+promete** porque silenciar `structlog` no callaría los `print()` del motor
+(`[F0.9 TENSOR MESH]`, `[FOCUSING]`, `[GPCG]`, `[BLOCK-MODEL-*]`) y una promesa a
+medias es peor que ninguna.
 
 ---
 

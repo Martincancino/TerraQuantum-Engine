@@ -735,15 +735,12 @@ OPCIONALIDAD_VERDADERA = {
         "`?` describe la realidad."
     ),
     "PercentileStats": (
-        "MEDIDO sobre una respuesta real de `/block-model`: de sus 14 campos, el "
-        "bloque `percentile_stats` sólo trae uno. No es que «pueda faltar»: falta. "
-        "Declararlo requerido sería la mentira contraria."
-    ),
-    "DataQualityScore": (
-        "NO SE PUDO MEDIR: en la respuesta observada de `/gravity-import/preview` "
-        "el `csv_analysis` viene vacío, así que no hay evidencia de que el bloque "
-        "se emita. La regla de la Fase 10 —no cambiar payloads que no se pueden "
-        "medir— es la que evitó la regresión de `user_supplied_key`."
+        "Y aquí el motivo NO es el `default_factory`, que es lo que parecía a "
+        "primera vista: `/block-model` **no emite su contenedor declarado** "
+        "(`BlockModelStats`). Lo que manda es un `percentile_stats` PLANO por "
+        "`extra=\"allow\"` (`density_p2`, `density_p5`, …) que no tiene nada que "
+        "ver con este modelo. Marcarlo requerido prometería campos de una "
+        "estructura que nadie serializa. Dueña: Fase 13."
     ),
 }
 
