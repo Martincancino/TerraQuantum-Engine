@@ -43,6 +43,11 @@ DECLARED_PACKAGES: tuple[str, ...] = (
     "reporting",
     "schemas",
     "services",
+    # Fase 11 — API de scripting. Es código de PRODUCCIÓN aunque no lo importe
+    # ningún endpoint: es la superficie que se le promete al consultor
+    # (`docs/08_API_SCRIPTING.md`), y un error de sintaxis aquí es un cliente
+    # que no arranca. Se compila con el resto, que es justo lo que H-5 pedía.
+    "terraquantum",
 )
 
 #: Paquetes que existen pero NO son código de producción: no se declaran ni se

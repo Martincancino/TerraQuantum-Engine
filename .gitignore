@@ -104,3 +104,7 @@ htmlcov/
 .cache/
 playwright-report/
 test-results/
+
+# Fase 11 — salida de los ejemplos de la API de scripting (paquetes y ZIP de
+# entrega que el consultor genera al correrlos). Son artefactos, no fuente.
+terraquantum-backend/salida/
