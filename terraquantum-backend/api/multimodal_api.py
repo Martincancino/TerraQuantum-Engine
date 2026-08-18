@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.logging import get_logger
 from services.multimodal_fusion_service import (
@@ -54,6 +54,7 @@ class MultimodalPlanRequest(BaseModel):
 
 
 class MultimodalPlanResponse(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     # Disponibilidad derivada (eco para el frontend).
     has_gravity: bool
     has_magnetic: bool

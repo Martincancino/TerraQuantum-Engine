@@ -219,6 +219,7 @@ class BoreholeSample(BaseModel):
     susceptibility_si anclan respectivamente la inversión gravimétrica/magnética;
     al menos una debe estar presente (igual semántica que BoreholeInterval).
     """
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     hole_id: str = Field(..., description="Identificador del sondaje, p.ej. 'BH01'.")
     x_m: float = Field(..., description="Coordenada local X del collar (m). Pozo vertical.")
     z_m: float = Field(..., description="Coordenada local Z del collar (m). Pozo vertical.")
@@ -274,6 +275,7 @@ class BoreholeSample(BaseModel):
 
 class BoreholeSurvey(BaseModel):
     """Conjunto de sondajes con metadatos de georreferencia (capa de carga FASE 20)."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     holes: List[BoreholeSample] = Field(default_factory=list, description="Muestras/tramos de sondaje.")
     crs: str = Field("local", description="Sistema de referencia, p.ej. 'UTM 19S' o 'local'.")
     datum_elevation_m: float = Field(

@@ -724,6 +724,116 @@ def test_la_ruta_v1_de_invertir_la_mantienen_los_tests_y_un_arnes_interno():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# 6-bis. La deuda de la Fase 10: los contratos que salían opcionales sin serlo
+# ═════════════════════════════════════════════════════════════════════════════
+#: Contratos que SIGUEN con campos opcionales, con el motivo MEDIDO. La lista es
+#: portante: si uno deja de tener opcionales, este test exige quitarlo de aquí.
+OPCIONALIDAD_VERDADERA = {
+    "HistoryRun": (
+        "Su ruta (`/v2/history/runs`) SÍ usa `response_model_exclude_unset=True`, "
+        "así que un campo que el servicio no ponga desaparece de verdad. Aquí el "
+        "`?` describe la realidad."
+    ),
+    "PercentileStats": (
+        "MEDIDO sobre una respuesta real de `/block-model`: de sus 14 campos, el "
+        "bloque `percentile_stats` sólo trae uno. No es que «pueda faltar»: falta. "
+        "Declararlo requerido sería la mentira contraria."
+    ),
+    "DataQualityScore": (
+        "NO SE PUDO MEDIR: en la respuesta observada de `/gravity-import/preview` "
+        "el `csv_analysis` viene vacío, así que no hay evidencia de que el bloque "
+        "se emita. La regla de la Fase 10 —no cambiar payloads que no se pueden "
+        "medir— es la que evitó la regresión de `user_supplied_key`."
+    ),
+}
+
+
+def test_los_contratos_dicen_lo_que_sus_rutas_emiten_de_verdad(sesion, corrida_ldm):
+    """Fase 10 dejó 17 contratos con `?` en campos que **nunca faltan**.
+
+    El diagnóstico de aquella fase era correcto —*«en un contrato de respuesta,
+    un default es una promesa que nadie quiso hacer»*— y el arreglo se revirtió
+    porque quitar los defaults arriesgaba 500 en cinco esquemas.
+
+    La salida no era quitar el default: era decir la verdad sobre la
+    SERIALIZACIÓN. Si la ruta no usa `response_model_exclude_unset`, FastAPI
+    serializa el modelo entero y el campo **viene siempre** aunque tenga
+    `default_factory`. `json_schema_serialization_defaults_required` lo declara
+    en el esquema sin tocar la construcción del modelo ni el payload.
+
+    Este test no comprueba la bandera: comprueba **la respuesta real**. Si el
+    esquema dice «requerido» y el endpoint no lo manda, aquí se ve.
+    """
+    _, corrida = corrida_ldm
+    import main
+
+    componentes = main.app.openapi()["components"]["schemas"]
+
+    def requeridos(nombre):
+        return set(componentes.get(nombre, {}).get("required") or [])
+
+    observados = {
+        "GeophysicsStatusResponse": corrida.status_now(),
+        "MisfitResponse": corrida.misfit(),
+        "ConvergenceResponse": corrida.convergence(),
+    }
+    estaciones = observados["MisfitResponse"].get("stations") or []
+    if estaciones:
+        observados["MisfitStationData"] = estaciones[0]
+    intentos = observados["ConvergenceResponse"].get("trials") or []
+    if intentos:
+        observados["ConvergenceTrial"] = intentos[0]
+
+    sondajes = sesion.post("/borehole/parse-csv", json_body={"csv_text": (
+        "hole_id,x_m,z_m,depth_from_m,depth_to_m,density_t_m3\n"
+        "BH01,100,100,0,20,3.10\nBH01,100,100,20,40,3.25\n"
+    )})
+    observados["ParseBoreholeCsvResponse"] = sondajes
+    observados["BoreholeSurvey"] = sondajes["survey"]
+    observados["BoreholeSample"] = sondajes["survey"]["holes"][0]
+
+    incumplidos = []
+    for modelo, payload in observados.items():
+        faltan = sorted(requeridos(modelo) - set(payload.keys()))
+        if faltan:
+            incumplidos.append(f"{modelo} declara requeridos y NO emite {faltan}")
+    assert not incumplidos, (
+        "El esquema promete campos que la respuesta real no trae. Eso es peor "
+        "que el `?` que veníamos a quitar:\n  " + "\n  ".join(incumplidos)
+    )
+
+    # Y el arreglo tiene que haber servido de algo: nada de opcionales fantasma.
+    for modelo in observados:
+        propiedades = set(componentes[modelo].get("properties") or {})
+        assert propiedades == requeridos(modelo), (
+            f"{modelo} sigue con campos opcionales que su ruta emite siempre: "
+            f"{sorted(propiedades - requeridos(modelo))}"
+        )
+
+
+def test_lo_que_sigue_siendo_opcional_lo_es_de_verdad():
+    """La otra mitad de la honestidad: no marcar requerido lo que sí puede faltar.
+
+    Tres contratos se quedan con `?`, cada uno por un motivo distinto y medido.
+    La lista es portante — si uno deja de tener opcionales, la excusa caducó.
+    """
+    import main
+
+    componentes = main.app.openapi()["components"]["schemas"]
+    caducadas = []
+    for nombre, motivo in OPCIONALIDAD_VERDADERA.items():
+        esquema = componentes.get(nombre) or {}
+        opcionales = set(esquema.get("properties") or {}) - set(esquema.get("required") or [])
+        if not opcionales:
+            caducadas.append(f"{nombre} — «{motivo[:70]}…»")
+    assert not caducadas, (
+        "Estos contratos ya no tienen campos opcionales: quítalos de "
+        f"OPCIONALIDAD_VERDADERA, la excusa dejó de describir la realidad:\n  "
+        + "\n  ".join(caducadas)
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 7. Caracterización: dos defectos del backend que esta API destapó
 #    Estos tests NO comprueban que algo funcione: fijan lo que HOY pasa, para
 #    que el día que alguien lo arregle se entere aquí. Ver docs/08 §6.

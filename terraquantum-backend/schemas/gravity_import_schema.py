@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, Dict, List, Optional
 from schemas.geophysics_schema import GravityObservation
 
@@ -160,6 +160,7 @@ class CsvAnalysisResult(BaseModel):
 
 
 class GravityImportMetadata(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     source_file: str
     schema_version: str
     unit_original: Optional[str] = None
@@ -320,6 +321,7 @@ SPATIAL_LEVEL_MAX_PRIORITY: Dict[str, str] = {
 
 
 class SpatialReadiness(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     version: str = "spatial_readiness_v0_1"
     level: str
     level_rank: int
@@ -340,6 +342,7 @@ class SpatialReadiness(BaseModel):
 
 
 class RegionalScalePreflight(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     version: str = "regional_scale_preflight_v0_1"
     scale_class: str
     can_run_single_inversion: bool

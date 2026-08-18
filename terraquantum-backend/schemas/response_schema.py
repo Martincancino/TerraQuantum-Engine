@@ -1,5 +1,30 @@
 """Response schemas for FastAPI endpoints — strict validation contracts."""
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CONTRATO_SERIALIZADO — por qué varios modelos de RESPUESTA llevan
+# `ConfigDict(json_schema_serialization_defaults_required=True)`   (Fase 11)
+#
+# La Fase 10 dejó 17 contratos que el frontend seguía escribiendo a mano, y el
+# diagnóstico era correcto: *en un contrato de respuesta, un default es una
+# promesa que nadie quiso hacer*. `default_factory` marca el campo opcional en
+# el OpenAPI, el tipo generado sale con `?` y el consumidor se llena de `?? []`
+# para casos imposibles — que es justo como se esconden los sitios donde SÍ
+# puede faltar. El arreglo de entonces (quitar los defaults) se revirtió porque
+# arriesgaba 500 en cinco esquemas.
+#
+# La salida no era quitar el default: era decir la verdad sobre la
+# SERIALIZACIÓN. Si la ruta NO usa `response_model_exclude_unset`, FastAPI
+# serializa el modelo entero y el campo viaja SIEMPRE, tenga default o no. Esta
+# bandera lo declara así en el esquema y **no toca nada más**: construir el
+# modelo sigue igual y `exclude_unset` sigue funcionando donde se use.
+#
+# Se aplica sólo donde se MIDIÓ sobre la respuesta real que el campo está. Tres
+# contratos se quedaron fuera con su motivo —`HistoryRun` (su ruta sí usa
+# `exclude_unset`), `PercentileStats` (medido: 13 de 14 campos NO llegan) y
+# `DataQualityScore` (no se pudo medir)— y hay un test que lo vigila en los dos
+# sentidos: `tests/test_fase11_api_scripting.py`.
+# ─────────────────────────────────────────────────────────────────────────────
+
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, Dict, List, Optional
 from schemas.gravity_import_schema import (
@@ -21,7 +46,17 @@ class GravityImportPreviewResponse(BaseModel):
     # extra="allow": el endpoint emite campos adicionales (auto_grid,
     # georef_preview, octree_params, importMetadata camelCase…) que el frontend
     # consume; un response_model estricto los filtraría rompiendo el contrato.
-    model_config = ConfigDict(extra="allow")
+    #
+    # Fase 11: y `json_schema_serialization_defaults_required` resuelve la otra
+    # mitad de esta ruta, la que la Fase 10 dejó en `INYECCION_TOLERADA` sin
+    # poder medir. Es el caso llamativo: `extra="allow"` SIN `exclude_unset`
+    # significa que los opcionales se emiten igualmente (en `null` si nadie los
+    # puso), o sea que **nunca faltan**. MEDIDO sobre una respuesta real: los 10
+    # campos declarados están presentes. El `?` del tipo generado describía un
+    # caso que esta ruta no produce.
+    model_config = ConfigDict(
+        extra="allow", json_schema_serialization_defaults_required=True,
+    )
 
     # /preview emite status="ok" históricamente (import_gravity_csv_v1); el
     # patrón debe aceptarlo o todo preview válido revienta con 500.
@@ -177,6 +212,7 @@ class GeophysicsStatusResponse(BaseModel):
     corrida. Se amplía con los estados reales + los terminales de F3
     (cancelled / interrumpida).
     """
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     status: str = Field(
         ..., pattern="^(queued|processing|running|done|error|cancelled|interrumpida)$"
     )
@@ -359,6 +395,7 @@ class BlockModelArrowMetadata(BaseModel):
 
 class MisfitStationData(BaseModel):
     """Observed vs. calculated data for a single gravity station."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     x: Optional[float] = None
     y: Optional[float] = None
     z: Optional[float] = None
@@ -369,6 +406,7 @@ class MisfitStationData(BaseModel):
 
 class MisfitResponse(BaseModel):
     """Full misfit report: per-station obs/calc + aggregate fit statistics."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     stations: List[MisfitStationData]
     chi2_reduced: float
     rmse: float
@@ -383,6 +421,7 @@ class MisfitResponse(BaseModel):
 
 class ConvergenceTrial(BaseModel):
     """Un candidato λ probado por el barrido Morozov, con su chi² resultante."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     lambda_value: float
     chi2_reduced: Optional[float] = None
 
@@ -395,6 +434,7 @@ class ConvergenceResponse(BaseModel):
     estructuradamente hoy — ver docs/01_PLAN_MAESTRO.md F5); es honesto sobre
     qué mide cada punto.
     """
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     available: bool
     selection_method: Optional[str] = None
     lambda_selected: Optional[float] = None

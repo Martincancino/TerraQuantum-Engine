@@ -137,14 +137,21 @@ INYECCION_TOLERADA: dict[str, str] = {
         "ramas que no se midieron (Arrow, zarr, modo mineral). Dueña: Fase 13."
     ),
     "POST /gravity-import/preview": (
-        "Ruta v1 de previsualización. No se pudo medir el delta sin un CSV real "
-        "por endpoint, y esta fase no cambia payloads que no puede medir — es la "
-        "regla que evitó la regresión de `user_supplied_key`. Dueña: Fase 11, "
-        "que es la que se hace cargo de la superficie v1 de scripting."
+        "MEDIDO POR LA FASE 11 (era «no se pudo medir»): con `exclude_unset` "
+        "desaparecerían exactamente DOS claves, `stage` (el default 'preview', "
+        "que el handler nunca elige) e `import_metadata` (un `null` que duplica "
+        "el `importMetadata` camelCase que el handler SÍ emite). Se deja como "
+        "está a propósito: el esquema ya dice la verdad —desde la Fase 11 los "
+        "declara REQUERIDOS, porque en el cable están siempre— y quitarlos "
+        "cambiaría un payload del camino dorado a cambio de nada."
     ),
     "POST /gravity-import/invert": (
-        "Igual que la anterior, y además invierte de verdad: medir su delta "
-        "cuesta minutos de solver. Dueña: Fase 11."
+        "MEDIDO POR LA FASE 11 con la API de scripting, que es lo que hizo "
+        "barato invertir de verdad: el delta son CUATRO claves —"
+        "`grid_auto_adapt`, `import_metadata`, `import_persistence` e "
+        "`inversion_result`—. Mismo patrón que en /preview: gemelas snake_case "
+        "de campos camelCase que el handler sí emite, más defaults que nadie "
+        "eligió. Misma decisión y mismo motivo."
     ),
 }
 

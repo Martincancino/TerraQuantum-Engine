@@ -153,27 +153,27 @@ export type BoreholeSample = {
   /** Profundidad final del tramo (m, + hacia abajo). */
   depth_to_m: number;
   /** Tipo de muestra: testigo, detritus, registro de densidad/susc en pozo, etc. */
-  sample_type?: "core" | "cuttings" | "downhole_density" | "downhole_susc" | "other";
+  sample_type: "core" | "cuttings" | "downhole_density" | "downhole_susc" | "other";
   /** Densidad medida del tramo (t/m³). Ancla la inversión gravimétrica. */
-  density_t_m3?: number | null;
+  density_t_m3: number | null;
   /** Incertidumbre fraccional de la densidad de muestreo (0.15 = 15%). */
-  density_uncertainty?: number;
+  density_uncertainty: number;
   /** Litología registrada (p.ej. 'granite', 'magnetite', 'diorite'). Alimenta priors PGI. */
-  lithology?: string | null;
+  lithology: string | null;
   /** Susceptibilidad magnética medida (SI). Ancla la inversión magnética. */
-  susceptibility_si?: number | null;
+  susceptibility_si: number | null;
   /** Comentario libre (trazabilidad). */
-  comment?: string;
+  comment: string;
 };
 
 /** Conjunto de sondajes con metadatos de georreferencia (capa de carga FASE 20). */
 export type BoreholeSurvey = {
   /** Muestras/tramos de sondaje. */
-  holes?: BoreholeSample[];
+  holes: BoreholeSample[];
   /** Sistema de referencia, p.ej. 'UTM 19S' o 'local'. */
-  crs?: string;
+  crs: string;
   /** Elevación del datum local (m s.n.m.) para referencia vertical. */
-  datum_elevation_m?: number;
+  datum_elevation_m: number;
 };
 
 /**
@@ -305,19 +305,19 @@ export type ConnectivitySummaryResponse = {
  */
 export type ConvergenceResponse = {
   available: boolean;
-  selection_method?: string | null;
-  lambda_selected?: number | null;
-  chi2_achieved?: number | null;
-  n_solves?: number | null;
-  trials?: ConvergenceTrial[];
-  warnings?: string[];
+  selection_method: string | null;
+  lambda_selected: number | null;
+  chi2_achieved: number | null;
+  n_solves: number | null;
+  trials: ConvergenceTrial[];
+  warnings: string[];
   note: string;
 };
 
 /** Un candidato λ probado por el barrido Morozov, con su chi² resultante. */
 export type ConvergenceTrial = {
   lambda_value: number;
-  chi2_reduced?: number | null;
+  chi2_reduced: number | null;
 };
 
 export type CoordSystemDetection = {
@@ -523,17 +523,17 @@ export type GeophysicsInversionStartResponse = {
  */
 export type GeophysicsStatusResponse = {
   status: string;
-  stage?: string;
-  progress?: number | null;
-  project_id?: string | null;
-  run_id?: string | null;
-  result?: GravityImportInvertResponse | null;
-  error_details?: ErrorDetails | null;
-  error?: string | null;
-  error_type?: string | null;
-  traceback?: string | null;
-  estimated_time_remaining_seconds?: number | null;
-  message?: string | null;
+  stage: string;
+  progress: number | null;
+  project_id: string | null;
+  run_id: string | null;
+  result: GravityImportInvertResponse | null;
+  error_details: ErrorDetails | null;
+  error: string | null;
+  error_type: string | null;
+  traceback: string | null;
+  estimated_time_remaining_seconds: number | null;
+  message: string | null;
 };
 
 /** Inversion response: complete pipeline result. */
@@ -562,10 +562,10 @@ export type GravityImportInvertResponse = {
 export type GravityImportMetadata = {
   source_file: string;
   schema_version: string;
-  unit_original?: string | null;
-  unit_internal?: string;
-  gravity_column_used?: string | null;
-  gravity_type?: string | null;
+  unit_original: string | null;
+  unit_internal: string;
+  gravity_column_used: string | null;
+  gravity_type: string | null;
   conversion_applied: boolean;
   row_count: number;
   valid_rows: number;
@@ -573,27 +573,27 @@ export type GravityImportMetadata = {
   warnings: string[];
   errors: string[];
   is_demo: boolean;
-  csv_analysis?: CsvAnalysisResult | null;
-  coordinate_transform?: CoordinateTransform | null;
-  auto_grid?: AutoGrid | null;
-  estimated_mean_spacing_m?: number | null;
-  estimated_depth_resolution_m?: number | null;
-  geological_context_hint?: string | null;
-  honesty_note?: string | null;
+  csv_analysis: CsvAnalysisResult | null;
+  coordinate_transform: CoordinateTransform | null;
+  auto_grid: AutoGrid | null;
+  estimated_mean_spacing_m: number | null;
+  estimated_depth_resolution_m: number | null;
+  geological_context_hint: string | null;
+  honesty_note: string | null;
 };
 
 /** CSV preview response: analysis + gates, no inversion. */
 export type GravityImportPreviewResponse = {
   status: string;
-  stage?: string;
-  csv_analysis?: CsvAnalysisResult | null;
-  coordinate_transform?: CoordinateTransform | null;
-  spatial_readiness?: SpatialReadiness | null;
-  regional_scale_preflight?: RegionalScalePreflight | null;
-  octree_params?: Record<string, unknown> | null;
-  import_metadata?: GravityImportMetadata | null;
-  errors?: string[];
-  warnings?: string[];
+  stage: string;
+  csv_analysis: CsvAnalysisResult | null;
+  coordinate_transform: CoordinateTransform | null;
+  spatial_readiness: SpatialReadiness | null;
+  regional_scale_preflight: RegionalScalePreflight | null;
+  octree_params: Record<string, unknown> | null;
+  import_metadata: GravityImportMetadata | null;
+  errors: string[];
+  warnings: string[];
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -871,9 +871,9 @@ export type MisfitResponse = {
 
 /** Observed vs. calculated data for a single gravity station. */
 export type MisfitStationData = {
-  x?: number | null;
-  y?: number | null;
-  z?: number | null;
+  x: number | null;
+  y: number | null;
+  z: number | null;
   d_obs: number;
   d_pred: number;
   residual: number;
@@ -884,8 +884,8 @@ export type MultimodalPlanResponse = {
   has_magnetic: boolean;
   has_borehole: boolean;
   n_sensors: number;
-  plan?: Record<string, unknown> | null;
-  insufficient_reason?: string | null;
+  plan: Record<string, unknown> | null;
+  insufficient_reason: string | null;
 };
 
 export type OutlierInfo = {
@@ -950,29 +950,29 @@ export type R3EnrichmentStatus = {
 };
 
 export type RegionalScalePreflight = {
-  version?: string;
+  version: string;
   scale_class: string;
   can_run_single_inversion: boolean;
-  requires_user_acknowledgement?: boolean;
+  requires_user_acknowledgement: boolean;
   recommended_action: string;
-  extent_x_m?: number | null;
-  extent_z_m?: number | null;
-  area_km2?: number | null;
-  station_count?: number | null;
-  estimated_nx?: number | null;
-  estimated_ny?: number | null;
-  estimated_nz?: number | null;
-  estimated_voxel_count?: number | null;
-  estimated_depth_m?: number | null;
-  estimated_block_size_m?: number | null;
-  max_allowed_nx?: number;
-  max_allowed_ny?: number;
-  max_allowed_nz?: number;
-  warnings?: string[];
-  blocked_reasons?: string[];
-  allowed_outputs?: string[];
-  suggested_tile_size_m?: number | null;
-  suggested_subset_bbox?: Record<string, number> | null;
+  extent_x_m: number | null;
+  extent_z_m: number | null;
+  area_km2: number | null;
+  station_count: number | null;
+  estimated_nx: number | null;
+  estimated_ny: number | null;
+  estimated_nz: number | null;
+  estimated_voxel_count: number | null;
+  estimated_depth_m: number | null;
+  estimated_block_size_m: number | null;
+  max_allowed_nx: number;
+  max_allowed_ny: number;
+  max_allowed_nz: number;
+  warnings: string[];
+  blocked_reasons: string[];
+  allowed_outputs: string[];
+  suggested_tile_size_m: number | null;
+  suggested_subset_bbox: Record<string, number> | null;
   rationale: string;
 };
 
@@ -1058,7 +1058,7 @@ export type SpatialExtent = {
 };
 
 export type SpatialReadiness = {
-  version?: string;
+  version: string;
   level: string;
   level_rank: number;
   can_run_3d_inversion: boolean;
@@ -1067,13 +1067,13 @@ export type SpatialReadiness = {
   can_compute_voxel_masl: boolean;
   can_compute_voxel_latlon: boolean;
   requires_user_acknowledgement: boolean;
-  required_acknowledgement?: string | null;
+  required_acknowledgement: string | null;
   max_priority_class_allowed: string;
   max_favorability_score_allowed: number;
-  missing_fields?: string[];
-  warnings?: string[];
-  allowed_outputs?: string[];
-  blocked_outputs?: string[];
+  missing_fields: string[];
+  warnings: string[];
+  allowed_outputs: string[];
+  blocked_outputs: string[];
   rationale: string;
 };
 
