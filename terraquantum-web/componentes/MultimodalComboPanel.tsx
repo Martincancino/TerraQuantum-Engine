@@ -96,7 +96,14 @@ export default function MultimodalComboPanel({
         return;
       }
       setError(null);
-      setPlan(res.data.plan);
+      // FASE 11 — el backend declara `plan` como diccionario LIBRE
+      // (`Optional[dict]` en `MultimodalPlanResponse`), así que el tipo generado
+      // lo da como `Record<string, unknown>`: la forma que este panel pinta NO
+      // está en el contrato. El cast lo dice en voz alta en vez de esconderlo en
+      // un tipo escrito a mano — y por eso todo lo que se lee abajo va con
+      // guardas (la Fase 9 midió que un plan incompleto tumbaba la pestaña).
+      // El arreglo de fondo es tipar el plan en el esquema del backend.
+      setPlan(res.data.plan as unknown as MultimodalPlan | null);
       setInsufficient(res.data.insufficient_reason);
     })();
     return () => {

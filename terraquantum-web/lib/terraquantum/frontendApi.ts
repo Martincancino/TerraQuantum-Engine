@@ -6,6 +6,21 @@ import type { BlockModelDataMode } from "../../store/useAppStore";
 // los genera el backend desde su propio OpenAPI. Ver
 // `types/backend-contracts.generated.ts`.
 import type {
+  ApplyCorrectionsResponse as ApplyCorrectionsResponseContract,
+  BoreholeSample as BoreholeSampleContract,
+  BoreholeSurvey as BoreholeSurveyContract,
+  ConvergenceResponse as ConvergenceResponseContract,
+  ConvergenceTrial as ConvergenceTrialContract,
+  DataQualityScore as DataQualityScoreContract,
+  GeophysicsStatusResponse as GeophysicsStatusResponseContract,
+  GravityImportMetadata as GravityImportMetadataContract,
+  GravityImportPreviewResponse as GravityImportPreviewResponseContract,
+  MisfitResponse as MisfitResponseContract,
+  MisfitStationData as MisfitStationDataContract,
+  MultimodalPlanResponse as MultimodalPlanResponseContract,
+  ParseBoreholeCsvResponse as ParseBoreholeCsvResponseContract,
+  RegionalScalePreflight as RegionalScalePreflightContract,
+  SpatialReadiness as SpatialReadinessContract,
   ColumnMappingPlanContract,
   IngestQuestion as IngestQuestionContract,
   SniffDetection as SniffDetectionContract,
@@ -350,32 +365,7 @@ export type ProjectFootprintResponse = {
 
 // ─── Regional Scale Preflight types (R3.7-C/D) ────────────────────────────
 
-export type RegionalScalePreflight = {
-  version?: string;
-  scale_class?: string;
-  can_run_single_inversion?: boolean;
-  requires_user_acknowledgement?: boolean;
-  recommended_action?: string;
-  extent_x_m?: number | null;
-  extent_z_m?: number | null;
-  area_km2?: number | null;
-  station_count?: number | null;
-  estimated_nx?: number | null;
-  estimated_ny?: number | null;
-  estimated_nz?: number | null;
-  estimated_voxel_count?: number | null;
-  estimated_depth_m?: number | null;
-  estimated_block_size_m?: number | null;
-  max_allowed_nx?: number;
-  max_allowed_ny?: number;
-  max_allowed_nz?: number;
-  warnings?: string[];
-  blocked_reasons?: string[];
-  allowed_outputs?: string[];
-  suggested_tile_size_m?: number | null;
-  suggested_subset_bbox?: Record<string, number> | null;
-  rationale?: string;
-};
+export type RegionalScalePreflight = RegionalScalePreflightContract;
 
 export type RegionalScaleGateError = {
   error?: string;
@@ -391,25 +381,7 @@ export type RegionalScaleGateError = {
 
 // ─── Spatial Readiness types (R3.5-F) ─────────────────────────────────────
 
-export type SpatialReadiness = {
-  version?: string;
-  level?: string;
-  level_rank?: number;
-  can_run_3d_inversion?: boolean;
-  can_run_local_conceptual_inversion?: boolean;
-  can_use_dem?: boolean;
-  can_compute_voxel_masl?: boolean;
-  can_compute_voxel_latlon?: boolean;
-  requires_user_acknowledgement?: boolean;
-  required_acknowledgement?: string | null;
-  max_priority_class_allowed?: string;
-  max_favorability_score_allowed?: number;
-  missing_fields?: string[];
-  warnings?: string[];
-  allowed_outputs?: string[];
-  blocked_outputs?: string[];
-  rationale?: string;
-};
+export type SpatialReadiness = SpatialReadinessContract;
 
 export type SpatialReadinessGateError = {
   error?: string;
@@ -740,23 +712,9 @@ export function buildTerrainTextureProxyUrl(rawUrl: string) {
 
 // ─── H-C3: Obs vs Calc misfit types ─────────────────────────────────────────
 
-export type MisfitStationData = {
-  x: number | null;
-  y: number | null;
-  z: number | null;
-  d_obs: number;
-  d_pred: number;
-  residual: number;
-};
+export type MisfitStationData = MisfitStationDataContract;
 
-export type MisfitResponse = {
-  stations: MisfitStationData[];
-  chi2_reduced: number;
-  rmse: number;
-  normalized_rmse: number;
-  r2: number;
-  n_stations: number;
-};
+export type MisfitResponse = MisfitResponseContract;
 
 export async function getGeophysicsMisfit(projectId: string, runId: string) {
   return fetchInternalJson<MisfitResponse>({
@@ -768,21 +726,9 @@ export async function getGeophysicsMisfit(projectId: string, runId: string) {
 
 // ─── F5: Convergencia (barrido λ / Morozov chi² discrepancy) ────────────────
 
-export type ConvergenceTrial = {
-  lambda_value: number | null;
-  chi2_reduced: number | null;
-};
+export type ConvergenceTrial = ConvergenceTrialContract;
 
-export type ConvergenceResponse = {
-  available: boolean;
-  selection_method: string | null;
-  lambda_selected: number | null;
-  chi2_achieved: number | null;
-  n_solves: number | null;
-  trials: ConvergenceTrial[];
-  warnings: string[];
-  note: string;
-};
+export type ConvergenceResponse = ConvergenceResponseContract;
 
 export async function getGeophysicsConvergence(projectId: string, runId: string) {
   return fetchInternalJson<ConvergenceResponse>({
@@ -1079,26 +1025,7 @@ export type GravityObservationPreview = {
   g: number;
 };
 
-export type GravityImportMetadata = {
-  source_file: string;
-  schema_version: string;
-  unit_original: string | null;
-  unit_internal: string;
-  gravity_column_used: string | null;
-  gravity_type: string | null;
-  conversion_applied: boolean;
-  row_count: number;
-  valid_rows: number;
-  rejected_rows: number;
-  warnings: string[];
-  errors: string[];
-  is_demo: boolean;
-  // Fase 5: resolución real y contexto geológico
-  estimated_mean_spacing_m?: number;
-  estimated_depth_resolution_m?: number;
-  geological_context_hint?: string;
-  honesty_note?: string;
-};
+export type GravityImportMetadata = GravityImportMetadataContract;
 
 export type CoordinateSystemDetection = {
   detected?: string;
@@ -1107,18 +1034,7 @@ export type CoordinateSystemDetection = {
 };
 
 // Fase 19 Tarea 5 — Data Quality Score numérico 0–100.
-export type DataQualityScore = {
-  version?: string;
-  score: number;
-  interpretation: "GOOD" | "MEDIOCRE" | "POOR" | string;
-  completeness: number;
-  spatial_distribution: number;
-  noise_level: number;
-  resolution: number;
-  outlier_fraction: number;
-  weights?: Record<string, number>;
-  notes?: string[];
-};
+export type DataQualityScore = DataQualityScoreContract;
 
 // Fase 19 Tarea 1 — tipo de dato inferido desde columnas del CSV.
 export type DataTypeDetection = {
@@ -1144,25 +1060,20 @@ export type CoordinateTransformData = {
   z_extent_m?: number;
 };
 
-export type GravityImportPreviewResponse = {
-  status: "ok" | "error";
+export type GravityImportPreviewResponse = GravityImportPreviewResponseContract & {
+  // FASE 11 — EXTENSIÓN, no copia. El contrato generado cubre los campos que el
+  // modelo Pydantic DECLARA; estos cuatro viajan por `extra="allow"` con nombre
+  // camelCase heredado (el handler los emite, el esquema no los nombra), así que
+  // el tipo generado sólo los ve como índice abierto. Declararlos aquí es decir
+  // lo que el endpoint manda de verdad; borrarlos dejaría al visor leyendo
+  // `unknown`. El arreglo de fondo —declararlos en el modelo del backend— cambia
+  // el contrato de una ruta v1 del camino dorado y no es de esta fase.
   previewCount: number;
   totalObservations: number;
   observationsPreview: GravityObservationPreview[];
   importMetadata: GravityImportMetadata;
-  warnings: string[];
-  errors: string[];
-  csv_analysis?: {
-    coordinate_system?: CoordinateSystemDetection | null;
-    quality_label?: string | null;
-    data_quality?: DataQualityScore | null;
-  } | null;
-  coordinate_transform?: CoordinateTransformData | null;
-  // Fase 19 Tarea 1 — auto-detección de tipo de CSV.
   detected_data_type?: DataTypeDetection | null;
   georef_preview?: GeorefSummary;
-  spatial_readiness?: SpatialReadiness | null;
-  regional_scale_preflight?: RegionalScalePreflight | null;
 };
 
 export async function previewGravityCsv(
@@ -1880,16 +1791,12 @@ export async function getFavorability(projectId: string, runId: string) {
 
 // ─── Geophysics Async Status (F0.5) ──────────────────────────────────────────
 
-export type GeophysicsStatusResponse = {
-  project_id?: string;
-  run_id?: string;
-  status: string;
-  progress?: number | null;
-  stage?: string | null;
-  message?: string | null;
+export type GeophysicsStatusResponse = GeophysicsStatusResponseContract & {
+  // Lo que NO viene del contrato del backend: el canal SSE
+  // (`/v2/geophysics-status/.../stream`) añade estos dos, y por eso este
+  // tipo es una EXTENSIÓN del generado y no una copia suya.
   heartbeat_at?: string | null;
   metrics?: Record<string, unknown> | null;
-  error?: string | null;
 };
 
 export async function getGeophysicsStatus(projectId: string, runId: string) {
@@ -2511,11 +2418,7 @@ export type ApplyCorrectionsRequest = {
   gravity_type_in?: "g_raw" | "free_air_anomaly" | "bouguer_anomaly" | "complete_bouguer_anomaly";
 };
 
-export type ApplyCorrectionsResponse = {
-  corrected: GravityCorrectedStation[];
-  report: GravityCorrectionReport;
-  output_gravity_type: string;
-};
+export type ApplyCorrectionsResponse = ApplyCorrectionsResponseContract;
 
 export async function applyGravityCorrections(
   request: ApplyCorrectionsRequest
@@ -2553,36 +2456,11 @@ export async function applyGravityCorrections(
 // ── FASE 20 — Sondajes (Borehole Integration) ───────────────────────────────
 // Espejo del schema backend BoreholeSample / BoreholeSurvey. El frontend NO
 // parsea ni valida: envía el texto del CSV y consume lo que devuelve el backend.
-export type BoreholeSample = {
-  hole_id: string;
-  x_m: number;
-  z_m: number;
-  depth_from_m: number;
-  depth_to_m: number;
-  sample_type: string;
-  density_t_m3: number | null;
-  density_uncertainty: number;
-  lithology: string | null;
-  susceptibility_si: number | null;
-  comment: string;
-};
+export type BoreholeSample = BoreholeSampleContract;
 
-export type BoreholeSurvey = {
-  holes: BoreholeSample[];
-  crs: string;
-  datum_elevation_m: number;
-};
+export type BoreholeSurvey = BoreholeSurveyContract;
 
-export type ParseBoreholeCsvResponse = {
-  survey: BoreholeSurvey;
-  n_holes: number;
-  n_samples: number;
-  n_with_density: number;
-  n_with_susceptibility: number;
-  n_with_lithology: number;
-  lithologies_detected: string[];
-  unrecognized_lithologies: string[];
-};
+export type ParseBoreholeCsvResponse = ParseBoreholeCsvResponseContract;
 
 export type ParseBoreholeCsvRequest = {
   csv_text: string;
@@ -2712,14 +2590,7 @@ export type MultimodalPlan = {
   notes: string[];
 };
 
-export type MultimodalPlanResponse = {
-  has_gravity: boolean;
-  has_magnetic: boolean;
-  has_borehole: boolean;
-  n_sensors: number;
-  plan: MultimodalPlan | null;
-  insufficient_reason: string | null;
-};
+export type MultimodalPlanResponse = MultimodalPlanResponseContract;
 
 export type MultimodalPlanRequest = {
   n_gravity_sensors?: number;

@@ -78,7 +78,7 @@ export type ApplyCorrectionsResponse = {
 };
 
 export type AutoGrid = {
-  version?: string;
+  version: string;
   block_size_m: number;
   nx: number;
   ny: number;
@@ -86,16 +86,16 @@ export type AutoGrid = {
   voxel_count: number;
   depth_m: number;
   cutoff_radius_m: number;
-  lambda_mag?: number | null;
-  alpha_spatial?: number | null;
-  r10_limit?: number;
-  adjusted_for_r10?: boolean;
+  lambda_mag: number | null;
+  alpha_spatial: number | null;
+  r10_limit: number;
+  adjusted_for_r10: boolean;
   voxel_count_before_r10: number;
-  r10_iterations?: number;
-  warnings?: string[];
-  rationale?: string[];
-  octree_params?: Record<string, unknown> | null;
-  recommended_use_treemesh?: boolean;
+  r10_iterations: number;
+  warnings: string[];
+  rationale: string[];
+  octree_params: Record<string, unknown> | null;
+  recommended_use_treemesh: boolean;
 };
 
 /** Block model JSON response (voxels as JSON array). */
@@ -321,36 +321,36 @@ export type ConvergenceTrial = {
 };
 
 export type CoordSystemDetection = {
-  detected?: string;
-  confidence?: string;
-  warning?: string | null;
-  utm_zone?: string | null;
-  utm_hemisphere?: string | null;
-  epsg_code?: number | null;
-  crs_source?: string;
+  detected: string;
+  confidence: string;
+  warning: string | null;
+  utm_zone: string | null;
+  utm_hemisphere: string | null;
+  epsg_code: number | null;
+  crs_source: string;
 };
 
 export type CoordinateTransform = {
-  version?: string;
-  input_coordinate_system?: string;
-  input_confidence?: string;
-  method?: string;
-  origin_strategy?: string;
-  origin_input_coordinates?: Record<string, unknown>;
-  x_min_raw?: number | null;
-  z_min_raw?: number | null;
-  x_max_raw?: number | null;
-  z_max_raw?: number | null;
-  x_extent_m?: number;
-  z_extent_m?: number;
-  transformed?: boolean;
-  warnings?: string[];
-  precision_notes?: string[];
-  utm_zone?: string | null;
-  utm_hemisphere?: string | null;
-  epsg_code?: number | null;
-  crs_source?: string;
-  absolute_origin?: Record<string, number> | null;
+  version: string;
+  input_coordinate_system: string;
+  input_confidence: string;
+  method: string;
+  origin_strategy: string;
+  origin_input_coordinates: Record<string, unknown>;
+  x_min_raw: number | null;
+  z_min_raw: number | null;
+  x_max_raw: number | null;
+  z_max_raw: number | null;
+  x_extent_m: number;
+  z_extent_m: number;
+  transformed: boolean;
+  warnings: string[];
+  precision_notes: string[];
+  utm_zone: string | null;
+  utm_hemisphere: string | null;
+  epsg_code: number | null;
+  crs_source: string;
+  absolute_origin: Record<string, number> | null;
 };
 
 export type CorrectedStation = {
@@ -359,10 +359,10 @@ export type CorrectedStation = {
   lon_deg: number;
   elev_m: number;
   g_obs_mgal: number;
-  gamma_mgal?: number | null;
-  fac_mgal?: number | null;
-  bc_mgal?: number | null;
-  tc_mgal?: number | null;
+  gamma_mgal: number | null;
+  fac_mgal: number | null;
+  bc_mgal: number | null;
+  tc_mgal: number | null;
   g_bouguer_mgal: number;
   uncertainty_mgal: number;
   gravity_type: string;
@@ -372,27 +372,27 @@ export type CorrectionReport = {
   n_stations: number;
   corrections_applied: string[];
   reduction_density_gcc: number;
-  dem_source?: string | null;
-  terrain_radius_m?: number | null;
-  fac_min_mgal?: number | null;
-  fac_max_mgal?: number | null;
-  bc_min_mgal?: number | null;
-  bc_max_mgal?: number | null;
-  tc_min_mgal?: number | null;
-  tc_max_mgal?: number | null;
-  g_bouguer_min_mgal?: number | null;
-  g_bouguer_max_mgal?: number | null;
-  tide_min_mgal?: number | null;
-  tide_max_mgal?: number | null;
-  drift_rate_mgal_per_day?: number | null;
-  drift_closure_mgal?: number | null;
-  drift_n_base?: number | null;
-  warnings?: string[];
+  dem_source: string | null;
+  terrain_radius_m: number | null;
+  fac_min_mgal: number | null;
+  fac_max_mgal: number | null;
+  bc_min_mgal: number | null;
+  bc_max_mgal: number | null;
+  tc_min_mgal: number | null;
+  tc_max_mgal: number | null;
+  g_bouguer_min_mgal: number | null;
+  g_bouguer_max_mgal: number | null;
+  tide_min_mgal: number | null;
+  tide_max_mgal: number | null;
+  drift_rate_mgal_per_day: number | null;
+  drift_closure_mgal: number | null;
+  drift_n_base: number | null;
+  warnings: string[];
 };
 
 export type CsvAnalysisResult = {
-  version?: string;
-  observation_count?: number;
+  version: string;
+  observation_count: number;
   spatial_extent: SpatialExtent;
   sampling: SamplingStats;
   gravity_stats: GravityStats;
@@ -400,17 +400,17 @@ export type CsvAnalysisResult = {
   outliers: OutlierInfo;
   units: UnitDetection;
   coordinate_system: CoordSystemDetection;
-  coordinate_transform?: CoordinateTransform | null;
-  auto_grid?: AutoGrid | null;
-  warnings?: string[];
-  quality_label?: string;
-  data_quality?: DataQualityScore | null;
-  has_elevation_column?: boolean;
-  has_uncertainty_column?: boolean;
-  has_instrument_metadata?: boolean;
-  has_corrections_metadata?: boolean;
-  professional_columns_detected?: string[];
-  professional_columns_with_values?: string[];
+  coordinate_transform: CoordinateTransform | null;
+  auto_grid: AutoGrid | null;
+  warnings: string[];
+  quality_label: string;
+  data_quality: DataQualityScore | null;
+  has_elevation_column: boolean;
+  has_uncertainty_column: boolean;
+  has_instrument_metadata: boolean;
+  has_corrections_metadata: boolean;
+  professional_columns_detected: string[];
+  professional_columns_with_values: string[];
 };
 
 /**
@@ -423,16 +423,16 @@ export type CsvAnalysisResult = {
  * `interpretation`: GOOD (≥75) · MEDIOCRE (≥50) · POOR (<50).
  */
 export type DataQualityScore = {
-  version?: string;
-  score?: number;
-  interpretation?: string;
-  completeness?: number;
-  spatial_distribution?: number;
-  noise_level?: number;
-  resolution?: number;
-  outlier_fraction?: number;
-  weights?: Record<string, number>;
-  notes?: string[];
+  version: string;
+  score: number;
+  interpretation: string;
+  completeness: number;
+  spatial_distribution: number;
+  noise_level: number;
+  resolution: number;
+  outlier_fraction: number;
+  weights: Record<string, number>;
+  notes: string[];
 };
 
 /**
@@ -456,10 +456,10 @@ export type DiagnosticManifestResponse = {
 };
 
 export type DuplicateInfo = {
-  exact_count?: number;
-  near_count?: number;
-  tolerance_m?: number;
-  examples?: Record<string, unknown>[];
+  exact_count: number;
+  near_count: number;
+  tolerance_m: number;
+  examples: Record<string, unknown>[];
 };
 
 /**
@@ -494,12 +494,12 @@ export type EnrichPackageResponse = {
 
 /** Structured error information for task failures. */
 export type ErrorDetails = {
-  code?: string | null;
+  code: string | null;
   message: string;
-  source?: string | null;
-  stage?: string | null;
-  details?: Record<string, unknown> | null;
-  traceback?: string | null;
+  source: string | null;
+  stage: string | null;
+  details: Record<string, unknown> | null;
+  traceback: string | null;
 };
 
 /** Background inversion start response (async task). */
@@ -539,22 +539,22 @@ export type GeophysicsStatusResponse = {
 /** Inversion response: complete pipeline result. */
 export type GravityImportInvertResponse = {
   status: string;
-  stage?: string;
-  project_id?: string | null;
-  run_id?: string | null;
-  georef?: Record<string, unknown> | null;
-  spatial_readiness?: SpatialReadiness | null;
-  regional_scale_preflight?: RegionalScalePreflight | null;
-  import_metadata?: GravityImportMetadata | null;
-  csv_analysis?: CsvAnalysisResult | null;
-  coordinate_transform?: CoordinateTransform | null;
-  auto_grid?: AutoGrid | null;
-  inversion_result?: InversionMetadata | null;
-  r3_enrichment?: R3EnrichmentStatus | null;
-  import_persistence?: ImportPersistenceStatus | null;
-  grid_auto_adapt?: GridAutoAdapt | null;
-  errors?: string[];
-  warnings?: string[];
+  stage: string;
+  project_id: string | null;
+  run_id: string | null;
+  georef: Record<string, unknown> | null;
+  spatial_readiness: SpatialReadiness | null;
+  regional_scale_preflight: RegionalScalePreflight | null;
+  import_metadata: GravityImportMetadata | null;
+  csv_analysis: CsvAnalysisResult | null;
+  coordinate_transform: CoordinateTransform | null;
+  auto_grid: AutoGrid | null;
+  inversion_result: InversionMetadata | null;
+  r3_enrichment: R3EnrichmentStatus | null;
+  import_persistence: ImportPersistenceStatus | null;
+  grid_auto_adapt: GridAutoAdapt | null;
+  errors: string[];
+  warnings: string[];
   /** `extra="allow"`: el endpoint emite además campos que el contrato no fija. */
   [key: string]: unknown;
 };
@@ -599,21 +599,21 @@ export type GravityImportPreviewResponse = {
 };
 
 export type GravityStats = {
-  min?: number | null;
-  max?: number | null;
-  mean?: number | null;
-  std?: number | null;
-  p5?: number | null;
-  p95?: number | null;
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  std: number | null;
+  p5: number | null;
+  p95: number | null;
 };
 
 /** Grid adaptation metadata (auto vs frontend-requested). */
 export type GridAutoAdapt = {
-  applied?: boolean;
-  reason?: string | null;
-  frontend_requested?: Record<string, number> | null;
-  effective_used?: Record<string, number> | null;
-  total_voxels?: number;
+  applied: boolean;
+  reason: string | null;
+  frontend_requested: Record<string, number> | null;
+  effective_used: Record<string, number> | null;
+  total_voxels: number;
 };
 
 /**
@@ -679,10 +679,10 @@ export type HistoryRunsResponse = {
 
 /** Parquet and file I/O persistence status. */
 export type ImportPersistenceStatus = {
-  persisted?: boolean;
-  source_gravity_path?: string | null;
-  metadata_path?: string | null;
-  warnings?: string[];
+  persisted: boolean;
+  source_gravity_path: string | null;
+  metadata_path: string | null;
+  warnings: string[];
 };
 
 export type InferredLiteral = {
@@ -719,22 +719,22 @@ export type IngestQuestionOption = {
 
 /** Solver fit statistics. */
 export type InversionDiagnostics = {
-  rmse_misfit?: number | null;
-  normalized_rmse?: number | null;
-  l2_norm?: number | null;
-  data_coverage?: number | null;
-  convergence_status?: string;
-  iterations?: number;
-  regularization_lambda?: number | null;
+  rmse_misfit: number | null;
+  normalized_rmse: number | null;
+  l2_norm: number | null;
+  data_coverage: number | null;
+  convergence_status: string;
+  iterations: number;
+  regularization_lambda: number | null;
 };
 
 /** Inversion execution metadata. */
 export type InversionMetadata = {
-  solver_type?: string | null;
-  lambda_mag?: number | null;
-  alpha_spatial?: number | null;
-  depth_beta?: number | null;
-  diagnostics?: InversionDiagnostics | null;
+  solver_type: string | null;
+  lambda_mag: number | null;
+  alpha_spatial: number | null;
+  depth_beta: number | null;
+  diagnostics: InversionDiagnostics | null;
 };
 
 /**
@@ -889,9 +889,9 @@ export type MultimodalPlanResponse = {
 };
 
 export type OutlierInfo = {
-  count?: number;
-  method?: string;
-  examples?: Record<string, unknown>[];
+  count: number;
+  method: string;
+  examples: Record<string, unknown>[];
 };
 
 export type ParseBoreholeCsvResponse = {
@@ -942,11 +942,11 @@ export type PercentileStats = {
 
 /** R3 Enrichment (elevation/DEM integration) status. */
 export type R3EnrichmentStatus = {
-  attempted?: boolean;
-  terrain_persisted?: boolean;
-  enrichment_status?: string | null;
-  has_elevation_data?: boolean;
-  warnings?: string[];
+  attempted: boolean;
+  terrain_persisted: boolean;
+  enrichment_status: string | null;
+  has_elevation_data: boolean;
+  warnings: string[];
 };
 
 export type RegionalScalePreflight = {
@@ -1046,15 +1046,15 @@ export type SniffReportContract = {
 };
 
 export type SpatialExtent = {
-  x_min?: number | null;
-  x_max?: number | null;
-  y_min?: number | null;
-  y_max?: number | null;
-  z_min?: number | null;
-  z_max?: number | null;
-  x_span?: number | null;
-  y_span?: number | null;
-  z_span?: number | null;
+  x_min: number | null;
+  x_max: number | null;
+  y_min: number | null;
+  y_max: number | null;
+  z_min: number | null;
+  z_max: number | null;
+  x_span: number | null;
+  y_span: number | null;
+  z_span: number | null;
 };
 
 export type SpatialReadiness = {
@@ -1110,10 +1110,10 @@ export type SystemStatusResponse = {
 };
 
 export type UnitDetection = {
-  declared?: string | null;
-  value_range_consistent?: boolean;
-  confidence?: string;
-  warning?: string | null;
+  declared: string | null;
+  value_range_consistent: boolean;
+  confidence: string;
+  warning: string | null;
 };
 
 /** Single voxel in block model. */
