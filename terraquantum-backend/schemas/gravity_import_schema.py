@@ -4,6 +4,7 @@ from schemas.geophysics_schema import GravityObservation
 
 
 class SpatialExtent(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     x_min: Optional[float] = None
     x_max: Optional[float] = None
     y_min: Optional[float] = None
@@ -22,6 +23,7 @@ class SamplingStats(BaseModel):
 
 
 class GravityStats(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     min: Optional[float] = None
     max: Optional[float] = None
     mean: Optional[float] = None
@@ -31,6 +33,7 @@ class GravityStats(BaseModel):
 
 
 class DuplicateInfo(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     exact_count: int = 0
     near_count: int = 0
     tolerance_m: float = 1.0
@@ -38,12 +41,14 @@ class DuplicateInfo(BaseModel):
 
 
 class OutlierInfo(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     count: int = 0
     method: str = "zscore_3sigma"
     examples: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class UnitDetection(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     declared: Optional[str] = None
     value_range_consistent: bool = True
     confidence: str = "low"
@@ -51,6 +56,7 @@ class UnitDetection(BaseModel):
 
 
 class CoordSystemDetection(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     detected: str = "unknown"
     confidence: str = "low"
     warning: Optional[str] = None
@@ -61,6 +67,7 @@ class CoordSystemDetection(BaseModel):
 
 
 class CoordinateTransform(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     version: str = "coord_transform_v0_1"
     input_coordinate_system: str = "unknown"
     input_confidence: str = "low"
@@ -84,6 +91,7 @@ class CoordinateTransform(BaseModel):
 
 
 class AutoGrid(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     version: str = "auto_grid_v0_1"
     block_size_m: float
     nx: int
@@ -118,6 +126,7 @@ class DataQualityScore(BaseModel):
     Cada componente es un sub-score 0–100; `score` es la suma ponderada.
     `interpretation`: GOOD (≥75) · MEDIOCRE (≥50) · POOR (<50).
     """
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     version: str = "data_quality_v0_1"
     score: float = 0.0
     interpretation: str = "POOR"
@@ -134,6 +143,7 @@ class DataQualityScore(BaseModel):
 
 
 class CsvAnalysisResult(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     version: str = "csv_analysis_v0_1"
     observation_count: int = 0
     spatial_extent: SpatialExtent

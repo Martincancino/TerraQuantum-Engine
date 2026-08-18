@@ -492,23 +492,24 @@ CONTRATOS_AUN_A_MANO: dict[str, str] = {
         "que saber de qué endpoint vino el modelo. Generarlo sería declarar como "
         "contrato del backend algo que fabrica el cliente."
     ),
-    "GravityImportPreviewResponse": "Diverge del backend a propósito (campos legacy camelCase). Dueña: Fase 11.",
-    "GravityImportMetadata": "Idem: metadatos con alias camelCase heredados. Dueña: Fase 11.",
-    "GeophysicsStatusResponse": "El frontend añade `metrics`/`heartbeat_at` del canal SSE. Dueña: Fase 11.",
-    "ApplyCorrectionsResponse": "`default_factory` la vuelve opcional; el servicio siempre la emite. Fase 11.",
-    "BoreholeSample": "Idem. Dueña: Fase 11.",
-    "BoreholeSurvey": "Idem (`holes` opcional en el contrato, siempre presente en la respuesta). Fase 11.",
-    "ConvergenceResponse": "Idem (`trials`, `lambda_selected`). Dueña: Fase 11.",
-    "ConvergenceTrial": "Idem. Dueña: Fase 11.",
-    "DataQualityScore": "Idem. Dueña: Fase 11.",
-    "HistoryRun": "Idem. Dueña: Fase 11.",
-    "MisfitResponse": "Idem. Dueña: Fase 11.",
-    "MisfitStationData": "Idem. Dueña: Fase 11.",
-    "MultimodalPlanResponse": "Idem. Dueña: Fase 11.",
-    "ParseBoreholeCsvResponse": "Idem. Dueña: Fase 11.",
-    "PercentileStats": "Idem. Dueña: Fase 11.",
-    "RegionalScalePreflight": "Idem. Dueña: Fase 11.",
-    "SpatialReadiness": "Idem. Dueña: Fase 11.",
+    "HistoryRun": (
+        "La Fase 11 midió por qué su tipo generado sale con `?`: su ruta "
+        "(`/v2/history/runs`) SÍ usa `response_model_exclude_unset=True`, así que "
+        "un campo que el servicio no ponga desaparece de verdad. Aliasarlo "
+        "obligaría al historial a comprobar ocho campos que en la práctica "
+        "siempre llegan. Cerrarlo bien es declarar en el servicio los campos que "
+        "siempre escribe. Dueña: Fase 13 (UX experta), que es la que toca el "
+        "historial."
+    ),
+    "PercentileStats": (
+        "MEDIDO por la Fase 11, y el motivo NO era `default_factory`: su "
+        "contenedor declarado (`BlockModelStats`) **no lo emite** `/block-model`. "
+        "Lo que sí manda es un `percentile_stats` PLANO por `extra=\"allow\"` "
+        "(`density_p2`, `density_p5`, …), que no tiene nada que ver con este "
+        "modelo. El tipo a mano describe lo que llega; el generado, un contenedor "
+        "que nadie usa. Cerrarlo es declarar el bloque plano en el esquema. "
+        "Dueña: Fase 13."
+    ),
     "VoxelData": (
         "Vive en `lib/terraQuantumGeology.ts`, que es código de RENDER: describe "
         "lo que el visor necesita para pintar, no lo que el motor calcula. "

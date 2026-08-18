@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CorrectionParams(BaseModel):
@@ -44,6 +44,7 @@ class CorrectionParams(BaseModel):
 
 
 class CorrectedStation(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     station_id: str
     lat_deg: float
     lon_deg: float
@@ -59,6 +60,7 @@ class CorrectedStation(BaseModel):
 
 
 class CorrectionReport(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     n_stations: int
     corrections_applied: List[str]
     reduction_density_gcc: float

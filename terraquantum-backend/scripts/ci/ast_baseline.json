@@ -1,7 +1,7 @@
 {
   "api": {
     "files": 22,
-    "loc": 6620,
+    "loc": 6622,
     "func_loc_max": 374,
     "func_loc_max_where": "api/gravity_import_api.py:1263 enrich_package_endpoint",
     "cc_max": 79,
@@ -51,9 +51,9 @@
   },
   "schemas": {
     "files": 11,
-    "loc": 2850,
+    "loc": 3012,
     "func_loc_max": 19,
-    "func_loc_max_where": "schemas/geophysics_schema.py:893 _validate_grid_bounds",
+    "func_loc_max_where": "schemas/geophysics_schema.py:895 _validate_grid_bounds",
     "cc_max": 7,
     "cc_max_where": "schemas/geophysics_schema.py:35 _validate_box",
     "args_max": 1,

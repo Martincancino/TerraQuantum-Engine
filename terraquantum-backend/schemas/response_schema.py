@@ -86,6 +86,7 @@ class GravityImportPreviewResponse(BaseModel):
 
 class R3EnrichmentStatus(BaseModel):
     """R3 Enrichment (elevation/DEM integration) status."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     attempted: bool = False
     terrain_persisted: bool = False
     # None = enrichment no intentado (sin project_id/run_id o georef MISSING)
@@ -98,6 +99,7 @@ class R3EnrichmentStatus(BaseModel):
 
 class ImportPersistenceStatus(BaseModel):
     """Parquet and file I/O persistence status."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     persisted: bool = False
     source_gravity_path: Optional[str] = None
     metadata_path: Optional[str] = None
@@ -106,6 +108,7 @@ class ImportPersistenceStatus(BaseModel):
 
 class GridAutoAdapt(BaseModel):
     """Grid adaptation metadata (auto vs frontend-requested)."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     applied: bool = False
     reason: Optional[str] = None
     frontend_requested: Optional[Dict[str, int]] = None  # {nx, ny, nz, blockSize, depth}
@@ -115,6 +118,7 @@ class GridAutoAdapt(BaseModel):
 
 class InversionDiagnostics(BaseModel):
     """Solver fit statistics."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     rmse_misfit: Optional[float] = None
     normalized_rmse: Optional[float] = None
     l2_norm: Optional[float] = None
@@ -126,6 +130,7 @@ class InversionDiagnostics(BaseModel):
 
 class InversionMetadata(BaseModel):
     """Inversion execution metadata."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     solver_type: Optional[str] = None
     lambda_mag: Optional[float] = None
     alpha_spatial: Optional[float] = None
@@ -137,7 +142,13 @@ class GravityImportInvertResponse(BaseModel):
     """Inversion response: complete pipeline result."""
     # extra="allow": el endpoint emite campos legacy camelCase (importMetadata,
     # inversionResult, gridAutoAdapt, georef…) consumidos por el frontend.
-    model_config = ConfigDict(extra="allow")
+    # F11: ver CONTRATO_SERIALIZADO (arriba). MEDIDO en esta ruta: con
+    # `exclude_unset` desaparecerían 4 claves (grid_auto_adapt, import_metadata,
+    # import_persistence, inversion_result); sin él viajan SIEMPRE, y eso es lo
+    # que el esquema pasa a decir.
+    model_config = ConfigDict(
+        extra="allow", json_schema_serialization_defaults_required=True,
+    )
 
     status: str = Field(..., pattern="^(done|error)$")
     stage: str = Field(default="inversion", pattern="^(import|inversion)$")
@@ -195,6 +206,7 @@ class GeophysicsInversionStartResponse(BaseModel):
 
 class ErrorDetails(BaseModel):
     """Structured error information for task failures."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)  # F11: ver CONTRATO_SERIALIZADO (schemas/response_schema.py)
     code: Optional[str] = None  # e.g. "SOLVER_DIVERGENCE", "FILE_NOT_FOUND", "VALIDATION_ERROR"
     message: str  # Human-readable error message
     source: Optional[str] = None  # e.g. "geophysics_service", "gravity_import_service", "block_model_store"
