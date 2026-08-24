@@ -1176,6 +1176,9 @@ class _CfgLSQR:
     prune_observable_domain: bool
     cut_cell_topography: bool
     cutcell_min_fraction: float
+    # FASE 14 — peso del prior geológico implícito en el término de smallness.
+    # 0.0 = apagado = byte-idéntico al comportamiento histórico.
+    geo_prior_alpha: float = 0.0
 
 
 @dataclass
@@ -2373,6 +2376,39 @@ class GravimetryInversion:
         else:
             d_reg = lambda_spatial * (L_active @ m_ref_sol)
 
+        # ── FASE 14: el modelo de referencia también en el término de SMALLNESS ──
+        # Por qué existe esta rama, medido y no supuesto (docs/06 §FASE 14):
+        # el `m_ref` de arriba entra SÓLO en la suavidad, ‖L·(m − m_ref)‖², y `L` es
+        # un Laplaciano de grafo, así que sólo actúa en la CURVATURA del contacto
+        # mientras el smallness sigue tirando de cada celda hacia base_density — es
+        # decir, contra el prior. Li & Oldenburg 1999, a quien cita el llamador, pone
+        # `m_ref` en el smallness. Sobre el dique inclinado con anti-inverse-crime ×3
+        # y semillas pareadas, la diferencia no es de matiz: por la suavidad el prior
+        # EMPEORA la recuperación (PR-AUC 0/25 semillas); por el smallness la MEJORA
+        # en las cuatro métricas y en todas las semillas, y su control con geología
+        # FALSA pasa a ser el PEOR brazo de todos — que es la firma de una restricción
+        # que de verdad transporta información geológica.
+        #
+        # Se añade como bloque ADITIVO —α‖m − m_ref‖² ENCIMA del smallness hacia 0—
+        # porque es exactamente la forma que se midió, y por el canal que el motor ya
+        # tiene para esto (el mismo que usan PGI y cross-gradient). `m_ref_sol` ya está
+        # mapeado al espacio de solución por `resolve_reference_model`, así que no hay
+        # que repetir la reducción activas/podadas.
+        # alpha = 0 → no se apila nada → byte-idéntico al comportamiento histórico.
+        _geo_alpha = float(getattr(cfg, "geo_prior_alpha", 0.0) or 0.0)
+        if _geo_alpha > 0.0 and m_ref_sol is not None:
+            _sqrt_a = float(np.sqrt(_geo_alpha))
+            extra_reg_blocks = list(extra_reg_blocks or []) + [
+                sp.eye(_n_active_sol, format="csr") * _sqrt_a
+            ]
+            extra_reg_rhs = list(extra_reg_rhs or []) + [
+                _sqrt_a * np.asarray(m_ref_sol, dtype=np.float64)
+            ]
+            logger.info(
+                f"[FASE 14] Prior geológico en smallness: alpha={_geo_alpha:.3g} "
+                f"sobre {_n_active_sol} celdas de solución."
+            )
+
         G_aug = sp.vstack([G_scaled, lambda_spatial * L_scaled]).tocsr()
         d_aug = np.concatenate([d_w, d_reg])
 
@@ -3048,6 +3084,15 @@ class GravimetryInversion:
         hz=None,                # Anchos 1D de celda en Z
         # ── DOI: Modelo de Referencia (Li & Oldenburg 1999) ──────────────────
         m_ref: Optional[np.ndarray] = None,
+        # ── FASE 14: peso del prior geológico implícito en el SMALLNESS ──────
+        # m_ref entra siempre en la suavidad; con geo_prior_alpha > 0 entra ADEMÁS
+        # como α‖m − m_ref‖². MEDIDO: por la suavidad sola el prior geológico
+        # empeora la recuperación; con este término la mejora. Ver docs/06 §FASE 14
+        # y scripts/validation/f14_implicit_geology_experiment.py.
+        # 0.0 → no se apila nada → byte-idéntico. El DOI SÍ tiene que pasarlo: su
+        # inversión 1 es la corrida principal, y si la 2 cambiara de funcional el
+        # índice mediría dos cosas a la vez.
+        geo_prior_alpha: float = 0.0,
         # ── Bound petrofísico EXPLÍCITO sobre la densidad recuperada (t/m³) ───
         # H-A0 Bug 3: density_max subido a 5.5 para cubrir magnetita (5.0-5.2),
         # cromita (4.5-4.8) y pirita masiva (4.5-5.0) — minerales objetivo en Chile.
@@ -3202,6 +3247,7 @@ class GravimetryInversion:
             prune_observable_domain=prune_observable_domain,
             cut_cell_topography=cut_cell_topography,
             cutcell_min_fraction=cutcell_min_fraction,
+            geo_prior_alpha=geo_prior_alpha,
         )
         est = _EstadoLSQR()
         est.solver_meta_ref = solver_meta

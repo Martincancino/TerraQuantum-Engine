@@ -1850,20 +1850,127 @@ def _build_implicit_geology_reference(params, x_c_full, y_c_full, z_c_full, base
     # m_ref del solver vive en CONTRASTE (densidad − base_density).
     m_ref_contrast = (prior.mean - float(base_density)).astype(np.float64)
 
+    # FASE 14 — CÓMO entra al funcional. Medido (docs/06 §FASE 14): por la suavidad
+    # sola el prior EMPEORA; con el término de smallness MEJORA. El default del
+    # esquema es "smallness"; "smoothness" queda disponible para reproducir el
+    # comportamiento histórico de la Fase 7.2 exactamente.
+    _binding = str(getattr(geo, "binding", "smallness"))
+    _alpha = float(getattr(geo, "prior_weight", 1.0)) if _binding == "smallness" else 0.0
+
+    # ── FASE 14: diagnósticos de honestidad del prior ────────────────────────
+    # Los tres salen de medir el cableado, no de leerlo. Ver
+    # scripts/validation/f14_implicit_geology_gate.py y §FASE 14 de docs/06.
+    _n_target = int(np.count_nonzero(prior.class_label))
+    _n_total = int(phi.size)
+    _frac_objetivo = (_n_target / _n_total) if _n_total else 0.0
+
+    # (1) El m_ref entra SOLO por el término de suavidad (‖L·(m − m_ref)‖²) y L es
+    #     un Laplaciano de grafo: L·constante = 0 EXACTO (medido: max|L·1| = 0.0 en
+    #     malla uniforme, 4e-17 en no-uniforme). Un prior que clasifica el 0 % o el
+    #     100 % de las celdas es espacialmente constante y por tanto **exactamente
+    #     inerte**: la inversión sale byte-idéntica a no haberlo pedido. Eso no se
+    #     puede reportar como "enabled: true" a secas.
+    _sin_contraste = _n_target == 0 or _n_target == _n_total
+
+    # (2) El HRBF degenera a su deriva polinómica cuando los contactos no bastan
+    #     para fijar curvatura (p.ej. todos los sondajes cortan el contacto a la
+    #     MISMA profundidad): los pesos RBF salen ~0 y φ queda en una rampa lineal.
+    #     Entonces "la superficie geológica" es un PLANO extrapolado a toda la malla,
+    #     no una superficie interpolada. Medido: con 1 sondaje vertical y contacto a
+    #     90 m, φ ≥ 0 en el 85 % de la malla, a 403 m del único pozo.
+    _campo_degenerado = bool(model.field.degenerado_a_plano)
+
+    # (3) Distancia horizontal desde cada celda objetivo al collar más cercano: es
+    #     la afirmación geológica más lejana que el prior está haciendo sin dato.
+    _collares = np.array(sorted({(float(b.x_m), float(b.z_m)) for b in _lith_intervals}))
+    _dist_h = np.sqrt(
+        (np.asarray(x_c_full, float)[:, None] - _collares[None, :, 0]) ** 2
+        + (np.asarray(z_c_full, float)[:, None] - _collares[None, :, 1]) ** 2
+    ).min(axis=1)
+    _mask_t = prior.class_label.ravel() > 0
+    _extrapolacion_max_m = float(_dist_h[_mask_t].max()) if _mask_t.any() else 0.0
+
     meta = {
         "enabled": True,
-        "binding": "m_ref (Li & Oldenburg reference model)",
+        # `binding` es la descripción humana de SIEMPRE (contrato de la Fase 7.2, con
+        # consumidor en tests/test_fase7_wiring.py): se conserva y se hace precisa.
+        # `binding_term` es la respuesta legible por máquina que estrena la Fase 14.
+        "binding": (
+            "m_ref (Li & Oldenburg 1999) — suavidad"
+            + (" + smallness" if _binding == "smallness" else " sólo")
+        ),
+        "binding_term": _binding,
+        "prior_weight": _alpha,
         "target_lithologies": list(model.target_lithologies),
         "n_value_points": int(model.n_value_points),
         "n_contact_points": int(model.n_contact_points),
         "n_orientations": int(model.n_orientations),
-        "n_target_cells": int(np.count_nonzero(prior.class_label)),
-        "n_total_cells": int(phi.size),
+        "n_target_cells": _n_target,
+        "n_total_cells": _n_total,
         "target_density_t_m3": float(geo.target_density_t_m3),
         "host_density_t_m3": float(host_mean),
         "softness": float(geo.softness),
+        # ── Fase 14 — lo que el usuario necesita para no creerse el prior ──
+        "n_boreholes": int(len(_collares)),
+        "target_volume_fraction": round(_frac_objetivo, 4),
+        "extrapolation_max_m": round(_extrapolacion_max_m, 1),
+        "degenerate_planar_field": bool(_campo_degenerado),
+        "inert_no_contrast": bool(_sin_contraste),
+        # El σ del prior NO pesa: `build_spatial_prior_from_implicit` lo calcula pero
+        # el solver sólo consume `prior.mean`. Se declara en vez de disimularlo.
+        "declared_std_is_inert": True,
+        "warnings": [],
     }
+    if _sin_contraste:
+        meta["warnings"].append(
+            "El prior clasifica el {:.0%} de la malla como una sola unidad: es "
+            "espacialmente constante y el término de suavidad lo anula exactamente "
+            "(L·constante = 0). La inversión sale igual que sin prior.".format(_frac_objetivo)
+        )
+    if _campo_degenerado and not _sin_contraste:
+        meta["warnings"].append(
+            "El campo implícito degeneró a un PLANO (los pesos RBF son ~0): los "
+            "contactos disponibles no fijan curvatura. La restricción es un contacto "
+            "plano extrapolado a toda la malla, no una superficie interpolada."
+        )
+    if _frac_objetivo >= 0.5 and not _sin_contraste:
+        meta["warnings"].append(
+            "El prior declara unidad objetivo en el {:.0%} de la malla, hasta {:.0f} m "
+            "del sondaje más cercano. Con pocos sondajes el campo implícito extrapola "
+            "sin límite: revise el resultado antes de usarlo para decidir.".format(
+                _frac_objetivo, _extrapolacion_max_m
+            )
+        )
+
+    # (4) Colisión medida: un sondaje SOLO litológico (que es justo el input que este
+    #     prior exige) no entra al array de anclaje, así que `enable_depth_prior`
+    #     encuentra `boreholes_arr is None` y fuerza `anchor_mode="hard"` — que fija
+    #     las celdas ancladas a base_density y las ELIMINA del sistema. El prior
+    #     geológico queda pisado sin que nada avise. Se avisa aquí.
+    if bool(getattr(params, "enable_depth_prior", False)) and not any(
+        getattr(b, "density_t_m3", None) is not None for b in _bh_list
+    ):
+        meta["warnings"].append(
+            "enable_depth_prior está activo y ningún sondaje aporta densidad medida: "
+            "el prior de profundidad ancla en modo DURO y pisa al prior geológico en "
+            "las celdas que fija. Desactive uno de los dos."
+        )
+
     return m_ref_contrast, meta
+
+
+
+def _geo_prior_alpha(geo_meta) -> float:
+    """FASE 14 — Peso del prior geológico en el término de smallness.
+
+    Sale del meta que arma `_build_implicit_geology_reference` para no cambiar la
+    aridad de la función ni tener que recalcular la decisión en cada llamador.
+    0.0 con `binding="smoothness"` o sin prior → el solver no apila nada y la
+    inversión queda byte-idéntica al comportamiento de la Fase 7.2.
+    """
+    if not geo_meta:
+        return 0.0
+    return float(geo_meta.get("prior_weight", 0.0) or 0.0)
 
 
 def _build_lithology_bounds_array(params, axis: str):
@@ -3232,6 +3339,8 @@ def _solve_grilla_completa(_lam: float, _meta_out: dict, *,
         forward_model=forward,          # F0.2: KDTree directo sobre active_cells
         sensor_coords=sensor_coords,
         m_ref=_geo_m_ref,               # FASE 7.2: prior geológico implícito (None = sin sesgo)
+        # FASE 14: y además en el smallness, que es donde MIDE mejor (docs/06 §FASE 14).
+        geo_prior_alpha=_geo_prior_alpha(ajuste.geo_meta),
         x_c=x_c_full,
         z_c=z_c_full,
         topography_elevations=_topography_elevations_padded,  # HITO 5: activo si MASL provisto
@@ -3364,6 +3473,7 @@ def _refinar_con_pgi(params: GeophysicsInvertInput, malla: _MallaGrav,
                     forward_model=forward,
                     sensor_coords=sensor_coords,
                     m_ref=_geo_m_ref,           # FASE 7.2: mismo prior geológico que pass-1
+                    geo_prior_alpha=_geo_prior_alpha(ajuste.geo_meta),
                     x_c=x_c_full,
                     z_c=z_c_full,
                     hx=hx, hy=hy, hz=hz,
@@ -4185,6 +4295,13 @@ def _doi_doble_inversion(params: GeophysicsInvertInput, malla: _MallaGrav,
             topography_elevations=_topography_elevations_padded,
             hx=hx, hy=hy, hz=hz,
             m_ref=m_ref2,                  # Inversión 2: referencia 0.1
+            # FASE 14: MISMO binding que la pass-1, y esto NO es cosmético. La
+            # inversión 1 del DOI **es** la corrida principal (m1 = est_density más
+            # abajo), así que si la pass-1 lleva el bloque de smallness y la pass-2
+            # no, la diferencia m1 − m2 mezclaría el desplazamiento de referencia
+            # —lo único que el DOI quiere medir— con el cambio de funcional, y el
+            # índice DOI saldría inflado sin que nada avisara.
+            geo_prior_alpha=_geo_prior_alpha(ajuste.geo_meta),
             density_min=params.density_min,
             density_max=params.density_max,
             boreholes=boreholes_arr,       # FASE 8: anclar igual que pass-1 → doi_raw coherente

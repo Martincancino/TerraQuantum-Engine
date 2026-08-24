@@ -163,6 +163,28 @@ CAMPOS_INVERT = {
     "susc_min", "utm_zone",
 }
 
+#: Campos AÑADIDOS al formulario DESPUÉS de la Fase 8, cada uno con su dueño.
+#:
+#: Existe esta segunda lista en vez de engordar la de arriba porque las dos
+#: mitades del gate dicen cosas distintas y sólo una envejece:
+#:
+#:   · `CAMPOS_INVERT` es una FOTO CONGELADA del contrato pre-Fase 8. Es lo que
+#:     hace verificable el `faltan`: si un campo de esa foto desaparece, el
+#:     frontend deja de poder invertir. Esa lista no debe crecer nunca — si
+#:     crece, deja de ser la foto y el `faltan` ya no compara contra nada.
+#:   · `sobran` vigila otra cosa: que nadie añada un campo SIN DECIRLO. Un campo
+#:     nuevo no es un fallo; un campo nuevo del que nadie se hizo cargo, sí.
+#:
+#: Añadir aquí cuesta una línea y obliga a nombrar al dueño. Ése es el precio,
+#: y es el mismo que cobra `HUERFANOS_TOLERADOS` en la Fase 6.
+CAMPOS_ANADIDOS_DESPUES = {
+    # Fase 14 — prior geológico implícito. Sigue el patrón que la propia Fase 8
+    # dejó montado (el `Form(...)` vive en la dependencia `_cfg_corrida`, no en
+    # el handler) y es hermano de `pgi_params_json` y `remanence_json`, que ya
+    # estaban en la foto. `None` ⇒ inversión byte-idéntica a no pedirlo.
+    "implicit_geology_json",
+}
+
 
 def test_formulario_de_invert_sigue_plano():
     """Si esto falla, el frontend deja de poder invertir — y nada más lo diría."""
@@ -178,12 +200,23 @@ def test_formulario_de_invert_sigue_plano():
     campos = set(cuerpo.get("properties", {}).keys())
 
     faltan = CAMPOS_INVERT - campos
-    sobran = campos - CAMPOS_INVERT
+    sobran = campos - CAMPOS_INVERT - CAMPOS_ANADIDOS_DESPUES
     assert not faltan, f"campos del formulario que desaparecieron: {sorted(faltan)}"
     assert not sobran, (
         f"campos nuevos en el formulario: {sorted(sobran)}. "
         "Si son objetos anidados (`malla`, `reg`…), el agrupamiento se hizo con "
-        "`Annotated[Modelo, Form()]` en vez de `Depends` y el contrato cambió."
+        "`Annotated[Modelo, Form()]` en vez de `Depends` y el contrato cambió. "
+        "Si es una extensión deliberada, decláralo en `CAMPOS_ANADIDOS_DESPUES` "
+        "con la fase dueña — no lo metas en `CAMPOS_INVERT`, que es la foto "
+        "congelada de lo que el frontend ya sabía enviar."
+    )
+
+    # La declaración tampoco puede pudrirse: un campo declarado que ya no está en
+    # el formulario es una entrada muerta que hace la lista menos creíble.
+    fantasmas = CAMPOS_ANADIDOS_DESPUES - campos
+    assert not fantasmas, (
+        f"declarados en CAMPOS_ANADIDOS_DESPUES pero ausentes del formulario: "
+        f"{sorted(fantasmas)}. O volvieron a quitarlos, o nunca llegaron."
     )
 
 

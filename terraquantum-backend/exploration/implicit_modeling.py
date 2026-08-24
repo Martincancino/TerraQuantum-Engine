@@ -236,6 +236,29 @@ class HermiteRBFImplicit:
         if not self._fitted:
             raise RuntimeError("HermiteRBFImplicit no ajustado: llame fit() primero.")
 
+    @property
+    def degenerado_a_plano(self) -> bool:
+        """FASE 14 — ¿El campo colapsó a su deriva polinómica de grado 1?
+
+        Si los datos no fijan curvatura —el caso típico: todos los contactos a la
+        MISMA profundidad, que es lo que da un sondaje vertical, o varios de la
+        misma cota— el sistema HRBF se satisface con el polinomio y los pesos α
+        salen 0. Entonces φ es una RAMPA LINEAL y su nivel cero es un PLANO
+        INFINITO: no hay superficie interpolada que enseñar, y la clasificación
+        φ ≥ 0 se extiende a toda la malla sin que el dato la sostenga.
+
+        Medido al cablearlo (docs/06 §FASE 14): con un sondaje y contacto a 90 m,
+        |α|_max ≈ 1e-15, φ = 2·ỹ y φ ≥ 0 en el 85 % de una malla 20×20×20; con
+        TRES sondajes al mismo nivel el campo es idéntico (max|Δφ| = 2,5e-13).
+
+        Es una propiedad del interpolante, no del servicio que lo consume: por eso
+        vive aquí y no en `geophysics_service`.
+        """
+        self._require_fit()
+        if self._alpha.size == 0:
+            return True
+        return bool(np.abs(self._alpha).max() <= 1e-8)
+
     def evaluate(self, X: np.ndarray, chunk: int = 20000) -> np.ndarray:
         """Evalúa φ en X (N,3). Devuelve (N,)."""
         self._require_fit()

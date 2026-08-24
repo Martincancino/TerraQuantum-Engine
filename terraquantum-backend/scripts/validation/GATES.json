@@ -66,6 +66,12 @@
       "decide": false,
       "que_hace": "PARTE B — Cadena COMPLETA con componentes de producción:"
     },
+    "f14_implicit_geology_experiment.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "tipo_manual": true,
+      "que_hace": "FASE 14 - Mide si un contacto geologico implicito (HRBF) MEJORA la inversion contra verdad conocida (dique inclinado 60 grados, anti-inverse-crime x3), con brazo de control de geologia FALSA. NO es puerta: su respuesta puede ser legitimamente 'no mejora'."
+    },
     "f2b_gate_cabinet.py": {
       "tipo": "gate",
       "decide": true,

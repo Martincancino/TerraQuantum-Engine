@@ -358,6 +358,29 @@ class ImplicitGeologyParams(BaseModel):
         default=None,
         description="Medidas estructurales que anclan el gradiente de φ (opcional).",
     )
+    # ── FASE 14 — CÓMO entra el prior al funcional. La perilla existe porque la
+    # diferencia entre las dos opciones está MEDIDA y no es de matiz.
+    binding: Literal["smoothness", "smallness"] = Field(
+        default="smallness",
+        description=(
+            "Término del funcional donde entra el prior. 'smoothness' (histórico, "
+            "Fase 7.2): sólo ‖L·(m − m_ref)‖², es decir sólo la CURVATURA del "
+            "contacto, mientras el smallness sigue tirando hacia base_density — "
+            "MEDIDO sobre verdad conocida: EMPEORA la recuperación (PR-AUC peor en "
+            "25 de 25 semillas). 'smallness' (por defecto): añade α‖m − m_ref‖², "
+            "que es donde Li & Oldenburg 1999 pone el modelo de referencia — MEDIDO: "
+            "mejora en las cuatro métricas y en todas las semillas, y su control con "
+            "geología FALSA es el peor brazo de todos. Ver docs/06 §FASE 14."
+        ),
+    )
+    prior_weight: float = Field(
+        default=1.0, gt=0.0, le=1000.0,
+        description=(
+            "Peso α del prior geológico cuando binding='smallness'. MEDIDO "
+            "insensible en una década (α=0,3 y α=3 dan PR-AUC 0,783 y 0,786). "
+            "Ignorado con binding='smoothness'."
+        ),
+    )
 
 
 class GeophysicsInvertInput(BaseModel):

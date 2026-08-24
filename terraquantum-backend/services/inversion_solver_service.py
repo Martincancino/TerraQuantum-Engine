@@ -33,6 +33,12 @@ def _run_lsqr_with_heartbeat(
     hz=None,
     # ── DOI: modelo de referencia (Li & Oldenburg 1999) ──────────────────────
     m_ref=None,
+    # ── FASE 14: peso del prior geológico implícito en el término de smallness ─
+    # Este wrapper es de paso obligatorio: si un parámetro nuevo no se declara
+    # AQUÍ, el motor lo recibe por el camino directo y no por el de producción —
+    # es el mismo tropiezo que ya costó una fase con `anchor_mode`.
+    # 0.0 = apagado = byte-idéntico.
+    geo_prior_alpha: float = 0.0,
     # ── Bound petrofísico de densidad (t/m³) — P2: configurable desde API ────
     density_min: float = 2.6,
     density_max: float = 5.5,   # H-A0 Bug 3: cubre magnetita (5.0-5.2), cromita (4.5-4.8)
@@ -100,6 +106,7 @@ def _run_lsqr_with_heartbeat(
             hy=hy,
             hz=hz,
             m_ref=m_ref,                # DOI: modelo de referencia (None = sin referencia)
+            geo_prior_alpha=geo_prior_alpha,  # FASE 14: prior geológico en smallness
             density_min=density_min,    # P2: bound petrofísico configurable desde API
             density_max=density_max,
             padding_mask=padding_mask,  # R-02: penalización diferencial de padding

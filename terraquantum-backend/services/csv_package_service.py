@@ -87,6 +87,11 @@ _CONFIG_DEFAULTS: dict = {
     # Fase 7B — params avanzados (objetos anidados; None = desactivado).
     "pgi_params": None,
     "remanence": None,
+    # FASE 14 — prior geológico implícito (φ HRBF desde los contactos litológicos de
+    # los sondajes → m_ref). Los sondajes con litología YA viajaban en el bloque
+    # #BOREHOLES del paquete; lo que faltaba era el interruptor. None = desactivado
+    # → inversión byte-idéntica. Ver schemas/geophysics_schema.py ImplicitGeologyParams.
+    "implicit_geology": None,
     # Prior de profundidad opt-in (docs/05 Parte B). OFF por defecto → byte-idéntico.
     # Fuente = espectro radial; prohíbe contraste somero para recortar el sesgo somero
     # medido de la gravedad-sola. Whitelisteados aquí para que viajen en el #CONFIG del

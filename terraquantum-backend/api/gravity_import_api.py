@@ -1814,6 +1814,29 @@ async def load_package(
             except Exception:
                 _rem_parsed = None
 
+        # ── FASE 14 — prior geológico implícito (φ HRBF desde los contactos) ──
+        # A diferencia de los dos de arriba, un `implicit_geology` mal formado NO se
+        # descarta en silencio: el usuario pidió que su geología acotara la inversión
+        # y devolverle un modelo sin ella, sin decírselo, es exactamente el defecto
+        # que la auditoría llama «el backend hace lo honesto y el camino del usuario
+        # se detiene ahí» (H-28/H-10). Se avisa por el canal de warnings del paquete.
+        _geo_parsed = None
+        _geo_obj = cfg.get("implicit_geology")
+        if isinstance(_geo_obj, dict):
+            from schemas.geophysics_schema import ImplicitGeologyParams as _GeoParams
+            try:
+                _geo_parsed = _GeoParams(**_geo_obj)
+            except Exception as _geo_exc:
+                import_result.warnings.append(
+                    f"implicit_geology del paquete es inválido y se IGNORA "
+                    f"(la inversión corre sin prior geológico): {_geo_exc}"
+                )
+        elif _geo_obj is not None:
+            import_result.warnings.append(
+                "implicit_geology del paquete no es un objeto y se IGNORA "
+                "(la inversión corre sin prior geológico)."
+            )
+
         try:
             invert_input = GeophysicsInvertInput(
                 project_id=project_id,
@@ -1847,6 +1870,8 @@ async def load_package(
                 boreholes=boreholes_parsed,
                 pgi_params=_pgi_parsed,
                 remanence=_rem_parsed,
+                # FASE 14 — None = inversión byte-idéntica (sin prior geológico).
+                implicit_geology=_geo_parsed,
                 padding_kappa=float(cfg.get("padding_kappa", 1e5)),
                 anchor_kappa=float(cfg.get("anchor_kappa", 1e4)),
                 auto_kappa=bool(cfg.get("auto_kappa", True)),
@@ -2022,6 +2047,8 @@ class CorridaCfg(BaseModel):
     allow_g_raw: bool = False
     pgi_params_json: Optional[str] = None
     remanence_json: Optional[str] = None
+    # FASE 14 — prior geológico implícito (φ HRBF desde contactos de sondaje).
+    implicit_geology_json: Optional[str] = None
 
 
 class MallaCfg(BaseModel):
@@ -2088,11 +2115,12 @@ def _cfg_corrida(
     allow_g_raw: bool = Form(False),
     pgi_params_json: Optional[str] = Form(None),
     remanence_json: Optional[str] = Form(None),
+    implicit_geology_json: Optional[str] = Form(None),
 ) -> CorridaCfg:
     return CorridaCfg(
         project_id=project_id, run_id=run_id, nir=nir, fe=fe, region=region,
         strict=strict, allow_g_raw=allow_g_raw, pgi_params_json=pgi_params_json,
-        remanence_json=remanence_json)
+        remanence_json=remanence_json, implicit_geology_json=implicit_geology_json)
 
 
 def _cfg_malla(
@@ -2216,6 +2244,7 @@ class _EstadoInvert:
     pgi_params_parsed: object = None
     remanence_parsed: object = None
     boreholes_parsed: object = None
+    implicit_geology_parsed: object = None
     # resultado
     inversion_result: object = None
     # georef
@@ -2584,6 +2613,7 @@ def _invert_extras_y_parseos(est: _EstadoInvert, corrida: CorridaCfg,
     helmert_control_points_json = georef.helmert_control_points_json
     pgi_params_json = corrida.pgi_params_json
     remanence_json = corrida.remanence_json
+    implicit_geology_json = corrida.implicit_geology_json
     boreholes_json = anclas.boreholes_json
 
     # ── FASE 19 (Caso B): Georef Helmert con puntos de control ────────────
@@ -2705,6 +2735,19 @@ def _invert_extras_y_parseos(est: _EstadoInvert, corrida: CorridaCfg,
         except Exception as _e:
             _corrections_warnings.append(f"remanence_json inválido (ignorado): {_e}")
 
+    # FASE 14 — prior geológico implícito. Mismo canal de aviso que sus vecinos:
+    # si llega mal formado se dice, porque una inversión sin la geología que el
+    # usuario pidió no es la que pidió.
+    _implicit_geology_parsed = None
+    if implicit_geology_json:
+        try:
+            from schemas.geophysics_schema import ImplicitGeologyParams as _GeoParams
+            _implicit_geology_parsed = _GeoParams(**json.loads(implicit_geology_json))
+        except Exception as _e:
+            _corrections_warnings.append(
+                f"implicit_geology_json inválido (IGNORADO; la inversión corre sin "
+                f"prior geológico): {_e}")
+
     # FASE 20 — Sondajes (anclaje grav+sondajes). Lista de BoreholeInterval.
     _boreholes_parsed = None
     if boreholes_json:
@@ -2729,6 +2772,7 @@ def _invert_extras_y_parseos(est: _EstadoInvert, corrida: CorridaCfg,
     est.pgi_params_parsed = _pgi_params_parsed
     est.remanence_parsed = _remanence_parsed
     est.boreholes_parsed = _boreholes_parsed
+    est.implicit_geology_parsed = _implicit_geology_parsed
 
 
 def _invert_ejecutar(est: _EstadoInvert, corrida: CorridaCfg, malla: MallaCfg,
@@ -2772,6 +2816,7 @@ def _invert_ejecutar(est: _EstadoInvert, corrida: CorridaCfg, malla: MallaCfg,
     _pgi_params_parsed = est.pgi_params_parsed
     _remanence_parsed = est.remanence_parsed
     _boreholes_parsed = est.boreholes_parsed
+    _implicit_geology_parsed = est.implicit_geology_parsed
     spatial_readiness_invert = est.spatial_readiness_invert
 
     try:
@@ -2809,6 +2854,8 @@ def _invert_ejecutar(est: _EstadoInvert, corrida: CorridaCfg, malla: MallaCfg,
             # Fase 7B — Advanced params
             pgi_params=_pgi_params_parsed,
             remanence=_remanence_parsed,
+            # FASE 14 — prior geológico implícito (None = sin prior, byte-idéntico).
+            implicit_geology=_implicit_geology_parsed,
             # Fase 20 — Sondajes que anclan la inversión (None = sin anclaje)
             boreholes=_boreholes_parsed,
             # FASE 16 — Kappas configurables
