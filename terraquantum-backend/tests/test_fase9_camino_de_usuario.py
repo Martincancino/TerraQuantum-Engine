@@ -51,15 +51,22 @@ RUTAS_SIN_UI_TOLERADAS: dict[str, str] = {
     ),
     "/borehole/desurvey": (
         "Desurvey de sondajes: capacidad del motor sin UI. El frontend sube "
-        "intervalos ya desurveyados. Dueña: Fase 14 (geología implícita)."
-    ),
-    "/borehole/lithology-properties": (
-        "Catálogo de propiedades litológicas. Lo consume el propio backend al "
-        "construir bounds por unidad; no hay pantalla que lo liste. Dueña: Fase 14."
+        "intervalos ya desurveyados. DEVUELTA por la Fase 14 al medirla: el "
+        "modelamiento implícito consume pozos VERTICALES —`from_boreholes` agrupa "
+        "por (x_m, z_m) y `BoreholeInterval` sólo admite un tramo vertical a (x,z) "
+        "fijo—, así que cablear desurvey no habría hecho llegar la geología "
+        "implícita a nadie: es una capacidad de INGESTA de pozos desviados, y su "
+        "dueña es quien abra los pozos desviados de punta a punta, no esta fase. "
+        "Sin dueña asignada: el plan §10 no tiene más fases."
     ),
     "/geophysics-live-update": (
         "Actualización incremental durante una corrida. Nunca se cableó: el visor "
-        "recarga el block model al terminar. Dueña: Fase 13 (UX experta)."
+        "recarga el block model al terminar. REVISADA Y DEVUELTA por la Fase 13 "
+        "(2026-08-19): no es undo/redo ni densidad de UX, es recómputo incremental "
+        "en el camino crítico — el gap de la lección 4 del informe 04 (DAG con "
+        "nodos sucios). Cablearla es una funcionalidad entera con su propia "
+        "física, no un atajo de teclado. SIN FASE DUEÑA en el plan §10: sus 14 "
+        "fases no la cubren, y decirlo es más honesto que dejarle un dueño falso."
     ),
     "/gravity-import/invert": (
         "Ruta v1 superada por `/v2/gravity-import/invert-with-corrections`; se "

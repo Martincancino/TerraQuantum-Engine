@@ -9,6 +9,8 @@ Este backend usa FastAPI y contiene los motores principales de:
 - Generación de block model (Parquet/Arrow, schema v4.0)
 - Observed vs Calculated, DOI e incertidumbre posterior
 - Exportación industrial (UBC-GIF, VTK, GSLIB, ASEG-GDF2)
+- Open Mining Format v1 (`.omf`): exportación e importación de sondajes — ver
+  `docs/09_OMF_INTEROPERABILIDAD.md`
 - Reportes técnicos con disclaimers JORC/NI 43-101
 - Smoke test industrial
 

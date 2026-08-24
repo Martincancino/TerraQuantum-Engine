@@ -134,7 +134,10 @@ INYECCION_TOLERADA: dict[str, str] = {
         "`exclude_unset` NO desaparecería ninguna, porque el constructor emite "
         "todos los campos declarados. Añadirlo sería un cambio sin efecto "
         "observable en el camino dorado y con riesgo distinto de cero en las "
-        "ramas que no se midieron (Arrow, zarr, modo mineral). Dueña: Fase 13."
+        "ramas que no se midieron (Arrow, zarr, modo mineral). REVISADA Y "
+        "DEVUELTA por la Fase 13 (2026-08-19): es deuda de CONTRATOS del backend "
+        "y la Fase 13 es una iteración de frontend — no toca un solo "
+        "`response_model`. SIN FASE DUEÑA en el plan §10."
     ),
     "POST /gravity-import/preview": (
         "MEDIDO POR LA FASE 11 (era «no se pudo medir»): con `exclude_unset` "
@@ -498,8 +501,11 @@ CONTRATOS_AUN_A_MANO: dict[str, str] = {
         "un campo que el servicio no ponga desaparece de verdad. Aliasarlo "
         "obligaría al historial a comprobar ocho campos que en la práctica "
         "siempre llegan. Cerrarlo bien es declarar en el servicio los campos que "
-        "siempre escribe. Dueña: Fase 13 (UX experta), que es la que toca el "
-        "historial."
+        "siempre escribe. REVISADA Y DEVUELTA por la Fase 13 (2026-08-19), y el "
+        "motivo de la asignación era una COLISIÓN DE PALABRA: «la que toca el "
+        "historial» se refería al historial de CORRIDAS (`HistorialView`), y el "
+        "historial de la Fase 13 es el de DESHACER, que no lo roza. SIN FASE "
+        "DUEÑA en el plan §10; sigue siendo deuda de contratos del backend."
     ),
     "PercentileStats": (
         "MEDIDO por la Fase 11, y el motivo NO era `default_factory`: su "
@@ -508,7 +514,9 @@ CONTRATOS_AUN_A_MANO: dict[str, str] = {
         "(`density_p2`, `density_p5`, …), que no tiene nada que ver con este "
         "modelo. El tipo a mano describe lo que llega; el generado, un contenedor "
         "que nadie usa. Cerrarlo es declarar el bloque plano en el esquema. "
-        "Dueña: Fase 13."
+        "REVISADA Y DEVUELTA por la Fase 13 (2026-08-19): arreglarlo es tocar un "
+        "esquema de Pydantic, y esta fase no entra al backend. SIN FASE DUEÑA en "
+        "el plan §10."
     ),
     "VoxelData": (
         "Vive en `lib/terraQuantumGeology.ts`, que es código de RENDER: describe "

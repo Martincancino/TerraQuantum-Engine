@@ -149,6 +149,16 @@ REGISTRO: dict[str, dict] = {
                         "c.TQ_MASTER_KEY", "tqmaster_de_prueba"),
     "TQ_LICENSE": _v("secreto", "produccion", _C, "arranque",
                      "c.TQ_LICENSE_TOKEN", "tqlic1.x.y"),
+    # La añadió la Fase 11 (API de scripting) y NO la declaró: este test lleva
+    # rojo desde el commit `84f42d9` porque aquella fase verificó los guards de
+    # las Fases 3, 9 y 10 pero no éste. La Fase 12 lo midió, le puso nombre y no
+    # lo arregló; la Fase 13 lo cierra porque mete su propio guard en el MISMO
+    # paso de CI, y añadir un test a un paso que ya está rojo es no tener gate.
+    # No vive en `core/config.py`: la lee el cliente de scripting al construir la
+    # sesión, así que la sonda es el propio constructor.
+    "TQ_API_KEY": _v("secreto", "produccion", "terraquantum/_session.py", "arranque",
+                     "__import__('terraquantum._session', fromlist=['x']).Session().api_key",
+                     "clave_de_prueba"),
     "TQ_LICENSE_PUBLIC_KEY_HEX": _v("secreto", "produccion", _C, "arranque",
                                     "c.TQ_LICENSE_PUBLIC_KEY_HEX", "00" * 32),
     "TQ_FREE_MAX_VOXELS": _v("int", "produccion", _C, "arranque",

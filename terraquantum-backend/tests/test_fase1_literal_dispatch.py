@@ -68,6 +68,26 @@ REGISTRY: dict[str, dict[str, tuple[str, str, str, str]]] = {
             "transporta TMI con signo; sin transformación TMI→|B| no hay despacho posible.",
         ),
     },
+    # ── Geología implícita (Fase 14) ─────────────────────────────────────────
+    # Los DOS valores se despachan de verdad, y la diferencia entre ellos está
+    # MEDIDA sobre verdad conocida (docs/06 §FASE 14): por la suavidad sola el
+    # prior geológico EMPEORA la recuperación; añadiéndolo al smallness la mejora.
+    "ImplicitGeologyParams.binding": {
+        "smallness": (
+            DISPATCHED, "services/geophysics_service.py",
+            '_binding == "smallness"',
+            "Pone prior_weight como alpha del bloque α‖m − m_ref‖² que arma el solver "
+            "(gravimetry `geo_prior_alpha`); es donde Li & Oldenburg 1999 pone el "
+            "modelo de referencia y donde la medición dice que el prior ayuda.",
+        ),
+        "smoothness": (
+            DISPATCHED, "exploration/gravimetry.py",
+            "geo_prior_alpha",
+            "Deja alpha en 0, así que el solver no apila el bloque de smallness y el "
+            "prior actúa sólo por ‖L·(m − m_ref)‖²: es el comportamiento histórico "
+            "de la Fase 7.2, byte-idéntico, conservado para poder reproducirlo.",
+        ),
+    },
     # ── Sondajes ─────────────────────────────────────────────────────────────
     "BoreholeSample.sample_type": {
         v: (

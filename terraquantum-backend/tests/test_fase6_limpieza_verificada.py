@@ -379,6 +379,15 @@ HUERFANOS_TOLERADOS = {
     "GeophysicsInvertResponse": "schemas/geophysics_schema.py — describe la respuesta de la inversión, pero el endpoint declara GeophysicsInversionStartResponse. Contrato sin enforcar → Fase 10.",
     "GeorefSummary": "schemas/project_schema.py — el frontend lo replica A MANO en lib/terraquantum/frontendApi.ts (H-16: 40 tipos duplicados). Generarlo desde OpenAPI → Fase 10.",
     "BlockModelArrowMetadata": "schemas/response_schema.py — documenta las cabeceras X-TQ-* del stream Arrow, que se escriben a mano. Contrato sin enforcar → Fase 10.",
+    # Lo dejó la Fase 8 al partir la espina dorsal y lleva rojo desde entonces;
+    # la Fase 12 lo midió y le puso nombre sin cerrarlo. La Fase 13 lo declara
+    # (salida 3 del mensaje de este test) porque es exactamente eso: NO es código
+    # muerto, es un contrato sin enforcar, hermano de los tres de arriba.
+    # MEDIDO: los cuatro solvers del repositorio ya devuelven la tupla que este
+    # Protocol describe; lo que falta es que alguien la compruebe. Cablearlo es
+    # anotar cuatro firmas del camino crítico, que no es una fase de frontend.
+    # SIN FASE DUEÑA en el plan §10.
+    "Solver": "exploration/protocols.py — Protocol que nombra el contrato de los cuatro solvers (tupla de 4 arrays + `solver_meta`). Ningún módulo lo importa porque nada tipa contra él. Contrato sin enforcar, no código muerto.",
 }
 
 

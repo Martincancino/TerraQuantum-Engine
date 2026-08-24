@@ -740,7 +740,10 @@ OPCIONALIDAD_VERDADERA = {
         "(`BlockModelStats`). Lo que manda es un `percentile_stats` PLANO por "
         "`extra=\"allow\"` (`density_p2`, `density_p5`, …) que no tiene nada que "
         "ver con este modelo. Marcarlo requerido prometería campos de una "
-        "estructura que nadie serializa. Dueña: Fase 13."
+        "estructura que nadie serializa. REVISADA Y DEVUELTA por la Fase 13 "
+        "(2026-08-19): es la misma deuda que `PercentileStats` en "
+        "`test_fase10_contratos.py`, y se arregla en el esquema del backend. La "
+        "Fase 13 es frontend. SIN FASE DUEÑA en el plan §10."
     ),
 }
 

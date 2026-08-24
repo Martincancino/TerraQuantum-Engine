@@ -108,17 +108,26 @@ def scan() -> dict[str, dict]:
 def _cited_as_gate_in_docs(gates: set[str]) -> dict[str, list[str]]:
     """Scripts que la documentación menciona en una frase que dice «gate».
 
-    Con un matiz que evita el falso positivo obvio: si en la MISMA línea se cita
-    un script que sí es gate, la palabra se refiere a ése. `docs/01` dice
-    «`f9_gate_regression.py` + `f9_report.py` → gate PASS 6/6»: el gate es el
-    primero, el segundo sólo dibuja el informe. Acusar ahí sería ruido, y un
-    gate ruidoso se apaga.
+    Con dos matices que evitan los falsos positivos, ambos MEDIDOS aquí:
+
+    1. Si en la MISMA línea se cita un script que sí es gate, la palabra se
+       refiere a ése. `docs/01` dice «`f9_gate_regression.py` + `f9_report.py`
+       → gate PASS 6/6»: el gate es el primero, el segundo sólo dibuja el
+       informe. Acusar ahí sería ruido, y un gate ruidoso se apaga.
+    2. El nombre del propio manifiesto (`GATES.json`) NO es una acusación.
+       Contiene la subcadena «gate», así que la frase más honesta que se puede
+       escribir sobre un diagnóstico —«declarado diagnóstico, no puerta, en
+       GATES.json»— disparaba este gate. Pasó de verdad: la Fase 14 escribió
+       exactamente esa frase en `docs/06` sobre
+       `f14_implicit_geology_experiment.py` y dejó la CI en rojo. Un gate que
+       castiga la frase que lo obedece enseña a no escribirla.
     """
     citas: dict[str, list[str]] = {}
     nombres = {p.name for p in VALIDATION_DIR.glob("*.py")}
+    manifiesto = MANIFEST_PATH.name.lower()
     for doc in sorted(DOCS_DIR.glob("*.md")):
         for numero, linea in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
-            if "gate" not in linea.lower():
+            if "gate" not in linea.lower().replace(manifiesto, ""):
                 continue
             citados = {nombre for nombre in nombres if nombre in linea}
             if citados & gates:
