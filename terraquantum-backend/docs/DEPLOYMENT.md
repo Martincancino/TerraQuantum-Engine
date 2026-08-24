@@ -361,7 +361,7 @@ USE_BOUNDED_SOLVER=true   # FISTA projected bounds (better physics)
 
 - [ ] Backup `/data/runs/` to S3 or external drive
 - [ ] Test in staging environment
-- [ ] Review `CHANGELOG.md` for breaking changes
+- [ ] Review the release notes (`git log` between tags) for breaking changes
 
 ### Upgrade Steps
 

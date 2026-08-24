@@ -86,7 +86,7 @@ Lo que **sí** se promete en v0:
 Lo que **no** se promete en v0:
 
 * Que los nombres de los métodos no cambien. Si algo se renombra, se anunciará
-  en el `CHANGELOG.md` del backend con la traducción.
+  en las notas de la versión (`git log` de la etiqueta) con la traducción.
 * Que los diccionarios devueltos por el backend (`report`, `block_model`,
   `misfit`…) mantengan sus claves. **Son el contrato del backend, no de esta
   capa**, y esta capa los pasa tal cual a propósito: envolverlos crearía un

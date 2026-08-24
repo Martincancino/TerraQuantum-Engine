@@ -108,3 +108,21 @@ test-results/
 # Fase 11 — salida de los ejemplos de la API de scripting (paquetes y ZIP de
 # entrega que el consultor genera al correrlos). Son artefactos, no fuente.
 terraquantum-backend/salida/
+
+# Material personal y experimentos ajenos al producto. Viven en el disco pero
+# NO son de TerraQuantum: se ignoran para que no ensucien `git status` ni se
+# cuelen en un commit. `postulacion_atrevete/` contiene firmas de terceros.
+#
+# TODOS ANCLADOS CON `/` A PROPOSITO, y no es cosmetico: sin la barra inicial un
+# patron de gitignore casa a CUALQUIER profundidad. MEDIDO al escribirlos:
+# `*.ipynb` sin anclar casa los 12 notebooks YA VERSIONADOS de DO-27_Kimberlite/
+# y Raglan_Magnetic/, que son el material de los dos benchmarks externos. Hoy no
+# se pierde nada —git no deja de seguir un fichero ya seguido—, pero el dia que
+# alguien anada un notebook de benchmark, desapareceria en silencio. Lo mismo
+# valia para `tools/` y `screen_*.png`, que habrian tragado cualquier
+# subdirectorio o captura futura del producto.
+/postulacion_atrevete/
+/Real-ESRGAN/
+/tools/
+/*.ipynb
+/screen_*.png
