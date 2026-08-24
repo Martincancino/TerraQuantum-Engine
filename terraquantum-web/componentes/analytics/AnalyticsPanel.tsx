@@ -20,6 +20,7 @@ import ObsVsCalcPanel from "../datos/ObsVsCalcPanel";
 import ConvergenceCurveWidget from "./ConvergenceCurveWidget";
 import DensitySusceptibilityHistogramWidget from "./DensitySusceptibilityHistogramWidget";
 import RegularizationFunctionalWidget from "./RegularizationFunctionalWidget";
+import ImplicitGeologyWidget from "./ImplicitGeologyWidget";
 
 /** Entrada escalonada (Fase E — microinteracciones) preservando el gap del slot. */
 function FadePanel({ index, children }: { index: number; children: ReactNode }) {
@@ -99,6 +100,18 @@ export default function AnalyticsPanel() {
           subtitle="Qué regularización usó esta corrida (Fase 7)"
         >
           <RegularizationFunctionalWidget report={report} />
+        </Panel>
+      </FadePanel>
+
+      {/* FASE 14 — Va pegado al funcional porque el prior geológico ENTRA por el
+          término de suavidad: es la misma letra pequeña, y aquí es donde se ve si
+          afirmó geología sin dato o si no actuó en absoluto. */}
+      <FadePanel index={5}>
+        <Panel
+          title="Geología implícita"
+          subtitle="Qué contacto acotó la inversión, y hasta dónde lo extrapoló"
+        >
+          <ImplicitGeologyWidget report={report} />
         </Panel>
       </FadePanel>
 

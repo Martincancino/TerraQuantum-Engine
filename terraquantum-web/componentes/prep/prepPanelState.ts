@@ -28,6 +28,7 @@
 
 import type { TQErrorView } from "../../lib/terraquantum/errorContract";
 import type { GravityCorrectionReport } from "../../lib/terraquantum/frontendApi";
+import type { ImplicitGeologyUI } from "../ImplicitGeologyForm";
 import type { MagneticRemanenceParamsUI } from "../MagneticRemanenceForm";
 import type { PgiParamsUI } from "../PgiParamsForm";
 
@@ -309,6 +310,9 @@ export type AvanzadoState = {
   pgiParams: PgiParamsUI | null;
   showRemanenceModal: boolean;
   remanenceParams: MagneticRemanenceParamsUI | null;
+  /** FASE 14 — prior geológico implícito (φ HRBF desde los contactos de sondaje). */
+  showImplicitGeologyModal: boolean;
+  implicitGeologyParams: ImplicitGeologyUI | null;
 };
 
 export const avanzadoInicial: AvanzadoState = {
@@ -319,6 +323,8 @@ export const avanzadoInicial: AvanzadoState = {
   pgiParams: null,
   showRemanenceModal: false,
   remanenceParams: null,
+  showImplicitGeologyModal: false,
+  implicitGeologyParams: null,
 };
 
 export type AvanzadoAction =
@@ -330,6 +336,8 @@ export type AvanzadoAction =
   | { type: "PGI_GUARDADO"; params: PgiParamsUI | null }
   | { type: "MODAL_REMANENCIA"; abierto: boolean }
   | { type: "REMANENCIA_GUARDADA"; params: MagneticRemanenceParamsUI | null }
+  | { type: "MODAL_GEOLOGIA_IMPLICITA"; abierto: boolean }
+  | { type: "GEOLOGIA_IMPLICITA_GUARDADA"; params: ImplicitGeologyUI | null }
   | { type: "ARCHIVOS_CAMBIARON" };
 
 export function avanzadoReducer(estado: AvanzadoState, accion: AvanzadoAction): AvanzadoState {
@@ -353,6 +361,14 @@ export function avanzadoReducer(estado: AvanzadoState, accion: AvanzadoAction): 
       return { ...estado, showRemanenceModal: accion.abierto };
     case "REMANENCIA_GUARDADA":
       return { ...estado, remanenceParams: accion.params, showRemanenceModal: false };
+    case "MODAL_GEOLOGIA_IMPLICITA":
+      return { ...estado, showImplicitGeologyModal: accion.abierto };
+    case "GEOLOGIA_IMPLICITA_GUARDADA":
+      return {
+        ...estado,
+        implicitGeologyParams: accion.params,
+        showImplicitGeologyModal: false,
+      };
     case "ARCHIVOS_CAMBIARON":
       // El CSV corregido describe al archivo anterior: no puede sobrevivirlo.
       return {
@@ -360,6 +376,11 @@ export function avanzadoReducer(estado: AvanzadoState, accion: AvanzadoAction): 
         correctedFile: null,
         correctionReport: null,
         showCorrectionWizard: false,
+        // FASE 14: el prior geológico nombra litologías de LOS SONDAJES de estos
+        // archivos. Sobrevivir al cambio lo dejaría describiendo un dato que ya
+        // no está — el mismo riesgo que H-29 reconoció para las correcciones.
+        implicitGeologyParams: null,
+        showImplicitGeologyModal: false,
       };
     default: {
       const _exhaustivo: never = accion;

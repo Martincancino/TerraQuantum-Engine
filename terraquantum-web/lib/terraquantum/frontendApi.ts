@@ -1404,7 +1404,27 @@ export type BuildPackageConfig = {
   // Fase 7B — params avanzados (objetos anidados; el backend los inyecta al solver).
   pgi_params?: Record<string, unknown> | null;
   remanence?: Record<string, unknown> | null;
+  // FASE 14 — prior geológico implícito (φ HRBF desde los contactos litológicos de
+  // los sondajes que ya viajan en `boreholes_json`). El campo φ, la clasificación y
+  // el m_ref se calculan ENTEROS en el backend; aquí sólo viaja la petición.
+  implicit_geology?: Record<string, unknown> | null;
 };
+
+/** FASE 14 — Una fila de la tabla petrofísica del backend (`/borehole/lithology-properties`). */
+export type LithologyEntry = {
+  name: string;
+  density_t_m3: number | null;
+  susceptibility_si: number | null;
+};
+
+/** Lee la tabla petrofísica por litología. La tabla vive en el backend
+ *  (`exploration/pgi_engine.LITHOLOGY_PROPERTIES`) y NO se duplica aquí. */
+export async function fetchLithologyProperties(): Promise<LithologyEntry[]> {
+  const res = await fetch("/api/borehole/lithology-properties", { method: "GET" });
+  if (!res.ok) return [];
+  const data: unknown = await res.json();
+  return Array.isArray(data) ? (data as LithologyEntry[]) : [];
+}
 
 export type BuildPackageResult =
   | { ok: true; status: number; blob: Blob; filename: string; route: string | null; error: null }

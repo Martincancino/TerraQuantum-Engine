@@ -28,6 +28,7 @@ import {
   etiquetarContexto, etiquetarParametros,
 } from "./prep/deshaciblePrep";
 import { PgiParamsForm } from "./PgiParamsForm";
+import { ImplicitGeologyForm } from "./ImplicitGeologyForm";
 import { MagneticRemanenceForm } from "./MagneticRemanenceForm";
 import { buildPackage, type BuildPackageConfig } from "../lib/terraquantum/frontendApi";
 
@@ -455,7 +456,29 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   const {
     showCorrectionWizard, correctedFile, correctionReport,
     showPgiModal, pgiParams, showRemanenceModal, remanenceParams,
+    showImplicitGeologyModal, implicitGeologyParams,
   } = avanzado;
+
+  // FASE 14 — las litologías que el usuario puede marcar como unidad objetivo son
+  // EXACTAMENTE las que traen sus sondajes: no hay catálogo inventado en el
+  // frontend. Y el nº de collares distintos decide si el campo implícito puede
+  // interpolar una superficie o va a degenerar a un plano.
+  const litologiasDeSondajes = useMemo(() => {
+    const vistas = new Set<string>();
+    for (const bh of boreholes ?? []) {
+      const lito = (bh as { lithology?: string | null }).lithology;
+      if (typeof lito === "string" && lito.trim()) vistas.add(lito.trim());
+    }
+    return [...vistas].sort();
+  }, [boreholes]);
+  const nCollaresDeSondajes = useMemo(() => {
+    const collares = new Set<string>();
+    for (const bh of boreholes ?? []) {
+      const b = bh as { x_m?: number; z_m?: number };
+      collares.add(`${b.x_m}|${b.z_m}`);
+    }
+    return collares.size;
+  }, [boreholes]);
 
   const setExpectedRock = (valor: string) => dispatchContexto({ type: "CAMPO", campo: "expectedRock", valor });
   const setExpectedDepth = (valor: string) => dispatchContexto({ type: "CAMPO", campo: "expectedDepth", valor });
@@ -502,6 +525,8 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   const setShowPgiModal = (abierto: boolean) => dispatchAvanzado({ type: "MODAL_PGI", abierto });
   const setShowRemanenceModal = (abierto: boolean) =>
     dispatchAvanzado({ type: "MODAL_REMANENCIA", abierto });
+  const setShowImplicitGeologyModal = (abierto: boolean) =>
+    dispatchAvanzado({ type: "MODAL_GEOLOGIA_IMPLICITA", abierto });
   const setCsvValidation = (resultado: CsvValidationResult | null) =>
     dispatchOperacion({ type: "CSV_VALIDADO_LOCALMENTE", resultado });
   const setCleanCsvLoading = (v: boolean) =>
@@ -1140,6 +1165,17 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
               convergence_tol: 0.001,
               fit_from_model: true,
               n_components_auto: pgiParams.n_components_auto,
+            },
+          }
+        : {}),
+      ...(implicitGeologyParams?.enabled && implicitGeologyParams.target_lithologies.length > 0
+        ? {
+            implicit_geology: {
+              enabled: true,
+              target_lithologies: implicitGeologyParams.target_lithologies,
+              target_density_t_m3: implicitGeologyParams.target_density_t_m3,
+              host_density_t_m3: implicitGeologyParams.host_density_t_m3,
+              softness: implicitGeologyParams.softness,
             },
           }
         : {}),
@@ -2029,6 +2065,25 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
               >
                 PGI {pgiParams?.enabled ? `(K=${pgiParams.n_components_auto})` : ""}
               </button>
+              <button
+                onClick={() => setShowImplicitGeologyModal(true)}
+                disabled={litologiasDeSondajes.length === 0}
+                title={
+                  litologiasDeSondajes.length === 0
+                    ? "Requiere sondajes con litología: sin contactos no se infiere geología."
+                    : "Prior geológico implícito (HRBF) desde los contactos de sondaje"
+                }
+                className={`px-3 py-1.5 text-[9px] uppercase tracking-widest font-bold rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  implicitGeologyParams?.enabled
+                    ? "bg-emerald-600/30 border-emerald-500 text-emerald-300"
+                    : "bg-neutral-800 border-neutral-700 text-neutral-400 hover:border-neutral-500"
+                }`}
+              >
+                Geología implícita
+                {implicitGeologyParams?.enabled
+                  ? ` (${implicitGeologyParams.target_lithologies.join("+")})`
+                  : ""}
+              </button>
               {dataType === "magnetic" && (
                 <button
                   onClick={() => setShowRemanenceModal(true)}
@@ -2051,6 +2106,19 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
                     initialParams={pgiParams ?? undefined}
                     onSubmit={(p) => dispatchAvanzado({ type: "PGI_GUARDADO", params: p })}
                     onCancel={() => setShowPgiModal(false)}
+                  />
+                </div>
+              </div>
+            )}
+            {showImplicitGeologyModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowImplicitGeologyModal(false)}>
+                <div onClick={(e) => e.stopPropagation()}>
+                  <ImplicitGeologyForm
+                    litologiasDisponibles={litologiasDeSondajes}
+                    nCollares={nCollaresDeSondajes}
+                    initialParams={implicitGeologyParams ?? undefined}
+                    onSubmit={(p) => dispatchAvanzado({ type: "GEOLOGIA_IMPLICITA_GUARDADA", params: p })}
+                    onCancel={() => setShowImplicitGeologyModal(false)}
                   />
                 </div>
               </div>
