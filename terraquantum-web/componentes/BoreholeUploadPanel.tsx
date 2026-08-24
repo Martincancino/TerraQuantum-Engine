@@ -10,10 +10,20 @@
 import { useMemo, useRef, useState } from "react";
 import {
   parseBoreholeCsvFile,
+  importBoreholeOmfFile,
   boreholeSurveyToIntervals,
   type BoreholeSurvey,
+  type ImportOmfBoreholesResponse,
   type ParseBoreholeCsvResponse,
 } from "../lib/terraquantum/frontendApi";
+
+// FASE 12 — el panel acepta además Open Mining Format. El backend devuelve el
+// MISMO survey en los dos casos, así que el resumen, el mapa en planta y la
+// tabla se reutilizan sin tocarlos; lo único propio del OMF es el inventario de
+// lo que traía el fichero y TerraQuantum no consume.
+function isOmfFile(file: File | null): boolean {
+  return !!file && file.name.toLowerCase().endsWith(".omf");
+}
 
 type SensorXZ = { x_m: number; z_m: number };
 
@@ -75,8 +85,11 @@ export default function BoreholeUploadPanel({ sensors, onConfirm }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ParseBoreholeCsvResponse | null>(null);
+  const [omfDetail, setOmfDetail] = useState<ImportOmfBoreholesResponse | null>(null);
+  const [surfaceZ, setSurfaceZ] = useState<string>("");
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const esOmf = isOmfFile(csvFile);
 
   const readFile = (file: File) => {
     setFileName(file.name);
@@ -93,11 +106,33 @@ export default function BoreholeUploadPanel({ sensors, onConfirm }: Props) {
   const handleParse = async () => {
     setError(null);
     setResult(null);
+    setOmfDetail(null);
     if (!csvFile) {
-      setError("Carga un archivo CSV de sondajes primero.");
+      setError("Carga un archivo CSV o OMF de sondajes primero.");
       return;
     }
     setLoading(true);
+
+    if (isOmfFile(csvFile)) {
+      // OMF: la cota de profundidad 0 no viene en el fichero salvo que lo haya
+      // escrito TerraQuantum (que pone Z=0 en la superficie). Se manda ese dato
+      // sólo si el usuario lo declara; si no, el backend mide desde el collar y
+      // lo avisa, en vez de desplazar las profundidades en silencio.
+      const res = await importBoreholeOmfFile({
+        file: csvFile,
+        crs,
+        surfaceZ: surfaceZ.trim() === "" ? undefined : Number(surfaceZ),
+      });
+      setLoading(false);
+      if (!res.ok || !res.data) {
+        setError(res.error ?? "No se pudo leer el fichero OMF.");
+        return;
+      }
+      setResult(res.data);
+      setOmfDetail(res.data);
+      return;
+    }
+
     const res = await parseBoreholeCsvFile({ file: csvFile, lengthUnits: units, crs });
     setLoading(false);
     if (!res.ok || !res.data) {
@@ -171,32 +206,50 @@ export default function BoreholeUploadPanel({ sensors, onConfirm }: Props) {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".csv,text/csv"
+          accept=".csv,text/csv,.omf"
           className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) readFile(f); }}
         />
         <span className="text-sm text-slate-300">
-          {fileName ? `📄 ${fileName}` : "Arrastra un CSV de sondajes aquí o haz clic"}
+          {fileName ? `📄 ${fileName}` : "Arrastra un CSV u OMF de sondajes aquí o haz clic"}
         </span>
         <span className="mt-1 text-[11px] text-slate-500">
-          Columnas: hole_id, x/easting, z/northing, depth_from, depth_to, density, lithology
+          {esOmf
+            ? "OMF (Leapfrog / Vulcan / Micromine): se leen las trazas de sondaje (LineSet)"
+            : "Columnas: hole_id, x/easting, z/northing, depth_from, depth_to, density, lithology"}
         </span>
       </div>
 
       {/* Controles */}
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col text-xs text-slate-400">
-          Unidades de longitud
-          <select
-            value={units}
-            onChange={(e) => setUnits(e.target.value as "m" | "ft" | "auto")}
-            className="mt-1 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-100"
-          >
-            <option value="m">Metros</option>
-            <option value="ft">Pies</option>
-            <option value="auto">Auto-detectar</option>
-          </select>
-        </label>
+        {esOmf ? (
+          <label className="flex flex-col text-xs text-slate-400">
+            Cota de profundidad 0 (opcional)
+            <input
+              value={surfaceZ}
+              onChange={(e) => setSurfaceZ(e.target.value)}
+              placeholder="p. ej. 0"
+              className="mt-1 w-40 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-100"
+            />
+            <span className="mt-1 max-w-[16rem] text-[10px] leading-snug text-slate-500">
+              Si se deja vacío, la profundidad se mide desde el collar de cada
+              pozo. Para un OMF exportado por TerraQuantum, usa 0.
+            </span>
+          </label>
+        ) : (
+          <label className="flex flex-col text-xs text-slate-400">
+            Unidades de longitud
+            <select
+              value={units}
+              onChange={(e) => setUnits(e.target.value as "m" | "ft" | "auto")}
+              className="mt-1 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-100"
+            >
+              <option value="m">Metros</option>
+              <option value="ft">Pies</option>
+              <option value="auto">Auto-detectar</option>
+            </select>
+          </label>
+        )}
         <label className="flex flex-col text-xs text-slate-400">
           CRS
           <input
@@ -211,7 +264,7 @@ export default function BoreholeUploadPanel({ sensors, onConfirm }: Props) {
           disabled={loading || !csvFile}
           className="rounded bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
         >
-          {loading ? "Validando…" : "Validar sondajes"}
+          {loading ? "Validando…" : esOmf ? "Leer OMF" : "Validar sondajes"}
         </button>
       </div>
 
@@ -232,6 +285,65 @@ export default function BoreholeUploadPanel({ sensors, onConfirm }: Props) {
             <Stat label="Con litología" value={String(result.n_with_lithology)} />
             <Stat label="Litologías" value={String(result.lithologies_detected.length)} />
           </div>
+
+          {/* FASE 12 — inventario honesto del OMF: qué venía dentro, qué se usó
+              y qué TerraQuantum todavía no consume. Sin esto, un fichero con un
+              block model entero parecería haberse importado por completo. */}
+          {omfDetail && (
+            <div className="flex flex-col gap-2 rounded border border-slate-700 bg-slate-800/40 p-3">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="text-xs font-semibold text-slate-200">
+                  Contenido del OMF
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  {omfDetail.n_elements} elemento(s)
+                  {omfDetail.deviated_holes_skipped > 0 &&
+                    ` · ${omfDetail.deviated_holes_skipped} sondaje(s) desviado(s) descartado(s)`}
+                </span>
+              </div>
+
+              <table className="w-full text-left text-[11px]">
+                <tbody>
+                  {omfDetail.inventory.map((el, i) => (
+                    <tr key={i} className="border-t border-slate-700/60">
+                      <td className="py-1 pr-2 text-slate-200">{el.name}</td>
+                      <td className="py-1 pr-2 text-slate-400">{el.kind}</td>
+                      <td className="py-1 pr-2 text-slate-500">
+                        {el.n_primitives > 0 ? `${el.n_primitives} elem.` : "—"}
+                      </td>
+                      <td className="py-1">
+                        {el.consumed ? (
+                          <span className="text-emerald-400">importado</span>
+                        ) : (
+                          <span className="text-slate-500" title={el.note}>
+                            no consumido
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {omfDetail.bounds_raw && (
+                <p className="text-[10px] leading-snug text-slate-500">
+                  Caja envolvente del fichero (coordenadas originales): X{" "}
+                  {fmt(omfDetail.bounds_raw.x_min, 0)}–{fmt(omfDetail.bounds_raw.x_max, 0)} · Y{" "}
+                  {fmt(omfDetail.bounds_raw.y_min, 0)}–{fmt(omfDetail.bounds_raw.y_max, 0)} · Z{" "}
+                  {fmt(omfDetail.bounds_raw.z_min, 0)}–{fmt(omfDetail.bounds_raw.z_max, 0)}
+                </p>
+              )}
+
+              {omfDetail.warnings.map((w, i) => (
+                <p
+                  key={i}
+                  className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] leading-snug text-amber-300"
+                >
+                  {w}
+                </p>
+              ))}
+            </div>
+          )}
 
           {result.unrecognized_lithologies.length > 0 && (
             <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">

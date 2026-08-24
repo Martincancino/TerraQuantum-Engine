@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import {
   downloadBlockModelCsv,
+  downloadRunOmf,
   downloadTechnicalReport,
   exportBundleUrl,
 } from "../../lib/terraquantum/frontendApi";
@@ -12,6 +13,7 @@ import {
  * F5 — Botonera de descarga unificada: PNG de alta resolución del visor 3D,
  * block model CSV, reporte técnico (HTML imprimible → PDF vía el navegador,
  * sin dependencias nuevas), y bundle ZIP industrial (VTK/UBC/GSLIB/ASEG/CSV).
+ * FASE 12 añade OMF, que es el formato con el que se entrega a una minera.
  * Cero física nueva: solo compone/descarga lo que el backend ya calculó.
  */
 type ActionState = "idle" | "busy" | "error" | "ok";
@@ -57,6 +59,7 @@ export default function ExportPanel({
   const [pngState, setPngState] = useState<ActionState>("idle");
   const [csvState, setCsvState] = useState<ActionState>("idle");
   const [reportState, setReportState] = useState<ActionState>("idle");
+  const [omfState, setOmfState] = useState<ActionState>("idle");
   const [msg, setMsg] = useState<string | null>(null);
 
   async function handleDownloadPng() {
@@ -175,6 +178,21 @@ export default function ExportPanel({
     window.open(exportBundleUrl(projectId, runId), "_blank");
   }
 
+  // FASE 12 — el OMF puede fallar con un motivo que el usuario necesita LEER
+  // (p. ej. una corrida conjunta cuya malla no es reconstruible), así que se
+  // descarga por fetch y el error se muestra aquí, no en una pestaña nueva.
+  async function handleDownloadOmf() {
+    setOmfState("busy");
+    setMsg(null);
+    const res = await downloadRunOmf(projectId, runId);
+    if (!res.ok) {
+      setOmfState("error");
+      setMsg(res.error);
+      return;
+    }
+    setOmfState("ok");
+  }
+
   const btnClass = (state: ActionState) =>
     `w-full py-2 rounded-md text-[10px] font-mono uppercase tracking-wider border transition-colors disabled:opacity-40 ${
       state === "error"
@@ -211,9 +229,24 @@ export default function ExportPanel({
         {reportState === "busy" ? "Generando…" : "Reporte técnico (HTML → PDF)"}
       </button>
 
+      <button
+        type="button"
+        onClick={handleDownloadOmf}
+        disabled={omfState === "busy"}
+        className={btnClass(omfState)}
+      >
+        {omfState === "busy" ? "Generando…" : "OMF (Leapfrog / Vulcan)"}
+      </button>
+
       <button type="button" onClick={handleOpenBundle} className={btnClass("idle")}>
         Bundle ZIP (VTK/UBC/GSLIB/CSV)
       </button>
+
+      <p className="text-[8px] text-white/40 font-mono leading-relaxed">
+        El OMF lleva block model, estaciones, sondajes e isosuperficies en un solo
+        fichero. Si el proyecto declara zona UTM sale georreferenciado; si no, en
+        metros locales, y el propio fichero lo dice.
+      </p>
 
       <p className="text-[8px] text-white/40 font-mono leading-relaxed">
         El reporte técnico se abre como HTML imprimible — usa &quot;Imprimir → Guardar

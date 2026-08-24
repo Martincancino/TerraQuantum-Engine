@@ -15,6 +15,7 @@ import type {
   GeophysicsStatusResponse as GeophysicsStatusResponseContract,
   GravityImportMetadata as GravityImportMetadataContract,
   GravityImportPreviewResponse as GravityImportPreviewResponseContract,
+  ImportOmfBoreholesResponse as ImportOmfBoreholesResponseContract,
   MisfitResponse as MisfitResponseContract,
   MisfitStationData as MisfitStationDataContract,
   MultimodalPlanResponse as MultimodalPlanResponseContract,
@@ -999,6 +1000,67 @@ export async function downloadBlockModelCsv(
         .get("content-disposition")
         ?.match(/filename="?([^"]+)"?/)?.[1] ||
       `block_model_${projectId}_${runId}.csv`;
+
+    try {
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+
+    return { ok: true, error: null };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, error: message || "Error de red" };
+  }
+}
+
+// FASE 12 — Open Mining Format (.omf), el formato con el que un consultor
+// entrega a una minera con Leapfrog / Vulcan / Micromine.
+//
+// Sigue el patrón de `downloadBlockModelCsv` y NO el de `exportBundleUrl` +
+// `window.open`: el backend contesta 422 con un motivo accionable cuando la
+// corrida no permite reconstruir la malla, y con `window.open` ese motivo se le
+// aparecería al usuario como una pestaña con JSON crudo.
+export async function downloadRunOmf(
+  projectId: string,
+  runId: string,
+  options?: { includeSurfaces?: boolean }
+): Promise<{ ok: boolean; error: string | null }> {
+  const surfaces = options?.includeSurfaces ?? true;
+  const path = `/api/export-omf?project_id=${encodeURIComponent(
+    projectId
+  )}&run_id=${encodeURIComponent(runId)}&include_surfaces=${surfaces}`;
+
+  try {
+    const res = await fetch(path, {
+      method: "GET",
+      cache: "no-store",
+      headers: { accept: "application/octet-stream" },
+    });
+
+    if (!res.ok) {
+      let error = `La ruta ${path} falló con status ${res.status}.`;
+      try {
+        const data = (await res.json()) as { detail?: unknown };
+        error = (typeof data.detail === "string" ? data.detail : null) ?? error;
+      } catch {
+        // Keep the status-based fallback when the response is not JSON.
+      }
+      return { ok: false, error };
+    }
+
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const filename =
+      res.headers
+        .get("content-disposition")
+        ?.match(/filename="?([^"]+)"?/)?.[1] ||
+      `terraquantum_${projectId}_${runId}.omf`;
 
     try {
       const link = document.createElement("a");
@@ -2462,6 +2524,10 @@ export type BoreholeSurvey = BoreholeSurveyContract;
 
 export type ParseBoreholeCsvResponse = ParseBoreholeCsvResponseContract;
 
+// FASE 12 — la respuesta del import de OMF EXTIENDE la del CSV en el backend,
+// así que el panel de sondajes reutiliza tal cual su resumen, su mapa y su tabla.
+export type ImportOmfBoreholesResponse = ImportOmfBoreholesResponseContract;
+
 export type ParseBoreholeCsvRequest = {
   csv_text: string;
   length_units?: "m" | "ft" | "auto";
@@ -2501,6 +2567,54 @@ export async function parseBoreholeCsvFile(opts: {
       };
     }
     return { ok: true, status: res.status, data: data as ParseBoreholeCsvResponse, error: null };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Error de red";
+    return { ok: false, status: 500, data: null, error: message };
+  }
+}
+
+// FASE 12 — Sondajes desde un OMF de terceros. Devuelve el MISMO survey que el
+// CSV (por eso la respuesta extiende `ParseBoreholeCsvResponse`), más el
+// inventario de lo que traía el fichero y no se consume.
+export async function importBoreholeOmfFile(opts: {
+  file: File;
+  projectId?: string;
+  runId?: string;
+  originEasting?: number;
+  originNorthing?: number;
+  surfaceZ?: number;
+  crs?: string;
+}): Promise<FrontendApiResult<ImportOmfBoreholesResponse>> {
+  const fd = new FormData();
+  fd.append("file", opts.file);
+  fd.append("crs", opts.crs ?? "local");
+  if (opts.projectId) fd.append("project_id", opts.projectId);
+  if (opts.runId) fd.append("run_id", opts.runId);
+  if (opts.originEasting != null) fd.append("origin_easting", String(opts.originEasting));
+  if (opts.originNorthing != null) fd.append("origin_northing", String(opts.originNorthing));
+  if (opts.surfaceZ != null) fd.append("surface_z", String(opts.surfaceZ));
+
+  try {
+    const res = await fetch("/api/borehole/import-omf", { method: "POST", body: fd });
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    if (!res.ok) {
+      const detail = (data as { detail?: unknown })?.detail;
+      return {
+        ok: false, status: res.status, data: null,
+        error: typeof detail === "string"
+          ? detail
+          : (detail as { message?: string })?.message ?? `Error ${res.status}`,
+      };
+    }
+    return {
+      ok: true, status: res.status,
+      data: data as ImportOmfBoreholesResponse, error: null,
+    };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Error de red";
     return { ok: false, status: 500, data: null, error: message };

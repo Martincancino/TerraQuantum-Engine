@@ -39,6 +39,7 @@
 //   GET /v2/geophysics-convergence/{project_id}/{run_id} → ConvergenceResponse
 //   GET /v2/history/runs                                 → HistoryRunsResponse
 //   GET /v2/history/runs/{project_id}/{run_id}           → HistoryRunDetailResponse
+//   POST /borehole/import-omf                            → ImportOmfBoreholesResponse
 //   POST /borehole/parse-csv                             → ParseBoreholeCsvResponse
 //   POST /borehole/parse-csv-file                        → ParseBoreholeCsvResponse
 //   POST /geophysics-invert                              → GeophysicsInversionStartResponse
@@ -53,7 +54,7 @@
 //   POST /v2/gravity-import/load-package                 → LoadPackageResponse
 //   POST /v2/gravity-import/parse-rows                   → ParseRowsResponse
 //
-// 69 tipos, cierre transitivo de 22 contratos de respuesta.
+// 72 tipos, cierre transitivo de 23 contratos de respuesta.
 
 /**
  * El plan de mapeo SIN invertir ni fabricar nada: se leen encabezados, se
@@ -677,6 +678,25 @@ export type HistoryRunsResponse = {
   [key: string]: unknown;
 };
 
+/** Mismos conteos que la importación de CSV, más lo específico del OMF. */
+export type ImportOmfBoreholesResponse = {
+  survey: BoreholeSurvey;
+  n_holes: number;
+  n_samples: number;
+  n_with_density: number;
+  n_with_susceptibility: number;
+  n_with_lithology: number;
+  lithologies_detected: string[];
+  unrecognized_lithologies: string[];
+  inventory: OmfElementInfo[];
+  warnings: string[];
+  n_elements: number;
+  deviated_holes_skipped: number;
+  origin_easting_applied: number;
+  origin_northing_applied: number;
+  bounds_raw: OmfImportBounds | null;
+};
+
 /** Parquet and file I/O persistence status. */
 export type ImportPersistenceStatus = {
   persisted: boolean;
@@ -886,6 +906,32 @@ export type MultimodalPlanResponse = {
   n_sensors: number;
   plan: Record<string, unknown> | null;
   insufficient_reason: string | null;
+};
+
+/** Una línea del inventario del OMF: qué venía dentro y si se usó. */
+export type OmfElementInfo = {
+  name: string;
+  kind: string;
+  n_vertices: number;
+  n_primitives: number;
+  attributes: string[];
+  consumed: boolean;
+  note: string;
+};
+
+/**
+ * Caja envolvente en las coordenadas ORIGINALES del fichero.
+ *
+ * Se publica siempre: es lo que deja ver de un vistazo si el OMF venía en UTM
+ * absoluto o en metros locales, sin que el backend lo adivine con un umbral.
+ */
+export type OmfImportBounds = {
+  x_min: number;
+  x_max: number;
+  y_min: number;
+  y_max: number;
+  z_min: number;
+  z_max: number;
 };
 
 export type OutlierInfo = {
