@@ -1,0 +1,542 @@
+# TerraQuantum — PLAN DE FASES 15 a 26
+
+> **Revisión de cierre del plan §10** · 2026-08-23 · rama `fases-19-25-cierre`
+> Verificado contra el **árbol de trabajo**, no contra HEAD. Ninguna afirmación
+> se apoya en documentación: todas citan `ruta:línea`.
+
+---
+
+## CÓMO USAR ESTE DOCUMENTO
+
+En una sesión nueva de Claude Code, abierta en la raíz del proyecto:
+
+```
+Lee docs/10_PLAN_FASES_15_26.md y ejecuta la Fase 16 completa.
+```
+
+**El número de fase ES el orden de ejecución.** Empiezan en **15** porque las
+Fases 1–14 son las del plan §10 de `docs/06_AUDITORIA_TECNICA_INTEGRAL.md` y ya
+están cerradas. No digas «la Fase 5»: eso es la fase vieja (superficie de
+configuración, cerrada el 2026-08-15). Di **«la Fase 15»**, «la Fase 16», etc.
+
+Reglas que la sesión debe respetar (están en `.claude/CLAUDE.md`):
+ninguna fase toca backend y frontend a la vez, no se instalan dependencias sin
+permiso, y **ninguna fase se declara cerrada sin responder las 4 preguntas del
+gate** (§10 de la auditoría). La 4ª es la que importa: *¿el gate falla si se
+rompe lo que dice defender?* — verificado por **mutación**, no por lectura.
+
+---
+
+## 1. VEREDICTO
+
+**No, no está todo listo — y lo que falta no es acabado, es corrección.**
+
+Las 14 fases se ejecutaron y sus gates son reales. El problema es otro: las
+auditorías se escribieron *antes* que las fases y **nunca se re-midieron contra
+el código**. Al hacerlo aparecen cuatro defectos que las tablas dan por vivos y
+que **lo siguen estando**, todos con la misma firma: el producto entrega un
+número equivocado con cara de correcto. Dos afectan la física del resultado;
+uno, el archivo que se le entrega al cliente.
+
+Además, **189 commits** separan la rama de `main` (main está 0 por delante) y las
+**Fases 12, 13 y 14 completas viven solo en el árbol de trabajo**.
+
+| | |
+|---|---|
+| Defectos que corrompen el resultado | **4** |
+| Defectos vivos confirmados (total) | **15** |
+| Verificados como ya cerrados | **12** |
+| Erratas encontradas en las auditorías | **2** |
+| Frentes de verificación que no se corrieron | **11 de 18** |
+
+### Cobertura honesta de esta revisión
+
+Se lanzaron 18 verificadores en paralelo contra el código real, cada uno con un
+escéptico asignado para intentar refutar lo que confirmara. **21 de 24 agentes
+murieron por límite de sesión.** Sobrevivieron tres frentes (empaque, bugs de
+confianza, motor magnético) y el resto se verificó a mano, priorizando lo que
+más daño hace.
+
+**Sí verificado:** corrección de terreno, convención de ejes magnética, ejes del
+ZIP industrial, roles de columna en la ingesta, unidades de exportación, empaque
+y updater, bugs de confianza del camino dorado, código muerto, dependencias,
+constante de λ, CI de validación.
+
+**NO verificado (queda como Fase 26):** los gates de las 14 fases uno a uno, la
+ejecución real de la suite, estructura y complejidad hoy, el operador de
+suavidad de 4º orden y la frontera de Dirichlet, seguridad y red, listas de
+tolerancia, higiene del repositorio, código muerto nuevo en el frontend.
+
+---
+
+## 2. LOS DEFECTOS QUE SIGUEN VIVOS
+
+Ordenados por daño al usuario. Los cuatro primeros cambian el número que el
+consultor entrega.
+
+### 🔴 H-F11-1 — Un CSV `X,Y,Z` entra con los ejes cambiados, en silencio
+
+`terraquantum-backend/services/gravity_import_service.py:154-156`
+
+```python
+_LOCAL_X_ALIASES: frozenset = frozenset({"x", "local_x", "coord_x"})
+_LOCAL_Z_ALIASES: frozenset = frozenset({"z", "local_z", "coord_z"})
+_LOCAL_Y_ALIASES: frozenset = frozenset({"y", "local_y", "coord_y"})
+```
+
+El slot `y_m` **es la profundidad** (convención interna: `y` = profundidad hacia
+abajo). Con la cabecera más común del mundo — `X,Y,Z` = easting, northing,
+cota — el **northing pasa a ser profundidad bajo superficie** y la **cota pasa a
+ser northing**. No hay aviso: la inversión corre y entrega un modelo.
+
+### 🔴 ACAD-1 — El campo geomagnético está rotado 90° en producción
+
+Dos convenciones opuestas, y nada permuta en medio:
+
+| Sitio | Qué dice | Ruta |
+|---|---|---|
+| Ingesta | `x_m slot = east/lon, z_m slot = north/lat` | `gravity_import_service.py:131` |
+| Ingesta (UTM) | `easting→x_m slot, northing→z_m slot` | `gravity_import_service.py:339` |
+| Motor magnético | `Convención de ejes del backend (idéntica a gravimetry): x=Norte, z=Este` | `magnetometry.py:31` |
+| Motor magnético | `np.cos(I) * np.cos(D),   # x = Norte` | `magnetometry.py:92-97` |
+| El empalme | `sensor_coords = np.array([[o.x_m, o.y_m, o.z_m] for o in obs])` — sin permutar | `geophysics_service.py:2107` |
+| El empalme | `sensor_coords[:, [0, 2]],  # (x=Norte, z=Este)` | `geophysics_service.py:2125` |
+
+La columna 0 contiene el **easting** y el motor la multiplica por `cos I·cos D`,
+que es la componente **Norte** del campo.
+
+**Por qué nadie lo vio, y son dos razones:**
+1. **Gravimetría es invariante** — usa solo la componente vertical (`_nagy_prism_safe`),
+   simétrica bajo el intercambio x↔z. El defecto es exclusivamente magnético.
+2. **Los benchmarks son ciegos por partida doble** — DO-27 y Raglan son árticos
+   (`cos I ≈ 0,11`, efecto mínimo) **y además no pasan por el importador**: los
+   harness (`scripts/validation/ingest_do27.py:100`, `raglan_harness.py:104`)
+   arman el frame a mano *con* la convención del motor, así que son consistentes
+   pase lo que pase en producción. El caso de uso declarado es Chile,
+   `cos I ≈ 0,87`, donde el efecto sería máximo.
+
+> Nota: `exploration/gravimetry.py` **no declara ninguna convención de ejes**, así
+> que la afirmación de `magnetometry.py:31` de ser «idéntica a gravimetry» no es
+> verificable desde gravimetry.
+
+### 🔴 ACAD-0 — La corrección de terreno usa el módulo, no la componente vertical
+
+`terraquantum-backend/services/gravity_corrections_service.py:183`
+
+```python
+tc_contrib = _G_NEWTON * rho_kg_m3 * cell_area * np.abs(dh) / r_m ** 2
+```
+
+Calcula `G·ρ·A·|dh|/r²` — el **módulo** de la atracción de la masa puntual.
+Falta el factor `|dh|/r` que proyecta sobre la vertical; la formulación clásica
+de columna vertical da `≈ G·ρ·A·dh²/(2r³)`. La razón es `2r/|dh|` y **crece con
+la distancia**, con radio por defecto de 22 km. Medido: **200× a 1 km con 10 m
+de desnivel; 12× en el total** de un cono de 500 m — sobre una señal de 0,1–10 mGal.
+
+**Está activa por defecto y entra en el dato que se invierte:**
+- `api/gravity_import_api.py:691` → `apply_terrain: bool = Form(True)`
+- `services/gravity_import_service.py:1895` → alimenta `g_corrected_mgal`
+- `:1901` → `effective_observations = [GravityObservation(..., g=float(gc)*1e-5) ...]`
+
+Mitigante: requiere que la descarga del DEM de OpenTopography tenga éxito; si
+falla, se añade un warning y la TC se omite.
+
+### 🟠 ACAD-1c — El ZIP industrial escribe UBC-GIF sin permutar ejes ni georreferencia
+
+Hay **dos escritores del mismo formato** y solo uno permuta.
+
+El de disco, correcto (`services/gravity_import_service.py:2121-2133`):
+```python
+_arr3d = _density_full.reshape((nx, ny, nz), order="F")   # (E, depth, N)
+_arr_ubc = np.transpose(_arr3d, (0, 2, 1))[:, :, ::-1]    # (E, N, Z-up)
+_ubc = export_core_to_ubc(..., nx=nx, ny=nz, nz=ny, ...)  # UBC: nE, nN, nZ
+```
+
+El del ZIP, crudo (`services/export_service.py:630-634`):
+```python
+def _ubc_msh_text(nx: int, ny: int, nz: int, bs: float) -> str:
+    ...
+    return f"{nx} {ny} {nz}\n0.00 0.00 0.00\n{dx}\n{dy}\n{dz}\n"
+```
+
+Para un modelo 20×10×20 las cabeceras salen `20 20 10` y `20 10 20`. Afecta
+también al orden del `.den` (`_ubc_mod_text`, sin transponer ni invertir Z) y a
+las coordenadas del `.gslib` (`_gslib_text`, que etiqueta `X_m/Y_m/Z_m` sobre
+los índices internos). El origen es `0 0 0`: sin georreferencia.
+**Invisible con malla cúbica** — y el ZIP es el artefacto de entrega al cliente.
+
+### 🟠 Resto de defectos vivos
+
+| ID | Qué pasa | Dónde |
+|---|---|---|
+| **NUEVO-1** | La **inversión conjunta** ignora la topografía por completo y su reporte no tiene el canal de avisos que la Fase 1 sí cableó en las rutas gravimétrica y magnética | `services/joint_inversion.py` |
+| **NUEVO-2** | Cambiar de pestaña pierde el **mapeo de columnas, los puntos Helmert, los sondajes y 25 parámetros** porque `PreparacionView` se desmonta. (Los archivos y el bbox sí sobreviven — la memoria decía «los 41 parámetros», y es menos que eso) | `componentes/views/PreparacionView.tsx` |
+| **NUEVO-3** | El **CSV corregido** por el asistente de gravimetría se descarta al cambiar de pestaña, y el paquete se rearma sobre el **CSV crudo** | flujo PrepPanel → paquete |
+| **H-36** | `resultIsStale` es una **lista a mano ya atrasada**: los parámetros de la Fase 14 no están, así que cambiarlos no marca el resultado como desactualizado. (La otra mitad, `modelRunKey`, sí es un invariante sólido) | `store/useAppStore.ts` |
+| **ACAD-12** | `bulk_rock_mass_kg` **contiene toneladas** — factor 1.000. El propio comentario documenta el renombrado `tonnage → bulk_rock_mass_kg` como «compliance-safe»: el renombrado creó la mentira de unidad | `exploration/gravimetry.py:4233,4248` |
+| **ACAD-13** | La exportación calcula el contraste contra el **literal 2.6** mientras el motor usa `base_density`, que es configurable | `export_service.py:31,210` vs `geophysics_service.py:394` |
+| **H-20** | El updater apunta a `github.com/TerraQuantum/terraquantum`; el remoto real es `Martincancino/TerraQuantum-Engine`. No hay workflow de releases ni llamada a `download_and_install`. El fallo se le presenta al usuario como si fuera falta de internet | `src-tauri/tauri.conf.json:34`, `lib.rs:975` |
+| **NUEVO-4** | El `.spec` **traga la excepción**: `_safe_submodules` devuelve `[]` ante cualquier fallo y `build_desktop.ps1` nunca instala ni verifica `requirements.txt` ⇒ el instalador puede salir sin OMF y sin avisar | `terraquantum_backend.spec:21-25,54-55` |
+| **H-39** | Los kernels de **MVI y tensor siguen ignorando `near_field_mode='prism'`** y usan siempre dipolo. La auditoría lo marca `[HECHO]`: ahí significaba «leído», no «arreglado» | `exploration/magnetometry.py` |
+| **H-34** | **Turbo sobrevive en la leyenda** de `MultiPhysicsControls`, describiendo colores que ya nadie pinta. Peor que antes: ahora la leyenda miente sobre lo que se ve | `componentes/.../MultiPhysicsControls.tsx:32,335` |
+| **H-23** | Sin lockfile con hashes, y `build_desktop.ps1` nunca compara el intérprete con `.python-version`. (Lo bueno: **0 dependencias sin techo**, eran 7; PyInstaller pineado; `.python-version` declarado y consumido por la CI) | `requirements.txt`, `scripts/build_desktop.ps1` |
+| **NUEVO-5** | `six`, transitiva de `omf`, quedó **sin pin** — el propio comentario nombra cuatro y pinea tres | `requirements.txt:111-113` |
+| **NUEVO-6** | Tauri sirve en el **primer puerto libre 3000..3011** ⇒ `localStorage` se pierde solo, incluidas las preferencias y la clave del copiloto | `src-tauri/src/lib.rs` |
+
+---
+
+## 3. LO QUE SÍ QUEDÓ CERRADO DE VERDAD
+
+Verificado en el código, no en el CHANGELOG.
+
+- **H-2** — `solve_sparse_normal_equations` ya no se invoca, y
+  `tests/test_fase6_limpieza_verificada.py:46` **falla si vuelve a aparecer**.
+- **H-14** — `distributed` y `shapely` eliminadas, con fecha y motivo en el
+  propio `requirements.txt`.
+- **H-17/18/19** — Splash finito con causa en español, `[Reintentar]` y
+  `[Ver registros]`; Job Object con `KILL_ON_JOB_CLOSE`; comprobación de
+  **identidad** del puerto, no solo de que alguien escuche.
+- **H-27** — El aviso de topografía plana llega al usuario extremo a extremo…
+  **salvo en la ruta conjunta** (ver NUEVO-1).
+- **H-28** — Cerrado **por invariante** (`modelRunKey`: el modelo lleva el sello
+  de la corrida y la vista se niega a pintarlo si no coincide), que era la
+  alternativa robusta de la Fase 1, no la barata.
+- **H-29** — El reconocimiento de riesgo ya no sobrevive al cambio de archivo, y
+  se validan **todos** los archivos del paquete.
+- **H-37** — El modo `amplitude` fantasma, cerrado por **rechazo explícito** con
+  error nombrado. Cierre legítimo, pero conviene saber que el usuario **perdió
+  una opción de la UI**, no la ganó.
+- **ACAD-14** — Las tarjetas económicas sin productor desaparecieron del
+  frontend, coherente con el anti-scope permanente.
+
+---
+
+## 4. DOS ERRATAS DE LAS AUDITORÍAS
+
+**No citar estas dos ante un profesor sin corregirlas antes.**
+
+### ACAD-6 no se sostiene tal como está escrito
+
+El expediente afirma que `PRECONDITIONED_OPERATING_LAMBDA = 0.1` contradice el
+comentario que la explica, que supuestamente validaría λ≈3. En el sitio de la
+constante (`services/geophysics_service.py:59-72`) el comentario dice **lo
+contrario**: «el lambda óptimo para el benchmark es 0.1», «Pearson máximo en
+lambda=0.1 (r=0.73)», «a lambda=3.0 el chi²=33 (sobre-regularización severa)».
+Código y comentario coinciden.
+
+Lo que sí hay ahí, escrito por el propio código, es una limitación distinta y
+real: está calibrada en `n_active=256` sobre un sintético 8×4×8 y
+**«no verificado a escala regional real»**. Ese es el hallazgo defendible.
+
+### H-4 está medio cerrado, y el repositorio lo confesó por escrito
+
+La CI ya define `TQ_RUN_VALIDATION: "1"`, pero solo para dos tests concretos
+(`test_f9_physics_regression.py::test_synthetic_sphere_recovery` y
+`test_depth_prior_service.py -m validation`). El comentario del workflow lo
+admite: «el diseño de la fase pedía `pytest -m validation` entero. No estaba».
+
+**El patrón importa más que el caso:** la tabla §1.3 de
+`docs/06_AUDITORIA_TECNICA_INTEGRAL.md` **no se re-midió después de las 14
+fases**. Marca como vivos hallazgos cerrados (H-2, H-14, H-17…) y como `[HECHO]`
+hallazgos vivos (H-39). Para alguien que llegue nuevo, hoy desinforma.
+
+---
+
+## 5. EL PLAN
+
+---
+
+### FASE 15 — Poner a salvo tres fases que solo existen en tu disco · **S** · 🔴 **P0** · *git*
+
+**Por qué va primero.** No es deuda técnica, es riesgo de pérdida. 189 commits
+separan la rama de `main` y las Fases 12, 13 y 14 no están en ningún commit.
+Todo lo demás construye encima.
+
+**Trabajo.**
+1. Commitear las Fases 12, 13 y 14 **en tres commits separados**, respetando la
+   separación backend/frontend.
+2. Incluir `requirements.txt` y `terraquantum_backend.spec` en el commit de la
+   Fase 12: la declaración de `omf==1.0.1` vive solo en el árbol, y **sin ella
+   HEAD produce un instalador sin OMF**.
+3. Verificar que `ci.yml` y los tests que nombra se commiteen juntos — hoy el
+   workflow lista `test_fase13_undo_redo.py`, que no está versionado.
+4. Decidir qué pasa con `Real-ESRGAN/`, `tools/`, los nueve `screen_*.png`,
+   `postulacion_atrevete/` y los notebooks: `.gitignore` o fuera del repo.
+5. Fusionar a `main`, o al menos empujar la rama.
+
+**Gate.** `git status --porcelain` no lista nada del producto, y un `git clone`
+limpio en otro directorio compila el backend y pasa la suite rápida.
+
+---
+
+### FASE 16 — La ingesta deja de adivinar el rol de una columna · **S** · 🔴 **P0** · *backend* · H-F11-1
+
+**Por qué va aquí.** Es el defecto más barato de arreglar y el que más usuarios
+muerde. Va antes que los otros porque corrompe el dato **de entrada**: todo lo
+que viene después hereda el error.
+
+**Trabajo.**
+1. Sacar `"y"` de `_LOCAL_Y_ALIASES` (`gravity_import_service.py:156`), o exigir
+   confirmación explícita cuando `y` aparece junto a `x` y `z` sin columna de
+   profundidad declarada.
+2. Regla nueva: si las tres columnas son `x/y/z` desnudas, el rol de cada una
+   **se pregunta**, nunca se asume. El mapeo manual ya existe — es cablearlo a
+   este caso.
+3. Auditar por el mismo criterio `_LOCAL_X_ALIASES` y `_LOCAL_Z_ALIASES`.
+
+**Gate.** Un CSV con cabeceras `X,Y,Z` y valores de easting/northing/cota
+chilenos: o se rechaza pidiendo el mapeo, o asigna los tres roles correctos.
+El test debe **fallar** si alguien devuelve `"y"` a la lista de profundidad.
+
+---
+
+### FASE 17 — La corrección de terreno usa la componente vertical · **M** · 🔴 **P0** · *backend* · ACAD-0, ACAD-9
+
+**Por qué va aquí.** Activa por defecto, entra en el dato que se invierte, error
+medido de 12× sobre una señal de 0,1–10 mGal. Que un **test tautológico**
+congelara la fórmula es parte del defecto: hay que romper el test *antes* de
+arreglar el código.
+
+**Trabajo.**
+1. Reemplazar `G·ρ·A·|dh|/r²` por la componente vertical de la columna
+   (`≈ G·ρ·A·dh²/(2r³)`) en `gravity_corrections_service.py:183`.
+2. Reescribir `test_tc_matches_pointmass_formula` para que compare contra un
+   **valor de referencia independiente** — el prisma de Nagy, que ya existe en
+   `gravimetry.py::_nagy_prism_safe` — y no contra una reimplementación de sí
+   mismo con `rtol=1e-9`.
+3. Barrer el resto de `tests/` buscando la misma patología: tests que
+   reimplementan la fórmula que dicen verificar.
+4. Cuantificar el efecto E2E con el Validation Framework y dejarlo escrito: es
+   lo que al expediente académico le falta.
+
+**Gate.** El test nuevo **falla con la fórmula vieja dentro**, verificado por
+mutación. Y una corrida del benchmark con TC activa vs. desactivada difiere en
+la magnitud predicha, no en 12×.
+
+---
+
+### FASE 18 — El experimento que cierra la rotación de 90° · **M** · 🔴 **P0** · *backend, medir* · ACAD-1
+
+**Por qué va aquí.** La inconsistencia está probada por lectura. Lo que **no**
+está probado es la consecuencia numérica, y el arreglo depende de saber cuál de
+las dos convenciones adoptar. Esta fase **mide**; la 19 corrige. Separarlas evita
+el error clásico de este repositorio: parchear la hipótesis equivocada porque
+daba el mismo número (fue exactamente lo que casi hunde la Fase 14).
+
+**Trabajo.**
+1. Construir un sintético a latitud chilena (`I≈−30°`, `D≈2°`) con un cuerpo
+   conocido y correrlo **por el camino de producción completo** — CSV →
+   importador → motor — **no** por los harness de benchmark, que arman el frame a
+   mano y por eso son ciegos.
+2. Comprobar si el eje máx–mín de la anomalía cae Norte-Sur (correcto en el
+   hemisferio sur con D≈2°) o Este-Oeste (rotado).
+3. Repetir a latitud ártica para demostrar por qué DO-27 y Raglan no lo vieron.
+4. Decidir y **escribir** cuál es la convención canónica del backend. Hoy
+   `magnetometry.py:31` afirma ser «idéntica a gravimetry» y `gravimetry.py` no
+   declara ninguna.
+
+**Gate.** El experimento produce un **número**, no una opinión: el ángulo medido
+entre el eje del dipolo recuperado y el esperado, a dos latitudes. Si sale ~90°
+en Chile y ~0° en el Ártico, la hipótesis queda cerrada.
+
+---
+
+### FASE 19 — Una sola convención de ejes, con guardia · **M** · 🟠 P1 · *backend* · ACAD-1, ACAD-1c
+
+**Por qué va aquí.** Depende de la 18. El defecto real no es la permutación que
+falta: es que **dos módulos documentan convenciones opuestas y nada los
+compara**. Se agrupa con el ZIP porque es el mismo error en el otro extremo del
+pipeline, y así no se edita dos veces la misma función.
+
+**Trabajo.**
+1. Permutar en el punto de empalme (`geophysics_service.py:2107`) o en la
+   ingesta — **un solo sitio**, el que elija la Fase 18.
+2. Arreglar `_ubc_msh_text` y `_ubc_mod_text` (`export_service.py:630-642`) para
+   que hagan la misma permutación que ya hace la ruta de disco, y escribir el
+   origen real en vez de `0 0 0`.
+3. Corregir `_gslib_text`, que hoy etiqueta `X_m/Y_m/Z_m` sobre índices internos.
+
+**Gate.** Un test con **malla NO cúbica** (20×10×20) que compare las cabeceras de
+los dos escritores UBC y exija que coincidan. Hoy salen `20 20 10` y `20 10 20`.
+**Con malla cúbica el defecto es invisible, así que un test cúbico no vale.**
+
+---
+
+### FASE 20 — La preparación deja de evaporarse · **M** · 🟠 P1 · *frontend* · NUEVO-2, NUEVO-3
+
+**Por qué va aquí.** Es la peor experiencia del producto y la más fácil de
+reproducir delante de un cliente: el usuario corrige un CSV, cambia de pestaña
+para mirar el 3D, vuelve, y ha perdido el mapeo de columnas, los puntos Helmert,
+los sondajes y 25 parámetros. Y el paquete se rearma sobre el CSV crudo — es
+decir, **corrige, y su corrección no llega**.
+
+**Trabajo.**
+1. Subir el estado de `PreparacionView` al store: el refactor que la Fase 13 se
+   prohibió hacer «de paso» y que ahora es el trabajo de su propia fase.
+2. Hacer que el CSV corregido sea el que viaja al paquete, no el crudo.
+3. Clasificar los campos nuevos en `store/deshacible.ts`, que ya obliga a
+   hacerlo por tipos.
+
+**Gate.** Un e2e que mapea columnas, corrige el CSV, navega a otra pestaña,
+vuelve, y comprueba que los 25 parámetros y el CSV corregido siguen ahí — **y que
+el paquete generado contiene el corregido**, no el crudo.
+
+---
+
+### FASE 21 — La inversión conjunta recupera topografía y avisos · **M** · 🟠 P1 · *backend* · NUEVO-1
+
+**Por qué va aquí.** La Fase 1 cerró H-27 en dos de las tres rutas. La que quedó
+fuera es la conjunta — el caso de los dos CSV, el que más diferencia al producto
+de una hoja de cálculo. Un modelo conjunto puede caer a topografía plana y salir
+con sello de bueno.
+
+**Trabajo.**
+1. Cablear `topography_run_warnings` en `services/joint_inversion.py`, igual que
+   en las rutas gravimétrica y magnética.
+2. Comprobar los **tres eslabones** (emisión → respuesta → componente montado),
+   como exige la pregunta 2 de la plantilla de gate.
+
+**Gate.** Correr la conjunta sin DEM y exigir que el aviso aparezca en el JSON
+**y** en la UI. El test debe fallar si se borra el cableado.
+
+---
+
+### FASE 22 — Las unidades de la exportación dejan de mentir · **S** · 🟠 P1 · *backend* · ACAD-12, ACAD-13
+
+**Por qué va aquí.** Dos errores pequeños en el mismo archivo de salida, ambos
+nacidos de un cambio cosmético: un renombrado «compliance-safe» que convirtió
+toneladas en kilos, y un literal que se quedó cuando `base_density` se volvió
+configurable. Se agrupan porque tocan la misma función.
+
+**Trabajo.**
+1. `bulk_rock_mass_kg`: o multiplicar por 1.000, o renombrar a
+   `bulk_rock_mass_t`. Decidir **mirando si alguien la consume**.
+2. Sustituir `VTK_BASE_DENSITY = 2.6` por la `base_density` de la corrida.
+
+**Gate.** Un test que invierte con `base_density ≠ 2.6` y exige que la columna
+exportada coincida con la que consume el frontend (`density_contrast_t_m3`).
+Hoy divergen.
+
+---
+
+### FASE 23 — «Desactualizado» por tipos, no por lista · **S** · 🟠 P1 · *frontend* · H-36
+
+**Por qué va aquí.** La Fase 13 ya demostró en este repositorio que el
+complemento exacto por tipos funciona: un campo sin clasificar **no compila**.
+`resultIsStale` se quedó como lista a mano y la Fase 14 ya la dejó atrás — el
+mismo agujero se repetirá con la fase siguiente si no se cierra por construcción.
+
+**Trabajo.**
+1. Convertir la lista de parámetros que invalidan el resultado en un tipo
+   exhaustivo, con el patrón de `NO_DESHACIBLE`.
+2. Incluir los parámetros de geología implícita de la Fase 14.
+
+**Gate.** Añadir un parámetro nuevo al store **sin clasificarlo rompe el
+typecheck**. Verificado añadiendo uno de mentira.
+
+---
+
+### FASE 24 — El instalador falla en voz alta cuando falta una dependencia · **M** · 🟡 P2 · *empaque* · NUEVO-4, NUEVO-5, H-23
+
+**Por qué va aquí.** La Fase 2 hizo que el **arranque** fallara en voz alta. El
+**build** todavía falla en silencio. No es hipotético: en esta máquina el
+`python` del PATH es **3.11.9 sin numpy**, mientras `.python-version` declara
+3.14.4 (y `py -3.14` sí tiene numpy 2.4.4).
+
+**Trabajo.**
+1. Que `_safe_submodules` avise —o aborte— en vez de devolver `[]`
+   (`terraquantum_backend.spec:21-25`).
+2. Añadir a `scripts/build_desktop.ps1` la comprobación del intérprete contra
+   `.python-version`, igual que ya hace con PyInstaller.
+3. Generar un lockfile con hashes (`pip-compile --generate-hashes`) e instalar
+   con `--require-hashes` en CI y en el build.
+4. Pinear `six`.
+
+**Gate.** Construir con una dependencia deliberadamente ausente y exigir que el
+build **falle**. Hoy pasa y produce un instalador roto.
+
+---
+
+### FASE 25 — El updater: o apunta bien, o se retira · **M** · 🟡 P2 · *empaque* · H-20
+
+**Por qué va aquí.** Hoy es un mecanismo de papel con un agravante: el mensaje de
+error le sugiere al usuario que quizá no tiene internet, cuando la causa real es
+que la URL apunta a un repositorio ajeno. Prometer una comprobación que siempre
+falla es peor que no ofrecerla.
+
+**Trabajo.**
+1. Corregir el endpoint al remoto real y publicar `latest.json` firmado desde un
+   workflow de release; **o**
+2. Retirar el bloque `updater` de `tauri.conf.json` y el ítem de menú hasta que
+   exista.
+3. Si se queda como aviso manual, que el texto lo diga en vez de prometer
+   instalación.
+
+**Gate.** Con red disponible, «Buscar actualizaciones» distingue **tres** estados
+—al día / hay versión nueva / no se pudo comprobar— y no confunde el tercero con
+los otros dos.
+
+---
+
+### FASE 26 — Terminar la revisión que el límite de sesión cortó · **M** · 🟡 P2 · *auditoría*
+
+**Por qué va al final.** Ninguna fase anterior depende de ello. Pero hasta
+cerrarla, la respuesta a «¿está todo listo?» tiene un margen sin cuantificar.
+
+**Trabajo.**
+1. Los gates de las **14 fases, uno a uno**, con la pregunta 4: *¿falla el gate
+   si se rompe lo que dice defender?* Esta patología ya apareció **dos veces** en
+   este repositorio (Fase 3: un gate de física que pasaba con el bug dentro;
+   Fase 6: un guard que se anulaba a sí mismo).
+2. Correr la suite completa **con `py -3.14`** y publicar números reales:
+   cuántos pasan, cuántos se saltan, y qué defiende lo que se salta.
+3. Los dos hallazgos numéricos nunca medidos: el **operador de suavidad de 4º
+   orden** (ACAD-3) y la **frontera de Dirichlet que nadie eligió** (ACAD-4).
+4. Estructura y complejidad hoy (H-3, H-9, H-16, H-35); seguridad y red (H-15,
+   H-21); listas de tolerancia que hayan crecido.
+5. **Re-escribir la tabla §1.3 de `docs/06`** con el estado real.
+
+**Gate.** Cada fila de §1.3 con fecha de re-medición y `ruta:línea`. Una fila sin
+evidencia no cuenta como verificada.
+
+---
+
+## 6. LO QUE **NO** HAY QUE HACER
+
+Tan importante como el plan: dónde no gastar las semanas.
+
+- **No re-litigar la profundidad.** La gravedad sola no la resuelve — es
+  null-space, no bug, medido con **3.450 inversiones**. `depth_beta` es inerte y
+  arreglarlo no mejora. Cerrado.
+- **No implementar la sección económica.** NPV, LOM, pit y scheduling son
+  **anti-scope permanente declarado** (H-8). Las tarjetas ya se borraron: que
+  sigan borradas.
+- **No perseguir HIGH en el veredicto de confianza.** El checkerboard QA no
+  depende del dato, así que falla siempre y el worst-of lo usa de tope duro. Es
+  una propiedad del diseño, no un fallo.
+- **No «arreglar» ACAD-6** — no existe la contradicción que describe. Si se
+  quiere tocar esa constante, el trabajo real es verificarla fuera de
+  `n_active=256`.
+- **No hacer refactors globales** para cerrar varios defectos de golpe. Las 20
+  respuestas sin `exclude_unset` y las ~19 perillas huérfanas de `Scene3D` son
+  deuda conocida y acotada; convertirlas en una fase «que lo arregla todo» es
+  exactamente lo que el repositorio prohíbe.
+- **No prometer porcentajes desde la Fase 14.** Fueron 150 inversiones, un mundo
+  y una λ. Alcanza para elegir un default, no para una cifra en una propuesta
+  comercial.
+
+---
+
+## 7. GOTCHAS DE ENTORNO
+
+- **Usa `py -3.14`, no `python`.** El intérprete del PATH es 3.11.9 **sin
+  numpy**; `py -3.14` tiene numpy 2.4.4 y coincide con `.python-version`.
+- No hay `.venv` en el proyecto.
+- Tauri sirve en el **primer puerto libre 3000..3011** ⇒ `localStorage` puede
+  vaciarse solo entre arranques.
+
+---
+
+*Documento generado el 2026-08-23 re-midiendo `docs/06_AUDITORIA_TECNICA_INTEGRAL.md`
+y `docs/academic/00_INDICE.md` contra el árbol de trabajo. Versión navegable:
+https://claude.ai/code/artifact/10b591e1-08cf-4e5f-ba8b-a3d1acc30d1e*
