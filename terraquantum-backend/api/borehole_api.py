@@ -35,6 +35,11 @@ from services.borehole_view_service import build_borehole_view_response
 router = APIRouter(prefix="/borehole", tags=["Borehole (Fase 20)"])
 _log = get_logger(__name__)
 
+# FASE 12 — tope del OMF subido. Es binario comprimido con el block model de otro
+# software dentro, así que no comparte techo con el CSV de sondajes (20 MB, más
+# arriba): un OMF de una malla mediana los supera sin ser sospechoso.
+OMF_MAX_BYTES = 200 * 1024 * 1024
+
 
 class ParseBoreholeCsvRequest(BaseModel):
     csv_text: str = Field(..., description="Contenido crudo del CSV de sondajes.")
@@ -154,6 +159,29 @@ def desurvey_endpoint(req: DesurveyRequest):
     })
 
 
+def _survey_summary(survey: BoreholeSurvey) -> dict:
+    """Conteos y litologías de un survey ya construido.
+
+    F12: se extrae de `_build_parse_response` para que la importación de OMF
+    produzca EXACTAMENTE los mismos conteos que la de CSV, sin reimplementarlos.
+    """
+    holes = survey.holes
+    lithos = [h.lithology for h in holes if h.lithology]
+    distinct_lithos = sorted({l.strip().lower() for l in lithos})
+    return {
+        "survey": survey,
+        "n_holes": len({h.hole_id for h in holes}),
+        "n_samples": len(holes),
+        "n_with_density": sum(1 for h in holes if h.density_t_m3 is not None),
+        "n_with_susceptibility": sum(1 for h in holes if h.susceptibility_si is not None),
+        "n_with_lithology": len(lithos),
+        "lithologies_detected": distinct_lithos,
+        "unrecognized_lithologies": sorted({
+            l for l in distinct_lithos if lithology_properties(l) is None
+        }),
+    }
+
+
 def _build_parse_response(
     csv_text: str, length_units: str, crs: str, datum_elevation_m: float
 ) -> ParseBoreholeCsvResponse:
@@ -167,24 +195,7 @@ def _build_parse_response(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    holes = survey.holes
-    hole_ids = {h.hole_id for h in holes}
-    lithos = [h.lithology for h in holes if h.lithology]
-    distinct_lithos = sorted({l.strip().lower() for l in lithos})
-    unrecognized = sorted({
-        l for l in distinct_lithos if lithology_properties(l) is None
-    })
-
-    return ParseBoreholeCsvResponse(
-        survey=survey,
-        n_holes=len(hole_ids),
-        n_samples=len(holes),
-        n_with_density=sum(1 for h in holes if h.density_t_m3 is not None),
-        n_with_susceptibility=sum(1 for h in holes if h.susceptibility_si is not None),
-        n_with_lithology=len(lithos),
-        lithologies_detected=distinct_lithos,
-        unrecognized_lithologies=unrecognized,
-    )
+    return ParseBoreholeCsvResponse(**_survey_summary(survey))
 
 
 @router.post("/parse-csv", response_model=ParseBoreholeCsvResponse)
@@ -218,6 +229,123 @@ async def parse_csv_file(
     resp = _build_parse_response(csv_text, length_units, crs, datum_elevation_m)
     _log.info("borehole_parse_csv_file", encoding=enc.value, n_samples=resp.n_samples)
     return resp
+
+
+# ── FASE 12 — Importar sondajes desde Open Mining Format ────────────────────
+
+class OmfElementInfo(BaseModel):
+    """Una línea del inventario del OMF: qué venía dentro y si se usó."""
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+    name: str
+    kind: str
+    n_vertices: int
+    n_primitives: int
+    attributes: List[str]
+    consumed: bool
+    note: str
+
+
+class OmfImportBounds(BaseModel):
+    """Caja envolvente en las coordenadas ORIGINALES del fichero.
+
+    Se publica siempre: es lo que deja ver de un vistazo si el OMF venía en UTM
+    absoluto o en metros locales, sin que el backend lo adivine con un umbral.
+    """
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+    z_min: float
+    z_max: float
+
+
+class ImportOmfBoreholesResponse(ParseBoreholeCsvResponse):
+    """Mismos conteos que la importación de CSV, más lo específico del OMF."""
+    inventory: List[OmfElementInfo]
+    warnings: List[str]
+    n_elements: int
+    deviated_holes_skipped: int
+    origin_easting_applied: float
+    origin_northing_applied: float
+    bounds_raw: Optional[OmfImportBounds] = None
+
+
+@router.post("/import-omf", response_model=ImportOmfBoreholesResponse)
+async def import_omf(
+    file: UploadFile = File(...),
+    project_id: Optional[str] = Form(None),
+    run_id: Optional[str] = Form(None),
+    origin_easting: Optional[float] = Form(None),
+    origin_northing: Optional[float] = Form(None),
+    surface_z: Optional[float] = Form(None),
+    density_attribute: Optional[str] = Form(None),
+    lithology_attribute: Optional[str] = Form(None),
+    crs: str = Form("local"),
+) -> ImportOmfBoreholesResponse:
+    """FASE 12 — Lee un `.omf` de terceros y devuelve sus SONDAJES.
+
+    Devuelve el mismo `BoreholeSurvey` que `/borehole/parse-csv`, así que el
+    sondaje importado alimenta el anclaje de la inversión por el camino que ya
+    existe. Del resto del fichero (volúmenes, superficies, nubes de puntos) se
+    devuelve un inventario y se declara que TerraQuantum aún no los consume.
+
+    Lo que NO hace, a propósito: aplastar sondajes desviados a la vertical (los
+    descarta y los nombra), adivinar el origen UTM, ni inventar el datum vertical.
+    """
+    from services.omf_import_service import OmfImportError, import_omf_boreholes
+
+    content = await file.read()
+    if len(content) > OMF_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Fichero OMF > {OMF_MAX_BYTES // (1024 * 1024)} MB.",
+        )
+    try:
+        result = import_omf_boreholes(
+            content,
+            project_id=project_id,
+            run_id=run_id,
+            origin_easting=origin_easting,
+            origin_northing=origin_northing,
+            surface_z=surface_z,
+            density_attribute=density_attribute,
+            lithology_attribute=lithology_attribute,
+            crs=crs,
+        )
+    except OmfImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    stats = result.stats
+    origin = stats.get("origin_applied") or {}
+    bounds = stats.get("bounds_raw")
+    _log.info(
+        "borehole_import_omf",
+        n_samples=len(result.survey.holes),
+        n_elements=stats.get("n_elements", 0),
+        deviated=stats.get("deviated_holes", 0),
+    )
+    return ImportOmfBoreholesResponse(
+        **_survey_summary(result.survey),
+        inventory=[
+            OmfElementInfo(
+                name=item.name,
+                kind=item.kind,
+                n_vertices=item.n_vertices,
+                n_primitives=item.n_primitives,
+                attributes=list(item.attributes),
+                consumed=item.consumed,
+                note=item.note,
+            )
+            for item in result.inventory
+        ],
+        warnings=result.warnings,
+        n_elements=int(stats.get("n_elements", 0)),
+        deviated_holes_skipped=int(stats.get("deviated_holes", 0)),
+        origin_easting_applied=float(origin.get("easting", 0.0)),
+        origin_northing_applied=float(origin.get("northing", 0.0)),
+        bounds_raw=OmfImportBounds(**bounds) if bounds else None,
+    )
 
 
 class LithologyEntry(BaseModel):

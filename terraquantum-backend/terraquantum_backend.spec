@@ -47,6 +47,13 @@ hiddenimports += _safe_submodules("scipy")
 hiddenimports += _safe_submodules("skimage")
 hiddenimports += _safe_submodules("pyproj")
 
+# Fase 12 — OMF. `omf` y `properties` resuelven clases por metaclase y registro
+# (`properties.HasProperties`), que es justo lo que el análisis estático de
+# PyInstaller pierde: sin esto el sidecar empaquetado exporta/importa OMF en
+# desarrollo y falla en el instalador.
+for _pkg in ("omf", "properties", "vectormath"):
+    hiddenimports += _safe_submodules(_pkg)
+
 # Excluir lo pesado y opcional que NO es parte del camino dorado offline.
 excludes = ["ee", "earthengine_api", "google.genai", "google.generativeai",
             "matplotlib", "tkinter", "IPython", "notebook", "pytest"]

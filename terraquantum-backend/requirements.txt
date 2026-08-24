@@ -86,3 +86,28 @@ scikit-learn>=1.3.0,<2.0.0   # verificado 1.9.0
 
 # Fase F4 — Isosuperficies del block model (marching cubes + normales)
 scikit-image>=0.24.0,<0.30.0   # verificado 0.26.0
+
+# ── Fase 12 — Open Mining Format (autorizada expresamente por el usuario) ────
+# `services/omf_export_service.py` y `services/omf_import_service.py` la importan
+# directamente. Es el formato con el que un consultor entrega a una minera con
+# Leapfrog / Vulcan / Micromine; sin él el resultado de TerraQuantum muere en
+# TerraQuantum (docs/06 §10, Fase 12).
+#
+# LICENCIA: MIT (la cadena entera lo es). Se evaluó antes de añadirla, como pide
+# el plan. Se DESCARTÓ el fork vivo `mira-omf` 3.4.0 pese a estar mejor mantenido:
+# arrastra `geoh5py`, que es LGPL-3.0-or-later, y esto se distribuye como
+# instalador firmado de un producto que se vende.
+#
+# ESTADO: publicada en 2019 y sin mantenimiento; sólo sdist (pip construye el
+# wheel al instalar). MEDIDO el 2026-08-18 en esta máquina: instala y hace
+# round-trip completo (Volume/PointSet/LineSet/Surface) en Python 3.14.4 con
+# numpy 2.4.4. Pin exacto: es la única versión publicada de la serie 1.x.
+omf==1.0.1
+# Transitivas de `omf`, pineadas A PROPÓSITO por H-23 (el instalador firmado debe
+# reconstruirse idéntico): `omf` las declara SIN techo (`properties>=0.5.5`,
+# `vectormath>=0.2.0`, `pypng`, `six`), así que sin estas líneas una publicación
+# futura de cualquiera de ellas cambiaría el binario de la MISMA versión de
+# TerraQuantum. Las cuatro son MIT y llevan sin release desde 2019 (pypng, 2022).
+properties==0.6.1
+vectormath==0.2.2
+pypng==0.20220715.0

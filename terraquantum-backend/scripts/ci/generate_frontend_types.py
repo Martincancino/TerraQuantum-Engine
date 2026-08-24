@@ -71,6 +71,10 @@ RUTAS_DEL_CABLE = (
     "/multimodal/plan",
     "/borehole/parse-csv",
     "/borehole/parse-csv-file",
+    # ── Fase 12: OMF. Sólo la IMPORTACIÓN entra aquí; la exportación
+    # (`/export/omf/…`) devuelve binario y por eso queda fuera por construcción,
+    # igual que `/diagnostics/export`.
+    "/borehole/import-omf",
 )
 
 CABECERA = """\

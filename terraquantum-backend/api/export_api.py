@@ -6,17 +6,21 @@ Endpoints:
       → ZIP industrial con model.vtr, model.mod, model.msh, model.gslib, manifest.json
   GET /export/block-model-csv/{project_id}/{run_id}
       → CSV estándar minero (X_m, Y_m, Z_m, Density_gcm3[, Susceptibility_SI], …) — F5
+  GET /export/omf/{project_id}/{run_id}
+      → Open Mining Format v1 (.omf) — FASE 12
 
 Regla de Oro: estos endpoints leen datos persistidos en disco.
-NO ejecutan física ni inversión.
+NO ejecutan física ni inversión (excepción declarada: las isosuperficies del OMF
+las calcula al vuelo `isosurface_service`, igual que para el visor).
 """
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
 from services.export_service import create_run_bundle_zip, export_block_model_to_csv
+from services.omf_export_service import OmfExportError, export_run_to_omf
 
 router = APIRouter(prefix="/export", tags=["export-fase11"])
 
@@ -77,6 +81,59 @@ async def get_block_model_csv(project_id: str, run_id: str) -> Response:
         media_type="text/csv",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-TerraQuantum-Disclaimer": "NO-JORC/NI-43-101 EXPLORATION ONLY",
+        },
+    )
+
+
+# FASE 12 — OMF. Igual que `/diagnostics/export`, esta ruta NO lleva
+# `response_model`: devuelve binario. Se declara el content-type real para que el
+# OpenAPI no mienta y el generador de tipos del frontend la salte a propósito.
+@router.get(
+    "/omf/{project_id}/{run_id}",
+    summary="Open Mining Format v1 (.omf) del run — FASE 12",
+    responses={200: {"content": {"application/octet-stream": {}},
+                     "description": "Fichero OMF v1 con block model, estaciones, "
+                                    "sondajes e isosuperficies."}},
+)
+async def get_run_omf(
+    project_id: str,
+    run_id: str,
+    include_surfaces: bool = Query(
+        True,
+        description="Incluir isosuperficies. Es lo único que se calcula al vuelo; "
+                    "desactívalo si sólo quieres el block model.",
+    ),
+) -> Response:
+    """Exporta la corrida a OMF, el formato con el que un consultor entrega a una
+    minera con Leapfrog / Vulcan / Micromine.
+
+    Contenido: `VolumeElement` (block model, ejes ya permutados a Este/Norte/arriba),
+    `PointSetElement` (estaciones observado/calculado/residual), `LineSetElement`
+    (sondajes con densidad y litología) y una `SurfaceElement` por isosuperficie.
+
+    Devuelve **404** si la corrida no existe, y **422** si su block model no permite
+    reconstruir la malla sin inventarla (caso medido: la tabla dispersa que escribe
+    la inversión conjunta, que no guarda `ix/iy/iz` ni `inputs.json`).
+    """
+    try:
+        payload, filename, manifest = export_run_to_omf(
+            project_id, run_id, include_surfaces=include_surfaces
+        )
+    except OmfExportError as exc:
+        status = 404 if "no encontrada" in str(exc).lower() else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error generando OMF: {exc}") from exc
+
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(payload)),
+            "X-TerraQuantum-OMF-Mapping": manifest["mapping_version"],
+            "X-TerraQuantum-Georeferenced": str(manifest["georeferenced"]).lower(),
             "X-TerraQuantum-Disclaimer": "NO-JORC/NI-43-101 EXPLORATION ONLY",
         },
     )
