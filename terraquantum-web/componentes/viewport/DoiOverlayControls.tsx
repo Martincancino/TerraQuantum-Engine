@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { DoiOverlayData } from "../../lib/render/DoiOverlayLayer";
 
@@ -57,10 +57,19 @@ export default function DoiOverlayControls() {
   }, [projectId, runId, setDoiOverlayData]);
 
   const handleToggle = () => {
-    const next = !showDoiOverlay;
-    setShowDoiOverlay(next);
-    if (next) load();
+    setShowDoiOverlay(!showDoiOverlay);
   };
+
+  // FASE 13 — misma asimetría que en `BoreholeControls`, mismo arreglo: la carga
+  // sale del manejador del clic y pasa a seguir al estado. Si no, un deshacer
+  // que encendiera `showDoiOverlay` dejaría el toggle en «ON» con
+  // `doiOverlayData` en null — y aquí la mentira sería peor que en los sondajes,
+  // porque el horizonte DOI es el juicio de INCERTIDUMBRE de la inversión.
+  useEffect(() => {
+    if (!(showDoiOverlay && model && projectId && runId)) return;
+    const timer = setTimeout(load, 0);
+    return () => clearTimeout(timer);
+  }, [showDoiOverlay, model, projectId, runId, load]);
 
   if (!model) {
     return (

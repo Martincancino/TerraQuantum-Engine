@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { BoreholeViewData } from "../../lib/render/BoreholeLayer";
 
@@ -57,10 +57,24 @@ export default function BoreholeControls() {
   }, [projectId, runId, setBoreholeData]);
 
   const handleToggle = () => {
-    const next = !showBoreholes;
-    setShowBoreholes(next);
-    if (next) load();
+    setShowBoreholes(!showBoreholes);
   };
+
+  // FASE 13 — asimetría medida y reparada. Antes, la carga vivía DENTRO del
+  // manejador del clic: la capa sólo tenía datos si el usuario había pulsado
+  // este botón concreto. Cualquier otro camino que encendiera `showBoreholes`
+  // —y el deshacer/rehacer es exactamente eso— dejaba el toggle en «ON» con
+  // `boreholeData` en null: la capa encendida y vacía, sin error visible.
+  //
+  // Ahora los datos siguen al estado, venga de donde venga. Es la misma forma
+  // que ya usaba `IsosurfaceControls`, con su mismo diferido por `setTimeout`
+  // para no hacer setState síncrono dentro del efecto — pero SIN duplicar la
+  // llamada en el manejador, que es lo que allí produce dos peticiones por clic.
+  useEffect(() => {
+    if (!(showBoreholes && model && projectId && runId)) return;
+    const timer = setTimeout(load, 0);
+    return () => clearTimeout(timer);
+  }, [showBoreholes, model, projectId, runId, load]);
 
   if (!model) {
     return (

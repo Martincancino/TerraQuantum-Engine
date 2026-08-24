@@ -19,6 +19,7 @@ import IsosurfaceControls from "../viewport/IsosurfaceControls";
 import BoreholeControls from "../viewport/BoreholeControls";
 import DoiOverlayControls from "../viewport/DoiOverlayControls";
 import ExportPanel from "../viewport/ExportPanel";
+import HistorialVisorControls from "../viewport/HistorialVisorControls";
 // FASE 9 — dos superficies terminadas que NUNCA se montaron (cierre de la Fase 6).
 // `SliceControls` es el único escritor del estado del corte, y `SectionPaintLayer`
 // ya estaba montada en Scene3D con `/api/section` respondiendo: el plano de corte
@@ -670,6 +671,13 @@ export default function Exploration3DView() {
           <div className="flex flex-col">
             <SidebarSection title="Modelo 3D">
               <LoadPanel />
+            </SidebarSection>
+            {/* FASE 13: arriba del todo y SIEMPRE montado (no sólo con modelo),
+                porque también registra los atajos Ctrl+Z/Ctrl+Y de esta vista y
+                porque tiene que poder decir «hay una inversión en curso»
+                justamente cuando todavía no hay modelo que enseñar. */}
+            <SidebarSection title="Historial de cambios">
+              <HistorialVisorControls />
             </SidebarSection>
             {showModel && (
               <SidebarSection title="Isosuperficies">

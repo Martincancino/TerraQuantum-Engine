@@ -15,8 +15,18 @@ import {
   contextoInicial, contextoReducer,
   operacionInicial, operacionReducer,
   parametrosInicial, parametrosReducer,
+  type ContextoState, type ParametrosState,
   type CsvIssue, type CsvValidationResult, type DensityPreset, type LambdaMode,
 } from "./prep/prepPanelState";
+import {
+  useReducerConHistorial,
+  limpiarHistorialPreparacion,
+  type OpcionesReducerConHistorial,
+} from "../lib/historial/useReducerConHistorial";
+import {
+  CLAVES_CONTEXTO, CLAVES_PARAMETROS,
+  etiquetarContexto, etiquetarParametros,
+} from "./prep/deshaciblePrep";
 import { PgiParamsForm } from "./PgiParamsForm";
 import { MagneticRemanenceForm } from "./MagneticRemanenceForm";
 import { buildPackage, type BuildPackageConfig } from "../lib/terraquantum/frontendApi";
@@ -364,6 +374,23 @@ type PrepPanelProps = {
   boreholes?: GravityCsvInvertPayload["boreholes"];
 };
 
+// FASE 13 — Opciones del historial, a nivel de MÓDULO a propósito: son las
+// dependencias de los efectos que graban los deltas, y crearlas dentro del
+// componente las volvería nuevas en cada render.
+const OPCIONES_CONTEXTO: OpcionesReducerConHistorial<ContextoState> = {
+  ambito: "preparacion",
+  grupo: "contexto",
+  vigiladas: CLAVES_CONTEXTO,
+  etiquetar: etiquetarContexto,
+};
+
+const OPCIONES_PARAMETROS: OpcionesReducerConHistorial<ParametrosState> = {
+  ambito: "preparacion",
+  grupo: "parametros",
+  vigiladas: CLAVES_PARAMETROS,
+  etiquetar: etiquetarParametros,
+};
+
 // PrepPanel (ex GravityCsvPreviewPanel) — vista «Preparación». Importa/valida el
 // survey, recolecta parámetros y genera el paquete CSV. NO invierte: la inversión
 // ocurre en LoadPanel (vista 3D).
@@ -394,9 +421,23 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   // haría imposible saber cuál de los dos cambios rompió algo — la misma
   // disciplina con la que la Fase 8 partió la espina dorsal del backend.
   const [operacion, dispatchOperacion] = useReducer(operacionReducer, operacionInicial);
-  const [contexto, dispatchContexto] = useReducer(contextoReducer, contextoInicial);
-  const [parametros, dispatchParametros] = useReducer(parametrosReducer, parametrosInicial);
   const [avanzado, dispatchAvanzado] = useReducer(avanzadoReducer, avanzadoInicial);
+
+  // FASE 13: las DOS máquinas que declaran intención del usuario ganan
+  // historial. `operacion` y `avanzado` se quedan con `useReducer` pelado a
+  // propósito — el motivo de cada exclusión está escrito en `deshaciblePrep.ts`.
+  // Los reducers no se tocan: el envoltorio intercepta su acción de restaurar
+  // ANTES de delegar, así que la comprobación `never` de los cuatro sigue viva.
+  const [contexto, dispatchContexto] = useReducerConHistorial(
+    contextoReducer,
+    contextoInicial,
+    OPCIONES_CONTEXTO,
+  );
+  const [parametros, dispatchParametros] = useReducerConHistorial(
+    parametrosReducer,
+    parametrosInicial,
+    OPCIONES_PARAMETROS,
+  );
 
   const {
     loading, errorMsg, cleanCsvLoading, cleanCsvError,
@@ -592,6 +633,13 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
     dispatchOperacion({ type: "ARCHIVOS_CAMBIARON" });
     dispatchParametros({ type: "ARCHIVOS_CAMBIARON" });
     dispatchAvanzado({ type: "ARCHIVOS_CAMBIARON" });
+    // FASE 13 — BARRERA. Cambiar de archivo caduca los reconocimientos de riesgo
+    // (H-29): un Ctrl+Z que cruzara este punto los resucitaría, re-afirmando un
+    // consentimiento sobre datos que el usuario no volvió a leer. El historial
+    // no cruza la barrera: se borra. Y con él se va también la única acción que
+    // toca varias máquinas a la vez, que es lo que evita tener que inventar
+    // comandos transaccionales.
+    limpiarHistorialPreparacion("el usuario cambió de archivo");
     // H-28: invalida también modelo/vista 3D (la limpieza vive en el store).
     clearActiveRun();
   };

@@ -6,6 +6,7 @@ import PrepPanel from "../PrepPanel";
 import PrepEnrichPanel from "../PrepEnrichPanel";
 import BoreholeUploadPanel from "../BoreholeUploadPanel";
 import MultimodalComboPanel from "../MultimodalComboPanel";
+import HistorialPrepControls from "../prep/HistorialPrepControls";
 import { boreholeSurveyToIntervals } from "../../lib/terraquantum/frontendApi";
 
 /**
@@ -84,6 +85,11 @@ export default function PreparacionView() {
               parámetro, regularización, límite de preview y empaquetado manual.
               El flujo normal usa valores por defecto sensatos.
             </p>
+            {/* FASE 13 — el deshacer va JUNTO a las perillas que deshace, no en
+                una barra global: aquí es donde el usuario está mirando cuando se
+                arrepiente. `<details>` no desmonta a sus hijos, así que colapsar
+                la sección no pierde el historial. */}
+            <HistorialPrepControls />
             <PrepPanel boreholes={boreholeIntervals} />
           </div>
         </details>

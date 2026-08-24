@@ -1,4 +1,9 @@
 import { create } from 'zustand';
+// FASE 13: el historial de comandos se engancha aquí y en ningún otro sitio.
+// `conHistorial` envuelve el `set` que reciben las 93 acciones y también el
+// `setState` de la api, calcula el delta sobre las claves declaradas en
+// `deshacible.ts` y lo registra. Ninguna acción de este fichero sabe que existe.
+import { conHistorial } from './historialVisor';
 import type { TerrainResponse, VoxelMineralModel } from '../lib/terraQuantumGeology';
 import type { IsosurfaceData } from '../lib/render/IsosurfaceMeshLayer';
 import type { BoreholeViewData } from '../lib/render/BoreholeLayer';
@@ -451,7 +456,7 @@ export function runKeyOf(run: Pick<ActiveRunState, "projectId" | "runId">): stri
   return `${run.projectId}::${run.runId}`;
 }
 
-export const useAppStore = create<AppState>((set, get) => ({
+export const useAppStore = create<AppState>(conHistorial((set, get) => ({
   // 1. CORE & VISTAS
   activeRun: {
     projectId: null,
@@ -879,4 +884,4 @@ export const useAppStore = create<AppState>((set, get) => ({
   // 15. F5 — Puente de captura PNG
   capturePngSnapshot: null,
   setCapturePngSnapshot: (fn) => set({ capturePngSnapshot: fn }),
-}));
+})));

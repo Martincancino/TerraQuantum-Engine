@@ -35,6 +35,7 @@ import DoiOverlayLayer from "../lib/render/DoiOverlayLayer";
 import type { VolumeCell } from "../lib/render/buildVolumeTexture";
 import { probeGpuCapabilities } from "../lib/render/gpuCapabilities";
 import SubsurfaceAOEffect from "../lib/render/SubsurfaceAOEffect";
+import { elFocoEstaEnUnControl } from "../lib/atajos/foco";
 
 // Tipos mínimos locales para las celdas del modelo 3D
 interface SceneCell {
@@ -1875,12 +1876,25 @@ export default function Scene3D() {
   }, [terrainData, model?.domainH, terrainRows, terrainCols, terrainVerticalExaggeration]);
 
   // ─── Keyboard Zoom Control (ArrowUp = zoom in, ArrowDown = zoom out) ────
+  //
+  // FASE 13 (auditoría §9H.2): este listener es global (`window`, fase de
+  // burbuja) y llamaba a `preventDefault()` SIN mirar dónde estaba el foco. En
+  // el subárbol de este componente conviven 8 `input[type=range]` (6 del corte
+  // caja, 1 del corte de sección, 1 del umbral conjunto), y el paso por flechas
+  // de un slider es la acción por defecto CANCELABLE del keydown: el evento
+  // burbujeaba hasta aquí antes de ejecutarla y el `preventDefault` la anulaba.
+  // Con un slider enfocado, las flechas movían la cámara y el slider NO se
+  // movía. No era «doble efecto»: era secuestro.
+  //
+  // El guard vive en `lib/atajos/foco.ts` y es el mismo que usan los atajos
+  // nuevos, para que no vuelva a haber dos criterios de foco distintos.
   useEffect(() => {
     const ZOOM_STEP = 0.9; // factor por tecla; 0.9 = 10% más cerca
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const ctrl = orbitControlsRef.current;
       if (!ctrl) return;
+      if (elFocoEstaEnUnControl(e)) return;
 
       if (e.key === 'ArrowUp') {
         ctrl.dollyIn(1 / ZOOM_STEP);   // acercar
