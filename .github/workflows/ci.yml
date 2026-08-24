@@ -84,7 +84,7 @@ jobs:
           python scripts/ci/deps_closure.py
           python scripts/ci/study_duplication.py --gate
           python scripts/ci/generate_frontend_types.py --check
-          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py tests/test_fase5_superficie_config.py tests/test_fase7_nucleo_compartido.py tests/test_fase8_espina_dorsal.py tests/test_fase9_camino_de_usuario.py tests/test_fase10_contratos.py -q
+          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py tests/test_fase5_superficie_config.py tests/test_fase7_nucleo_compartido.py tests/test_fase8_espina_dorsal.py tests/test_fase9_camino_de_usuario.py tests/test_fase10_contratos.py tests/test_fase13_undo_redo.py -q
 
       - name: Canario de física (regresión W_z sobre esfera sintética)
         # H-4: la regresión física NUNCA corría automáticamente. Y el arreglo no
