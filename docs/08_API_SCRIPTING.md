@@ -188,21 +188,55 @@ lo dominan la densidad del kernel y la memoria, no el número de vóxeles
 
 ---
 
-## 6. Lo que esta API destapó y NO arregla
+## 6. Lo que esta API destapó
 
 El informe anticipaba que *«la propia API se vuelve el mejor test de integración
-del proyecto»*. Lo fue el primer día. Los dos hallazgos son del **backend**, no
-de esta capa, y se registran aquí porque un script los va a pisar:
+del proyecto»*. Lo fue el primer día. Los **tres** hallazgos son del **backend**,
+no de esta capa, y se registran aquí porque un script los va a pisar. **Uno ya
+está cerrado** (H-F11-1, Fase 16); los otros dos siguen vivos.
 
-**H-F11-1 · Un CSV `X,Y,Z` corrompe la geometría en silencio (🔴 alto).**
+*(El título decía «y NO arregla» y contaba «los dos hallazgos» cuando eran tres:
+corregido al cerrar el primero.)*
+
+**H-F11-1 · Un CSV `X,Y,Z` corrompía la geometría en silencio — ✅ CERRADO (Fase 16, 2026-08-24).**
 `X,Y,Z` es el encabezado de los dos benchmarks magnéticos publicados. El
-auto-mapeo asigna `{x: X, y: Z, depth: Y}`: el northing queda en el rol
+auto-mapeo asignaba `{x: X, y: Z, depth: Y}`: el northing quedaba en el rol
 PROFUNDIDAD y la elevación constante en el rol norte. La guarda que existe para
-exactamente esto (`northing_in_depth_slot`) exige `> 1e5 m`, así que dispara con
-DO-27 (northing 7,1e6) y **no dispara con Raglan** (4,1e4, coordenadas locales):
+exactamente esto (`northing_in_depth_slot`) exige `> 1e5 m`, así que disparaba con
+DO-27 (northing 7,1e6) y **no con Raglan** (4,1e4, coordenadas locales):
 `needs_mapping=False`, `needs_confirmation=False`, `suspicions=[]`. Río abajo
-muere con *«El kernel magnético G_active quedó vacío. Revisa cutoff_radius…»*,
-que señala el sitio equivocado. **Mitigación hoy: pasar `column_map` explícito.**
+moría con *«El kernel magnético G_active quedó vacío. Revisa cutoff_radius…»*,
+que señala el sitio equivocado.
+
+**Cómo se cerró, y por qué no bastaba con borrar el alias.** La Fase 16 midió que
+quitar `"y"` de la lista —el arreglo obvio— cambia una corrupción por otra
+**peor de ver**: `x`→este, `z`→norte (pero `z` es la *cota*) y el northing
+descartado, sin ningún número absurdo que delate el problema. La ambigüedad es
+de **nombre**, no de rango: una terna `x/y/z` desnuda admite dos lecturas
+—(este, norte, cota) y (este, profundidad, norte)— y el corpus de tests del
+propio repositorio contenía **las dos**. Así que ahora se **pregunta**:
+`_resolve_coordinate_columns` devuelve `coord_type=None` con un mensaje que
+ofrece los dos `column_map` listos para copiar, `analyze_columns` responde
+`needs_mapping=True`, y el sugeridor por **rango** propone el par (este, norte)
+correcto — confianza media, para confirmar en un clic. Vale igual para
+`local_x/local_y/local_z` y `coord_x/coord_y/coord_z`; `x_m/y_m/z_m` (la
+convención interna, con sufijo) y `depth`/`profundidad` siguen sin preguntar.
+
+Las dos guardas se **componen** y ninguna sustituye a la otra: la de nombre actúa
+*antes* de que haya respuesta; la de rango sigue viva y rechaza *después* una
+respuesta que los valores desmienten (mapear un northing de 6,9e6 m a
+profundidad se refuta con el dato en la mano).
+
+```python
+plan = tq.analyze_columns("gravimetria.csv")
+if plan.needs_mapping:
+    print(plan.suggestions)   # {'x': {'column': 'X', ...}, 'y': {'column': 'Y', ...}}
+```
+
+`ColumnPlan.suggestions` es nuevo de la Fase 16: el backend ya calculaba las
+sugerencias y las publica en el contrato, pero desde Python había que hurgar en
+`plan.mapping`. Preguntar sin dejar ver la respuesta sugerida habría sido cambiar
+una corrupción silenciosa por un muro.
 
 **H-F11-2 · El auto-grid propone mallas que el esquema rechaza (🟠 medio).**
 Con el mapeo ya correcto, el auto-grid de Raglan propone `nx=82, nz=81` y
@@ -221,13 +255,20 @@ están en disco y `open_run()` los recupera por id, pero el listado sale vacío.
 Contraste medido: la misma corrida con `wait=False` aparece con estado, ruta y
 tiempos.
 
-Ninguno de los tres se arregla en la Fase 11 a propósito: son conducta de la
+Ninguno de los tres se arregló en la Fase 11 a propósito: son conducta de la
 ingesta, del esquema y de la persistencia, tocarlos cambia el camino dorado de
-**todos** los usuarios, y esta fase no cambia payloads que no le corresponden.
+**todos** los usuarios, y esa fase no cambiaba payloads que no le correspondían.
 Que el cliente escribiera el historial, además, sería la API fabricando una
-persistencia que el backend no hizo. Los tres quedan pinchados por tests de
-caracterización en `tests/test_fase11_api_scripting.py`, que se pondrán rojos el
-día que alguien los arregle.
+persistencia que el backend no hizo. Los tres quedaron pinchados por tests de
+caracterización en `tests/test_fase11_api_scripting.py`, que se ponen rojos el
+día que alguien los arregla.
+
+**Y funcionó, que es lo que hay que contar de este mecanismo.** El test de
+H-F11-1 no sólo se puso rojo al cerrarlo en la Fase 16: llevaba escrito en el
+mensaje de fallo qué había que actualizar —él mismo, esta sección y el
+`column_map` de `examples/02`—, así que el arreglo no pudo dejar documentación
+mintiendo detrás. **H-F11-2 y H-F11-3 siguen abiertos** y sus dos tests siguen
+pinchándolos.
 
 ---
 

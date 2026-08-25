@@ -40,10 +40,13 @@ uno, el archivo que se le entrega al cliente.
 
 Además, **189 commits** separan la rama de `main` (main está 0 por delante) y las
 **Fases 12, 13 y 14 completas viven solo en el árbol de trabajo**.
+*(Ambas cosas dejaron de ser ciertas el 2026-08-24: la **Fase 15** las commiteó en
+10 commits y empujó la rama. La tabla de abajo es la del 08-23 y se conserva como
+foto de partida; el estado vivo se lee en los **✅ EJECUTADA** de cada fase.)*
 
 | | |
 |---|---|
-| Defectos que corrompen el resultado | **4** |
+| Defectos que corrompen el resultado | **4** (hoy **3**: H-F11-1 cerrado por la Fase 16) |
 | Defectos vivos confirmados (total) | **15** |
 | Verificados como ya cerrados | **12** |
 | Erratas encontradas en las auditorías | **2** |
@@ -74,7 +77,8 @@ tolerancia, higiene del repositorio, código muerto nuevo en el frontend.
 Ordenados por daño al usuario. Los cuatro primeros cambian el número que el
 consultor entrega.
 
-### 🔴 H-F11-1 — Un CSV `X,Y,Z` entra con los ejes cambiados, en silencio
+### ✅ H-F11-1 — Un CSV `X,Y,Z` entraba con los ejes cambiados, en silencio
+**CERRADO por la Fase 16 el 2026-08-24.** Lo de abajo es el diagnóstico original.
 
 `terraquantum-backend/services/gravity_import_service.py:154-156`
 
@@ -182,6 +186,7 @@ los índices internos). El origen es `0 0 0`: sin georreferencia.
 | **H-23** | Sin lockfile con hashes, y `build_desktop.ps1` nunca compara el intérprete con `.python-version`. (Lo bueno: **0 dependencias sin techo**, eran 7; PyInstaller pineado; `.python-version` declarado y consumido por la CI) | `requirements.txt`, `scripts/build_desktop.ps1` |
 | **NUEVO-5** | `six`, transitiva de `omf`, quedó **sin pin** — el propio comentario nombra cuatro y pinea tres | `requirements.txt:111-113` |
 | **NUEVO-6** | Tauri sirve en el **primer puerto libre 3000..3011** ⇒ `localStorage` se pierde solo, incluidas las preferencias y la clave del copiloto | `src-tauri/src/lib.rs` |
+| **NUEVO-7** *(medido por la Fase 16, 08-24)* | El plan de mapeo publica `suggestions` —qué columna va en cada rol, deducido del RANGO de los valores— y **ningún `.tsx` la lee**: 0 consumidores. La UI abre el paso de mapeo (`PrepEnrichPanel.tsx:324` sí reacciona a `needsMapping`) pero muestra una lista de columnas desnuda mientras el backend ya sabe cuál es cuál. Desde Python sí se ve. Familia **H-10**; el guard de la Fase 9 no lo caza porque mide **rutas y componentes**, no **campos de una respuesta** | `types/backend-contracts.generated.ts:210` |
 
 ---
 
@@ -267,6 +272,53 @@ Todo lo demás construye encima.
 **Gate.** `git status --porcelain` no lista nada del producto, y un `git clone`
 limpio en otro directorio compila el backend y pasa la suite rápida.
 
+#### ✅ EJECUTADA — 2026-08-24
+
+**10 commits**, rama empujada (`9cdd8b0..552a00c`, sin `--force`), **199 por
+delante de `main`**; `main` intacto por decisión explícita —fusionar metería ahí
+los tres defectos que aún corrompen el resultado—. `git status --porcelain` y
+`git diff HEAD` vacíos: el árbol quedó **byte-idéntico** a lo que había, que es
+la prueba de que partir los commits no perdió nada.
+
+**Estructura:** convención de la casa (`Fase N (backend)` / `(frontend)` /
+`(proceso)`), y **los diez cumplen la regla de oro sin excepción** — incluido
+partir la limpieza de READMEs en dos commits, uno de ellos de **un solo fichero
+borrado**, porque una regla que se cumple «salvo cuando incomoda» deja de ser
+comprobable. Dos ficheros (`PrepPanel.tsx`, `frontendApi.ts`) mezclaban fases y
+se partieron **a nivel de línea** (bloques `difflib` + `git hash-object` +
+`update-index`, sin tocar el árbol). `docs/06` **no** se pudo partir: la Fase 13
+no tiene sección «EJECUTADA» propia y la línea «CERRADAS: 1 a 14» sólo es cierta
+con las tres dentro — partirla exigía inventar frases de transición.
+
+**Lo que apareció al medir el gate: DOS puertas de CI en rojo que nadie sabía.**
+Las dos las causaba el trabajo sin commitear, así que HEAD habría entrado en rojo
+el día que se commiteara sin más.
+1. **El gate de H-22 castigaba la frase honesta.** Acusa a un script declarado
+   `diagnostico` que la documentación cite en una línea que diga «gate»; la Fase
+   14 escribió *«declarado diagnóstico, no puerta, en `GATES.json`»* y
+   `GATES.json` en minúsculas **contiene la subcadena `gate`**. Se excluye el
+   nombre del propio manifiesto antes de buscar la palabra. Mutación en las dos
+   direcciones: una acusación legítima sigue fallando, y sigue fallando también
+   cuando aparece en la misma línea que nombra `GATES.json`.
+2. **El formulario plano de la Fase 8** llevaba rojo desde que la Fase 14 añadió
+   `implicit_geology_json`. La lista congelada **no crece** —es la foto del
+   contrato pre-Fase 8 y es lo que hace verificable la mitad «falta un campo»—;
+   el campo nuevo va en `CAMPOS_ANADIDOS_DESPUES` con su fase dueña, más una
+   tercera aserción contra declaraciones fantasma. Mutación 3/3.
+
+**Y una trampa en el `.gitignore` de la limpieza del 08-23:** los patrones iban
+**sin anclar**, y `*.ipynb` casa los **12 notebooks YA VERSIONADOS** de
+`DO-27_Kimberlite/` y `Raglan_Magnetic/`. Hoy no se perdía nada (git no deja de
+seguir un fichero ya seguido), pero el día que alguien añadiera un notebook de
+benchmark desaparecería en silencio. Todos anclados con `/` y verificado con
+`git check-ignore` en las dos direcciones.
+
+**Gate medido:** clon limpio → compila **9 paquetes** · **5 guardas de CI** en
+verde · suite rápida **266 passed / 2 skipped / 0 failed**. Y la **suite completa
+`-m "not slow"`: 2601 passed, 5 skipped, 0 failed** (4 h 49 min). Los 2 skips de
+la rápida son de entorno (`test_fase3_f9_no_evaluado.py:142`, no hay corrida viva
+en la máquina), no fallos tapados.
+
 ---
 
 ### FASE 16 — La ingesta deja de adivinar el rol de una columna · **S** · 🔴 **P0** · *backend* · H-F11-1
@@ -287,6 +339,106 @@ que viene después hereda el error.
 **Gate.** Un CSV con cabeceras `X,Y,Z` y valores de easting/northing/cota
 chilenos: o se rechaza pidiendo el mapeo, o asigna los tres roles correctos.
 El test debe **fallar** si alguien devuelve `"y"` a la lista de profundidad.
+
+#### ✅ EJECUTADA — 2026-08-24
+
+**Salida elegida: se PREGUNTA.** `tests/test_fase16_roles_de_columna.py`, 17
+tests.
+
+**Alcance medido antes de tocar nada, para saber a quién muerde:** de los **210
+CSV del árbol**, la regla nueva bloquea **exactamente 3** — `DO27_Gravity_mGal`,
+`DO27_Magnetic_TMI_nT` y `Raglan_Magnetic_TMI_nT`, es decir los tres ficheros
+publicados con cabecera `X,Y,Z`, que son justamente los que se estaban
+corrompiendo. Ninguna fixture de LdM, ni el `do27_gravity_LISTO_mini`, ni los
+datos de prueba cambian de conducta.
+
+**El punto 1 del plan, medido, no alcanzaba.** Quitar `"y"` de la lista —el
+arreglo obvio— deja `x`→este ✔, `z`→**norte** ✘ (pero `z` es la cota) y el
+northing **descartado**: se cambia una corrupción silenciosa por otra **peor de
+ver**, porque desaparece el número absurdo (7e6 m de profundidad) que era lo
+único que podía delatarla. Por eso el arreglo es el punto 2 y no el 1.
+
+**La contradicción, en una línea:** para el mapeo manual y el plan
+(`column_mapping_service.ROLE_Y`) la letra `y` significa **NORTE**; en el sniffer
+significaba **PROFUNDIDAD**. La misma letra, roles opuestos, y nada que los
+comparara. Y `y` **nunca estuvo en el contrato**: el propio mensaje de error del
+resolver declara las formas admitidas como «(x_m, z_m), (lat/lon),
+(easting/northing), o **(x, z)**». La terna `x, y, z` no figura.
+
+**🔴 LA PRUEBA DE QUE LA AMBIGÜEDAD ES REAL ESTABA EN EL PROPIO CORPUS DE TESTS,
+con las dos lecturas a la vez.** `test_r35_flexible_coordinate_parser` usa
+`x,y,z` con `y = 5.0` constante — una profundidad de 5 m, la lectura interna. Y
+`test_column_mapping._arbitrary_csv` usa `X,Y,Z` con el comentario *«X/Y locales
+métricos, Z elevación»* — la lectura del resto del mundo. **Dos ficheros de test,
+la misma cabecera, significados opuestos.** El segundo pasaba
+mientras el código hacía lo contrario de lo que su comentario declaraba, porque
+el único `assert` era `status == "ok"`: **ninguno de los tres ficheros que
+cubrían este camino miraba dónde caían las coordenadas.** El tercero
+(`test_unit_inference_header`) tenía además `z=0` en todas las filas, es decir
+una geometría degenerada —todas las estaciones en norte=0— que tampoco nadie
+comprobaba.
+
+**Se cierra por NOMBRE, y la guarda por RANGO no se toca.** La de rango
+(`northing_in_depth_slot`, umbral `1e5 m`) es ciega en coordenadas locales: caza
+DO-27 (7,1e6) y no Raglan (4,1e4). **Las dos se componen y ninguna sustituye a la
+otra**: la de nombre actúa *antes* de que exista una respuesta; la de rango
+*después*, y —medido al montar el gate— rechaza mapear a mano un northing de
+6,9e6 m al eje vertical. Es decir: el mapeo manual no es una puerta trasera para
+reintroducir el defecto.
+
+**Preguntar sin dejar ver la respuesta habría sido un muro.** El sugeridor por
+rango propone el par correcto (`x→X` este, `y→Y` norte, confianza **media**,
+nunca alta) y ahora se puede leer desde Python: `ColumnPlan.suggestions` es nuevo
+—el backend ya lo calculaba y lo publicaba en el contrato, faltaba el accesor—.
+
+**Alcance verificado:** `x_m/y_m/z_m` (convención interna, con sufijo),
+`depth`/`profundidad` y el contrato `(x, z)` **siguen sin preguntar**; las tres
+familias ambiguas (`x/y/z`, `local_*`, `coord_*`) preguntan, que es el punto 3.
+
+**Una desviación de la letra del punto 1, declarada.** El punto 1 ofrecía pedir
+confirmación «cuando `y` aparece junto a `x` y `z` **sin columna de profundidad
+declarada**», lo que sugiere que con un `depth_m` al lado podría resolverse solo.
+No se hace: el **punto 2 no tiene excepción**, y aunque `depth_m` deje a `y` como
+horizontal, sigue sin decir cuál de `y`/`z` es el norte y cuál la cota —
+resolverlo exigiría asumir que `z` es la vertical, la misma clase de suposición
+que causó H-F11-1, una capa más adentro y por eso más difícil de ver. El coste es
+un mapeo manual en un encabezado poco frecuente; el beneficio es que la regla no
+tiene bordes y se explica en una frase. Queda pinchado con test propio.
+
+**El gate de física NO se toca, y se verificó en vez de suponerlo:**
+`f9_regression_lib.py` no llama al importador — `case_raglan` usa
+`raglan_harness.load_raglan_magnetic()`, que arma el frame a mano. Esa misma
+elusión es *por qué* el defecto sobrevivió a dos benchmarks externos: los
+datasets que lo habrían delatado nunca pasaron por la puerta que lo tenía.
+
+**Gate por MUTACIÓN:** devolver `"y"` al rol profundidad pone **7 de 17** tests de
+la fase en rojo —incluido el gate literal y las tres familias— más 3 en otros
+ficheros; restaurar vuelve a verde. El test de control (que el detector de
+geometría corrupta sabe distinguir) se mantiene verde bajo mutación, que es lo
+que impide que el gate pase por vacuidad.
+
+**Efecto colateral medido, y es una deuda ajena:** el presupuesto AST se puso
+rojo con **+44 líneas**. Al medirlo, `services.loc` ya estaba en **+4,86 %** del
+techo *antes* de esta fase — **1.371 líneas** de las Fases 12-14 que nunca se
+re-baselinearon. Se re-baselinea deliberadamente (es el flujo que el propio gate
+indica) y conviene saber que **`cc_max` (181) y `func_loc_max` (777) NO se
+movieron**: lo que creció son líneas de funcionalidad, no complejidad.
+
+**🟠 LO QUE ESTA FASE MIDIÓ Y NO ARREGLÓ, con nombre — NUEVO-7.** El camino de
+usuario está cableado a medias. `PrepEnrichPanel.tsx:324` **sí** reacciona a
+`needsMapping` y abre el paso de mapeo manual, así que la pregunta llega. Pero
+`suggestions` —la respuesta sugerida por rango, la que convierte la pregunta en
+un clic— existe en `types/backend-contracts.generated.ts:210` y **ningún `.tsx`
+la lee**: cero consumidores medidos. El usuario de la UI ve «hay que mapear» y
+una lista de columnas desnuda, mientras el backend ya sabe cuál es cuál. Desde
+Python sí se ve (`ColumnPlan.suggestions`, añadido aquí).
+
+Es la familia **H-10** otra vez —*el backend hace lo honesto y el camino del
+usuario se detiene ahí*— y conviene decir por qué el guard de la Fase 9 no lo
+caza: ese guard mide **rutas** y **componentes montados**, no **campos de una
+respuesta**. Un campo del contrato sin lector es un hueco que hoy nadie vigila.
+No se arregla aquí porque **esta fase es de backend** y la regla de oro del
+proyecto prohíbe cruzar; queda como trabajo de frontend, hermano de la Fase 20.
 
 ---
 
