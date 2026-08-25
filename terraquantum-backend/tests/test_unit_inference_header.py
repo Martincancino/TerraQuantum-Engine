@@ -11,6 +11,14 @@ Regla implementada (gravity_import_service):
     CON warning explícito (nunca en silencio).
   - Si no hay evidencia embebida ni mapeo manual → sigue siendo error
     (no adivinar: lección del doble-Bouguer).
+
+FASE 16 — por qué cambió el encabezado de estos CSV. Usaban `x,y,z`, que dejó de
+auto-resolverse (H-F11-1: `y` junto a `x` y `z` es ambiguo y ahora se pregunta).
+El encabezado era ANDAMIAJE —el tema de este fichero es la UNIDAD, no los ejes— y
+además estaba mal: con la tercera columna a 0 en todas las filas, la vieja
+lectura mandaba TODAS las estaciones a norte=0, una geometría degenerada que
+ningún assert miraba. Ahora es `x,z,depth_m`, que es el contrato documentado y
+da una geometría no degenerada.
 """
 import os
 import sys
@@ -40,8 +48,8 @@ def _rows(n: int = 12) -> str:
 
 class TestUnitInferenceFromHeader:
     def test_g_mgal_header_infers_unit_with_warning(self):
-        """CSV x,y,z,g_mgal sin columna unit → importa OK e infiere mGal avisando."""
-        path = _write_csv("x,y,z,g_mgal\n" + _rows())
+        """CSV x,z,depth_m,g_mgal sin columna unit → importa OK e infiere mGal avisando."""
+        path = _write_csv("x,z,depth_m,g_mgal\n" + _rows())
         try:
             result = import_gravity_csv_v1(path, strict=False)
             assert not any(
@@ -55,7 +63,7 @@ class TestUnitInferenceFromHeader:
             os.unlink(path)
 
     def test_bouguer_mgal_header_also_infers(self):
-        path = _write_csv("x,y,z,bouguer_mgal\n" + _rows())
+        path = _write_csv("x,z,depth_m,bouguer_mgal\n" + _rows())
         try:
             result = import_gravity_csv_v1(path, strict=False)
             assert not any("Missing required column: unit" in e for e in result.errors)
@@ -65,7 +73,7 @@ class TestUnitInferenceFromHeader:
 
     def test_plain_g_header_without_unit_still_errors(self):
         """Sin unidad embebida ni columna unit → sigue exigiendo unit (no adivinar)."""
-        path = _write_csv("x,y,z,g\n" + _rows())
+        path = _write_csv("x,z,depth_m,g\n" + _rows())
         try:
             result = import_gravity_csv_v1(path, strict=False)
             assert any(
@@ -79,7 +87,7 @@ class TestUnitInferenceFromHeader:
         rows = "\n".join(
             f"{i * 100},{(i % 3) * 100},0,{0.1 + i * 0.01},mGal" for i in range(12)
         )
-        path = _write_csv("x,y,z,g,unit\n" + rows)
+        path = _write_csv("x,z,depth_m,g,unit\n" + rows)
         try:
             result = import_gravity_csv_v1(path, strict=False)
             assert result.observations, f"errors: {result.errors}"

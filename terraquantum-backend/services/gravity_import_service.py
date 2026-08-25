@@ -155,7 +155,18 @@ _UTM_ZONE_COL_ALIASES: frozenset = frozenset({
 })
 _LOCAL_X_ALIASES: frozenset = frozenset({"x", "local_x", "coord_x"})
 _LOCAL_Z_ALIASES: frozenset = frozenset({"z", "local_z", "coord_z"})
-_LOCAL_Y_ALIASES: frozenset = frozenset({"y", "local_y", "coord_y"})
+# H-F11-1 (Fase 16) — ESTE CONJUNTO YA NO ASIGNA NINGÚN ROL: sólo DETECTA la
+# ambigüedad para preguntar. Antes se llamaba `_LOCAL_Y_ALIASES` y mandaba la
+# columna al slot `y_m`, que en la convención interna ES LA PROFUNDIDAD; con la
+# cabecera más común del mundo (`X,Y,Z` = este, norte, cota) el northing acababa
+# bajo tierra y la cota en el norte, sin aviso. La contradicción, en una línea:
+# para el mapeo manual (`column_mapping_service.ROLE_Y`) la letra `y` significa
+# NORTE, y aquí significaba PROFUNDIDAD. Van las tres familias porque
+# `coord_x/coord_y/coord_z` es igual de ambiguo (punto 3 de la fase); quedan
+# fuera los nombres con sufijo `_m`, que son la convención interna explícita y
+# los resuelve la rama 1. El argumento completo y sus medidas:
+# `tests/test_fase16_roles_de_columna.py`.
+_LOCAL_Y_AMBIGUOUS_ALIASES: frozenset = frozenset({"y", "local_y", "coord_y"})
 _DEPTH_COL_ALIASES: frozenset = frozenset({
     "depth", "depth_m", "depth_below_surface", "depth_below_surface_m",
     "profundidad", "profundidad_m", "prof_m", "profundidad_bajo_superficie",
@@ -370,9 +381,42 @@ def _resolve_coordinate_columns(
     if not local_z_col and "z_m" in h_set:
         local_z_col = headers[headers_lower.index("z_m")]
     if local_x_col and local_z_col:
-        local_y_col = _find_first_alias(headers_lower, headers, _LOCAL_Y_ALIASES)
-        if not local_y_col and "y_m" in h_set:
-            local_y_col = headers[headers_lower.index("y_m")]
+        # H-F11-1 (Fase 16) — LA TERCERA LETRA DESNUDA NO SE INTERPRETA: SE PREGUNTA.
+        # Con `x` y `z` solos la lectura es única y documentada (este, norte). Con
+        # un `y` hermano el archivo admite DOS —(este, norte, cota), la del resto
+        # del mundo; y (este, profundidad, norte), la que este código aplicaba— y
+        # el NOMBRE no las distingue. Devolver `coord_type=None` es lo que hace
+        # que `build_column_mapping_plan` marque `needs_mapping` y el endpoint
+        # DEVUELVA el plan: al usuario le llega además la sugerencia por RANGO
+        # (`_suggest_missing_by_range`), que sí puede leer los valores. Aquí no se
+        # mira el rango a propósito: esa guarda ya existe (`northing_in_depth_slot`,
+        # umbral 1e5 m) y es CIEGA a las coordenadas locales — caza DO-27 (7,1e6) y
+        # no Raglan (4,1e4). La ambigüedad es de nombre; se cierra por nombre.
+        ambiguous_y_col = _find_first_alias(
+            headers_lower, headers, _LOCAL_Y_AMBIGUOUS_ALIASES
+        )
+        if ambiguous_y_col:
+            errors.append(
+                f"La columna '{ambiguous_y_col}' es ambigua junto a "
+                f"'{local_x_col}' y '{local_z_col}': no se puede saber por el "
+                "nombre si es la coordenada NORTE (y el eje vertical es "
+                f"'{local_z_col}') o la PROFUNDIDAD bajo superficie. "
+                "TerraQuantum no lo adivina porque las dos lecturas producen "
+                "geometrías 3D distintas y ambas parecen correctas. "
+                "Indique el rol de cada columna en el mapeo manual, por ejemplo: "
+                f"{{\"x\": \"{local_x_col}\", \"y\": \"{ambiguous_y_col}\", "
+                f"\"elevation\": \"{local_z_col}\"}} para (este, norte, cota); "
+                f"o {{\"x\": \"{local_x_col}\", \"y\": \"{local_z_col}\", "
+                f"\"depth\": \"{ambiguous_y_col}\"}} para (este, norte, profundidad)."
+            )
+            return {
+                "coord_type": None,
+                "x_col": None, "y_col": None, "z_col": None, "utm_zone_col": None,
+                "errors": errors, "warnings": warnings, "raw_cols": {},
+            }
+
+        # `y_m` SÍ se acepta sin preguntar: sufijo `_m` = convención interna.
+        local_y_col = headers[headers_lower.index("y_m")] if "y_m" in h_set else None
         depth_col = _find_first_alias(headers_lower, headers, _DEPTH_COL_ALIASES)
         y_col = local_y_col or depth_col
         if not y_col:

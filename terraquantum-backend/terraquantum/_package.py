@@ -154,6 +154,22 @@ class ColumnPlan:
         return self.mapping.get("suspicions")
 
     @property
+    def suggestions(self) -> Dict[str, Any]:
+        """`{rol: {column, confidence, reason}}` propuesto por RANGO de valores.
+
+        Lo añade la Fase 16 (H-F11-1). Desde que una terna `x/y/z` desnuda se
+        PREGUNTA en vez de adivinarse, `needs_mapping=True` es una respuesta
+        frecuente y legítima — y un script que sólo ve el `True` no tiene con qué
+        seguir. El backend ya calculaba estas sugerencias y las publica en el
+        contrato (`ingest_contracts_schema`); lo que faltaba era el accesor, así
+        que desde Python había que hurgar en `plan.mapping`.
+
+        Nunca son de confianza alta: se proponen para confirmar, jamás se aplican
+        solas. Ése es el contrato que el propio `column_mapping_service` declara.
+        """
+        return dict(self.mapping.get("suggestions") or {})
+
+    @property
     def confidence(self) -> Optional[float]:
         valor = self.mapping.get("confidence")
         return float(valor) if isinstance(valor, (int, float)) else None

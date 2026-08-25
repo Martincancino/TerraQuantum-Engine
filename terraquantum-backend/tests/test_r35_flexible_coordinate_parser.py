@@ -176,7 +176,21 @@ def test_legacy_x_m_y_m_z_m_still_works(tmp_path):
     )
 
 
-def test_local_alias_x_y_z_imports_correctly(tmp_path):
+def test_local_alias_x_y_z_pregunta_y_con_mapeo_importa_donde_dice(tmp_path):
+    """FASE 16 (H-F11-1) — `x,y,z` deja de resolverse solo, y aquí está el porqué.
+
+    Este CSV es la lectura LEGÍTIMA de la terna: `y = 5.0` en todas las filas es
+    una profundidad de 5 m, no un northing. Y ese es justamente el problema: en
+    el mismo repositorio, `test_column_mapping._arbitrary_csv` usa `X,Y,Z` con la
+    intención contraria (su comentario dice «X/Y locales métricos, Z elevación»).
+    Dos ficheros de test, la misma cabecera, dos significados opuestos — que es
+    la prueba de que el NOMBRE no alcanza y de que adivinar era elegir por el
+    usuario.
+
+    Antes este test sólo pedía `status == "ok"` y 12 observaciones, así que no
+    habría notado la diferencia. Ahora exige las dos mitades: que sin mapeo se
+    PREGUNTE, y que con mapeo los valores caigan EN EL EJE QUE EL MAPEO DICE.
+    """
     rows = [
         (f"st_{i}", i * 100.0, 5.0, i * 100.0, "mGal", 5.0 + i * 0.1, "bouguer_anomaly")
         for i in range(12)
@@ -186,9 +200,25 @@ def test_local_alias_x_y_z_imports_correctly(tmp_path):
         ["station_id", "x", "y", "z", "unit", "g_mgal", "gravity_type"],
         rows,
     )
-    result = import_gravity_csv_v1(tmp_path / "local_xyz.csv")
-    assert result.status == "ok", result.errors
-    assert len(result.observations) == 12
+
+    sin_mapa = import_gravity_csv_v1(tmp_path / "local_xyz.csv")
+    assert sin_mapa.status == "error", (
+        "`x,y,z` volvió a auto-resolverse. Con la otra lectura —la de la cabecera "
+        "más común del mundo— eso manda el northing al eje vertical."
+    )
+    assert any("ambigua" in e.lower() for e in sin_mapa.errors), sin_mapa.errors
+
+    con_mapa = import_gravity_csv_v1(
+        tmp_path / "local_xyz.csv",
+        column_map={"x": "x", "y": "z", "depth": "y"},
+    )
+    assert con_mapa.status == "ok", con_mapa.errors
+    assert len(con_mapa.observations) == 12
+    assert all(o.y_m == 5.0 for o in con_mapa.observations), (
+        "la profundidad declarada (5 m) no llegó al eje vertical"
+    )
+    norte = [o.z_m for o in con_mapa.observations]
+    assert max(norte) - min(norte) > 1.0, "el eje norte quedó degenerado"
 
 
 def test_local_x_z_without_y_assumes_y_zero(tmp_path):

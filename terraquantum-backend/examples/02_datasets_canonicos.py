@@ -72,7 +72,9 @@ CANONICOS = [
         "csv": RAIZ / "Raglan_Magnetic" / "Raglan_Magnetic_TMI_nT.csv",
         "config": {},
         "rapido": {"depth": 600},
-        # ⚠️ Este mapeo NO es cosmético: sin él, el dataset se corrompe EN
+        # ⚠️ Este mapeo NO es cosmético: es la RESPUESTA a la pregunta que la
+        # ingesta hace desde la Fase 16. Sin él el import falla diciendo qué
+        # mapear; antes de la Fase 16 corría y corrompía la geometría EN
         # SILENCIO. Ver el hallazgo H-F11-1 al pie de este archivo.
         "column_map": {"x": "X", "y": "Y", "elevation": "Z",
                        "magnetic_value": "TMI_nT", "sigma": "Std_nT"},
@@ -163,18 +165,30 @@ if __name__ == "__main__":
 # integración del proyecto». Lo fue el primer día. Ninguno es de esta API — los
 # dos están en el backend, y los dos se reproducen con tres líneas.
 #
-# H-F11-1 · Un CSV `X,Y,Z` corrompe la geometría EN SILENCIO  🔴 ALTO
+# H-F11-1 · Un CSV `X,Y,Z` corrompía la geometría EN SILENCIO  ✅ CERRADO (Fase 16)
 #   `X,Y,Z` es el encabezado de los DOS benchmarks magnéticos publicados. El
-#   auto-mapeo devuelve `{x: X, y: Z, depth: Y}`: el NORTHING queda en el rol
+#   auto-mapeo devolvía `{x: X, y: Z, depth: Y}`: el NORTHING quedaba en el rol
 #   PROFUNDIDAD y la elevación constante en el rol norte. Existe una guarda para
 #   exactamente esto (`northing_in_depth_slot`, column_mapping_service) y su
 #   umbral es `> 1e5 m`:
 #     · DO-27  — northing 7,1e6 → LA GUARDA DISPARA (`needs_confirmation=True`).
-#     · Raglan — northing 4,1e4 → **NO dispara**. `needs_mapping=False`,
+#     · Raglan — northing 4,1e4 → **NO disparaba**. `needs_mapping=False`,
 #       `needs_confirmation=False`, `suspicions=[]`. Silencio absoluto.
 #   Consecuencia medida: área degenerada → `El kernel magnético G_active quedó
 #   vacío. Revisa cutoff_radius…`, un mensaje que apunta al sitio equivocado.
 #   El umbral asume coordenadas UTM; Raglan las tiene LOCALES (496–4504 m).
+#
+#   CERRADO el 2026-08-24 preguntando en vez de adivinar: una terna `x/y/z`
+#   desnuda admite dos lecturas —(este, norte, cota) y (este, profundidad,
+#   norte)— y el nombre no las distingue, así que la ingesta devuelve el plan y
+#   pide el mapeo. La guarda por RANGO no se tocó: sigue viva como segunda línea,
+#   y rechaza una respuesta que los valores desmientan.
+#
+#   POR ESO EL `column_map` DE RAGLAN SE QUEDA donde está, pero cambió de
+#   naturaleza: era la MITIGACIÓN de un defecto y ahora es la RESPUESTA a la
+#   pregunta que la ingesta hace. Sigue siendo obligatorio, y ahora se nota:
+#   sin él el import falla con un mensaje que dice qué mapear, en vez de correr
+#   y entregar un modelo con el norte y la profundidad cambiados.
 #
 # H-F11-2 · El auto-grid propone mallas que el esquema rechaza  🟠 MEDIO
 #   Con el mapeo YA correcto, el auto-grid de Raglan propone `nx=82, nz=81` y

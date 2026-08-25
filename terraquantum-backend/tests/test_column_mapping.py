@@ -76,11 +76,25 @@ def test_plan_arbitrary_columns_needs_mapping():
 
 
 def test_plan_es_bouguer_header_now_autodetects():
-    """Deuda F2 cerrada: el header ES del corpus resuelve sin mapeo manual."""
+    """Deuda F2 cerrada: el header ES del corpus resuelve sin mapeo manual.
+
+    FASE 16 — el tema de este test es el VALOR (`Anomalia_Bouguer_mGal`), y ése
+    sigue auto-resolviéndose. Lo que cambió es el andamiaje: `X,Y,Z` dejó de
+    auto-mapearse (H-F11-1), así que `needs_mapping` pasa a True. Se comprueba
+    explícitamente que lo que falta son las COORDENADAS y no el valor — si algún
+    día el valor volviera a caerse, este test tiene que seguir viéndolo.
+    """
     headers = ["Anomalia_Bouguer_mGal", "X", "Y", "Z"]
     plan = build_column_mapping_plan(headers, data_kind="gravity")
-    assert plan["needs_mapping"] is False
     assert plan["roles"]["gravity_value"] == "Anomalia_Bouguer_mGal"
+    assert "gravity_value" not in plan["missing_required"], (
+        "el header ES dejó de auto-detectarse: ésa es la deuda F2, y este test "
+        "existe para eso"
+    )
+    assert set(plan["missing_required"]) == {"x", "y"}, (
+        "lo único que debe faltar son las dos horizontales, porque `X,Y,Z` es "
+        f"ambiguo y se pregunta. missing={plan['missing_required']}"
+    )
 
 
 def test_plan_with_override_resolves():
@@ -142,14 +156,49 @@ def test_import_arbitrary_columns_without_map_fails_clearly(tmp_path):
     assert res.errors
 
 
-def test_import_es_bouguer_header_now_imports_without_map(tmp_path):
-    """Deuda F2 cerrada: el CSV con header ES importa SIN column_map (unidad
-    inferida del nombre — patrón 60d1c56 — y coordenadas locales X/Y/Z)."""
+def test_import_es_bouguer_header_infiere_valor_y_unidad_sin_mapearlos(tmp_path):
+    """Deuda F2 cerrada: el header ES da valor Y unidad sin que nadie los mapee.
+
+    FASE 16 — antes se llamaba `..._now_imports_without_map` y no pasaba NINGÚN
+    mapeo. Ya no se puede: `X,Y,Z` es ambiguo y la ingesta pregunta (H-F11-1).
+    El mapeo que se pasa es SÓLO de coordenadas; el valor y la unidad siguen sin
+    mapearse, que es exactamente lo que la deuda F2 vino a cerrar. Si se mapearan
+    también, el test se volvería vacío.
+
+    El comentario de `_arbitrary_csv` decía «X/Y locales métricos, Z elevación» y
+    la lectura vieja hacía otra cosa (Y→profundidad, Z→norte). Nadie lo vio
+    porque el único assert era `status == "ok"`. Ahora se comprueba dónde caen.
+    """
     path = _write(tmp_path, "es.csv", _arbitrary_csv())
-    res = import_gravity_csv_v1(path, strict=False, allow_g_raw=True, data_kind="gravity")
+    res = import_gravity_csv_v1(
+        path, strict=False, allow_g_raw=True, data_kind="gravity",
+        column_map={"x": "X", "y": "Y", "elevation": "Z"},
+    )
     assert res.status == "ok", res.errors
     assert res.import_metadata.gravity_column_used == "Anomalia_Bouguer_mGal"
     assert any("inferida mGal" in w for w in res.warnings)
+
+    # La geometría que el comentario del CSV siempre declaró, ahora verificada.
+    norte = [o.z_m for o in res.observations]
+    assert max(norte) - min(norte) > 1.0, (
+        "el eje norte quedó degenerado: ahí entró la elevación, no el northing"
+    )
+    assert all(o.y_m == 0.0 for o in res.observations), (
+        "Z es la elevación de superficie: la profundidad tiene que ser 0"
+    )
+
+
+def test_import_es_bouguer_header_sin_mapa_pregunta_por_las_coordenadas(tmp_path):
+    """La otra mitad de lo anterior: sin mapeo NO se inventa la geometría.
+
+    Es el caso del gate de la Fase 16 llegando por la puerta de este fichero.
+    """
+    path = _write(tmp_path, "es.csv", _arbitrary_csv())
+    res = import_gravity_csv_v1(path, strict=False, allow_g_raw=True, data_kind="gravity")
+    assert res.status == "error", (
+        "`X,Y,Z` volvió a auto-mapearse: el northing acaba en el eje vertical"
+    )
+    assert any("ambigua" in e.lower() for e in res.errors), res.errors
 
 
 def test_read_csv_headers(tmp_path):

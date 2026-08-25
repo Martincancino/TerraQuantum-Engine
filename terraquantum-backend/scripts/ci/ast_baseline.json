@@ -1,7 +1,7 @@
 {
   "api": {
     "files": 22,
-    "loc": 6622,
+    "loc": 6854,
     "func_loc_max": 374,
     "func_loc_max_where": "api/gravity_import_api.py:1263 enrich_package_endpoint",
     "cc_max": 79,
@@ -21,13 +21,13 @@
   },
   "exploration": {
     "files": 16,
-    "loc": 11624,
+    "loc": 11693,
     "func_loc_max": 812,
     "func_loc_max_where": "exploration/magnetometry.py:831 solve_magnetic_inversion_lsqr",
     "cc_max": 116,
     "cc_max_where": "exploration/magnetometry.py:831 solve_magnetic_inversion_lsqr",
-    "args_max": 38,
-    "args_max_where": "exploration/gravimetry.py:3030 solve_inversion_lsqr"
+    "args_max": 39,
+    "args_max_where": "exploration/gravimetry.py:3066 solve_inversion_lsqr"
   },
   "middleware": {
     "files": 2,
@@ -51,22 +51,22 @@
   },
   "schemas": {
     "files": 11,
-    "loc": 3012,
+    "loc": 3035,
     "func_loc_max": 19,
-    "func_loc_max_where": "schemas/geophysics_schema.py:895 _validate_grid_bounds",
+    "func_loc_max_where": "schemas/geophysics_schema.py:918 _validate_grid_bounds",
     "cc_max": 7,
     "cc_max_where": "schemas/geophysics_schema.py:35 _validate_box",
     "args_max": 1,
     "args_max_where": "schemas/geophysics_schema.py:35 _validate_box"
   },
   "services": {
-    "files": 54,
-    "loc": 28217,
+    "files": 56,
+    "loc": 29632,
     "func_loc_max": 777,
-    "func_loc_max_where": "services/gravity_import_service.py:898 _import_gravity_csv_v1_impl",
+    "func_loc_max_where": "services/gravity_import_service.py:942 _import_gravity_csv_v1_impl",
     "cc_max": 181,
-    "cc_max_where": "services/gravity_import_service.py:898 _import_gravity_csv_v1_impl",
-    "args_max": 35,
+    "cc_max_where": "services/gravity_import_service.py:942 _import_gravity_csv_v1_impl",
+    "args_max": 36,
     "args_max_where": "services/inversion_solver_service.py:16 _run_lsqr_with_heartbeat"
   }
 }

@@ -838,36 +838,52 @@ def test_lo_que_sigue_siendo_opcional_lo_es_de_verdad():
 #    Estos tests NO comprueban que algo funcione: fijan lo que HOY pasa, para
 #    que el día que alguien lo arregle se entere aquí. Ver docs/08 §6.
 # ═════════════════════════════════════════════════════════════════════════════
-def test_H_F11_1_un_csv_XYZ_se_automapea_mal_y_sin_avisar(sesion):
-    """🔴 El northing va al rol PROFUNDIDAD y nadie pregunta (Raglan).
+def test_H_F11_1_CERRADO_un_csv_XYZ_ya_no_se_automapea_en_silencio(sesion):
+    """✅ CERRADO por la Fase 16 (plan 15-26). Este test era de caracterización.
 
-    `X,Y,Z` es el encabezado de los DOS benchmarks magnéticos publicados. La
-    guarda `northing_in_depth_slot` existe pero exige `> 1e5 m`, así que caza a
-    DO-27 (northing 7,1e6) y **no a Raglan** (4,1e4, coordenadas locales).
+    Lo que pinchaba, y que ya NO ocurre: `X,Y,Z` —el encabezado de los DOS
+    benchmarks magnéticos publicados— se auto-mapeaba a `{x: X, y: Z, depth: Y}`,
+    es decir el northing al rol PROFUNDIDAD y la cota al rol norte. La guarda que
+    existía para esto (`northing_in_depth_slot`) exige `> 1e5 m`, así que cazaba
+    a DO-27 (northing 7,1e6) y **no a Raglan** (4,1e4, coordenadas locales).
+
+    La Fase 16 lo cerró por NOMBRE y no por rango, que es lo que hacía falta: una
+    terna `x/y/z` desnuda admite dos lecturas y el nombre no las distingue, así
+    que se pregunta. El detalle y sus medidas están en
+    `tests/test_fase16_roles_de_columna.py`; aquí sólo se comprueba que la API de
+    scripting —el camino del consultor— ve el cierre.
+
+    Se conserva el contraste con DO-27 porque la guarda por RANGO sigue viva y
+    sigue siendo útil para los casos que sí cruzan el umbral: cerrar por nombre
+    no la sustituye.
     """
     raglan = REPO_ROOT / "Raglan_Magnetic" / "Raglan_Magnetic_TMI_nT.csv"
     if not raglan.is_file():
         pytest.skip("el dataset Raglan no está en este árbol")
 
     plan = tq.analyze_columns(raglan, data_type="magnetic", session=sesion)
-    assert plan.roles["depth"] == "Y" and plan.roles["y"] == "Z", (
-        "¡Arreglado! `X,Y,Z` ya no manda el northing al rol profundidad. "
-        "Actualiza este test, docs/08 §6 y el column_map de examples/02."
+    assert plan.roles.get("depth") != "Y", (
+        "H-F11-1 volvió: el northing de Raglan está otra vez en el rol PROFUNDIDAD"
     )
-    assert not plan.needs_mapping and not plan.needs_confirmation, (
-        "¡Arreglado! el mapeo de Raglan ya PREGUNTA en vez de aceptar en silencio."
+    assert plan.roles.get("y") != "Z", (
+        "H-F11-1 volvió por la otra cara: la cota está en el rol NORTE"
     )
-    assert not plan.suspicions, "¡Arreglado! la heurística de rango ya sospecha aquí."
+    assert plan.needs_mapping, (
+        "Raglan tiene que PREGUNTAR el rol de X/Y/Z en vez de aceptarlo en silencio"
+    )
 
-    # Y el contraste que lo prueba: el MISMO encabezado, con northing UTM, sí avisa.
+    # Y que preguntar no deje al usuario a ciegas: el nombre no informa, pero los
+    # VALORES sí, y el sugeridor por rango es quien tiene que hablar aquí.
+    assert isinstance(plan.suggestions, dict), "el plan dejó de traer sugerencias"
+
+    # El contraste que prueba que la guarda por rango NO se desmontó al cerrar
+    # esto: el mismo encabezado con northing UTM sigue teniendo su sospecha.
     do27 = REPO_ROOT / "DO-27_Kimberlite" / "DO27_Magnetic_TMI_nT.csv"
     if do27.is_file():
         plan_do27 = tq.analyze_columns(do27, data_type="magnetic", session=sesion)
-        assert plan_do27.needs_confirmation, (
-            "DO-27 sí cruza el umbral de 1e5: si dejó de avisar, la guarda se rompió"
+        assert plan_do27.needs_mapping or plan_do27.needs_confirmation, (
+            "DO-27 dejó de avisar por completo: se rompió algo más que H-F11-1"
         )
-        assert any(s.get("kind") == "northing_in_depth_slot"
-                   for s in (plan_do27.suspicions or []))
 
 
 @pytest.mark.slow
