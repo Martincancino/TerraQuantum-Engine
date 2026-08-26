@@ -11,7 +11,7 @@
 En una sesión nueva de Claude Code, abierta en la raíz del proyecto:
 
 ```
-Lee docs/10_PLAN_FASES_15_26.md y ejecuta la Fase 16 completa.
+Lee docs/10_PLAN_FASES_15_26.md y ejecuta la Fase 19 completa.
 ```
 
 **El número de fase ES el orden de ejecución.** Empiezan en **15** porque las
@@ -122,6 +122,18 @@ que es la componente **Norte** del campo.
 > Nota: `exploration/gravimetry.py` **no declara ninguna convención de ejes**, así
 > que la afirmación de `magnetometry.py:31` de ser «idéntica a gravimetry» no es
 > verificable desde gravimetry.
+
+> **MEDIDO por la Fase 18 (2026-08-25) — sigue VIVO, la Fase 19 lo corrige.**
+> La consecuencia numérica ya no es una hipótesis: producción calcula con una
+> **declinación efectiva `D_ef = 90° − D`** (identidad verificada a 10⁻¹³ nT), así
+> que **no es una rotación de 90° sino una REFLEXIÓN sobre el azimut 45°** — con
+> `D = 2°` el desvío es **86°**, y con `D = 45°` el defecto sería **exactamente
+> invisible**. En Chile la anomalía predicha queda **incorrelada con la
+> verdadera** (Pearson **r = −0,05**); por el camino de producción completo el
+> error horizontal del blanco pasa de 30 m a **150 m** y el misfit de 1,0 % a
+> **51,6 %**. En el Ártico los dos brazos son indistinguibles: índice de ceguera
+> **√2·cos I·|sin D − cos D|** = 1,18 (Chile) vs 0,24 (Raglan) y 0,07 (DO-27).
+> Detalle y decisión: `docs/11_CONVENCION_DE_EJES.md`.
 
 ### ✅ ACAD-0 — La corrección de terreno usaba el módulo, no la componente vertical
 
@@ -627,7 +639,6 @@ sección se sigue colapsando a un punto en el horizontal, y los 7 tests
 tautológicos de arriba siguen como están: cada uno vive en un área distinta
 (solver, DOI, PGI, laplaciano, fusión) y arreglarlos es otra fase.
 
-
 ---
 
 ### FASE 18 — El experimento que cierra la rotación de 90° · **M** · 🔴 **P0** · *backend, medir* · ACAD-1
@@ -654,6 +665,167 @@ daba el mismo número (fue exactamente lo que casi hunde la Fase 14).
 entre el eje del dipolo recuperado y el esperado, a dos latitudes. Si sale ~90°
 en Chile y ~0° en el Ártico, la hipótesis queda cerrada.
 
+#### ✅ EJECUTADA — 2026-08-25
+
+Harness: `scripts/validation/fase18_axis_convention_experiment.py` (4 partes) ·
+reporte: `fase18_axis_convention_report.json` · decisión escrita:
+**`docs/11_CONVENCION_DE_EJES.md`**. **No se tocó una línea de producción.**
+
+**El número — y el plan pedía uno equivocado.** El gate esperaba «~90° en Chile».
+Sale **86,000°**, y la diferencia no es ruido: **el defecto no es una rotación,
+es una REFLEXIÓN sobre el azimut 45°.** Producción calcula la respuesta magnética
+con una declinación efectiva
+
+```
+D_efectiva = 90° − D          (la inclinación queda intacta)
+```
+
+y eso es una **identidad, no una aproximación**: ajustando qué par (I', D')
+reproduce la salida corrupta, el residuo baja a **~10⁻¹³ nT** en los cuatro sitios
+y en dos posiciones distintas del cuerpo. Con `D = 2°` la rotación es `90 − 2·D`
+= 86°, no 90°.
+
+| sitio | I | D | D efectiva | predicha | rotación | Pearson r | error/señal |
+|---|---|---|---|---|---|---|---|
+| **Chile** (defaults) | −30,0° | 2,0° | **88,000°** | 88,00° | **86,000°** | **−0,053** | **1,45** |
+| DO-27 (IGRF real) | 83,8° | 25,4° | 64,600° | 64,60° | 39,200° | 0,9945 | 0,103 |
+| Raglan (IGRF real) | 83,0° | −32,0° | 122,000° | 122,00° | 154,000° | 0,9407 | 0,336 |
+| **Declinación 45°** | −30,0° | 45,0° | **45,000°** | 45,00° | **0,000°** | **1,0000** | **0,000** |
+
+El `r = −0,05` de Chile es el titular: la anomalía que produce el motor **no está
+correlacionada con la verdadera**. No es un sesgo, es otro dato. Y el
+`error/señal = 1,45 ≈ √2` es la firma aritmética exacta de dos señales
+incorreladas.
+
+**La cuarta fila es la que ninguna lectura de código podía dar.** Con `D = 45°`
+el defecto es **exactamente invisible** (1,9·10⁻¹³ nT). Si fuera una rotación
+rígida de 90°, ahí habría un error del **78 %** de la señal. Se midió: lo hay
+para la hipótesis rival, no para producción. Reflexión confirmada, rotación
+refutada, con números.
+
+**Por qué DO-27 y Raglan fueron ciegos, en forma cerrada.** Lo que se desplaza es
+`f̂` en el marco geográfico, y su módulo vale **√2·cos I·|sin D − cos D|**
+(verificado contra el cálculo numérico a 1·10⁻¹⁶): Chile **1,1813**; Raglan
+0,2375 (**5,0× menos**); DO-27 0,0725 (**16,3× menos**); D=45° exactamente 0.
+`cos I ≈ 0,11` en el Ártico aplasta justo la componente que se refleja. Y la
+segunda razón se confirmó por lectura: `ingest_do27.py:100` y
+`raglan_harness.py:104` arman el frame a mano *con* la convención del motor, así
+que nunca pasan por el importador.
+
+**El camino de producción completo, en tres tramos.** CSV con cabeceras en
+español → `import_gravity_csv_v1(data_kind="magnetic")` → empalme literal de
+`geophysics_service.py:2107` → motor.
+
+*B1, el contrato de la ingesta* — con una malla de estaciones **deliberadamente
+asimétrica** (21 × 13; con malla cuadrada el defecto sería invisible, la misma
+lección que el gate de la Fase 19 exige para el ZIP):
+
+```
+|x_m − Este| = 0,00e+00 m      |x_m − Norte| = 1200,0 m
+span(x_m, z_m) = (1200, 720)   span CSV (E, N) = (1200, 720)
+```
+
+El slot `x_m` **es** el easting. Medido, no leído de un comentario.
+
+*B3, el modelo recuperado* (brazo de control = `field_unit_vector` parcheado a la
+convención del dato; un instrumento de medida que **no** se escribe en producción
+y se restaura en un `finally`):
+
+| geometría | sitio | brazo | err. horizontal | misfit |
+|---|---|---|---|---|
+| cuadrada 17×17 | **Chile** | **producción** | **150,0 m** | **51,61 %** |
+| cuadrada 17×17 | **Chile** | control | **30,0 m** | **1,04 %** |
+| cuadrada 17×17 | DO-27 | producción | 30,0 m | 21,67 % |
+| cuadrada 17×17 | DO-27 | control | 30,0 m | 21,05 % |
+| alargada 21×13 | Chile | producción | 150,0 m | 60,76 % |
+| alargada 21×13 | Chile | control | 30,0 m | 22,06 % |
+| alargada 21×13 | DO-27 | producción | 30,0 m | 26,41 % |
+| alargada 21×13 | DO-27 | control | 30,0 m | 25,72 % |
+
+En Chile el defecto **quintuplica el error horizontal y multiplica el misfit por
+50**; en el Ártico los dos brazos son **indistinguibles** (0,6 puntos). El
+misfit del 51,6 % es lo que el usuario ve: la inversión **no puede ajustar su
+propio dato**, y el producto le entrega igualmente un modelo.
+
+> **Se publican las DOS geometrías a propósito.** La alargada hace decisivo el
+> tramo B1 pero le cuesta fit al control (22 % en vez de 1 %); la cuadrada da el
+> contraste más limpio pero su B1 no discriminaría. Quedarse sólo con la que
+> favorece la conclusión es el vicio que este repositorio persigue.
+> ⚠️ **Con el `auto_grid` crudo de este CSV (34×36×34 a 29 m) el experimento NO
+> discrimina**: el solver GPCG termina por `(max_outer)` en los DOS brazos, con
+> misfit 47–58 % y el pico pegado a 14,5 m. La malla de B3 se **declara**
+> (el endpoint acepta `nx/ny/nz` del paquete, `gravity_import_api.py:1731-1733`).
+> Que el auto-grid por defecto deje al solver sin converger es un hallazgo
+> aparte, y no tiene fase.
+
+**La profundidad no discrimina, otra vez.** −190 m (producción) vs −130 m
+(control) sobre una verdad de 220 m: los dos brazos dejan el pico cerca de la
+superficie. Es el mismo eje ciego que midió la Fase 17 y que
+`project_synthetic_depth_ambiguity` lleva midiendo desde el principio. **El eje
+que discrimina es el horizontal.**
+
+**Mutación: 8/8** (Parte D del harness, reproducible).
+
+| mutación | qué rompe | resultado |
+|---|---|---|
+| **M1** — quitar el defecto | `f̂` en la convención del dato | rotación medida **5,7·10⁻¹⁴°** en los 4 sitios: el harness dice 0 cuando no hay defecto, no se mide a sí mismo |
+| **M2** — reflexión vs rotación | compara con la hipótesis rival | producción == verdad a 1,9·10⁻¹³ nT; la rotación rígida de 90° falla por **78 %** de la señal |
+| **M3** — ensamblado inconsistente | permuta los sensores y NO los vóxeles | **ningún** (I', D') lo reproduce: residuo **17 %** de la señal. El «88,000° exacto» de la Parte A no es un artefacto del ajustador |
+| **M4** — sólo es magnético | permuta consistente sobre el forward GRAVIMÉTRICO | **4,8·10⁻¹⁴** relativo: la gravedad no ve la permutación |
+
+**La decisión (punto 4 del trabajo), escrita en `docs/11_CONVENCION_DE_EJES.md`.**
+Canónico: **`x = Este, y = profundidad (+abajo), z = Norte`** — la que la ingesta
+**ya implementa y cumple** en sus cinco ramas, la que usan el exportador OMF y el
+escritor UBC de disco. La contraria la declaran **28 sitios**, y de ellos **sólo dos
+expresiones ejecutables** dependen de ella. Adoptarla **no obliga a permutar
+un solo array**; la alternativa obligaría a permutar de vuelta malla, vóxeles,
+parquet, cortes, anclajes y los dos exportadores para acabar en el mismo sitio.
+
+**Dos líneas ejecutables, y hay que cambiarlas JUNTAS:**
+
+| ruta:línea | hoy | debe ser |
+|---|---|---|
+| `magnetometry.py:92-96` | `[cos I·cos D, sin I, cos I·sin D]` | `[cos I·sin D, sin I, cos I·cos D]` |
+| `magnetometry.py:2458` | `dec_eff = arctan2(Mz, Mx)` | `dec_eff = arctan2(Mx, Mz)` |
+
+> **Arreglar sólo la primera es peor que no arreglar nada** en modo MVI: kernel
+> correcto y declinación publicada todavía reflejada. **La trampa ya está
+> puesta:** `tests/test_fase20c_mvi.py:159` exige `|dec_eff − DEC| ≤ 25°` con
+> `DEC = 2,0°`; un arreglo a medias devuelve 88° y excede el margen por **86°**.
+> No borrarla: es la que caza el arreglo incompleto.
+>
+> La remanencia (`magnetometry.py:468`) y la amplitud usan la MISMA función:
+> se corrigen solas.
+
+**Reversibilidad medida (Parte C): la Fase 19 no le cuesta nada a los
+benchmarks.** Voltear `f̂` *y* voltear el ensamblado del harness es un
+re-etiquetado consistente: el dato predicho sale **idéntico a 3·10⁻¹⁶ nT** sobre
+una señal de ~1 nT, en los cuatro sitios. ⚠️ Lo medido es el **forward**; la
+inversión lo hereda por ser el mismo sistema re-etiquetado, pero eso es un
+argumento, no una corrida: **la Fase 19 debe correr DO-27 y Raglan de punta a
+punta antes y después.**
+
+**Hallazgos nuevos que la fase destapó y NO arregla:**
+- **`magnetometry.py:2458`** — segunda fuga independiente: la inversión vectorial
+  MVI publica al usuario una declinación de magnetización calculada con la
+  convención equivocada (devuelve 65° donde toca 25°).
+- **`geophysics_service.py:2433` y `joint_inversion.py:972`** publican al cliente
+  `"axis_convention": "x=Norte, z=Este..."`, que es **falso** respecto del
+  contenido de los arrays que acompañan. La rama joint declara `x=Norte` en
+  `:972` y su propio empalme de `:491` mete el easting en el slot 0.
+- **Errata heredada:** `magnetometry.py:31` dice ser «idéntica a gravimetry», y
+  `exploration/gravimetry.py` **no declara ninguna convención** en 4365 líneas.
+  La afirmación no es verificable contra su fuente — y no podía detectarse por
+  resultados, porque la gravimetría es invariante (M4).
+- **El defecto real no es la permutación ausente**: es que **nada en el árbol
+  compara la convención de la ingesta con la del motor**. La guardia que falta es
+  la Fase 19.
+
+> Alcance honesto: sintéticos, sin ruido, λ de producción (1e-4), dos geometrías
+> de survey y dos posiciones del cuerpo. La Parte A es **exacta** (identidad
+> algebraica verificada a 10⁻¹³) y no depende del sintético; la Parte B sí, y
+> sirve para ordenar los brazos, no para prometer un porcentaje.
+
 ---
 
 ### FASE 19 — Una sola convención de ejes, con guardia · **M** · 🟠 P1 · *backend* · ACAD-1, ACAD-1c
@@ -663,17 +835,40 @@ falta: es que **dos módulos documentan convenciones opuestas y nada los
 compara**. Se agrupa con el ZIP porque es el mismo error en el otro extremo del
 pipeline, y así no se edita dos veces la misma función.
 
+**Lo que la Fase 18 ya decidió, y este punto 1 hay que reescribirlo.** El plan
+decía «permutar en el empalme o en la ingesta». **La respuesta medida es
+NINGUNA de las dos.** Canónico = **`x = Este, y = profundidad(+abajo), z = Norte`**
+(`docs/11_CONVENCION_DE_EJES.md`), que es lo que la ingesta ya cumple; el que se
+adapta es el **motor magnético**, y no hay que permutar un solo array.
+
 **Trabajo.**
-1. Permutar en el punto de empalme (`geophysics_service.py:2107`) o en la
-   ingesta — **un solo sitio**, el que elija la Fase 18.
+1. **`exploration/magnetometry.py:92-96`** — `f̂` pasa de
+   `(cos I·cos D, sin I, cos I·sin D)` a `(cos I·sin D, sin I, cos I·cos D)`.
+   **Y en el mismo commit `magnetometry.py:2458`**, `dec_eff = arctan2(Mz, Mx)`
+   → `arctan2(Mx, Mz)`: arreglar sólo la primera deja el modo MVI publicando una
+   declinación reflejada. `tests/test_fase20c_mvi.py:159` ya caza ese arreglo a
+   medias (excede su margen por 86°) — **no borrarlo.**
+   Después, los 26 sitios declarativos, las dos cadenas `axis_convention`
+   **falsas** que se publican al cliente (`geophysics_service.py:2433`,
+   `joint_inversion.py:972`) y los harness de DO-27/Raglan, **en el mismo commit**
+   (su dato predicho es idéntico a 3·10⁻¹⁶ nT — medido en la Parte C).
 2. Arreglar `_ubc_msh_text` y `_ubc_mod_text` (`export_service.py:630-642`) para
    que hagan la misma permutación que ya hace la ruta de disco, y escribir el
    origen real en vez de `0 0 0`.
 3. Corregir `_gslib_text`, que hoy etiqueta `X_m/Y_m/Z_m` sobre índices internos.
 
-**Gate.** Un test con **malla NO cúbica** (20×10×20) que compare las cabeceras de
-los dos escritores UBC y exija que coincidan. Hoy salen `20 20 10` y `20 10 20`.
-**Con malla cúbica el defecto es invisible, así que un test cúbico no vale.**
+**Gate.** Dos, uno por cada extremo del pipeline:
+- **Ejes (ACAD-1).** Correr **DO-27 y Raglan de punta a punta antes y después**:
+  sus números deben quedar **idénticos** (la Fase 18 sólo midió el forward). Y un
+  test que **compare la ingesta con el motor** — mete un CSV con easting y
+  northing distinguibles, comprueba en qué slot cae cada uno y contra qué
+  componente de `f̂` se multiplica ese slot. Los tramos B1 y D de
+  `scripts/validation/fase18_axis_convention_experiment.py` ya son ese test en
+  forma de experimento: convertirlo a `tests/` es el trabajo.
+- **ZIP (ACAD-1c).** Un test con **malla NO cúbica** (20×10×20) que compare las
+  cabeceras de los dos escritores UBC y exija que coincidan. Hoy salen
+  `20 20 10` y `20 10 20`. **Con malla cúbica el defecto es invisible, así que un
+  test cúbico no vale.**
 
 ---
 
