@@ -11,7 +11,7 @@ Fórmulas de referencia:
     - GRS80: Moritz (1980 — IUGG)
     - FAC:   Heiskanen & Moritz (1967) fórmula 3-57
     - BC:    Hinze et al. (2005), Geophysics (coeficiente CODATA 2018)
-    - TC:    Hammer (1939) / método de prismas rectangulares
+    - TC:    Hammer (1939) / Kane (1962) — columna vertical (línea de masa)
 """
 from __future__ import annotations
 
@@ -110,10 +110,10 @@ def compute_bouguer_correction(
 
 
 # ---------------------------------------------------------------------------
-# 4. Corrección de Terreno (TC) — aproximación de masa puntual
+# 4. Corrección de Terreno (TC) — columna vertical (componente vertical)
 # ---------------------------------------------------------------------------
 
-def compute_terrain_correction_pointmass(
+def compute_terrain_correction_column(
     station_x_m: np.ndarray,
     station_z_m: np.ndarray,
     station_elev_m: np.ndarray,
@@ -125,17 +125,44 @@ def compute_terrain_correction_pointmass(
     max_radius_m: float = 22000.0,
 ) -> np.ndarray:
     """
-    Corrección de terreno por aproximación de MASA PUNTUAL [mGal].
+    Corrección de terreno por COLUMNA VERTICAL de masa [mGal].
 
-    Cada celda del DEM se trata como una masa puntual: TC = Σ G·ρ·área·|dh|/r².
-    NO es la fórmula exacta de prisma (Nagy) — esa se reserva para una fase
-    posterior y reutilizaría ``gravimetry.py::_nagy_prism_safe``. La masa puntual
-    converge al prisma en campo lejano (r ≫ tamaño de celda) y sobrestima en el
-    campo cercano (r ≲ celda).
+    Cada celda del DEM se trata como una columna vertical de sección
+    ``dem_cell_size_m²`` que va desde la cota de la estación hasta la cota del
+    terreno, y se suma la COMPONENTE VERTICAL de su atracción — que es lo que
+    mide un gravímetro. Integrando z/(r²+z²)^{3/2} entre 0 y Δh:
 
-    TC es siempre ≥ 0 (propiedad matemática — el terreno alrededor de una
-    estación siempre reduce la gravedad medida, ya sea por masa por encima
-    o por el "hueco" relativo debajo del plano de Bouguer).
+        TC = Σ G·ρ·A·(1/r − 1/√(r²+Δh²))                   [forma cerrada]
+           = Σ G·ρ·A·Δh² / (r·s·(r+s)),  s = √(r²+Δh²)      [forma estable]
+           ≈ Σ G·ρ·A·Δh²/(2r³)                              [límite campo lejano]
+
+    con ``r`` la distancia HORIZONTAL estación–celda y ``Δh`` el desnivel.
+    Las tres primeras líneas son la misma álgebra; se implementa la SEGUNDA
+    porque la primera pierde dígitos por cancelación cuando Δh ≪ r (medido:
+    8·10⁻⁶ de error relativo a r=22 km con Δh=0,1 m) y porque el límite de campo
+    lejano diverge como 1/r³ en terreno escarpado cercano (medido: 202× el
+    prisma de Nagy para Δh=1000 m a r=50 m, frente a 0,96× de la forma cerrada).
+
+    HISTORIA — esto es lo que arregla la Fase 17 (defecto ACAD-0). Hasta
+    2026-08-25 la función sumaba ``G·ρ·A·|Δh|/r²``: el MÓDULO de la atracción de
+    una masa puntual, sin proyectar sobre la vertical. Le faltaba el factor
+    Δh/(2r), así que sobrestimaba por ``2r/|Δh|`` — un factor que CRECE con la
+    distancia, con radio de integración por defecto de 22 km. Medido: 200× para
+    una celda a 1 km con 10 m de desnivel, 66× a 1 km con 30 m, y 14,8× en el
+    total de un cono de 500 m, sobre una señal de exploración de 0,1–10 mGal.
+
+    APROXIMACIONES QUE SIGUEN VIVAS (no son bugs, son el modelo):
+      - La sección de la celda se colapsa a un punto en el horizontal. El error
+        contra el prisma exacto de Nagy decae como ≈0,375·(celda/r)²: medido
+        9,4·10⁻⁴ a r=20 celdas y 7,9·10⁻² a r=2 celdas. Siempre SUBESTIMA
+        (0,71–0,99 del prisma), nunca diverge.
+      - La celda que contiene la estación (r=0) queda excluida por la máscara.
+
+    TC es siempre ≥ 0, ahora por CONSTRUCCIÓN y no por recorte: el numerador es
+    Δh² y el denominador es positivo para todo r>0. Físicamente: el terreno
+    alrededor de una estación siempre reduce la gravedad medida, ya sea por masa
+    por encima o por el "hueco" relativo debajo del plano de Bouguer. La fórmula
+    es simétrica en Δh — colina y valle del mismo desnivel aportan lo mismo.
 
     Args:
         station_x_m, station_z_m: coordenadas locales de las estaciones [m]
@@ -176,19 +203,31 @@ def compute_terrain_correction_pointmass(
         r_m = r[mask]
         dh = dem_flat_elev[mask] - se  # positive = terrain above station
 
-        # Masa puntual por celda del DEM (sin rama de prisma exacto).
-        # TC contribution (always positive by construction)
-        tc_contrib = _G_NEWTON * rho_kg_m3 * cell_area * np.abs(dh) / r_m ** 2
+        # Componente VERTICAL de la columna de masa, forma cerrada estable.
+        # Equivale a G·ρ·A·(1/r − 1/√(r²+Δh²)) sin la cancelación catastrófica
+        # que esa resta sufre cuando Δh ≪ r.
+        s_m = np.sqrt(r_m ** 2 + dh ** 2)
+        tc_contrib = (
+            _G_NEWTON * rho_kg_m3 * cell_area * dh ** 2
+            / (r_m * s_m * (r_m + s_m))
+        )
         # Convert m/s² → mGal
         tc[i] = np.sum(tc_contrib) * 1e5
 
-    tc = np.maximum(tc, 0.0)  # enforce non-negativity
+    # Sin np.maximum(tc, 0.0): la no-negatividad es ESTRUCTURAL (numerador Δh²,
+    # denominador > 0 para todo r > 0). Un recorte aquí sería un guard inerte
+    # que aparentaría defender algo que la fórmula ya garantiza.
     return tc
 
 
-# Alias deprecado: el nombre histórico prometía "prisma" pero la implementación
-# es masa puntual. Conservado para no romper callers; preferir el nombre nuevo.
-compute_terrain_correction_prism = compute_terrain_correction_pointmass
+# Alias deprecados. Dos nombres históricos, los dos mentían sobre la fórmula:
+#   - ``_prism``     prometía el prisma exacto de Nagy y nunca lo fue (Fase 0).
+#   - ``_pointmass`` describía G·ρ·A·|Δh|/r², el MÓDULO de una masa puntual, que
+#     era justamente el defecto ACAD-0 que corrige la Fase 17.
+# La implementación es una COLUMNA vertical, y el nombre ahora lo dice.
+# Conservados para no romper callers; preferir ``compute_terrain_correction_column``.
+compute_terrain_correction_pointmass = compute_terrain_correction_column
+compute_terrain_correction_prism = compute_terrain_correction_column
 
 
 # ---------------------------------------------------------------------------
