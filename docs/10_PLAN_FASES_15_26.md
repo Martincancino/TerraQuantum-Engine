@@ -123,7 +123,7 @@ que es la componente **Norte** del campo.
 > que la afirmación de `magnetometry.py:31` de ser «idéntica a gravimetry» no es
 > verificable desde gravimetry.
 
-### 🔴 ACAD-0 — La corrección de terreno usa el módulo, no la componente vertical
+### ✅ ACAD-0 — La corrección de terreno usaba el módulo, no la componente vertical
 
 `terraquantum-backend/services/gravity_corrections_service.py:183`
 
@@ -144,6 +144,12 @@ de desnivel; 12× en el total** de un cono de 500 m — sobre una señal de 0,1�
 
 Mitigante: requiere que la descarga del DEM de OpenTopography tenga éxito; si
 falla, se añade un warning y la TC se omite.
+
+> **CERRADO por la Fase 17 (2026-08-25).** La fórmula es ahora la componente
+> vertical de la columna en forma cerrada y estable, verificada contra el prisma
+> exacto de Nagy y por mutación 4/4. Medido E2E sobre una sierra de 800 m de
+> desnivel: la TC pasa de 67–117 mGal (absurdo) a 2,5–6,8 mGal, y el error de
+> profundidad del cuerpo recuperado de 150,1 m a 14,7 m.
 
 ### 🟠 ACAD-1c — El ZIP industrial escribe UBC-GIF sin permutar ejes ni georreferencia
 
@@ -464,6 +470,163 @@ arreglar el código.
 **Gate.** El test nuevo **falla con la fórmula vieja dentro**, verificado por
 mutación. Y una corrida del benchmark con TC activa vs. desactivada difiere en
 la magnitud predicha, no en 12×.
+
+#### ✅ EJECUTADA — 2026-08-25
+
+**La fórmula.** `gravity_corrections_service.py` pasa de `G·ρ·A·|Δh|/r²` a la
+componente vertical de la columna, en forma cerrada y estable:
+
+```python
+s_m = np.sqrt(r_m ** 2 + dh ** 2)
+tc_contrib = _G_NEWTON * rho_kg_m3 * cell_area * dh ** 2 / (r_m * s_m * (r_m + s_m))
+```
+
+**Una desviación del punto 1, declarada, y el test la defiende.** El plan pedía
+`≈ G·ρ·A·Δh²/(2r³)`. Eso es sólo el **límite de campo lejano**, y tomado al pie
+de la letra cambia un desbordamiento por otro: contra el prisma exacto de Nagy,
+en terreno escarpado cercano (celda de 50 m, r=50 m) sobrestima **10× con 200 m
+de desnivel, 35× con 400 m y 202× con 1000 m**, porque diverge como 1/r³. La
+forma cerrada se queda en **0,71–0,99 del prisma** en todo el campo cercano —
+siempre por debajo, nunca desbordada. Las dos coinciden lejos: a r=1000 m
+difieren 6,7·10⁻⁴. Se implementa la exacta. **La mutación M2 mete la fórmula del
+plan y el test la caza**, así que esta desviación no es una opinión.
+
+Y se escribe en forma racionalizada, no como `1/r − 1/√(r²+Δh²)`: esa resta
+pierde dígitos por cancelación cuando Δh ≪ r — medido **8·10⁻⁶** de error
+relativo a r=22 km con Δh=0,1 m, que es justo el régimen del radio por defecto.
+
+**La no-negatividad deja de ser un recorte y pasa a ser estructural.** Se retira
+el `np.maximum(tc, 0.0)`: el numerador es Δh² y el denominador positivo, así que
+el recorte ya no puede dispararse nunca. Un guard inerte que aparenta defender
+algo es la patología que este repositorio persigue desde la auditoría 06-03.
+
+**El nombre, otra vez.** La Fase 0 renombró `..._prism` → `..._pointmass` porque
+el nombre prometía Nagy y la implementación era masa puntual. Arregló el nombre y
+dejó viva la fórmula. Ahora la implementación es una **columna**, así que la
+función es `compute_terrain_correction_column` y los **dos** nombres históricos
+quedan como alias — ningún llamador cambia.
+
+**El test tautológico, sustituido por una referencia independiente.** El viejo
+`test_tc_matches_pointmass_formula` reescribía a mano la línea 182 del servicio y
+comparaba con `rtol=1e-9`: verificaba que Python sabe multiplicar. El nuevo
+compara contra `gravimetry.py::_nagy_prism_safe` — otro módulo, escrito para el
+motor directo, que no sabe que la corrección de terreno existe. **12 tests**, de
+los cuales tres familias son gates de verdad:
+- contra Nagy, **una celda** en campo lejano (r ≥ 20 celdas): concuerda a
+  **9,4·10⁻⁴** (r=1000 m) y **2,3·10⁻⁴** (r=2000 m);
+- contra Nagy, **un DEM entero** sumado celda a celda, con tolerancia del 25 %
+  porque ahí sí entra el campo cercano, más la exigencia de que la columna
+  **subestime** al prisma y nunca se pase;
+- **leyes de escala** — TC ∝ Δh² y TC ∝ 1/r³ — que discriminan la fórmula vieja
+  (∝|Δh|, ∝1/r²) sin necesidad de Nagy.
+
+**Mutación: 4/4.** M1 la fórmula vieja, M2 el campo lejano del plan, M3 la resta
+ingenua, M4 `|Δh|` en vez de `Δh²`. Las cuatro fallan; restaurado, 12/12 pasa.
+El error de la vieja es `2r/|Δh|` **exacto** (medido 200,01 frente a 200,00
+predicho) y **crece con la distancia**: 66× a 1 km con 30 m, **4400× a 22 km con
+10 m**, que es el radio por defecto.
+
+**El efecto E2E, medido — y la verdad no se postula.** Sierra sintética de 800 m
+de desnivel (DEM 224×224 de 90 m, radio 10 km), 64 estaciones, cuerpo de
+0,6 t/m³ entre 300 y 600 m. La **TC verdadera** se calcula sumando el prisma
+exacto de Nagy sobre las ~38.800 celdas dentro del radio, estación por estación:
+
+| brazo | media | rango | vs. verdad |
+|---|---|---|---|
+| **TC exacta (Nagy)** | 4,5234 mGal | 2,608–6,985 | — |
+| **TC nueva (Fase 17)** | 4,3991 mGal | 2,488–6,840 | **0,973×** |
+| **TC vieja (ACAD-0)** | 91,9703 mGal | 67,167–117,142 | **20,33×** |
+
+Ése es el número que cierra el defecto: la fórmula nueva reproduce el prisma
+exacto al **97,3 %**; la vieja lo sobrestimaba **20 veces**. Y el residuo que
+cada brazo deja en el dato (`TC_aplicada − TC_verdadera`, porque
+`CBA = FAA − BC + TC` y pasarse de TC sesga la anomalía hacia **arriba**):
+
+| brazo | sesgo medio | pico a pico |
+|---|---|---|
+| TC nueva | −0,1243 mGal | 0,6427 |
+| TC desactivada | −4,5234 mGal | 4,3773 |
+| **TC vieja** | **+87,4469 mGal** | **45,6520** |
+
+La señal del cuerpo es **1,33 mGal** pico a pico: el artefacto que metía la
+fórmula vieja era **66× el sesgo y 34× la variación** de lo que se busca. En la
+inversión eso no sesga el modelo, lo **satura**: **4800 de 4800 celdas** por
+encima del umbral, Δρ máximo **2,900 t/m³** y **215× la masa verdadera** — la
+topografía se convierte en una manta de densidad falsa que cubre el volumen
+entero. Con la TC exacta el mismo caso da 372 celdas, Δρ 0,218 t/m³, masa
+**1,02×** y **14,7 m** de error de profundidad.
+
+> ⚠️ **No comparar los brazos por `err_prof`.** El brazo corrupto da 150,1 m y el
+> ideal 14,7 m, pero el 150,1 es el centroide de una malla **saturada**: es el
+> espejismo del centroide que este repositorio ya midió en
+> `project_techo_medium_checkerboard`. Las métricas honestas del brazo corrupto
+> son 4800/4800 celdas y 215× de masa.
+
+**La corrección se gana el sueldo en el eje HORIZONTAL, que es el que se vende.**
+Cuatro brazos, con el DC quitado de cada residuo (para descartar que todo fuese un
+offset — no lo era):
+
+| brazo | residuo p-p | err_prof | **err_horiz** | Δρ máx | celdas | masa |
+|---|---|---|---|---|---|---|
+| IDEAL (TC exacta) | 0,000 mGal | 14,7 m | **0,0 m** | 0,218 | 372 | 1,02× |
+| **TC nueva (Fase 17)** | 0,643 mGal | 400,0 m | **53,5 m** | 0,898 | 20 | 0,25× |
+| TC desactivada | 4,377 mGal | 400,0 m | **638,2 m** | 0,916 | 68 | 0,87× |
+| TC vieja (ACAD-0) | 45,652 mGal | 338,8 m | **678,8 m** | 2,896 | 296 | 11,07× |
+
+**La profundidad NO discrimina: los tres brazos no-ideales dan ~400 m, incluido
+«sin TC».** Eso es coherente con lo que este repositorio lleva midiendo desde
+`project_synthetic_depth_ambiguity`: la gravedad sola no resuelve profundidad, y
+cualquier residuo topográfico basta para tumbarla. **El eje que sí discrimina es
+el horizontal** — 53,5 m con la fórmula nueva frente a **~650 m** sin TC o con la
+vieja: sin corregir, el objetivo se pierde; corregido, se encuentra. Es
+exactamente el eje del producto (targeting, *dónde perforar*, ver
+`project_fase25_field_validation`).
+
+**🔴 Lo que la Fase 17 NO arregla, y queda como sucesor.** El residuo baja de 45,7
+a **0,64 mGal** p-p… que sigue siendo **el 48 % de la señal del cuerpo**, y con él
+la profundidad pasa de 14,7 a 400 m y la masa recuperada de 1,02× a 0,25×.
+Colapsar la celda a un punto en el horizontal todavía cuesta caro con 800 m de
+relieve y DEM de 90 m. **La salida ya existe en el repositorio**:
+`_build_sparse_kernel` usa Nagy exacto en campo cercano y masa puntual lejos
+(`gravimetry.py:780`); la TC debería hacer lo mismo con las primeras coronas de
+celdas. Fase aparte.
+
+> Alcance honesto: **un** sintético, **una** realización sin ruido, y **λ fijo en
+> los cuatro brazos** a propósito, para aislar el cambio en el dato. Producción
+> re-elige λ (Morozov/L-curve), así que la degradación real será menor. Sirve para
+> ordenar los brazos, no para prometer un número.
+
+**El barrido de tautologías (punto 3): 84 ficheros, 7 supervivientes.** De 19
+hallazgos crudos, un pase adversarial descartó 12 (solución analítica publicada,
+tests de propiedad, baselines declarados). Sobreviven, **sin corregir — son de
+otras áreas y esta fase es de la corrección de terreno**:
+
+| fichero:línea | qué congela |
+|---|---|
+| `test_multimodal_fusion.py:147` | **El único que congela un defecto plausible REAL**: copia `np.std(arr)/√n` de `multimodal_fusion_service.py:312`, con el `ddof=0` implícito. El error estándar de la media se define con la desviación *muestral* (`ddof=1`); con n=4 el σ del ancla de sondaje queda **13,4 % subestimado** y el test no puede verlo |
+| `test_gravity_column_norm_refactor.py:112,160` | Dos tests que **nunca llaman al código bajo prueba**: rearman `Ws` a mano, así que `norma=1` y `cond_post ≤ cond_pre` son ciertos por construcción para cualquier matriz. Además reimplementan un `Wz_inv` que producción ya **retiró** |
+| `test_doi_calibration.py:108` | No importa una sola línea de producción: `abs(0.01-0.0)/0.1 == 0.1` es aritmética de Python |
+| `test_fase4_depth_weighting.py:182` | Rearma el sistema entero (peso de columna, `alpha_spatial`, calibración `N=256`) y compara a `rel<1e-6`. Sirve como detector de cambios, es ciego al eje que su nombre promete |
+| `test_laplacian_weights.py:121` | `2/(a+b)` copiado con `atol=1e-14`; un factor global equivocado es invisible en todo el fichero, porque `L·1=0` se cumple para cualquier peso |
+| `test_pgi_engine.py:234` | `√α` copiado de `pgi_engine.py:251` con `rtol=1e-10` |
+
+**El Validation Framework no podía hacer esto, y está declarado en su contrato.**
+El punto 4 pedía cuantificar el efecto «con el Validation Framework». No se pudo:
+`validation/contract.py:113-117` define `Topography` con un solo modo — *«'flat' =
+superficie plana en y=0. Otros modos se añadirán **con su verdad**»* — y
+`elevation_m` es un escalar, no un DEM. Un marco que sólo sabe de mundos planos
+no puede expresar una corrección de terreno. Por eso la medición se hizo con un
+harness propio que sí usa la función de TC de producción y el motor directo e
+inverso de producción. **La verdad que le faltaba al framework es justamente la
+que esta fase construyó** (la suma de prismas de Nagy sobre el DEM): contribuirla
+como un `Topography.kind` nuevo es el camino natural. `python -m
+validation.test_determinism` sigue en **8/8** tras el cambio.
+
+**Lo que NO se tocó.** La celda que contiene la estación sigue excluida (r=0), la
+sección se sigue colapsando a un punto en el horizontal, y los 7 tests
+tautológicos de arriba siguen como están: cada uno vive en un área distinta
+(solver, DOI, PGI, laplaciano, fusión) y arreglarlos es otra fase.
+
 
 ---
 
