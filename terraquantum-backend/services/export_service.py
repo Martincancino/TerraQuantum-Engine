@@ -306,6 +306,62 @@ def export_core_to_vtr(
 # FASE 11 — UBC-mesh Export (estándar UBC-GIF)
 # ═════════════════════════════════════════════════════════════════════════════
 
+# ── UN SOLO escritor UBC-GIF para las DOS rutas (FASE 19, ACAD-1c) ───────────
+# Había dos, y discrepaban. `gravity_import_service` (ruta de disco) permutaba a
+# ejes UBC; el bundle ZIP —lo que el cliente DESCARGA— escribía `{nx} {ny} {nz}`
+# crudo. Sobre una corrida 20×10×20 el fichero del disco decía «20 20 10» y el
+# del ZIP «20 10 20», y 3998 de 4000 celdas caían en distinto sitio. Ahora las
+# dos rutas pasan por estas tres funciones: no hay dos sitios que sincronizar.
+#
+#   TQ  : (nx=Este, ny=PROFUNDIDAD +abajo, nz=Norte), aplanado Fortran
+#         `ix + nx·iy + nx·ny·iz` — que es como el parquet persiste el modelo
+#         (medido: 1951/1951 corridas con `inputs.json` cumplen ese orden).
+#   UBC : (nE, nN, nZ) con Z + hacia ARRIBA. Ver `docs/11_CONVENCION_DE_EJES.md`.
+
+UBC_NODATA = -9999.0
+
+
+def tq_flat_to_ubc_flat(values_tq, nx: int, ny: int, nz: int) -> np.ndarray:
+    """Reordena de ejes TerraQuantum a ejes UBC-GIF (índice 0 del eje Z = FONDO)."""
+    arr = np.asarray(values_tq, dtype=np.float64).reshape((nx, ny, nz), order="F")
+    arr_ubc = np.transpose(arr, (0, 2, 1))[:, :, ::-1]          # (E, N, Z-arriba)
+    return np.ascontiguousarray(arr_ubc).ravel(order="F")
+
+
+def ubc_mesh_text(n_east: int, n_north: int, n_z: int,
+                  d_east: float, d_north: float, d_z: float,
+                  origin_east: float, origin_north: float, origin_z: float) -> str:
+    """Texto del `.msh`. `origin_z` es la cota del FONDO; UBC publica la del techo.
+
+    SIN líneas de comentario: `discretize.TensorMesh.read_UBC` y `np.loadtxt` no
+    toleran headers `!`; los metadatos van en `run_manifest.json`.
+    """
+    ubc_origin_z = origin_z + n_z * d_z          # esquina superior-noroeste
+    return (
+        f"{n_east} {n_north} {n_z}\n"
+        f"{origin_east:.4f} {origin_north:.4f} {ubc_origin_z:.4f}\n"
+        + " ".join([f"{d_east:.4f}"] * n_east) + "\n"
+        + " ".join([f"{d_north:.4f}"] * n_north) + "\n"
+        + " ".join([f"{d_z:.4f}"] * n_z) + "\n"
+    )
+
+
+def ubc_model_text(values_ubc, active_ubc, n_east: int, n_north: int, n_z: int) -> str:
+    """Texto del `.den`/`.mod`: z varía más rápido y DESDE ARRIBA, luego N, luego E."""
+    vals = np.asarray(values_ubc, dtype=np.float64).reshape(
+        (n_east, n_north, n_z), order="F")[:, :, ::-1]
+    act = np.asarray(active_ubc, dtype=bool).reshape(
+        (n_east, n_north, n_z), order="F")[:, :, ::-1]
+    out: list[str] = []
+    for ie in range(n_east):
+        for inn in range(n_north):
+            for iz in range(n_z):
+                v = vals[ie, inn, iz]
+                out.append(f"{v:.6f}" if (act[ie, inn, iz] and np.isfinite(v))
+                           else f"{UBC_NODATA:.1f}")
+    return "\n".join(out) + "\n"
+
+
 def export_block_model_to_ubc(
     output_dir: str,
     run_prefix: str,
@@ -342,7 +398,7 @@ def export_block_model_to_ubc(
       2. <prefix>.mod  — Archivo de modelo de propiedades
          Un valor por línea, en orden UBC-GIF:
          z varía más rápido, luego y (N-S), luego x (E-W).
-         Celdas inactivas (aire) → NODATA_VALUE.
+         Celdas inactivas (aire) → `UBC_NODATA`.
 
     Convención UBC-GIF:
       - Eje Z positivo hacia ARRIBA (opuesto a la convención interna de TerraQuantum).
@@ -363,8 +419,6 @@ def export_block_model_to_ubc(
     -------
     dict con claves "mesh_path", "model_path", "n_cells"
     """
-    NODATA = -9999.0
-
     density_arr = np.asarray(density, dtype=np.float64)
     n_cells = nx * ny * nz
 
@@ -390,45 +444,16 @@ def export_block_model_to_ubc(
     # .den: convención GRAV3D para modelos de densidad (compatible SimPEG/discretize).
     model_path = out_dir / f"{run_prefix}.den"
 
-    # ── 1. Archivo de malla (.msh) ───────────────────────────────────────────
-    # UBC-GIF: nE nN nZ en primera línea; origin NW-superior; hE hN hZ.
-    # SIN líneas de comentario: discretize.TensorMesh.read_UBC y np.loadtxt
-    # no toleran headers '!'; los metadatos van en run_manifest.json.
-    with mesh_path.open("w", encoding="ascii") as f:
-        f.write(f"{nx} {ny} {nz}\n")
-        # Origen UBC: esquina superior-noroeste
-        # Z UBC = positivo hacia arriba → origin_z + nz*dz es la cota más alta
-        ubc_origin_z = origin_z + nz * dz
-        f.write(f"{origin_x:.4f} {origin_y:.4f} {ubc_origin_z:.4f}\n")
-        # Anchos de celda (valores repetidos para grilla uniforme)
-        f.write(" ".join([f"{dx:.4f}"] * nx) + "\n")
-        f.write(" ".join([f"{dy:.4f}"] * ny) + "\n")
-        f.write(" ".join([f"{dz:.4f}"] * nz) + "\n")
-
-    # ── 2. Archivo de modelo (.den) ───────────────────────────────────────────
-    # Orden UBC-GIF (z varía más rápido, luego y, luego x):
-    # El modelo interno TerraQuantum usa Fortran order (x varía más rápido).
-    # Necesitamos reordenar: flatten en orden C luego transponer ejes.
-
-    # Reshape de Fortran 1D → 3D (nx, ny, nz) en orden F
-    density_3d = density_arr.reshape((nx, ny, nz), order="F")
-    active_3d  = active_mask.reshape((nx, ny, nz), order="F")
-
-    # UBC-GIF orden: ix varía más lento, iy varía, iz varía más rápido
-    # → iterar en ix(E), iy(N), iz(Z desde arriba)
-    # Z en UBC es positivo hacia arriba → invertimos el eje Z
-    density_ubc = density_3d[:, :, ::-1]   # flip Z
-    active_ubc  = active_3d[:,  :, ::-1]
-
-    with model_path.open("w", encoding="ascii") as f:
-        for ix in range(nx):
-            for iy in range(ny):
-                for iz in range(nz):
-                    val = density_ubc[ix, iy, iz]
-                    if active_ubc[ix, iy, iz] and np.isfinite(val):
-                        f.write(f"{val:.6f}\n")
-                    else:
-                        f.write(f"{NODATA:.1f}\n")
+    # ── 1. Malla (.msh) y 2. modelo (.den), por el escritor COMPARTIDO ───────
+    # Aquí `nx, ny, nz` YA son ejes UBC (nE, nN, nZ): el llamador permuta antes.
+    mesh_path.write_text(
+        ubc_mesh_text(nx, ny, nz, dx, dy, dz, origin_x, origin_y, origin_z),
+        encoding="ascii",
+    )
+    model_path.write_text(
+        ubc_model_text(density_arr, active_mask, nx, ny, nz),
+        encoding="ascii",
+    )
 
     mesh_kb  = mesh_path.stat().st_size  / 1024
     model_kb = model_path.stat().st_size / 1024
@@ -627,34 +652,70 @@ def _densities_from_parquet(run_dir: Path, total: int) -> list[float]:
     return [2.6] * total
 
 
-def _ubc_msh_text(nx: int, ny: int, nz: int, bs: float) -> str:
-    dx = " ".join(f"{bs:.2f}" for _ in range(nx))
-    dy = " ".join(f"{bs:.2f}" for _ in range(ny))
-    dz = " ".join(f"{bs:.2f}" for _ in range(nz))
-    return f"{nx} {ny} {nz}\n0.00 0.00 0.00\n{dx}\n{dy}\n{dz}\n"
+def run_local_origin(project_id: str, run_id: str) -> "tuple[float, float]":
+    """Origen ABSOLUTO del frame local de la corrida, o (0,0) si no lo hay.
+
+    (0,0) no es relleno: es la verdad del frame local con origen en la esquina SW
+    del survey, que es el caso mayoritario medido en disco. Lo usan las DOS rutas
+    de exportación UBC, para que no puedan volver a divergir por el origen.
+    """
+    try:
+        from services.omf_export_service import load_georef
+        geo = load_georef(project_id, run_id)
+        if geo.is_absolute:
+            return float(geo.easting0), float(geo.northing0)
+    except Exception:
+        pass
+    return 0.0, 0.0
 
 
-def _ubc_mod_text(densities: list[float]) -> str:
-    lines = []
-    for d in densities:
-        lines.append("1e8" if (d is None or (isinstance(d, float) and _math.isnan(d))) else f"{float(d):.6f}")
-    return "\n".join(lines) + "\n"
+def _densities_to_array(densities: "list[float]") -> np.ndarray:
+    return np.array([np.nan if d is None else float(d) for d in densities], dtype=np.float64)
+
+
+def _ubc_msh_text(nx: int, ny: int, nz: int, bs: float,
+                  origin_east: float = 0.0, origin_north: float = 0.0) -> str:
+    """`nx, ny, nz` en ejes TQ (Este, PROFUNDIDAD, Norte) — los de `inputs.json`.
+
+    FASE 19: escribía `{nx} {ny} {nz}` crudo. UBC-GIF es `(nE, nN, nZ)`, y el eje
+    vertical de TQ es `ny`. Con malla cúbica el error es invisible.
+    """
+    return ubc_mesh_text(
+        n_east=nx, n_north=nz, n_z=ny,
+        d_east=bs, d_north=bs, d_z=bs,
+        origin_east=origin_east, origin_north=origin_north,
+        origin_z=-float(ny * bs),          # techo del modelo = superficie (0 m)
+    )
+
+
+def _ubc_mod_text(densities: "list[float]", nx: int, ny: int, nz: int) -> str:
+    """`densities` en orden TQ Fortran (`ix + nx·iy + nx·ny·iz`), como el parquet."""
+    ubc = tq_flat_to_ubc_flat(_densities_to_array(densities), nx, ny, nz)
+    return ubc_model_text(ubc, np.isfinite(ubc), nx, nz, ny)
 
 
 def _gslib_text(densities: list[float], nx: int, ny: int, nz: int, bs: float) -> str:
+    """GSLIB / SGeMS. `X_m, Y_m, Z_m` = Este, Norte, cota (negativa hacia abajo).
+
+    FASE 19 (ACAD-1c): escribía `Y_m = (iy+½)·bs` —e `iy` es la PROFUNDIDAD— y
+    `Z_m = −(iz+½)·bs` —e `iz` es el NORTE—. Un consumidor de GSLIB lee
+    X=Este / Y=Norte / Z=cota, así que el modelo entregado salía tumbado. El
+    bucle NO cambia: recorre el aplanado Fortran del parquet; lo que estaba mal
+    eran las coordenadas que se le adjuntan a cada celda.
+    """
     hdr = [
         f"TerraQuantum Block Model {nx}x{ny}x{nz} bs={bs}m NO-JORC/NI-43-101",
         "5", "X_m", "Y_m", "Z_m", "Density_gcm3", "Is_Active",
     ]
     rows: list[str] = []
     idx = 0
-    for iz in range(nz):
-        for iy in range(ny):
-            for ix in range(nx):
+    for iz in range(nz):            # iz = NORTE
+        for iy in range(ny):        # iy = PROFUNDIDAD (+ abajo)
+            for ix in range(nx):    # ix = ESTE
                 d = densities[idx] if idx < len(densities) else None
                 bad = d is None or (isinstance(d, float) and _math.isnan(d))
                 rows.append(
-                    f"{(ix+0.5)*bs:.2f} {(iy+0.5)*bs:.2f} {-(iz+0.5)*bs:.2f} "
+                    f"{(ix+0.5)*bs:.2f} {(iz+0.5)*bs:.2f} {-(iy+0.5)*bs:.2f} "
                     f"{'-9999.000000' if bad else f'{float(d):.6f}'} {'0' if bad else '1'}"
                 )
                 idx += 1
@@ -774,9 +835,10 @@ def create_run_bundle_zip(project_id: str, run_id: str) -> "tuple[bytes, str]":
     cfg_hash = _cfg_hash(inputs)
     manifest = _build_bundle_manifest(clean_pid, clean_rid, inputs, report, cfg_hash)
 
-    msh   = _ubc_msh_text(nx, ny, nz, bs)
+    _origin_e, _origin_n = run_local_origin(clean_pid, clean_rid)
+    msh   = _ubc_msh_text(nx, ny, nz, bs, origin_east=_origin_e, origin_north=_origin_n)
     dens  = _densities_from_parquet(run_dir, nx * ny * nz)
-    mod   = _ubc_mod_text(dens)
+    mod   = _ubc_mod_text(dens, nx, ny, nz)
     gslib = _gslib_text(dens, nx, ny, nz, bs)
     mfst  = _json.dumps(manifest, indent=2, ensure_ascii=False)
 
@@ -891,12 +953,15 @@ def _aseg_gdf2_dat_text(
     ]
     rows: list[str] = list(hdr_lines)
     idx = 0
-    for iz in range(nz):
-        for iy in range(ny):
-            for ix in range(nx):
-                x = (ix + 0.5) * bs
-                y = (iy + 0.5) * bs
-                z = (iz + 0.5) * bs
+    # FASE 19 (ACAD-1c): `Y_m` se declara «Northing» en el .dfn y llevaba `iy`,
+    # que es la PROFUNDIDAD; `Z_m` se declara «Depth positive downward» y llevaba
+    # `iz`, que es el NORTE. Mismo defecto que el GSLIB, mismo bucle, misma cura.
+    for iz in range(nz):            # iz = NORTE
+        for iy in range(ny):        # iy = PROFUNDIDAD (+ abajo)
+            for ix in range(nx):    # ix = ESTE
+                x = (ix + 0.5) * bs     # Easting local
+                y = (iz + 0.5) * bs     # Northing local
+                z = (iy + 0.5) * bs     # profundidad, + hacia abajo
                 d = densities[idx] if idx < len(densities) else None
                 bad = d is None or (isinstance(d, float) and _math.isnan(d))
                 if bad:

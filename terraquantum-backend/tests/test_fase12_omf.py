@@ -462,36 +462,30 @@ def tempfile_gettempdir() -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.unit
-def test_defecto_h_f12_1_el_bundle_zip_exporta_los_ejes_sin_permutar():
-    """H-F12-1 — el ZIP industrial contradice al fichero que hay en disco.
+def test_defecto_h_f12_1_cerrado_el_bundle_zip_permuta_los_ejes():
+    """H-F12-1 — CERRADO por la FASE 19 (2026-08-26). Era un test-trampa.
 
-    `gravity_import_service` escribe `model.msh` en el run_dir CON la permutación
-    (nE, nN, nZ) = (nx, nz, ny). El bundle ZIP regenera un `model.msh` con el MISMO
-    nombre a partir de `_ubc_msh_text(nx, ny, nz)`, es decir SIN permutar: Norte y
-    profundidad quedan intercambiados en lo que descarga el cliente.
+    La Fase 12 midió que `gravity_import_service` escribía `model.msh` en el
+    run_dir CON la permutación (nE, nN, nZ) = (nx, nz, ny) y que el bundle ZIP
+    regeneraba un `model.msh` con el MISMO nombre SIN permutar: sobre una corrida
+    real (nx=20, ny=10, nz=20) el fichero del disco decía «20 20 10» y el del ZIP
+    «20 10 20». La Fase 12 no lo corrigió —tocar el bundle industrial no era su
+    alcance— y dejó este test PINCHANDO el defecto, con el encargo explícito de
+    que quien lo arreglara lo actualizara en vez de arreglarlo de tapadillo.
 
-    Verificado sobre una corrida real (nx=20, ny=10, nz=20): el fichero en disco
-    dice «20 20 10» y el del ZIP dice «20 10 20».
-
-    Este test PINCHA el defecto tal como está hoy. Cuando alguien lo arregle se
-    pondrá rojo, y ese es su trabajo: obligar a mirarlo en vez de arreglarlo de
-    tapadillo. La Fase 12 no lo corrige porque tocar el bundle industrial no es su
-    alcance y el repo prohíbe los refactors de oportunidad.
+    Esto es ese cambio. El gate completo —las dos rutas byte a byte, el modelo, el
+    origen, GSLIB y ASEG— vive en `tests/test_fase19_zip_ubc_ejes.py`.
     """
     from services.export_service import _ubc_msh_text
 
     nx, ny, nz = 20, 10, 20      # ny es la PROFUNDIDAD
     primera_linea = _ubc_msh_text(nx, ny, nz, 100.0).splitlines()[0]
 
-    assert primera_linea == "20 10 20", (
-        "si esto cambió, el bundle ZIP ya no tiene el defecto H-F12-1: "
-        "actualiza el test y la ficha de la fase"
-    )
-    correcto_seria = f"{nx} {nz} {ny}"
-    assert primera_linea != correcto_seria, (
-        "el orden UBC correcto es (nE, nN, nZ) = (nx, nz, ny), como sí hace "
+    assert primera_linea == f"{nx} {nz} {ny}", (
+        "el orden UBC correcto es (nE, nN, nZ) = (nx, nz, ny), el mismo que hace "
         "gravity_import_service al exportar desde load-package"
     )
+    assert primera_linea != f"{nx} {ny} {nz}", "H-F12-1 ha vuelto"
 
 
 @pytest.mark.unit

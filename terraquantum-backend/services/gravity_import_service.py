@@ -2169,13 +2169,17 @@ async def run_field_data_inversion_with_corrections(
         _arr3d = _density_full.reshape((nx, ny, nz), order="F")      # (E, depth, N)
         _arr_ubc = np.transpose(_arr3d, (0, 2, 1))[:, :, ::-1]       # (E, N, Z-up)
 
-        from services.export_service import export_core_to_ubc
+        from services.export_service import export_core_to_ubc, run_local_origin
+        # FASE 19: el mismo origen que publica el bundle ZIP. Las dos rutas leen
+        # la georreferencia por la MISMA función, así que no pueden divergir.
+        _origin_e, _origin_n = run_local_origin(project_id, run_id)
         _ubc = export_core_to_ubc(
             output_dir=str(run_dir),
             run_prefix="model",
             nx=nx, ny=nz, nz=ny,                     # UBC: nE, nN, nZ
             dx=float(block_size),
             est_density=np.ascontiguousarray(_arr_ubc).ravel(order="F"),
+            origin_x=_origin_e, origin_y=_origin_n,
             origin_z=-float(ny * block_size),        # techo del modelo = superficie (0 m)
             project_id=project_id,
             run_id=run_id,
