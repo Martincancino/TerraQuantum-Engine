@@ -32,7 +32,7 @@ from services.inversion_kernel_service import (
 )
 
 BS = 100.0
-NX, NY, NZ = 14, 4, 14          # North, depth (down+), East
+NX, NY, NZ = 14, 4, 14          # Este, profundidad (+abajo), Norte
 INC, DEC, B0 = 75.0, 10.0, 55000.0
 CUTOFF = 2500.0
 
@@ -96,13 +96,24 @@ def _make_edge_source_data():
     El mundo verdadero se define sobre coords con padding para que el cuerpo viva fuera del
     core. Los sensores cubren solo el footprint del core (el survey). Sin padding el motor no
     tiene dónde poner la fuente → artefacto de borde. Devuelve (d, sensors, true_east).
+
+    FASE 19 — el cuerpo se desplaza por `wx`, que es el **Este**. Antes se desplazaba por
+    `wz`, porque el motor creía que el eje 0 era el Norte (ACAD-1); con la convención
+    canónica ese eje es el NORTE y el escenario dejaba de ser el que este docstring
+    describe. No es un retoque de umbral: es el MISMO caso físico, bien etiquetado.
+    MEDIDO — con el cuerpo por `wz` (Norte) el misfit sin padding cae a 16,9 % y el test
+    se ponía rojo contra su umbral de 30 %; por `wx` (Este) sube a **71,1 %**, y con
+    padding baja a **2,87 %** (ratio 0,04). El caso queda más severo, no menos.
+    La razón está medida: con I=75°, D=10°, la componente horizontal del campo vale
+    0,2549 en el eje Este y 0,0449 en el Norte — 5,7× — y es la que hace inexplicable
+    una fuente desplazada por ese eje.
     """
     mw = build_padded_tensor_grid(NX, NY, NZ, BS, n_pad=4, pad_factor=1.3)
     wx, wy, wz = mw["x_c"], mw["y_c"], mw["z_c"]
-    core_edge_E = wz[mw["is_core"]].max()
+    core_edge_E = wx[mw["is_core"]].max()
     true_east = core_edge_E + 250.0
     true = np.zeros(wx.size)
-    body = (np.abs(wx - 700) <= 110) & (np.abs(wy - 150) <= 110) & (np.abs(wz - true_east) <= 160)
+    body = (np.abs(wz - 700) <= 110) & (np.abs(wy - 150) <= 110) & (np.abs(wx - true_east) <= 160)
     true[body] = 0.08
     sx, sy = np.meshgrid(np.linspace(50, NX * BS - 50, 18), np.linspace(50, NZ * BS - 50, 18))
     sensors = np.column_stack([sx.ravel(), np.full(sx.size, -30.0), sy.ravel()])
@@ -157,10 +168,11 @@ def test_padding_moves_peak_off_the_edge():
     chi_pad, _, _, (gxp, gyp, gzp), iscp = _invert(d, sensors, n_pad=4)
 
     # Pico GLOBAL (incluye padding): East debe acercarse a la fuente real (fuera del core).
+    # FASE 19: el Este es el eje 0 (`gx`), no el 2. Ver `_make_edge_source_data`.
     gip0 = int(np.nanargmax(np.where(np.isfinite(chi_no), chi_no, -np.inf)))
     gipp = int(np.nanargmax(np.where(np.isfinite(chi_pad), chi_pad, -np.inf)))
-    peak_E_no, peak_E_pad = gz0[gip0], gzp[gipp]
-    core_edge_E = gz0[isc0].max()
+    peak_E_no, peak_E_pad = gx0[gip0], gxp[gipp]
+    core_edge_E = gx0[isc0].max()
     assert peak_E_no <= core_edge_E + 1, "sin padding el pico queda clavado en el borde del core"
     assert peak_E_pad > peak_E_no, "con padding el pico se aleja del borde hacia la fuente"
     assert abs(peak_E_pad - true_east) < abs(peak_E_no - true_east)

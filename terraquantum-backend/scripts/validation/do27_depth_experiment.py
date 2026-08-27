@@ -102,7 +102,7 @@ def build_truth_anchor(gt, fr, raw) -> tuple[np.ndarray, dict]:
     (el .den almacena el contraste Δρ; 0 = roca caja). Es el valor que un sondaje real
     leería: no se inventa, se toma del ground truth peer-reviewed.
     """
-    tx, ty, tz = _truth_to_local(gt, fr)          # x=Norte, y=prof, z=Este (local)
+    tx, ty, tz = _truth_to_local(gt, fr)          # x=Este, y=prof, z=Norte (local)
     den = raw["den"]
     body = (den != 0.0) & (den != -100.0)
     mean_contrast = float(np.mean(den[body]))     # Δρ medio (negativo: kimberlita)

@@ -64,8 +64,8 @@ SUSC_MAX = 0.05           # κ verdadero máx = 0.02 SI (HK1); headroom sin forz
 # Survey 600 m × 600 m. bs=40 m → 15×15 horizontal cubre el footprint; 13 celdas en
 # profundidad ≈ 520 m alcanzan la cola del pipe (techo ~50 m, base ~480 m bajo datum).
 BLOCK_SIZE = 50.0
-NX = 12   # Norte (12×50 = 600 m cubre el footprint)
-NZ = 12   # Este
+NX = 12   # Este (12×50 = 600 m cubre el footprint)
+NZ = 12   # Norte
 NY = 10   # profundidad (10×50 = 500 m alcanza la base del pipe)
 # Survey ~600 m de lado (diagonal ~850 m). 2000 m de cutoff capta toda interacción
 # relevante (gravedad 1/r², magnetismo 1/r³) sin inflar la densidad del kernel.
@@ -115,9 +115,9 @@ def _subsample(arr_list, stride):
 #  Medición de geometría vs ground truth
 # ══════════════════════════════════════════════════════════════════════════════
 def _truth_to_local(gt: PipeGroundTruth, fr: LocalFrame):
-    """Centroide verdadero (UTM/elev) → frame local (x=Norte, y=prof, z=Este)."""
-    tx = float(gt.centroid_northing - fr.origin_north)   # Norte
-    tz = float(gt.centroid_easting - fr.origin_east)     # Este
+    """Centroide verdadero (UTM/elev) → frame local (x=Este, y=prof, z=Norte)."""
+    tx = float(gt.centroid_easting - fr.origin_east)     # Este
+    tz = float(gt.centroid_northing - fr.origin_north)   # Norte
     ty = float(fr.datum_elev - gt.centroid_elevation)    # profundidad
     return tx, ty, tz
 
@@ -150,8 +150,8 @@ def measure_geometry(model_full, x_c, y_c, z_c, gt: PipeGroundTruth, fr: LocalFr
     rec = {}
     if loc.get("recovered_x_m") is not None:
         rec = {
-            "recovered_easting": round(fr.to_easting(loc["recovered_z_m"]), 1),
-            "recovered_northing": round(fr.to_northing(loc["recovered_x_m"]), 1),
+            "recovered_easting": round(fr.to_easting(loc["recovered_x_m"]), 1),
+            "recovered_northing": round(fr.to_northing(loc["recovered_z_m"]), 1),
             "recovered_elevation": round(fr.to_elevation(loc["recovered_y_m"]), 1),
         }
     # Techo recuperado (profundidad bajo datum) vs techo verdadero bajo datum.

@@ -28,10 +28,17 @@ Estabilidad numérica (garantiza cond(A) < 1e14 y que LSQR no diverja):
   • El signo de r̂ (celda→sensor vs sensor→celda) es IRRELEVANTE: solo aparecen
     (f̂·r_vec)² y r² (potencias pares) y r⁵=|r|⁵. Reusamos dxv = x_cell − x_sensor.
 
-Convención de ejes del backend (idéntica a gravimetry): x=Norte, z=Este,
-y=profundidad (+ hacia abajo). El vector unitario del campo inducido es entonces
-    f̂ = (cos I · cos D,  sin I,  cos I · sin D)        [orden (x, y, z)]
+Convención de ejes del backend (`docs/11_CONVENCION_DE_EJES.md`): x=Este,
+z=Norte, y=profundidad (+ hacia abajo). El vector unitario del campo inducido es
+    f̂ = (cos I · sin D,  sin I,  cos I · cos D)        [orden (x, y, z)]
 donde I = inclinación (+ hacia abajo) y D = declinación (+ al Este desde el Norte).
+
+FASE 19 (ACAD-1): hasta 2026-08-26 este módulo declaraba lo contrario (x=Norte)
+y construía f̂ con `cos I·cos D` en la componente 0, mientras la ingesta metía el
+EASTING en ese slot. El efecto medido no era una rotación sino una REFLEXIÓN
+—declinación efectiva D_ef = 90° − D—, invisible en el Ártico y devastadora en
+Chile (r = −0,05 entre la anomalía calculada y la verdadera). La guardia que lo
+impide volver es `tests/test_fase19_convencion_de_ejes.py`.
 """
 
 import logging
@@ -80,9 +87,9 @@ logger = logging.getLogger(__name__)
 def field_unit_vector(inclination_deg: float, declination_deg: float) -> np.ndarray:
     """
     Vector unitario f̂ del campo geomagnético inducido en coordenadas del backend
-    (x=Norte, z=Este, y=profundidad + hacia abajo).
+    (x=Este, z=Norte, y=profundidad + hacia abajo).
 
-        f̂ = (cos I · cos D,  sin I,  cos I · sin D)
+        f̂ = (cos I · sin D,  sin I,  cos I · cos D)
 
     Para Chile (hemisferio sur) I≈−30° → la componente vertical (y, hacia abajo)
     es negativa: el campo apunta hacia arriba, como debe ser. Norma exactamente 1.
@@ -90,9 +97,9 @@ def field_unit_vector(inclination_deg: float, declination_deg: float) -> np.ndar
     I = np.deg2rad(float(inclination_deg))
     D = np.deg2rad(float(declination_deg))
     f = np.array([
-        np.cos(I) * np.cos(D),   # x = Norte
+        np.cos(I) * np.sin(D),   # x = Este
         np.sin(I),               # y = profundidad (+ abajo)
-        np.cos(I) * np.sin(D),   # z = Este
+        np.cos(I) * np.cos(D),   # z = Norte
     ], dtype=np.float64)
     n = np.linalg.norm(f)
     return f / n if n > 0 else f
@@ -122,10 +129,10 @@ class MagnetometryForward:
     Modelo invertido = SUSCEPTIBILIDAD κ (SI, adimensional). Referencia base κ=0
     (roca huésped no magnética), por lo que el "contraste" coincide con κ.
 
-    Convención espacial (igual que gravimetry):
-      - x: Norte (horizontal)
+    Convención espacial (`docs/11_CONVENCION_DE_EJES.md`, la que entrega la ingesta):
+      - x: Este (horizontal)
       - y: profundidad positiva hacia abajo
-      - z: Este (horizontal)
+      - z: Norte (horizontal)
     """
 
     def __init__(
@@ -199,8 +206,8 @@ class MagnetometryForward:
         EXACTAMENTE el dipolo (mismo signo, misma escala). Esta convergencia es la
         prueba de consistencia que valida los signos del tensor.
 
-        Convención de ejes idéntica al resto del motor: x=Norte, y=profundidad
-        (+ abajo), z=Este. Las potencias del tensor son simétricas en el signo de
+        Convención de ejes idéntica al resto del motor: x=Este, y=profundidad
+        (+ abajo), z=Norte. Las potencias del tensor son simétricas en el signo de
         r̂, igual que el dipolo.
         """
         dx_vec = np.asarray(dx_vec, dtype=np.float64)
@@ -458,7 +465,7 @@ class MagnetometryForward:
         la dirección de remanencia Inc_rem/Dec_rem), retorna G_ind + Q * G_rem.
 
         Para q_ratio=0: retorna G_ind directamente (sin coste adicional).
-        La convención de ejes es la del backend (x=Norte, z=Este, y=profundidad).
+        La convención de ejes es la del backend (x=Este, z=Norte, y=profundidad).
         """
         G_ind = self._build_sparse_kernel(x_c_act, y_c_act, z_c_act, sensor_coords)
 
@@ -520,7 +527,7 @@ class MagnetometryForward:
         modo que |M| recupera la susceptibilidad efectiva κ y μ0 se cancela igual que
         en el escalar (prefactor C = B0·V/4π idéntico).
 
-        Derivación (campo dipolar proyectado sobre f̂, ejes x=Norte/y=prof/z=Este):
+        Derivación (campo dipolar proyectado sobre f̂, ejes x=Este/y=prof/z=Norte):
             ΔT = Σ_c M_c · G_c,
             G_c = C · [ 3·r_vec_c·(f̂·r_vec) / r⁵  −  f̂_c / r³ ],   c ∈ {x,y,z}
         con r_vec = (celda − sensor) y C = B0·V/4π (μ0 cancelado). Cada G_c es par en
@@ -2452,10 +2459,14 @@ class MagnetometryInversion:
         # ── PASO 3: amplitud (observable robusto) y dirección efectiva ───────
         amplitude = np.sqrt(Mx ** 2 + My ** 2 + Mz ** 2)
         horiz = np.sqrt(Mx ** 2 + Mz ** 2)
-        # Convención de ejes: f̂=(cosI·cosD, sinI, cosI·sinD) con x=Norte, y=prof, z=Este.
-        # → I = atan2(My, √(Mx²+Mz²)) ; D = atan2(Mz, Mx).
+        # Convención de ejes: f̂=(cosI·sinD, sinI, cosI·cosD) con x=Este, y=prof, z=Norte.
+        # → I = atan2(My, √(Mx²+Mz²)) ; D = atan2(Mx, Mz), con D medida desde el
+        # NORTE hacia el ESTE. FASE 19: era `atan2(Mz, Mx)`, que devolvía 90−D.
+        # Arreglar f̂ y NO arreglar esto deja el kernel bien y la dirección
+        # publicada reflejada — el arreglo a medias que caza
+        # `tests/test_fase20c_mvi.py::test_mvi_amplitude_direction_recovery`.
         inc_eff = np.degrees(np.arctan2(My, horiz))
-        dec_eff = np.degrees(np.arctan2(Mz, Mx))
+        dec_eff = np.degrees(np.arctan2(Mx, Mz))
 
         def _expand(vec_active, fill=np.nan):
             full = np.full(self.total_voxels, fill, dtype=np.float64)

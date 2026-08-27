@@ -84,9 +84,11 @@ def sphere_tmi_nt(x_s, z_s, cx, cz, depth, radius, susceptibility,
     inc = np.radians(inc_deg)
     dec = np.radians(dec_deg)
 
-    # Vector unitario del campo regional (x=Norte, z=Este, y=abajo)
-    fx = np.cos(inc) * np.cos(dec)
-    fz = np.cos(inc) * np.sin(dec)
+    # Vector unitario del campo regional (x=Este, z=Norte, y=abajo).
+    # FASE 19: las columnas x_m/z_m de este CSV alimentan los slots 0 y 2 del
+    # motor, así que f̂ tiene que estar escrito en la convención canónica.
+    fx = np.cos(inc) * np.sin(dec)
+    fz = np.cos(inc) * np.cos(dec)
     fy = -np.sin(inc)
 
     # Momento magnético en A·m²

@@ -63,7 +63,7 @@ from scripts.validation.do27_harness import _grid_centers_fortran
 from services.field_validation_service import estimate_location_error
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PARÁMETROS DEL CASO SINTÉTICO  (frame local: x=Norte, y=profundidad↓, z=Este)
+#  PARÁMETROS DEL CASO SINTÉTICO  (frame local: x=Este, y=profundidad↓, z=Norte)
 # ══════════════════════════════════════════════════════════════════════════════
 SEED = 20260628                 # reproducibilidad (jitter de estaciones + ruido)
 

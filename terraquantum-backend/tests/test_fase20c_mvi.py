@@ -153,8 +153,17 @@ def test_mvi_amplitude_direction_recovery():
     # cuerpo), NO en un único argmax frágil. Sin remanencia → debe ≈ dirección inducida.
     strong = amp > 0.5 * amp.max()
     assert strong.sum() > 0
-    inc_eff = float(np.average(inc_full[strong], weights=amp[strong]))
-    dec_eff = float(np.average(dec_full[strong], weights=amp[strong]))
+    w = amp[strong]
+    # FASE 19: la declinación se promedia en CIRCULAR (por vector unitario), no con
+    # `np.average`. MEDIDO: las declinaciones por celda barren ±180°, y la media
+    # aritmética las cancela — daba −3,2° con el código correcto y −0,8° con la
+    # declinación REFLEJADA, así que este test pasaba verde con las dos. En circular
+    # salen 9,8° y 80,2° (suman 90: la firma de la reflexión). La inclinación no
+    # tiene ese problema: vive en (−90, 90) y no envuelve.
+    dec_rad = np.radians(dec_full[strong])
+    inc_eff = float(np.average(inc_full[strong], weights=w))
+    dec_eff = float(np.degrees(np.arctan2(np.sum(w * np.sin(dec_rad)),
+                                          np.sum(w * np.cos(dec_rad)))))
     assert abs(inc_eff - INC) <= 20.0, f"inc efectiva={inc_eff:.1f} vs inducida {INC}"
     assert abs(dec_eff - DEC) <= 25.0, f"dec efectiva={dec_eff:.1f} vs inducida {DEC}"
     assert amp.max() > 0.0

@@ -28,7 +28,7 @@ susceptibilidad se reportan sólo como informativo.
 | Magnético: 2 primeras filas son el IGRF volcado como filas (`83.8, 25.4, 60308, nan, nan`) | Se **extraen como parámetros del kernel** (I=83.8°, D=25.4°, B0=60308 nT) y se descartan de las estaciones |
 | Magnético: filas con `nan` | Descartadas (validador Fase 14) → 961 estaciones limpias |
 | Gravimetría: `Error_Est = 0` | σ adaptativo (2 % del std de la señal), piso robusto |
-| UTM grande (557000, 7133300) | Frame local: se resta el origen; x=Norte, z=Este, y=profundidad |
+| UTM grande (557000, 7133300) | Frame local: se resta el origen; x=Este, z=Norte, y=profundidad |
 | Gravimetría ya es Bouguer | Se invierte el contraste directo; unidades mGal → m/s² (×1e-5, igual que `gravity_import_service`) |
 
 ## Ground truth (geometría del pipe verdadero)

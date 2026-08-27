@@ -11,8 +11,8 @@ de los datos.
 REFRAME (project_fase25_field_validation): se valida POSICIÓN/ESTRUCTURA del cuerpo, NO la
 susceptibilidad punto a punto. Métrica dura = error horizontal del cuerpo dominante.
 
-Reusa el patrón de DO-27 (do27_harness): mismo motor, mismas métricas, mismo gotcha de
-ejes (x=Norte, z=Este, y=prof). Diferencias: magnético SOLO (sin gravedad/joint), coords
+Reusa el patrón de DO-27 (do27_harness): mismo motor, mismas métricas, misma
+convención de ejes (x=Este, z=Norte, y=prof). Diferencias: magnético SOLO (sin gravedad/joint), coords
 locales, σ = Std real, IGRF de obs.mag. NO se tunea nada.
 
 USO:
@@ -47,8 +47,8 @@ from scripts.validation.ingest_do27 import LocalFrame
 # ── Malla de inversión: cubre el survey 4000×4000 m a 200 m (la malla de referencia es
 # 40×40×10 @100 m = 16000 celdas, demasiado para el solver acotado). 20×20×5 = 2000 celdas.
 BLOCK_SIZE = 200.0
-NX = 20   # Norte
-NZ = 20   # Este
+NX = 20   # Este
+NZ = 20   # Norte
 NY = 5    # profundidad (5×200 = 1000 m, igual que la malla de referencia)
 # El kernel dipolar magnético cae como 1/r³ → 2500 m capta toda interacción relevante en
 # un survey de 4 km sin inflar la densidad del kernel (acelera mucho el solver acotado).
@@ -101,7 +101,7 @@ def invert_magnetic(survey: RaglanMagneticSurvey, fr: LocalFrame, use_padding: b
         [survey.east, survey.north, survey.elevation, survey.tmi_nt, survey.sigma_nt],
         SENSOR_STRIDE,
     )
-    # Sensores en el frame del motor: x=Norte←north, y=prof←(datum−elev), z=Este←east.
+    # Sensores en el frame del motor: x=Este←east, y=prof←(datum−elev), z=Norte←north.
     sensors = fr.sensors(e, n, z)
 
     if use_padding:
@@ -171,7 +171,7 @@ def invert_via_production(survey: RaglanMagneticSurvey, fr: LocalFrame):
         [survey.east, survey.north, survey.elevation, survey.tmi_nt, survey.sigma_nt],
         SENSOR_STRIDE,
     )
-    sensors = fr.sensors(e, n, z)   # x=Norte, y=prof, z=Este
+    sensors = fr.sensors(e, n, z)   # x=Este, y=prof, z=Norte
     obs = [
         GravityObservation(x_m=float(sx), y_m=float(sy), z_m=float(sz), g=0.0)
         for sx, sy, sz in sensors
@@ -275,8 +275,8 @@ def _structural_correlation(chi, x_c, y_c, z_c, fr: LocalFrame) -> dict:
     """
     cube, rxc, ryc, rzc = load_reference_cube()
     chi = np.asarray(chi, dtype=np.float64)
-    east = np.asarray(z_c) + fr.origin_east
-    north = np.asarray(x_c) + fr.origin_north
+    east = np.asarray(x_c) + fr.origin_east
+    north = np.asarray(z_c) + fr.origin_north
     depth = np.asarray(y_c)
     ie = np.clip(np.searchsorted(0.5 * (rxc[:-1] + rxc[1:]), east), 0, len(rxc) - 1)
     jn = np.clip(np.searchsorted(0.5 * (ryc[:-1] + ryc[1:]), north), 0, len(ryc) - 1)
@@ -319,13 +319,13 @@ def measure(chi, x_c, y_c, z_c, ref: RaglanReference, fr: LocalFrame) -> dict:
         return {"recovered_peak": None}
     # Pico recuperado (celda de máxima susc) → coords de datos.
     ip = int(np.nanargmax(np.where(finite, chi, -np.inf)))
-    peak_east = fr.to_easting(z_c[ip]); peak_north = fr.to_northing(x_c[ip])
+    peak_east = fr.to_easting(x_c[ip]); peak_north = fr.to_northing(z_c[ip])
     peak_depth = float(y_c[ip])
     # Centroide de la región fuerte (>0.5·max).
     strong = finite & (chi > 0.5 * cmax)
     w = chi[strong]
-    sc_east = fr.to_easting(float(np.average(z_c[strong], weights=w)))
-    sc_north = fr.to_northing(float(np.average(x_c[strong], weights=w)))
+    sc_east = fr.to_easting(float(np.average(x_c[strong], weights=w)))
+    sc_north = fr.to_northing(float(np.average(z_c[strong], weights=w)))
     sc_depth = float(np.average(y_c[strong], weights=w))
 
     # Cuerpo dominante INTERIOR (mapa colapsado en profundidad, excluyendo un borde de 2
@@ -333,8 +333,8 @@ def measure(chi, x_c, y_c, z_c, ref: RaglanReference, fr: LocalFrame) -> dict:
     # X≈4478) satura ~2 columnas de borde a un artefacto; lo mismo en el oeste. El cuerpo
     # geológico real se evalúa en el interior. Honesto: se reporta el pico GLOBAL (con
     # artefacto) Y el cuerpo INTERIOR (representativo del blanco de sondaje).
-    east_all = np.asarray(z_c) + fr.origin_east
-    north_all = np.asarray(x_c) + fr.origin_north
+    east_all = np.asarray(x_c) + fr.origin_east
+    north_all = np.asarray(z_c) + fr.origin_north
     Ne = np.unique(north_all); Ee = np.unique(east_all)
     hor = np.zeros((Ne.size, Ee.size))
     in_ = np.searchsorted(Ne, north_all); ie_ = np.searchsorted(Ee, east_all)

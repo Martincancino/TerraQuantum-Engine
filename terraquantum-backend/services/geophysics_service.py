@@ -2122,7 +2122,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             _max_elev_mag = float(np.max(_elev_arr_mag))
             _surface_depths_mag = _max_elev_mag - _elev_arr_mag  # prof desde el punto más alto
             _topo_mag, _surf_mode_mag = _interp_surface_mag(
-                sensor_coords[:, [0, 2]],                       # (x=Norte, z=Este)
+                sensor_coords[:, [0, 2]],                       # (x=Este, z=Norte)
                 _surface_depths_mag,
                 np.column_stack([x_c_full, z_c_full]),
             )
@@ -2430,7 +2430,7 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
             "declination_deg": params.declination_deg,
             "field_intensity_nt": params.field_intensity_nt,
             "field_unit_vector_xyz": solver_meta.get("field_unit_vector"),
-            "axis_convention": "x=Norte, z=Este, y=profundidad(+abajo)",
+            "axis_convention": "x=Este, z=Norte, y=profundidad(+abajo)",
         },
         "remanence": _remanence_report,
         "self_demagnetization": (

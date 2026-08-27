@@ -22,7 +22,7 @@ CX = CZ = (NX - 1) * SP / 2.0          # centro del survey (local)
 Vol = (4/3) * np.pi * R**3
 mass = Vol * DRHO
 C = B0 * Vol / (4 * np.pi)             # prefactor dipolo (igual que el motor)
-fhat = field_unit_vector(INC, DEC)     # (x=N, y=abajo, z=E)
+fhat = field_unit_vector(INC, DEC)     # (x=Este, y=abajo, z=Norte)
 rng = np.random.default_rng(11)
 
 # ── estaciones ────────────────────────────────────────────────────────────────
@@ -32,9 +32,11 @@ sid = 1
 for j in range(NY):
     for i in range(NX):
         e = i * SP; n = j * SP                       # easting/northing local
-        dN = CZ - n; dE = CX - e                     # (ojo: x=N, z=E en el motor)
-        # vector cuerpo - estación en coords motor (x=N, y=prof, z=E)
-        rvec = np.array([dN, DEPTH, dE])
+        dN = CZ - n; dE = CX - e
+        # vector cuerpo - estación en coords motor (x=Este, y=prof, z=Norte).
+        # FASE 19: el CSV lleva easting/northing, y la ingesta los manda a los
+        # slots 0 y 2 en ese orden; el generador tiene que armarlo igual.
+        rvec = np.array([dE, DEPTH, dN])
         r = np.sqrt(rvec @ rvec)
         # gravedad (esfera = masa puntual): componente vertical
         g_mgal = (G * mass * DEPTH / r**3) * 1e5 + rng.normal(0, 0.02)

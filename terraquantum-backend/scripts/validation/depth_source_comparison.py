@@ -38,7 +38,7 @@ NOISE_FRAC = 0.02           # ruido = 2% del pico
 
 def _survey():
     a = np.linspace(-SPAN / 2, SPAN / 2, N_SIDE)
-    gx, gz = np.meshgrid(a, a, indexing="ij")   # x=Norte, z=Este; cuerpo en (0,depth,0)
+    gx, gz = np.meshgrid(a, a, indexing="ij")   # x=Este, z=Norte; cuerpo en (0,depth,0)
     return gx, gz
 
 

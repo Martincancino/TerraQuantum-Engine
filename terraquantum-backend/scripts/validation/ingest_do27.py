@@ -15,19 +15,25 @@ Lo que hace:
                       forward-model de los autores y extrae la GEOMETRÍA del pipe
                       (centroide, techo, extensión) — el ground truth peer-reviewed.
   • LocalFrame    — transforma UTM (Easting/Northing/elevación) ↔ frame local del
-                      motor (x=Norte, z=Este, y=profundidad+abajo).
+                      motor (x=Este, z=Norte, y=profundidad+abajo).
 
 CAVEAT HONESTO (no se oculta): los datos geofísicos son "synthetic based on" DO-27
 (forward-modelados desde la geología de sondajes), NO dato crudo de campo. Aun así,
 el ground truth y las inversiones de referencia son EXTERNOS y peer-reviewed: es el
 escalón correcto antes de datos de campo crudos.
 
-Convención del motor TerraQuantum (ver exploration/magnetometry.py):
-    x = Norte (horizontal),  z = Este (horizontal),  y = profundidad (+ hacia abajo)
+Convención del motor TerraQuantum (`docs/11_CONVENCION_DE_EJES.md`):
+    x = Este (horizontal),  z = Norte (horizontal),  y = profundidad (+ hacia abajo)
 Mapeo UTM → local:
-    x_local (Norte) = Northing_UTM - origin_north
-    z_local (Este)  = Easting_UTM  - origin_east
+    x_local (Este)  = Easting_UTM  - origin_east
+    z_local (Norte) = Northing_UTM - origin_north
     y_local (prof)  = datum_elev   - elevación      (datum = elevación de referencia)
+
+FASE 19: hasta 2026-08-26 este adaptador armaba el frame al revés (col0=Norte),
+igual que el motor. Las dos mitades eran consistentes entre sí, y por eso DO-27
+NO podía ver ACAD-1: el harness nunca pasa por el importador. Voltear las dos a
+la vez es un re-etiquetado exacto — la Fase 18 lo midió en el forward (3·10⁻¹⁶ nT)
+y la Fase 19 lo confirmó corriendo el benchmark entero antes y después.
 """
 from __future__ import annotations
 
@@ -97,35 +103,39 @@ class PipeGroundTruth:
 
 @dataclass
 class LocalFrame:
-    """Frame local del motor (x=Norte, z=Este, y=prof). Origen + datum compartidos."""
-    origin_east: float    # se resta al Easting → z_local
-    origin_north: float   # se resta al Northing → x_local
+    """Frame local del motor (x=Este, z=Norte, y=prof). Origen + datum compartidos.
+
+    Los métodos se llaman por lo que DEVUELVEN (`east_local`, `north_local`), no
+    por el slot en que acaban: el slot lo decide `sensors()`, en un solo sitio.
+    """
+    origin_east: float    # se resta al Easting → x_local
+    origin_north: float   # se resta al Northing → z_local
     datum_elev: float     # elevación de referencia → y_local = datum - elev
 
     # ── UTM → local ──────────────────────────────────────────────────────────
-    def x_north(self, northing) -> np.ndarray:
+    def north_local(self, northing) -> np.ndarray:
         return np.asarray(northing, dtype=np.float64) - self.origin_north
 
-    def z_east(self, easting) -> np.ndarray:
+    def east_local(self, easting) -> np.ndarray:
         return np.asarray(easting, dtype=np.float64) - self.origin_east
 
     def y_depth(self, elevation) -> np.ndarray:
         return self.datum_elev - np.asarray(elevation, dtype=np.float64)
 
     def sensors(self, easting, northing, elevation) -> np.ndarray:
-        """Matriz (n,3) [x=Norte, y=prof, z=Este] que consume el forward del motor."""
+        """Matriz (n,3) [x=Este, y=prof, z=Norte] que consume el forward del motor."""
         return np.column_stack([
-            self.x_north(northing),
+            self.east_local(easting),
             self.y_depth(elevation),
-            self.z_east(easting),
+            self.north_local(northing),
         ])
 
     # ── local → UTM (para reportar el cuerpo recuperado en UTM) ───────────────
-    def to_easting(self, z_east) -> float:
-        return float(z_east) + self.origin_east
+    def to_easting(self, x_local) -> float:
+        return float(x_local) + self.origin_east
 
-    def to_northing(self, x_north) -> float:
-        return float(x_north) + self.origin_north
+    def to_northing(self, z_local) -> float:
+        return float(z_local) + self.origin_north
 
     def to_elevation(self, y_depth) -> float:
         return self.datum_elev - float(y_depth)

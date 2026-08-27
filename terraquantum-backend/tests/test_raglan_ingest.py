@@ -79,8 +79,8 @@ def test_frame_roundtrip():
     s = load_raglan_magnetic()
     fr = build_raglan_frame(s)
     # local↔data invertible; el datum es la superficie (0) → sensores a y<0 (sobre tierra).
-    assert fr.to_easting(fr.z_east(3350.0)) == pytest.approx(3350.0)
-    assert fr.to_northing(fr.x_north(40250.0)) == pytest.approx(40250.0)
+    assert fr.to_easting(fr.east_local(3350.0)) == pytest.approx(3350.0)
+    assert fr.to_northing(fr.north_local(40250.0)) == pytest.approx(40250.0)
     sensors = fr.sensors(s.east, s.north, s.elevation)
     assert sensors.shape == (s.n, 3)
     assert (sensors[:, 1] < 0).all()      # profundidad de sensor < 0 = sobre la superficie

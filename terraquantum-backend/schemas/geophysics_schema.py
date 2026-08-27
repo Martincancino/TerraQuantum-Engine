@@ -573,7 +573,7 @@ class GeophysicsInvertInput(BaseModel):
         description="Anomalía TMI por observación (nT), paralela a observations. Si se provee activa el motor magnético (Fase 9A) e ignora g.",
     )
     # Parámetros del campo geomagnético inducido (defaults razonables para Chile).
-    # Convención de ejes del backend: x=Norte, z=Este, y=profundidad (+ hacia abajo).
+    # Convención de ejes del backend: x=Este, z=Norte, y=profundidad (+ hacia abajo).
     inclination_deg: float = Field(
         -30.0, ge=-90.0, le=90.0,
         description="Inclinación del campo inducido (°, + hacia abajo). Default -30 (hemisferio sur).",

@@ -7,8 +7,8 @@ SEGUNDO benchmark externo. A diferencia de DO-27 (synthetic-based-on), Raglan es
 (Northern Quebec), invertido en 3D hacia 1997 (la inversión que ayudó a ubicar un sondaje
 mineralizado). Tutorial SimPEG Transform 2021.
 
-Reusa la maquinaria de DO-27 (`ingest_do27.LocalFrame`, convención del motor x=Norte/
-z=Este/y=prof) y la generaliza a las particularidades de Raglan:
+Reusa la maquinaria de DO-27 (`ingest_do27.LocalFrame`, convención del motor x=Este/
+z=Norte/y=prof) y la generaliza a las particularidades de Raglan:
   • Coordenadas LOCALES (no UTM) → no se resta origen UTM; se usa el origen de la malla.
   • Z ≈ 40 m constante = altura de drape (vuelo) sobre la superficie (z0=0).
   • Std_nT por estación = incertidumbre REAL → se usa como σ (no adaptativo).
@@ -203,7 +203,7 @@ def _read_ubc_msh_2d(path: Path):
 def build_raglan_frame(survey: RaglanMagneticSurvey, *, root: Optional[Path] = None) -> LocalFrame:
     """Frame local alineado con la malla de referencia (origen = esquina de la malla).
 
-    x=Norte ← data Y, z=Este ← data X, y=prof ← (datum=0 superficie) − elevación. Los
+    x=Este ← data X, z=Norte ← data Y, y=prof ← (datum=0 superficie) − elevación. Los
     sensores quedan a y=−40 (40 m sobre la superficie, su altura de drape).
     """
     root = Path(root) if root else _DEFAULT_RAGLAN_ROOT

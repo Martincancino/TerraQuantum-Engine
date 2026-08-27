@@ -969,7 +969,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             "declination_deg": params.declination_deg,
             "field_intensity_nt": params.field_intensity_nt,
             "field_unit_vector_xyz": meta_m.get("field_unit_vector"),
-            "axis_convention": "x=Norte, z=Este, y=profundidad(+abajo)",
+            "axis_convention": "x=Este, z=Norte, y=profundidad(+abajo)",
         },
         "continuation": {
             "cross_lambda_beta": cross_beta,

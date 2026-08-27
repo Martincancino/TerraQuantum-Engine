@@ -96,8 +96,8 @@ def test_local_frame_roundtrip():
     fr = build_local_frame(g, m)
     # UTM → local → UTM debe ser identidad.
     e, n, z = 557300.0, 7133600.0, 420.0
-    assert fr.to_easting(fr.z_east(e)) == pytest.approx(e)
-    assert fr.to_northing(fr.x_north(n)) == pytest.approx(n)
+    assert fr.to_easting(fr.east_local(e)) == pytest.approx(e)
+    assert fr.to_northing(fr.north_local(n)) == pytest.approx(n)
     assert fr.to_elevation(float(fr.y_depth(z))) == pytest.approx(z)
     # El datum está por encima de todas las elevaciones de sensores.
     assert fr.datum_elev >= g.elevation.max()
