@@ -184,7 +184,23 @@ mismo error horizontal). Eso es exactamente lo que predice el índice de ceguera
 
 ---
 
-## 4. QUÉ TIENE QUE CAMBIAR (trabajo de la Fase 19)
+## 4. QUÉ CAMBIÓ (ejecutado por la Fase 19, 2026-08-26)
+
+> **Estado: HECHO.** Todo lo que esta sección enumeraba está aplicado. La
+> guardia que exige la §6 vive en `tests/test_fase19_convencion_de_ejes.py` y
+> `tests/test_fase19_zip_ubc_ejes.py`. Se conserva el texto en futuro porque es
+> el registro de la decisión, no una lista de tareas viva.
+>
+> **Dos erratas de esta sección, medidas al ejecutarla:** los «26 sitios
+> declarativos» incluían **dos que sí calculan** —
+> `scripts/prepare_test_csv.py:87-89` (`fx`/`fz` del campo regional) y
+> `scripts/diagnostics/generar_3csv_multifisica.py:36-38` (el `rvec` con el que
+> genera el CSV multi-física)—: los dos generan datos sintéticos que entran al
+> motor por los slots 0 y 2, así que había que voltearlos. Y faltaba un tercer
+> sitio declarativo, `magnetometry.py:125-128`, en el docstring de
+> `MagnetometryForward`.
+
+### 4.1 Lo que decía el plan
 
 **Lo ejecutable — dos líneas, y las dos hay que cambiar juntas:**
 

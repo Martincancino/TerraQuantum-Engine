@@ -870,6 +870,113 @@ adapta es el **motor magnético**, y no hay que permutar un solo array.
   `20 20 10` y `20 10 20`. **Con malla cúbica el defecto es invisible, así que un
   test cúbico no vale.**
 
+#### ✅ EJECUTADA — 2026-08-26
+
+**ACAD-1 y ACAD-1c cerrados**, en tres commits (backend · backend · docs).
+Guardias nuevas: `tests/test_fase19_convencion_de_ejes.py` (9) y
+`tests/test_fase19_zip_ubc_ejes.py` (8).
+
+**La promesa que NO se sostuvo, y es el titular de la fase.** El plan daba por
+puesta una trampa: *«`tests/test_fase20c_mvi.py:159` ya caza el arreglo a medias,
+excede su margen por 86°; no la borres»*. **Medido: no lo cazaba.** Ese test
+promediaba declinaciones con `np.average`, y las declinaciones por celda que
+devuelve MVI barren **±180°**, así que la media aritmética las cancela: daba
+**−3,2°** con el código correcto y **−0,8°** con la declinación REFLEJADA — las
+dos dentro del margen de 25°. Con la mutación puesta seguía **verde**. Se cambió
+a media **circular** (por vector unitario): ahora salen **9,8°** y **80,2°**, que
+suman 90 — la firma exacta de la reflexión — y la mutación lo mata. *La fase
+descubrió que su propio gate heredado era decorativo.*
+
+**Mutación 4/4** (con hash del fichero verificado antes, durante y después de cada
+una, porque el árbol vive en OneDrive y una restauración llegó a revertirse sola):
+
+| mutación | qué revierte | tests en rojo |
+|---|---|---|
+| M1 | `f̂` a `(cos I·cos D, …)` | **5** |
+| M2 | arreglo A MEDIAS: `dec_eff = atan2(Mz, Mx)` | **3** |
+| M3 | quitar la permutación UBC del ZIP | **6** |
+| M4 | etiquetas de eje de GSLIB y ASEG | **2** |
+
+**Gate de ejes — DO-27 y Raglan de punta a punta, antes y después.**
+El plan prometía números **idénticos** apoyándose en la Parte C de la Fase 18.
+**No salen idénticos, y ahora se sabe por qué** — la Parte C midió el *forward*
+sobre geometría simétrica:
+
+- **DO-27** — *ni una sola clave de `gravity_only` cambió* en las 120 del reporte
+  (invarianza exacta de la gravimetría, medida end-to-end, más fuerte que el
+  `4,8·10⁻¹⁴` que la Fase 18 midió sólo en el forward). Lo magnético se mueve
+  ≤8 m horizontales (0,16 celdas) y ≤16 m en profundidad; **los dos veredictos
+  siguen PASS** (tol. 100 m): grav 53,7 m · mag 73,8→**76,9** · joint-grav
+  74,4→**82,8** · joint-mag 81,2→**76,0**. Aislado el origen: con la geometría
+  REAL de DO-27 el dato predicho por las dos convenciones coincide a
+  **1,02·10⁻¹⁶** relativo ⇒ el movimiento vive **entero en el camino del solver**
+  (sistema permutado-pero-equivalente, iterando a un iterado ligeramente
+  distinto), no en la física.
+- **Raglan** — aquí el cambio **sí es geométrico**, y se midió la causa: el survey
+  **no es simétrico respecto de la caja de vóxeles**. `east_local` ∈
+  [−3,4 , 4004,6] **se sale** de la caja [0, 4000] por los dos extremos;
+  `north_local` ∈ [28,0 , 3970,0] **cabe entera**. Voltear los ejes transpone el
+  survey contra una caja cuadrada fija y eso no es una simetría de ESTE survey.
+  Resultado: la métrica dura **idéntica** (pico interior **212,1 m**, PASS), el
+  misfit igual (8,060 → 8,079 %), la correlación igual (0,558 → 0,559), y el
+  **artefacto de borde que el propio harness documentaba se disuelve**: pico
+  GLOBAL 1202,1 → **212,1 m**. La profundidad empeora (err 50 → 250 m), en el eje
+  que este repositorio ya tiene medido como null-space.
+  > La colocación de antes era la **arbitraria** —venía de la convención
+  > equivocada del motor—; la de ahora es la que coincide con la ingesta y con
+  > los ejes (E, N) del propio modelo de referencia.
+
+**Gate del ZIP.** Malla NO cúbica 20×10×20: la cabecera pasa de `20 10 20` a
+`20 20 10`, y **3998 de 4000 celdas** caían en distinto sitio según se
+descargase el ZIP o se leyese el fichero del disco. En vez de sincronizar dos
+escritores se dejó **UNO**: `ubc_mesh_text` / `ubc_model_text` /
+`tq_flat_to_ubc_flat`, que usan las dos rutas — verificado **byte-idéntico** al
+escritor de disco anterior en 5 formas de malla, así que la ruta de `load-package`
+no cambió de comportamiento. El origen ya no es `0 0 0` sino el UTM real, leído
+por las dos rutas con la **misma** función (`run_local_origin`).
+
+**Un test de otra fase se puso rojo, y NO se arregló moviendo el umbral.**
+`test_magnetic_padding.py::test_padding_makes_edge_source_explainable` exige
+misfit > 30 % sin padding y pasó a dar **16,9 %**. La causa, medida: su docstring
+dice *«fuente más allá del borde **Este**»* pero desplazaba el cuerpo por el eje
+`wz`, que bajo la convención canónica es el **Norte**; el escenario había dejado
+de ser el que el test describe. Con I=75°, D=10° la componente horizontal del
+campo vale **0,2549** en el Este y **0,0449** en el Norte (5,7×), y es la que
+hace inexplicable una fuente desplazada por ese eje. Se movió el cuerpo a `wx`
+—el mismo caso físico, bien etiquetado— y el misfit sin padding sube a
+**71,1 %** y con padding baja a **2,87 %** (ratio 0,04): el caso queda **más
+severo** que antes, no retocado.
+
+**Tres erratas del expediente de la Fase 18**, todas medidas al ejecutarlo:
+1. La trampa de MVI no cazaba nada (arriba).
+2. De los «26 sitios declarativos», **dos SÍ calculan**:
+   `scripts/prepare_test_csv.py:87-89` (`fx`/`fz` del campo regional) y
+   `scripts/diagnostics/generar_3csv_multifisica.py:36-38` (el `rvec` del
+   generador multi-física). Los dos fabrican datos que entran al motor por los
+   slots 0 y 2: había que voltearlos.
+3. Faltaba un tercer sitio declarativo: `magnetometry.py:125-128`.
+
+**Alcance que la fase NO tocó, con la línea exacta:**
+- **`terraquantum-web/componentes/MagnetizationVectors.tsx:99`** reconstruye
+  `f̂ = (cos I·cos D, sin I, cos I·sin D)` sobre ejes de mundo donde `x` lleva el
+  **easting** (verificado: `Scene3D.tsx:1094` mapea `cell.x` → x de Three.js), así
+  que dibuja las flechas MVI a azimut **90−D**. Es **anterior a esta fase y no
+  empeora con ella** —el backend publicaba D antes y publica D ahora—, pero es un
+  defecto vivo. Fix: `Math.cos(I)*Math.sin(D), Math.sin(I), Math.cos(I)*Math.cos(D)`.
+  Es frontend: la regla de oro lo deja para su propia fase.
+- **El reporte DO-27 commiteado estaba obsoleto.** Al re-medir el «antes» salió
+  que `do27_validation_report.json` difería de HEAD en **11 claves, todas de la
+  rama joint** (joint-mag horiz 61,6 vs 81,2; misfit 2,679 vs 1,269). Sus números
+  los produjo un commit anterior. Los dos reportes quedan regenerados.
+- **NUEVO — el bundle ZIP se inventa la malla cuando falta `inputs.json`.**
+  Medido sobre una corrida con la forma real de `f3_gate/runs/joint96k`
+  (48×42×48 @36 m = 96 768 celdas, sin `inputs.json`, como TODAS las corridas
+  `api_v0`/v2 en disco): el ZIP entrega una malla **8×8×8 @100 m con 512 celdas**
+  —el 0,5 % del modelo, al tamaño de celda equivocado— **sin un solo aviso**
+  (`export_service.py`, `inputs.get("nx") or 8`). No es ACAD-1c y no se tocó:
+  es un fallback que finge, y merece su propia decisión (leer
+  `run_manifest.json → inversion_params`, o fallar en voz alta).
+
 ---
 
 ### FASE 20 — La preparación deja de evaporarse · **M** · 🟠 P1 · *frontend* · NUEVO-2, NUEVO-3

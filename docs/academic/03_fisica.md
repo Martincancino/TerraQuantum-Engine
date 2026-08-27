@@ -441,6 +441,25 @@ API magnética.
 
 Ésta es la sección más importante del informe.
 
+> **ESTADO: CERRADO — 2026-08-26.** Lo que §7.5 pedía («no se ejecutó ningún
+> experimento numérico») lo hizo la **Fase 18**, y la **Fase 19** corrigió el
+> código. Dos matices que el experimento añadió a lo que aquí se dedujo por
+> lectura:
+>
+> 1. **No es una rotación de 90°, es una REFLEXIÓN sobre el azimut 45°.** La
+>    forma cerrada `D_ef = 90° − D` que §7.3 anota como «equivalentemente» es la
+>    exacta; la lectura «el patrón está rotado 90°» no lo es. El discriminador
+>    medido: con `D = 45°` el defecto es **exactamente cero**, cosa que una
+>    rotación rígida no predice.
+> 2. **La ceguera ártica tiene forma cerrada:** índice = `√2·cos I·|sin D − cos D|`
+>    — Chile 1,1813 · Raglan 0,2375 · DO-27 0,0725. La intuición de §7.4 («escala
+>    con cos I») es correcta y el factor exacto lleva además el término en D.
+>
+> La decisión y las mediciones están en `docs/11_CONVENCION_DE_EJES.md`; el
+> experimento en `scripts/validation/fase18_axis_convention_experiment.py`. El
+> código de §7.1 se cita **tal como estaba cuando se detectó**: es la evidencia,
+> no el estado actual.
+
 ### 7.1 Qué dice el código
 
 ```python
