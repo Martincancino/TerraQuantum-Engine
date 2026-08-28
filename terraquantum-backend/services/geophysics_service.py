@@ -340,6 +340,214 @@ def topography_run_warnings(topography_used: str) -> list:
     return []
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FASE 20 — El contraste efectivo deja de ser invisible
+# ─────────────────────────────────────────────────────────────────────────────
+# La inversión gravimétrica recupera un CONTRASTE respecto de `base_density`, pero el
+# bound petrofísico se declara en densidad ABSOLUTA (`density_min`/`density_max`). El
+# número que gobierna la física es la resta —`density_min − base_density`— y hasta la
+# Fase 20 no se declaraba en ninguna parte: ni en el reporte, ni en la UI, ni en un log.
+#
+# Por qué importa, MEDIDO (validation/HALLAZGO_2026-08-06_bound_por_defecto.md, 48
+# inversiones por HTTP sobre 6 regímenes): ese piso de contraste mueve la recuperación
+# de PR-AUC 0,890 a 0,288 en un régimen y de 247,9 m a 24,0 m de error de profundidad en
+# otro, CAMBIANDO DE SIGNO entre ellos. Ese documento retira por escrito la
+# recomendación de invertir el default: no hay un valor correcto, hay un régimen. Por eso
+# esta fase NO elige el valor por el usuario. Lo declara, junto al indicador que delata
+# en qué régimen cayó la corrida —el % de celdas que terminaron pegadas al bound, que en
+# esa misma medición fue de 91,3 % a 0,0 % según el brazo— y avisa cuando el par
+# `base_density`/`density_min` quedó DESACOPLADO.
+
+_EFFECTIVE_CONTRAST_EVIDENCE = "validation/HALLAZGO_2026-08-06_bound_por_defecto.md"
+
+
+def _contract_default(params, field: str, fallback: float) -> float:
+    """Default declarado por el contrato pydantic de ESTE params (v1 y v2 difieren).
+
+    `GeophysicsInvertInput.density_min` vale 2.6 y `GeophysicsInvertInputV2.density_min`
+    vale 0.0: preguntarle al modelo evita cablear a mano una tabla que se desincroniza.
+    """
+    try:
+        return float(type(params).model_fields[field].default)
+    except Exception:
+        return float(fallback)
+
+
+def density_bound_decoupling(params) -> dict:
+    """¿Quedaron `base_density` y `density_min` desacoplados? Diagnóstico puro.
+
+    Devuelve las reglas que dispararon (lista, posiblemente vacía) y los números con los
+    que se decidió. NO fuerza ningún valor: el propio proyecto midió que no existe un
+    `density_min` correcto fuera de un régimen.
+
+    Reglas (ambas por VALOR, no por procedencia: el camino del paquete pasa `density_min`
+    explícito SIEMPRE, así que `model_fields_set` no distinguiría nada):
+
+    * `positive_floor` — `density_min > base_density`. El piso de contraste efectivo es
+      POSITIVO: la propia roca caja (contraste 0) queda fuera de la caja permitida y toda
+      celda sin anomalía se recorta al bound. Es el caso que produce el camino real de la
+      UI: los presets de litología mueven `density_min` a 4,5 (magnetita) o 4,3 (cobre) y
+      `base_density` NO viaja en la configuración del paquete (`api/gravity_import_api.py`),
+      así que se queda en 2,6.
+    * `base_moved_min_at_default` — `base_density` fuera de su default de contrato y
+      `density_min` exactamente en el suyo. Es la regla que pide la Fase 20: mover la roca
+      caja sin mover el bound cambia el piso de contraste sin que nada lo diga.
+    """
+    base = float(getattr(params, "base_density", 2.6))
+    dmin = float(getattr(params, "density_min", 0.0))
+    dmax = float(getattr(params, "density_max", 5.5))
+    base_default = _contract_default(params, "base_density", 2.6)
+    dmin_default = _contract_default(params, "density_min", 0.0)
+
+    rules = []
+    if dmin > base:
+        rules.append("positive_floor")
+    if base != base_default and dmin == dmin_default:
+        rules.append("base_moved_min_at_default")
+
+    return {
+        "rules": rules,
+        "decoupled": bool(rules),
+        "base_density_t_m3": base,
+        "density_min_t_m3": dmin,
+        "density_max_t_m3": dmax,
+        "base_density_default_t_m3": base_default,
+        "density_min_default_t_m3": dmin_default,
+        "effective_contrast_min_t_m3": round(dmin - base, 6),
+        "effective_contrast_max_t_m3": round(dmax - base, 6),
+    }
+
+
+def density_bound_run_warnings(params) -> list:
+    """Avisos de nivel de corrida por desacople de `base_density`/`density_min`.
+
+    Viajan por `report.warnings[]` y `technicalSummary.warnings[]`, el canal que el
+    frontend YA renderiza (`lib/terraquantum/runWarnings.ts` → `WarningBanner`), así que
+    la Fase 20 no toca frontend. Lista vacía cuando el par es coherente: el caso acoplado
+    y el permisivo declarado NO generan ruido — quedan sólo DECLARADOS en
+    `report.effective_contrast`.
+    """
+    d = density_bound_decoupling(params)
+    if not d["rules"]:
+        return []
+
+    base = d["base_density_t_m3"]
+    dmin = d["density_min_t_m3"]
+    dmax = d["density_max_t_m3"]
+    floor = d["effective_contrast_min_t_m3"]
+    avisos = []
+
+    if "positive_floor" in d["rules"]:
+        avisos.append(
+            f"Contraste efectivo INCOHERENTE: el bound inferior de densidad "
+            f"(density_min = {dmin:.2f} t/m³) es MAYOR que la densidad de fondo declarada "
+            f"(base_density = {base:.2f} t/m³). La inversión recupera el contraste respecto "
+            f"al fondo, así que el piso efectivo queda en {floor:+.2f} t/m³: la propia roca "
+            f"caja está FUERA de la caja permitida y toda celda sin anomalía se recorta al "
+            f"bound inferior. Si buscabas los bounds de una litología densa (magnetita "
+            f"4,5-5,5; cobre 4,3-4,8), declara base_density con el mismo valor que "
+            f"density_min; si el fondo es granítico, density_min debe bajar a "
+            f"{base:.2f} t/m³ o menos."
+        )
+
+    if "base_moved_min_at_default" in d["rules"]:
+        avisos.append(
+            f"Bounds de densidad DESACOPLADOS: base_density se declaró en {base:.2f} t/m³ "
+            f"(fuera de su default {d['base_density_default_t_m3']:.2f}) pero density_min "
+            f"quedó en su valor por defecto ({dmin:.2f} t/m³). El número que gobierna la "
+            f"inversión es la resta: el contraste permitido queda en "
+            f"[{floor:+.2f}, {d['effective_contrast_max_t_m3']:+.2f}] t/m³. No hay un "
+            f"density_min correcto —es una variable de régimen, medido en "
+            f"{_EFFECTIVE_CONTRAST_EVIDENCE}— pero conviene declarar los dos juntos: "
+            f"density_min = base_density fija no-negatividad, y density_min < base_density "
+            f"habilita cuerpos MENOS densos que el fondo (magma, sal, cavidades). "
+            f"Rango absoluto vigente: [{dmin:.2f}, {dmax:.2f}] t/m³."
+        )
+
+    return avisos
+
+
+def build_effective_contrast(params, solver_meta: dict, r03_saturation: dict) -> dict:
+    """FASE 20 — Bloque `effective_contrast` del reporte: qué contraste pudo recuperarse
+    y cuántas celdas terminaron pegadas al bound.
+
+    El % de celdas en el bound es el indicador que DELATA el régimen: en el barrido de
+    dos brazos fue 91,3 % con el bound estricto y 0,0 % con el permisivo sobre el mismo
+    mundo. Se prefiere el conteo de R-03 (post-clip; ya descuenta los vóxeles muertos que
+    reciben `base_density` por diseño y no por saturación) y se cae al del solver si R-03
+    no corrió.
+    """
+    d = density_bound_decoupling(params)
+    floor = d["effective_contrast_min_t_m3"]
+
+    if floor > 0:
+        regime = "piso_de_contraste_positivo"
+        regime_note = (
+            "El piso de contraste es POSITIVO: la roca caja (contraste 0) no es "
+            "representable y toda celda sin anomalía se recorta al bound inferior."
+        )
+    elif floor == 0:
+        regime = "no_negatividad_estricta"
+        regime_note = (
+            "No-negatividad estricta (density_min = base_density): sólo se recuperan "
+            "cuerpos MÁS densos que el fondo."
+        )
+    else:
+        regime = "contraste_negativo_permitido"
+        regime_note = (
+            f"Se permiten contrastes negativos hasta {floor:.2f} t/m³ (magma, sal, "
+            "cavidades, roca alterada)."
+        )
+
+    r03 = r03_saturation or {}
+    meta = solver_meta or {}
+    if r03.get("n_active_total"):
+        n_active = int(r03.get("n_active_total") or 0)
+        pct_total = r03.get("sat_percent_total")
+        n_lo = int(r03.get("n_sat_lower") or 0)
+        n_hi = int(r03.get("n_sat_upper") or 0)
+        source = "r03_saturation"
+    else:
+        n_active = int(meta.get("n_active") or 0)
+        _frac = meta.get("sat_fraction")
+        pct_total = round(100.0 * float(_frac), 2) if _frac is not None else None
+        n_lo = int(meta.get("n_sat_lower") or 0)
+        n_hi = int(meta.get("n_sat_upper") or 0)
+        source = "solver_meta"
+
+    def _pct(n):
+        return round(100.0 * n / n_active, 2) if n_active > 0 else None
+
+    return {
+        "unit": "t/m3",
+        "base_density": d["base_density_t_m3"],
+        "density_min": d["density_min_t_m3"],
+        "density_max": d["density_max_t_m3"],
+        "contrast_min": floor,
+        "contrast_max": d["effective_contrast_max_t_m3"],
+        "regime": regime,
+        "regime_note": regime_note,
+        "cells_at_bound_pct": pct_total,
+        "cells_at_lower_bound_pct": _pct(n_lo),
+        "cells_at_upper_bound_pct": _pct(n_hi),
+        "n_cells_at_lower_bound": n_lo,
+        "n_cells_at_upper_bound": n_hi,
+        "n_active_cells": n_active,
+        "cells_at_bound_source": source,
+        "decoupled": d["decoupled"],
+        "decoupling_rules": d["rules"],
+        "note": (
+            "La inversión recupera CONTRASTE respecto de base_density; el bound se declara "
+            "en densidad ABSOLUTA. El número que gobierna la física es la resta "
+            "(contrast_min = density_min − base_density), y es lo que se declara aquí. El % "
+            "de celdas pegadas al bound delata el régimen: alto = el bound está haciendo de "
+            "regularizador; ~0 % = el bound no restringe. No hay un density_min correcto "
+            "fuera de un régimen — medido en " + _EFFECTIVE_CONTRAST_EVIDENCE +
+            " (48 inversiones, ningún brazo domina)."
+        ),
+    }
+
+
 def reject_unavailable_inversion_modes(params) -> None:
     """Detiene la corrida si se pidió un modo de inversión que el motor no ejecuta.
 
@@ -4791,7 +4999,10 @@ def _armar_resumenes(params: GeophysicsInvertInput, malla: _MallaGrav,
     # `technical_summary["warnings"]` ya se renderiza en el detalle de la corrida;
     # el array de nivel superior es el que consume la vista de resultados. Ambos
     # llevan el mismo texto para que no haya dos versiones de la verdad.
-    _run_warnings = topography_run_warnings(_topography_used)
+    # FASE 20: el desacople base_density/density_min viaja por el MISMO canal. Es un
+    # aviso de configuración, no de degradación del motor: la corrida es válida, pero el
+    # contraste que pudo recuperar no es el que el usuario cree haber pedido.
+    _run_warnings = topography_run_warnings(_topography_used) + density_bound_run_warnings(params)
     if _run_warnings:
         technical_summary["warnings"] = list(technical_summary.get("warnings", [])) + _run_warnings
 
@@ -5055,6 +5266,13 @@ def _armar_payload(params: GeophysicsInvertInput, malla: _MallaGrav,
         # ── Post-auditoría R-A1/R-A2/R-03 ────────────────────────────────────
         "r03_decision":           _r03_decision,
         "r03_saturation":         r03_saturation,
+        # ── FASE 20: el contraste EFECTIVO (density_min − base_density) declarado ──
+        # El bound se pide en densidad absoluta y la inversión trabaja en contraste; la
+        # resta es el número que decide qué puede recuperarse y hasta ahora no salía en
+        # ninguna parte. Va junto al % de celdas pegadas al bound, que es lo que delata
+        # en qué régimen cayó la corrida.
+        "effective_contrast": build_effective_contrast(
+            params, _solver_meta, r03_saturation),
         "lambda_used":            _lambda_mag,
         "lambda_effective":       _solver_meta.get("lambda_effective", _lambda_mag),
         "lambda_spatial_approx":  round(_lambda_spatial_eff, 8),
@@ -5091,7 +5309,9 @@ def _armar_payload(params: GeophysicsInvertInput, malla: _MallaGrav,
             "note": (
                 "Dead voxels = celdas activas con sens=0 para todos los sensores "
                 "(más allá del cutoff_radius). Excluidas del solver; "
-                "asignadas density=base_density=2.60 t/m3 en la reconstruccion."
+                # FASE 20: decía "2.60" literal aunque la corrida usara otra base.
+                f"asignadas density=base_density={ajuste.base_density:.2f} t/m3 "
+                "en la reconstruccion."
             ),
         },
         # ── HITO 5: Topografía y solver bound-constrained ─────────────────────────

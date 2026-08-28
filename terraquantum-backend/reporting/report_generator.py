@@ -244,6 +244,8 @@ def generate_technical_report_html(
     # F5 — Veredicto reconciliado (B3) en prosa + resolución de profundidad (B2)
     reconciled_verdict_section = _reconciled_verdict_section_html(report.get("overall_verdict"))
     depth_resolution_section = _depth_resolution_section_html(report.get("depthResolution"))
+    # FASE 20 — contraste EFECTIVO (density_min − base_density) + celdas en el bound
+    effective_contrast_section = _effective_contrast_section_html(report.get("effective_contrast"))
 
     return f"""<!doctype html>
 <html lang="es">
@@ -622,6 +624,8 @@ def generate_technical_report_html(
 
 {depth_resolution_section}
 
+{effective_contrast_section}
+
 {favorability_section}
 
 {spatial_readiness_cap_section}
@@ -773,6 +777,55 @@ def _reconciled_verdict_section_html(overall_verdict: "dict[str, Any] | None") -
     <h3>Señales Reconciliadas</h3>
     <table>{comp_rows}</table>
     <p style="font-size:12px;color:var(--muted);">{_escape(v.get("note") or "")}</p>
+  </section>
+"""
+
+
+def _effective_contrast_section_html(effective_contrast: "dict[str, Any] | None") -> str:
+    """FASE 20 — El contraste EFECTIVO (`density_min − base_density`) y el % de celdas
+    pegadas al bound. El porqué, medido, está en `services.geophysics_service`
+    (`build_effective_contrast`); aquí sólo se pinta."""
+    ec = _as_dict(effective_contrast)
+    if not ec:
+        return ""
+
+    unit = " t/m³"
+
+    def _signed(value: Any) -> str:
+        """El contraste se lee por su SIGNO: «+1,9» y «−2,6» son regímenes opuestos y
+        «1.9 t/m³» a secas no lo dice. Los bounds absolutos van sin signo (`_number`)."""
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return _number(value, unit)
+        if value == 0:
+            return f"0{unit}"        # «+0» no es un signo, es ruido
+        return f"{value:+.4g}{unit}"
+
+    decoupled = bool(ec.get("decoupled"))
+    aviso = (
+        f'<p><strong>{_escape("⚠ Bounds DESACOPLADOS: " + ", ".join(_as_list(ec.get("decoupling_rules"))))}</strong></p>'
+        if decoupled else ""
+    )
+
+    return f"""
+  <section id="effective-contrast">
+    <h2>4.6 Contraste Efectivo y Saturación del Bound (Fase 20)</h2>
+    {aviso}
+    <p>{_escape(ec.get("regime_note") or "")}</p>
+    <table>
+      {_row("Densidad de fondo (base_density)", _number(ec.get("base_density"), unit))}
+      {_row("Bound absoluto inferior (density_min)", _number(ec.get("density_min"), unit))}
+      {_row("Bound absoluto superior (density_max)", _number(ec.get("density_max"), unit))}
+      {_row("Contraste efectivo MÍNIMO", _signed(ec.get("contrast_min")))}
+      {_row("Contraste efectivo MÁXIMO", _signed(ec.get("contrast_max")))}
+      {_row("Régimen", ec.get("regime"))}
+      {_row("Celdas pegadas al bound", _number(ec.get("cells_at_bound_pct"), " %"))}
+      {_row("… al bound inferior", _number(ec.get("cells_at_lower_bound_pct"), " %"))}
+      {_row("… al bound superior", _number(ec.get("cells_at_upper_bound_pct"), " %"))}
+      {_row("Celdas activas", ec.get("n_active_cells"))}
+      {_row("Fuente del conteo", ec.get("cells_at_bound_source"))}
+      {_row("¿Bounds desacoplados?", _bool_value(ec.get("decoupled")))}
+    </table>
+    <p style="font-size:12px;color:var(--muted);">{_escape(ec.get("note") or "")}</p>
   </section>
 """
 
