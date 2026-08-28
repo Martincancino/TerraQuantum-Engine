@@ -173,6 +173,7 @@ def _format_trilogy(report_data: dict) -> str:
     bt = report_data.get("best_target") or {}
     dr = report_data.get("depthResolution") or {}
     ov = report_data.get("overall_verdict") or {}
+    _ceiling = ov.get("ceiling") or {}
     per_axis = dr.get("per_axis") or {}
     horiz = per_axis.get("horizontal") or {}
 
@@ -205,6 +206,13 @@ def _format_trilogy(report_data: dict) -> str:
         f"- Nivel: {ov.get('level', '?')}",
         f"- Titular: {ov.get('headline') or '—'}",
         f"- Factores limitantes: {', '.join(ov.get('limiting_factors', []) or []) or '—'}",
+        # FASE 21: el copiloto no puede decir "MEDIUM" sin decir hasta dónde se PODÍA
+        # llegar. Sin esta línea repetiría la lectura errónea que la fase vino a cerrar
+        # ("confianza media" cuando el sistema quería decir "no tengo forma de decírtelo").
+        f"- Techo alcanzable en esta corrida: {_ceiling.get('max_attainable_level', '?')}"
+        + (f" (topado por: {', '.join(_ceiling.get('capped_by') or [])})"
+           if _ceiling.get("capped_by") else ""),
+        f"- Por qué ese techo: {_ceiling.get('reason') or '—'}",
         f"- Acción recomendada: {ov.get('recommended_action') or '—'}",
     ]
     return "\n".join(lines)

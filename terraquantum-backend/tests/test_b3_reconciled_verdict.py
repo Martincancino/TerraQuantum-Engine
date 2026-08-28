@@ -49,6 +49,9 @@ def test_ldm_contradiction_collapses_to_low():
 def test_r06_false_alarm_chi2_only_does_not_cap():
     # REMEDIATION disparado SÓLO por delta_chi2 (bug conocido) con mass/forward/rms ≈ 0:
     # NO debe arrastrar el veredicto. Aquí el resto es HIGH → overall HIGH pese al gate.
+    # FASE 21: el checkerboard se declara PASS explícitamente. Antes este test aprobaba
+    # con el diagnóstico AUSENTE, que es justo el agujero que la Fase 21 cerró (`NOT_RUN`
+    # ya no es gratis); dejarlo implícito volvería el test cómplice del defecto.
     p = {
         "confidence_level": "HIGH",
         "model_reliability_level": "HIGH_RELIABILITY",
@@ -61,6 +64,7 @@ def test_r06_false_alarm_chi2_only_does_not_cap():
             "delta_chi2_pct": 94.8,                  # falso alarma
         },
         "best_target": {"confidence_level": "HIGH", "is_null_space_artifact": False},
+        "checkerboard_qa": {"status": "PASS", "pearson_r": 0.72},
     }
     v = build_reconciled_verdict(p)
     assert v["level"] == "HIGH"
@@ -81,18 +85,22 @@ def test_apply_caps_confidence_and_reliability_and_target():
 
 
 def test_clean_all_high_stays_high():
+    # FASE 21: con el checkerboard declarado PASS el techo queda libre y HIGH sobrevive
+    # — el worst-of sigue sin degradar un caso genuinamente bueno.
     p = {
         "confidence_level": "HIGH",
         "model_reliability_level": "HIGH_RELIABILITY",
         "priority_class": "HIGH_RELATIVE_PRIORITY",
         "r06_padding_saturation_audit": {"phase_gate_recommendation": "APPROVE_USING_SAT_CORE"},
         "best_target": {"confidence_level": "HIGH", "is_null_space_artifact": False},
+        "checkerboard_qa": {"status": "PASS", "pearson_r": 0.81},
     }
     apply_reconciled_verdict(p)
     assert p["overall_verdict"]["level"] == "HIGH"
     assert p["confidence_level"] == "HIGH"               # sin downgrade
     assert p["model_reliability_level"] == "HIGH_RELIABILITY"
     assert p["best_target"]["confidence_level"] == "HIGH"
+    assert p["overall_verdict"]["ceiling"]["max_attainable_level"] == "HIGH"
 
 
 def test_null_space_target_forces_low():
@@ -102,6 +110,7 @@ def test_null_space_target_forces_low():
         "priority_class": "HIGH_RELATIVE_PRIORITY",
         "r06_padding_saturation_audit": {"phase_gate_recommendation": "APPROVE_USING_SAT_CORE"},
         "best_target": {"confidence_level": "HIGH", "is_null_space_artifact": True},
+        "checkerboard_qa": {"status": "PASS", "pearson_r": 0.7},
     }
     v = apply_reconciled_verdict(p)
     assert v["level"] == "LOW"
@@ -116,11 +125,15 @@ def test_medium_is_the_weakest_link():
         "priority_class": "HIGH_RELATIVE_PRIORITY",
         "r06_padding_saturation_audit": {"phase_gate_recommendation": "APPROVE_USING_SAT_CORE"},
         "best_target": {"confidence_level": "HIGH", "is_null_space_artifact": False},
+        "checkerboard_qa": {"status": "PASS", "pearson_r": 0.7},
     }
     apply_reconciled_verdict(p)
     assert p["overall_verdict"]["level"] == "MEDIUM"
     assert p["confidence_level"] == "MEDIUM"              # HIGH capado a MEDIUM
     assert p["best_target"]["confidence_level"] == "MEDIUM"
+    # FASE 21: MEDIUM aquí lo fija una señal medida, NO el techo del checkerboard.
+    assert p["overall_verdict"]["decided_by"] == ["model_reliability"]
+    assert p["overall_verdict"]["ceiling"]["max_attainable_level"] == "HIGH"
 
 
 def test_idempotent_no_upgrade_on_second_apply():
@@ -133,13 +146,18 @@ def test_idempotent_no_upgrade_on_second_apply():
 
 
 def test_r06_not_run_is_ignored():
-    # Sin r06 (no corrió) no debe forzar nada; gana el resto.
+    # Sin r06 (no corrió) no debe forzar nada; gana el resto. r06 mide el impacto FÍSICO
+    # del padding saturado: si no hay padding auditado no hay nada que penalizar, a
+    # diferencia del checkerboard (Fase 21), cuya ausencia sí topea porque lo que mide —la
+    # resolución del survey— no deja de ser desconocida por no haberse calculado.
     p = {
         "confidence_level": "MEDIUM",
         "model_reliability_level": "MEDIUM_RELIABILITY",
         "priority_class": "MEDIUM_RELATIVE_PRIORITY",
         "best_target": {"confidence_level": "MEDIUM", "is_null_space_artifact": False},
+        "checkerboard_qa": {"status": "PASS", "pearson_r": 0.7},
     }
     v = build_reconciled_verdict(p)
     assert v["level"] == "MEDIUM"
     assert v["components"]["r06_padding_gate"] == "NOT_RUN"
+    assert not [s for s in v["signals"] if s["signal"].startswith("r06")]

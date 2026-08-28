@@ -766,6 +766,28 @@ def _reconciled_verdict_section_html(overall_verdict: "dict[str, Any] | None") -
         else f"<p>{_escape('Ninguno — todas las señales coinciden.')}</p>"
     )
 
+    # FASE 21 — el techo declarado y quién MANDÓ. Reportes anteriores no traen ninguna
+    # de las dos claves: se omite la sección en vez de dibujarla vacía.
+    ceiling = _as_dict(v.get("ceiling"))
+    ceiling_html = f"""
+    <h3>Techo del Veredicto</h3>
+    <table>
+      {_row("Nivel máximo alcanzable en esta corrida", ceiling.get("max_attainable_level"))}
+      {_row("Topado por", ", ".join(str(c) for c in _as_list(ceiling.get("capped_by"))) or "—")}
+      {_row("¿Es estructural (no lo levanta más dato)?", _bool_value(ceiling.get("structural")))}
+      {_row("Por qué", ceiling.get("reason"))}
+      {_row("Qué haría falta para levantarlo", ceiling.get("how_to_lift"))}
+      {_row("Evidencia", ceiling.get("evidence"))}
+    </table>""" if ceiling else ""
+
+    signals = [s for s in _as_list(v.get("signals")) if isinstance(s, dict)]
+    signals_html = f"""
+    <h3>Entradas del Worst-Of (cuál mandó)</h3>
+    <table>{"".join(
+        _row(str(s.get("signal", "?")),
+             str(s.get("level", "?")) + ("  ← fijó el veredicto" if s.get("is_limiting") else ""))
+        for s in signals)}</table>""" if signals else ""
+
     return f"""
   <section id="reconciled-verdict">
     <h2>3.5 Veredicto Reconciliado (B3 — Un Solo Veredicto Honesto)</h2>
@@ -774,6 +796,8 @@ def _reconciled_verdict_section_html(overall_verdict: "dict[str, Any] | None") -
     <p>{_escape(v.get("recommended_action") or "")}</p>
     <h3>Factores Limitantes (eslabón más débil)</h3>
     {limiting_html}
+{signals_html}
+{ceiling_html}
     <h3>Señales Reconciliadas</h3>
     <table>{comp_rows}</table>
     <p style="font-size:12px;color:var(--muted);">{_escape(v.get("note") or "")}</p>

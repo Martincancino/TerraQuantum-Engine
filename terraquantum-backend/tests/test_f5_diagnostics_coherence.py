@@ -134,21 +134,34 @@ def test_universal_vertical_null_space_alone_never_downgrades_b3():
     poder discriminante, exactamente el problema que motivó F5). build_reconciled_verdict
     NO debe leer depthResolution — este test lo deja explícito para que un cambio
     futuro que lo haga sea una decisión consciente, no un accidente."""
-    payload = {
+    # FASE 21: el checkerboard se declara PASS. Antes este test afirmaba HIGH con el
+    # diagnóstico AUSENTE, y eso ya no da el techo libre (`NOT_RUN` topea como `FAIL`).
+    # Su contrato nunca fue "sale HIGH" sino "depthResolution no entra", así que además
+    # de arreglar el payload se afirma el contrato DIRECTAMENTE: el veredicto tiene que
+    # ser INVARIANTE ante la presencia de depthResolution. Eso es más fuerte que un
+    # nivel concreto y sobrevive a cualquier tope futuro de otra señal.
+    base = {
         "confidence_level": "HIGH",
         "model_reliability_level": "HIGH_RELIABILITY",
         "priority_class": "HIGH_RELATIVE_PRIORITY",
         "r06_padding_saturation_audit": {"phase_gate_recommendation": "APPROVE_USING_SAT_CORE"},
         "best_target": {"confidence_level": "HIGH", "is_null_space_artifact": False},
-        "depthResolution": {
-            "computed": True,
-            "deep_mass_fraction": 0.94,
-            "per_axis": {"vertical": {"quality": "null_space_dominated", "deep_mass_fraction": 0.94}},
-        },
+        "checkerboard_qa": {"status": "PASS", "pearson_r": 0.72},
     }
-    verdict = build_reconciled_verdict(payload)
+    con_b2 = dict(base, depthResolution={
+        "computed": True,
+        "deep_mass_fraction": 0.94,
+        "per_axis": {"vertical": {"quality": "null_space_dominated", "deep_mass_fraction": 0.94}},
+    })
+
+    verdict = build_reconciled_verdict(con_b2)
     assert verdict["level"] == "HIGH"
     assert "depthResolution" not in verdict["components"]
+    # La invariancia: quitar B2 no cambia NADA del veredicto.
+    sin_b2 = build_reconciled_verdict(base)
+    assert verdict["level"] == sin_b2["level"]
+    assert verdict["limiting_factors"] == sin_b2["limiting_factors"]
+    assert verdict["components"] == sin_b2["components"]
 
 
 def test_ldm_real_run_best_target_and_depth_resolution_do_not_contradict():

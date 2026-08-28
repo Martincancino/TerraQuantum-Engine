@@ -1155,16 +1155,36 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
         levels.append(("LOW", "best_target_null_space"))
 
     # ── C2 (red-team): resolución del survey (checkerboard) ──────────────────────
-    # Si el survey NO resuelve la estructura de prueba (status FAIL), el modelo no puede
-    # sellarse HIGH: la resolución es demostrablemente pobre. Cap a MEDIUM (no a LOW: un
-    # cuerpo dominante único puede seguir siendo un indicio MEDIUM y el targeting
-    # HORIZONTAL puede ser bueno pese a la baja resolución de estructura fina). Ausente /
-    # NOT_RUN → sin efecto, como r06.
+    # Si el survey NO resuelve la estructura de prueba, el modelo no puede sellarse HIGH:
+    # la resolución es demostrablemente pobre. Cap a MEDIUM (no a LOW: un cuerpo dominante
+    # único puede seguir siendo un indicio MEDIUM y el targeting HORIZONTAL puede ser bueno
+    # pese a la baja resolución de estructura fina).
+    #
+    # FASE 21 (ACAD-11) — `NOT_RUN` TAMBIÉN TOPEA. Hasta aquí sólo topaba `FAIL` y la
+    # ausencia del diagnóstico no tenía efecto, así que **el veredicto podía MEJORAR si se
+    # corrían menos diagnósticos**: el checkerboard es non-fatal (`_checkerboard_qa` se
+    # traga la excepción y deja `_cb_qa = None`), de modo que una corrida donde ese QA
+    # revienta salía con el techo LIBRE mientras la misma corrida con el QA sano salía
+    # capada. En un producto cuyo argumento es la honestidad eso es lo único inaceptable.
+    #
+    # DECISIÓN, entre las dos que el plan admite: **`NOT_RUN` topea igual que `FAIL`**, en
+    # vez de negarse a emitir veredicto. Motivo: el checkerboard es un diagnóstico
+    # accesorio y no fatal; convertir su caída en un bloqueo dejaría sin veredicto a una
+    # corrida cuya física es válida, y castigaría al usuario por un fallo del motor. Topear
+    # conserva la semántica del worst-of (ausencia de evidencia ≠ evidencia de resolución)
+    # y hace el veredicto MONÓTONO: ningún diagnóstico que se deje de correr puede subir
+    # el nivel. `PASS` y `WARNING` sí son evidencia medida y no topean; cualquier otro
+    # estado (incluido uno inesperado) se trata como no medido y topea.
     cb = report_payload.get("checkerboard_qa") or {}
     cb_status = str(cb.get("status", "")).upper()
     components["checkerboard_qa"] = cb_status or "NOT_RUN"
-    if cb_status == "FAIL":
-        levels.append(("MEDIUM", "checkerboard_resolution"))
+    components["checkerboard_pearson_r"] = cb.get("pearson_r")
+    cb_caps = cb_status not in ("PASS", "WARNING")
+    if cb_caps:
+        levels.append((
+            "MEDIUM",
+            "checkerboard_resolution" if cb_status == "FAIL" else "checkerboard_not_run",
+        ))
 
     if not levels:
         overall = "UNKNOWN"
@@ -1175,13 +1195,23 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
         overall = _ORD_VERDICT[overall_ord]
         limiting = [name for lv, name in levels if _VERDICT_ORD[lv] == overall_ord]
 
+    # FASE 21: el techo va en la PRIMERA línea que el usuario lee. «MEDIUM» a secas se lee
+    # como "confianza media"; lo que el sistema quiere decir es que el nivel superior no
+    # estaba disponible en esta corrida.
+    techo_frase = (
+        " El nivel HIGH no estaba disponible en esta corrida: lo topa el QA de resolución "
+        "del survey (checkerboard), que no depende del dato observado — ver `ceiling` en "
+        "este mismo bloque."
+        if cb_caps else ""
+    )
+
     if overall == "HIGH":
         headline = ("Modelo geofísicamente confiable a su escala: blanco resoluble y bien "
                     "constreñido por el dato.")
         action = "Usar como soporte técnico; integrar con geología antes de decisiones críticas."
     elif overall == "MEDIUM":
         headline = ("Modelo utilizable con CAUTELA; limitado por: " + ", ".join(limiting) +
-                    ". Tratar el blanco como indicio a corroborar.")
+                    ". Tratar el blanco como indicio a corroborar." + techo_frase)
         action = "Revisar cobertura/residuales/regional antes de comprometer perforación."
     elif overall == "LOW":
         headline = ("Modelo NO confiable como base ÚNICA; limitado por: " + ", ".join(limiting) +
@@ -1196,16 +1226,114 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
         "level": overall,
         "limiting_factors": limiting,
         "components": components,
+        # ── FASE 21 — quién MANDÓ, señal por señal ────────────────────────────
+        "signals": _verdict_signal_ledger(levels, overall_ord),
+        # Mismo conjunto que `limiting_factors`, bajo el nombre que responde la pregunta
+        # («¿cuál mandó?»). Se conservan los dos: `limiting_factors` ya lo consumen el
+        # copiloto y los scripts de validación, y renombrarlo rompería esa lectura.
+        "decided_by": list(limiting),
+        # ── FASE 21 — el techo, declarado ─────────────────────────────────────
+        "ceiling": _verdict_ceiling(cb_status, cb_caps),
         "headline": headline,
         "recommended_action": action,
         "method": "weakest_link_reconciliation",
         "note": (
             "Veredicto ÚNICO = el más conservador entre confianza de survey, confiabilidad "
-            "del modelo, prioridad de targeting, gate físico de padding/regional (r06) y "
-            "validez del blanco (null-space). Reconcilia señales que antes se reportaban por "
-            "separado y podían contradecirse (p.ej. GOOD/HIGH junto a UNCLASSIFIED/REMEDIATION)."
+            "del modelo, prioridad de targeting, gate físico de padding/regional (r06), "
+            "validez del blanco (null-space) y resolución del survey (checkerboard). "
+            "Reconcilia señales que antes se reportaban por separado y podían contradecirse "
+            "(p.ej. GOOD/HIGH junto a UNCLASSIFIED/REMEDIATION). `signals` dice qué aportó "
+            "cada entrada y cuál fijó el resultado; `ceiling`, hasta dónde podía llegar."
         ),
     }
+
+
+# ── FASE 21 (ACAD-11) — el techo del veredicto, declarado al usuario ──────────
+# Evidencia: validation/HALLAZGO_2026-08-06_techo_medium.md — 99 inversiones por la ruta
+# de producción, CERO `HIGH`. La causa no es prudencia del modelo: el QA de resolución
+# devuelve el mismo número siempre (pearson_r = 0,1162 idéntico a cuatro decimales en las
+# 9 corridas revisadas; 0,1178 en las 5 filas del probe anterior) frente a un umbral de
+# PASS de 0,60, porque `build_checkerboard_model` alterna el signo CELDA A CELDA
+# (`exploration/checkerboard_test.py`) — en una malla de 125 m eso es una longitud de onda
+# de 250 m que además alterna en profundidad, por debajo del límite físico de resolución
+# de un campo potencial. Es un examen que ningún survey gravimétrico puede aprobar. Y como
+# el worst-of lo usa de tope duro, `HIGH` no sobrevive nunca.
+#
+# Hasta la Fase 21 el usuario veía «MEDIUM» sin saber que el nivel superior era inalcanzable
+# por construcción — leía "confianza media" donde el sistema quería decir "no tengo forma de
+# decírtelo". Esta fase NO levanta el techo (ver Fase 26 y Fase 30, en ese orden): el mismo
+# hallazgo advierte que liberarlo antes de que la señal discrimine sería PEOR que el estado
+# actual, porque 1 de cada 3 realizaciones de ruido desvía el blanco ~170 m con diagnósticos
+# idénticos y aparecerían `HIGH` en corridas de 285 m de error.
+_VERDICT_CEILING_EVIDENCE = "validation/HALLAZGO_2026-08-06_techo_medium.md"
+
+
+def _verdict_ceiling(cb_status: str, cb_caps: bool) -> dict:
+    """Hasta dónde PODÍA llegar este veredicto, y por qué no más arriba."""
+    if not cb_caps:
+        return {
+            "max_attainable_level": "HIGH",
+            "capped_by": [],
+            "structural": False,
+            "reason": (
+                f"El QA de resolución del survey (checkerboard) devolvió {cb_status}: no "
+                "impone techo. El nivel del veredicto lo fijan las demás señales."
+            ),
+            "how_to_lift": None,
+            "evidence": _VERDICT_CEILING_EVIDENCE,
+        }
+
+    no_corrio = cb_status != "FAIL"
+    return {
+        "max_attainable_level": "MEDIUM",
+        "capped_by": ["checkerboard_not_run" if no_corrio else "checkerboard_resolution"],
+        # El checkerboard NO depende del dato observado: sintetiza su propio tablero y lo
+        # propaga con el mismo kernel. Para una geometría de survey y una malla dadas su
+        # salida es determinista ⇒ re-medir el mismo survey no puede levantar este techo.
+        "structural": not no_corrio,
+        "reason": (
+            "El diagnóstico de resolución no se pudo calcular en esta corrida (es "
+            "non-fatal). Se topea igual que un FAIL: la ausencia de evidencia no es "
+            "evidencia de resolución, y el veredicto nunca debe mejorar por correr menos "
+            "diagnósticos."
+            if no_corrio else
+            "HIGH no está disponible en esta corrida, y no por falta de dato: el QA de "
+            "resolución (checkerboard) no depende de lo observado — sintetiza un tablero "
+            "que alterna signo celda a celda y lo invierte con el mismo kernel. Ese patrón "
+            "está por debajo del límite físico de resolución de un campo potencial, así que "
+            "devuelve FAIL para cualquier survey gravimétrico realista (medido: pearson_r "
+            "= 0,1162 idéntico a cuatro decimales en 9 corridas, frente a un umbral de PASS "
+            "de 0,60). Como el veredicto es el eslabón más débil, ese FAIL fija el techo en "
+            "MEDIUM. Recolectar más dato NO lo levanta."
+        ),
+        "how_to_lift": (
+            "Recalibrar el umbral del examen o cambiar su longitud de onda al tamaño del "
+            "cuerpo buscado, y sólo DESPUÉS levantar el techo — en ese orden. Hoy el techo "
+            "protege: 1 de cada 3 realizaciones de ruido desvía el blanco ~170 m en vez de "
+            "~19 m con diagnósticos idénticos, así que liberar HIGH antes de que la señal "
+            "discrimine produciría veredictos HIGH en corridas de 285 m de error."
+        ),
+        "evidence": _VERDICT_CEILING_EVIDENCE,
+    }
+
+
+def _verdict_signal_ledger(levels, overall_ord) -> list:
+    """FASE 21 — Qué aportó cada entrada del worst-of y cuál MANDÓ.
+
+    `components` ya publicaba los valores CRUDOS de cada señal, pero no su nivel mapeado
+    ni si llegó a contribuir: con un worst-of, saber cuál fijó el resultado es la mitad de
+    la información. Aquí sale explícito y en orden de severidad.
+    """
+    ledger = [
+        {
+            "signal": name,
+            "level": lv,
+            "is_limiting": overall_ord is not None and _VERDICT_ORD[lv] == overall_ord,
+        }
+        for lv, name in levels
+    ]
+    ledger.sort(key=lambda s: (_VERDICT_ORD[s["level"]], s["signal"]))
+    return ledger
 
 
 def _cap_confidence_str(current: str, overall_ord) -> str:

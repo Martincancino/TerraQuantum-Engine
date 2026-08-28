@@ -728,6 +728,10 @@ def _build_bundle_manifest(
 ) -> dict[str, Any]:
     fit_diag = (report or {}).get("fitDiagnostics") or {}
     ts = report.get("technicalSummary") or {} if report else {}
+    # FASE 21: QA de resolución y techo del veredicto, leídos de las claves que el motor
+    # SÍ escribe (`checkerboard_qa`, `overall_verdict.ceiling`).
+    _cb_qa_report = (report or {}).get("checkerboard_qa") or {}
+    _verdict_ceiling_report = ((report or {}).get("overall_verdict") or {}).get("ceiling") or {}
 
     _run_dir_bm = get_run_dir(pid, rid)
     _parquet_path_bm = _run_dir_bm / RUN_BLOCK_MODEL_FILENAME
@@ -777,8 +781,18 @@ def _build_bundle_manifest(
             "residual_mae": fit_diag.get("residual_mae"),
             "misfit_error_percent": fit_diag.get("misfit_error_percent"),
         },
+        # FASE 21: este bloque leía `report["checkerboard_pearson_r"]`, una clave que NADIE
+        # escribe nunca — el manifiesto del ZIP industrial declaraba un QA de resolución
+        # con `pearson_r: null` y sin `status`, así que el cliente recibía el nombre del
+        # diagnóstico y ninguno de sus dos números. La clave real es `checkerboard_qa`.
+        # Va acompañado del techo del veredicto: decir MEDIUM sin decir que HIGH era
+        # inalcanzable es la lectura errónea que la Fase 21 vino a cerrar.
         "checkerboard_qa": {
-            "pearson_r": (report or {}).get("checkerboard_pearson_r"),
+            "pearson_r": _cb_qa_report.get("pearson_r"),
+            "status": _cb_qa_report.get("status") or "NOT_RUN",
+            "sign_recovery_pct": _cb_qa_report.get("sign_recovery_pct"),
+            "verdict_ceiling": _verdict_ceiling_report.get("max_attainable_level"),
+            "verdict_ceiling_reason": _verdict_ceiling_report.get("reason"),
             "overall_level": ts.get("overall_level"),
             "fit_level": fit_diag.get("fit_level"),
         } if report else None,
