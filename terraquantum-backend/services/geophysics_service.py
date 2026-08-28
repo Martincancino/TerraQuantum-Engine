@@ -761,6 +761,13 @@ def build_run_inputs_snapshot(params: GeophysicsInvertInput):
         "lambda_mag": params.lambda_mag,
         "alpha_spatial": params.alpha_spatial,
         "enable_focusing": params.enable_focusing,
+        # FASE 22 (ACAD-13): esta lista blanca escrita a mano no traía `base_density`
+        # — medido: 0 de 2.089 `inputs.json` en disco la tenían, y no porque nadie la
+        # moviera, sino porque el snapshot no la copiaba nunca. El bundle ZIP necesita
+        # saber contra qué se invirtió para rotular su contraste, y sin esto sólo podía
+        # leerlo del `report.json` (que puede faltar). No entra en `_AUDIT_KEYS`, así
+        # que el `config_hash` de las corridas existentes no cambia.
+        "base_density": getattr(params, "base_density", None),
     }
 
 
@@ -4743,8 +4750,16 @@ def _armar_fit_diagnostics(datos: _DatosGrav, ajuste: _AjusteGrav,
     return fit_diagnostics, misfit_error_percent
 
 
-def _cutoff_y_targeting(malla: _MallaGrav, sol: _SolucionGrav, posterior_std):
-    """Cutoff adaptativo por escala + exportación del TargetingEngine (no fatal)."""
+def _cutoff_y_targeting(malla: _MallaGrav, ajuste: _AjusteGrav, sol: _SolucionGrav,
+                        posterior_std):
+    """Cutoff adaptativo por escala + exportación del TargetingEngine (no fatal).
+
+    FASE 22 — recibe `ajuste` sólo para una cosa: la `base_density` efectiva de la
+    corrida. El export del TargetingEngine calculaba su contraste contra el literal
+    2.6 (ACAD-13) mientras la ruta canónica lo calcula contra `base_density`, y las
+    dos columnas —de nombre casi idéntico, `density_contrast` y
+    `density_contrast_t_m3`— divergían sin que nada lo dijera.
+    """
     dx = malla.dx
     x_c = malla.x_c
     y_c = malla.y_c
@@ -4781,6 +4796,15 @@ def _cutoff_y_targeting(malla: _MallaGrav, sol: _SolucionGrav, posterior_std):
 
     # Se sigue ejecutando TargetingEngine por compatibilidad industrial.
     # Pero NO usamos su Parquet como archivo principal, porque suele exportar solo anomalías.
+    #
+    # FASE 22 — esta llamada pasaba CINCO argumentos y se comía cuatro defaults que no
+    # son los de la corrida. Los tres nuevos no son adorno:
+    #   · `block_size`  — sin él la firma caía en `block_size=10.0`, de modo que el
+    #     volumen de celda quedaba fijo en 1.000 m³ cualquiera fuese `params.block_size`
+    #     (medido: 1.034 de 2.089 corridas en disco usan un dx ≠ 10, hasta 8.315 m).
+    #   · `ix/iy/iz`    — sin ellos se re-derivaban como `floor(coord/10.0)`, índices que
+    #     sólo coinciden con los de la malla cuando dx = 10.
+    #   · `base_density`— ACAD-13, el literal 2.6.
     try:
         TargetingEngine.extract_and_export(
             x_c,
@@ -4788,8 +4812,13 @@ def _cutoff_y_targeting(malla: _MallaGrav, sol: _SolucionGrav, posterior_std):
             z_c,
             est_density,
             probability,
+            ix=malla.ix,
+            iy=malla.iy,
+            iz=malla.iz,
+            block_size=float(dx),
             cutoff_density=cutoff_density,
             posterior_std=posterior_std,  # σ posterior Hutchinson (NaN si no se calculó)
+            base_density=float(ajuste.inversor_core.base_density),
         )
     except Exception as exc:
         _log.warning("targeting_engine_warning", error=str(exc))
@@ -5082,6 +5111,11 @@ def _persistir_artefactos(params: GeophysicsInvertInput, malla: _MallaGrav,
             dx=float(dx),
             est_density=est_density,                # Core 1D Fortran order
             sensitivity=normalized_sensitivity,     # Core 1D Fortran order
+            # FASE 22 (ACAD-13): el MISMO valor con el que se construye
+            # `density_contrast_t_m3` 150 líneas más arriba. Antes esta rama usaba el
+            # literal 2.6 de `export_service`, así que el `model.vtr` del ZIP y el
+            # parquet que pinta el frontend discrepaban en `base_density − 2.6`.
+            base_density=float(inversor_core.base_density),
             is_active_flat=None,                    # se infiere de np.isfinite(est_density)
         )
         if vtr_export_path:
@@ -5471,9 +5505,18 @@ def _armar_payload(params: GeophysicsInvertInput, malla: _MallaGrav,
             "format": "VTK Rectilinear Grid XML (.vtr)",
             "compatible_with": ["ParaView", "Leapfrog Geo", "Vulcan", "GOCAD"],
             "fields": ["Density_Contrast_gcm3", "Sensitivity_Proxy", "Is_Active"],
+            # FASE 22 (ACAD-13): esta nota decía «Densidad base: 2.6 g/cm³» como texto
+            # fijo. Era la mentira derivada del literal: aunque el .vtr se hubiera
+            # corregido, el reporte seguiría diciéndole al usuario contra qué NO se
+            # calculó. Ahora el número es el de la corrida y viaja también estructurado
+            # (`base_density_t_m3`), para que no haya que parsear una frase.
+            "base_density_t_m3": float(ajuste.inversor_core.base_density),
             "note": (
                 "Filtrar celdas de aire en ParaView con Threshold → Is_Active == 1. "
-                "Densidad base: 2.6 g/cm³. Sentinel de aire: -9999.0."
+                f"Densidad base (roca caja) de esta corrida: "
+                f"{float(ajuste.inversor_core.base_density):.4g} t/m³ (= g/cm³). "
+                "Density_Contrast_gcm3 es densidad absoluta menos esa base. "
+                "Sentinel de aire: -9999.0."
             ),
             "available": vtr_export_path is not None,
         },
@@ -5664,7 +5707,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
     fit_diagnostics, misfit_error_percent = _armar_fit_diagnostics(
         datos, ajuste, sol, _update, g_modeled_solver, r01_consistency,
         r02_padding_leak, r03_saturation, r06_padding_saturation_audit)
-    cutoff_density = _cutoff_y_targeting(malla, sol, posterior_std)
+    cutoff_density = _cutoff_y_targeting(malla, ajuste, sol, posterior_std)
     focusing_payload = _armar_focusing(params, malla, datos, ajuste, sol)
 
     art = _persistir_artefactos(params, malla, ajuste, sol, _update,

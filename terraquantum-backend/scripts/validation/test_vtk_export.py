@@ -77,10 +77,15 @@ def test_build_vtk_core_arrays():
     density[::3] = np.nan   # cada 3ra celda es aire
     sensitivity = rng.uniform(0.0, 1.0, n_core)
 
+    # FASE 22 (ACAD-13): `base_density` ya no tiene default. Antes esta llamada lo
+    # omitía y el contraste salía contra el literal 2.6 del módulo; el assert de más
+    # abajo (≈ 0.1 = 2.7 − 2.6) pasaba en verde APOYÁNDOSE en el defecto. Declararlo
+    # deja la dependencia a la vista: el 0.1 esperado es 2.7 − 2.6, no una constante.
     x_e, y_e, z_e, data_dict = build_vtk_core_arrays(
         nx=nx, ny=ny, nz=nz, dx=dx,
         est_density=density,
         sensitivity=sensitivity,
+        base_density=2.6,
     )
 
     # ── Verificar edges ──────────────────────────────────────────────────────
@@ -148,6 +153,7 @@ def test_export_block_model_to_vtr(tmp_dir: str):
         nx=nx, ny=ny, nz=nz, dx=dx,
         est_density=density,
         sensitivity=sensitivity,
+        base_density=2.6,       # FASE 22: obligatorio, ver test_build_vtk_core_arrays
     )
 
     filename_prefix = str(Path(tmp_dir) / "block_model_core")
@@ -209,6 +215,7 @@ def test_export_core_to_vtr_pipeline(tmp_dir: str):
         nx=nx, ny=ny, nz=nz, dx=dx,
         est_density=density,
         sensitivity=sensitivity,
+        base_density=2.6,       # FASE 22: obligatorio, ver test_build_vtk_core_arrays
     )
 
     assert vtr_path is not None, "Pipeline devolvió None — ¿pyevtk instalado?"

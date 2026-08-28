@@ -4168,7 +4168,18 @@ class TargetingEngine:
         cutoff_density=2.75,
         export_path="data/block_model_001.parquet",
         posterior_std=None,
+        base_density=2.6,
     ):
+        """FASE 22 — `base_density` deja de ser el literal 2.6 (ACAD-13).
+
+        El contraste que esta exportación escribía se calculaba contra `2.6` escrito a
+        mano mientras el motor invierte contra `base_density`, que el contrato declara
+        configurable (`schemas/geophysics_schema.py:782`, rango 1.0–6.0). Con la roca
+        caja en 4,5 t/m³ la columna quedaba desfasada en 1,9 t/m³ — más que casi
+        cualquier contraste de interés. El default 2.6 se conserva sólo para que la
+        firma siga siendo llamable desde un script suelto; producción pasa el valor
+        efectivo de la corrida.
+        """
         logger.info("[TARGETING] Modelando clases geometalúrgicas y exportando block model.")
 
         x = np.asarray(x, dtype=np.float64)
@@ -4207,11 +4218,21 @@ class TargetingEngine:
             raise ValueError("probability contiene NaN o Inf.")
 
         block_size = float(block_size)
-        MAX_BLOCK_VOLUME_M3 = 1_000_000  # 100m × 100m × 100m
-        block_volume = min(block_size ** 3, MAX_BLOCK_VOLUME_M3)
+        # FASE 22 (ACAD-12) — aquí vivía `MAX_BLOCK_VOLUME_M3 = 1_000_000` y
+        # `block_volume = min(block_size**3, MAX_BLOCK_VOLUME_M3)`: un tope SILENCIOSO
+        # de 100 m de arista. Sobre los `block_size` reales medidos en disco (2.089
+        # corridas) recortaba el volumen sin decirlo — con dx=520 m el tope declaraba
+        # 1e6 m³ donde la celda mide 1,4e8. La ruta canónica nunca tuvo ese tope:
+        # `inversion_postprocess_service.py:90` usa `dx*dx*dx` a secas, y ésta ahora
+        # coincide con ella, que es lo que permite compararlas en el gate.
+        block_volume = block_size ** 3
 
-        density_contrast = density - 2.6
-        tonnage = block_volume * density
+        density_contrast = density - float(base_density)
+        # FASE 22 (ACAD-12) — `tonnage` está en TONELADAS: m³ × t/m³. La columna se
+        # llamaba `bulk_rock_mass_kg` y había un factor 1.000 entre el nombre y el
+        # valor. Se renombra en vez de multiplicar porque el número en kg no lo pide
+        # nadie: cero lectores en backend, frontend, scripts y notebooks.
+        bulk_rock_mass_tonnes = block_volume * density
 
         targeting_score = density * probability
         target_idx = int(np.argmax(targeting_score))
@@ -4230,11 +4251,19 @@ class TargetingEngine:
             _std_arr = np.full(n, np.nan, dtype=np.float64)
 
         # FASE 7 (Q4): nombres de columna no-mineros/compliance-safe en el Parquet.
-        #   tonnage         -> bulk_rock_mass_kg
+        #   tonnage         -> bulk_rock_mass_kg   (FASE 22: -> bulk_rock_mass_tonnes)
         #   probability     -> relative_target_score
         #   targeting_score -> exploration_index
         # Las variables internas (tonnage/targeting_score) se conservan; solo cambian
         # los nombres exportados y las expresiones de filtrado que los referencian.
+        #
+        # FASE 22 (ACAD-12): el renombrado «compliance-safe» de la Fase 7 acertó al
+        # quitar la palabra `tonnage` —invita a leerse como tonelaje de RECURSO, y
+        # esto es masa de roca— y erró en el sufijo: puso `_kg` sobre un valor en
+        # toneladas. Se corrige por el mismo camino que ya se usó en la ruta canónica
+        # (commit d424c7c: `modeled_rock_mass_kg` -> `modeled_rock_mass_tonnes`), y con
+        # la misma palabra, para que las dos columnas de masa del producto se llamen
+        # igual y puedan compararse.
         df = pl.DataFrame(
             {
                 "ix": ix,
@@ -4245,7 +4274,7 @@ class TargetingEngine:
                 "z": z,
                 "density": density,
                 "density_contrast": density_contrast,
-                "bulk_rock_mass_kg": tonnage,
+                "bulk_rock_mass_tonnes": bulk_rock_mass_tonnes,
                 "relative_target_score": probability,
                 "exploration_index": targeting_score,
                 "posterior_std": _std_arr,

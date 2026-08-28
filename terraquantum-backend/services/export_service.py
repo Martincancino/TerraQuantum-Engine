@@ -28,7 +28,14 @@ logger = logging.getLogger(__name__)
 
 # ── Sentinels ────────────────────────────────────────────────────────────────
 VTK_AIR_SENTINEL = np.float64(-9999.0)   # Valor dummy para celdas de aire
-VTK_BASE_DENSITY = np.float64(2.6)       # g/cm³ — densidad base de roca encajante
+
+# FASE 22 (ACAD-13): aquí vivía `VTK_BASE_DENSITY = np.float64(2.6)`, la «densidad base
+# de roca encajante» escrita a mano. La constante se BORRA en vez de corregirse porque
+# el defecto no era su valor sino su existencia: la roca caja es un parámetro de la
+# corrida (`base_density`, contrato 1,0–6,0 t/m³), y mientras hubiera un módulo con un
+# número fijo cualquier llamador futuro podía volver a alcanzarlo sin enterarse. Ahora
+# `base_density` es argumento OBLIGATORIO de `build_vtk_core_arrays` y de
+# `export_core_to_vtr`: olvidarlo es un TypeError, no un sesgo silencioso.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -153,6 +160,7 @@ def build_vtk_core_arrays(
     dx: float,
     est_density: np.ndarray,
     sensitivity: np.ndarray,
+    base_density: float,
     is_active_flat: Optional[np.ndarray] = None,
 ) -> tuple:
     """
@@ -164,6 +172,12 @@ def build_vtk_core_arrays(
     dx         : float      — Tamaño de celda en metros (celdas cúbicas)
     est_density : 1D array  — Densidad absoluta en Fortran order (nx*ny*nz,)
     sensitivity : 1D array  — Sensibilidad/DOI normalizado en Fortran order
+    base_density : float    — Roca caja de la corrida (t/m³). FASE 22 (ACAD-13):
+                    OBLIGATORIO y sin default a propósito. Es el mismo valor contra
+                    el que la ruta canónica calcula `density_contrast_t_m3`
+                    (`inversion_postprocess_service.py:105`), que es la columna que
+                    consume el frontend; si aquí se usa otro, el .vtr que el cliente
+                    descarga en el ZIP contradice a la pantalla que está mirando.
     is_active_flat : 1D bool array opcional — True = roca, False = aire.
                     Si None, se infiere de np.isfinite(est_density).
 
@@ -206,10 +220,11 @@ def build_vtk_core_arrays(
             )
 
     # ── Calcular contraste de densidad ───────────────────────────────────────
-    # Celdas de aire → sentinel; celdas activas → densidad_absoluta - 2.6
+    # Celdas de aire → sentinel; celdas activas → densidad_absoluta − base_density
+    # de la corrida (FASE 22, ACAD-13: antes era el literal 2.6).
     density_contrast = np.where(
         is_active,
-        density_arr - VTK_BASE_DENSITY,
+        density_arr - np.float64(base_density),
         VTK_AIR_SENTINEL,
     )
 
@@ -245,6 +260,7 @@ def export_core_to_vtr(
     dx: float,
     est_density: np.ndarray,
     sensitivity: np.ndarray,
+    base_density: float,
     is_active_flat: Optional[np.ndarray] = None,
 ) -> Optional[str]:
     """
@@ -258,6 +274,8 @@ def export_core_to_vtr(
     dx           : float — Tamaño de celda en metros
     est_density  : 1D array — Densidades absolutas en Fortran order
     sensitivity  : 1D array — DOI normalizado en Fortran order
+    base_density : float — Roca caja de la corrida (t/m³). Obligatorio: ver
+                   `build_vtk_core_arrays`.
     is_active_flat: 1D bool array opcional
 
     Retorna
@@ -269,6 +287,7 @@ def export_core_to_vtr(
             nx=nx, ny=ny, nz=nz, dx=dx,
             est_density=est_density,
             sensitivity=sensitivity,
+            base_density=base_density,
             is_active_flat=is_active_flat,
         )
 
@@ -632,24 +651,67 @@ def _read_json(path: "Path | None") -> "dict[str, Any] | None":
         return None
 
 
+def base_density_of_run(inputs: "dict[str, Any]",
+                        report: "dict[str, Any] | None") -> "tuple[float, str]":
+    """FASE 22 (ACAD-13) — La roca caja de la corrida, leída del disco, con su fuente.
+
+    El bundle ZIP escribe DOS contrastes de densidad (`model.vtr` y el `Density_Contrast`
+    del `model.dat` ASEG-GDF2) y hasta esta fase los dos restaban el literal 2.6. Para
+    dejar de mentir hay que saber contra qué se invirtió de verdad, y eso no está donde
+    uno lo buscaría: `build_run_inputs_snapshot` es una lista blanca de claves escrita a
+    mano y `base_density` no estaba en ella (medido: 0 de 2.089 `inputs.json` en disco la
+    traían). Sí está en el reporte, dentro del bloque que publicó la Fase 20.
+
+    Devuelve `(valor, fuente)`. La fuente viaja al manifiesto: cuando hay que asumir el
+    default de contrato, el cliente tiene que poder verlo, no deducirlo.
+    """
+    ec = (report or {}).get("effective_contrast") or {}
+    val = ec.get("base_density")
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and _math.isfinite(float(val)):
+        return float(val), "report.effective_contrast"
+
+    val = (inputs or {}).get("base_density")
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and _math.isfinite(float(val)):
+        return float(val), "inputs.json"
+
+    # Corridas anteriores a la Fase 20/22: ninguna de las dos fuentes existe. Se usa el
+    # default del contrato (`schemas/geophysics_schema.py:782`) y se DECLARA como asumido.
+    return 2.6, "contract_default_assumed"
+
+
 def _densities_from_parquet(run_dir: Path, total: int) -> list[float]:
-    """Lee densidades del parquet persistido. Sin cálculos nuevos."""
+    """Lee densidades ABSOLUTAS del parquet persistido. Sin cálculos nuevos."""
     try:
         import pandas as pd
         bm_path = run_dir / RUN_BLOCK_MODEL_FILENAME
         if not bm_path.exists():
-            return [2.6] * total
+            return [float("nan")] * total
         df = pd.read_parquet(bm_path)
-        for col in ("density", "density_absolute", "density_contrast"):
-            if col in df.columns:
-                vals = list(df[col].astype(float))
-                pad = total - len(vals)
-                if pad > 0:
-                    vals.extend([float("nan")] * pad)
-                return vals[:total]
+        # FASE 22: aquí el bucle recorría ("density", "density_absolute",
+        # "density_contrast"). Las dos últimas se retiran por razones distintas:
+        #   · `density_absolute` no la escribe nadie en todo el backend (0 de 2.684
+        #     parquets de corrida en disco la tienen): era una rama muerta;
+        #   · `density_contrast` sí es un nombre vivo —lo escribe el TargetingEngine en
+        #     OTRO fichero— y ahí estaba el peligro: de haberse alcanzado habría
+        #     entregado un CONTRASTE por el hueco de la densidad ABSOLUTA
+        #     (`model.den`, `model.gslib` y la columna `Density_gcm3` del ASEG-GDF2),
+        #     un error de datum del orden de la propia roca caja presentado como
+        #     densidad. Es el mismo defecto que esta fase cierra, con el signo cambiado.
+        # `density` está en 2.684 de 2.684: la rama viva era siempre la primera.
+        if "density" in df.columns:
+            vals = list(df["density"].astype(float))
+            pad = total - len(vals)
+            if pad > 0:
+                vals.extend([float("nan")] * pad)
+            return vals[:total]
     except Exception:
         pass
-    return [2.6] * total
+    # FASE 22: antes se devolvía `[2.6] * total` — un modelo uniforme de roca INVENTADO
+    # que salía por `model.den`/`model.gslib`/`model.dat` con la misma cara que un
+    # resultado de inversión. NaN es lo que el escritor UBC ya traduce a NODATA
+    # (`ubc_model_text` filtra por `np.isfinite`): un fichero que dice «no hay dato» en
+    # vez de uno que dice «hay 2,6 t/m³ en todas partes».
+    return [float("nan")] * total
 
 
 def run_local_origin(project_id: str, run_id: str) -> "tuple[float, float]":
@@ -758,6 +820,8 @@ def _build_bundle_manifest(
     except Exception:
         _run_manifest_provenance = None
 
+    _bd_value, _bd_source = base_density_of_run(inputs, report)
+
     return {
         "schema_version": "11.0",
         "generated_utc": datetime.now(timezone.utc).isoformat(),
@@ -773,6 +837,24 @@ def _build_bundle_manifest(
         "grid": {
             "nx": inputs.get("nx"), "ny": inputs.get("ny"), "nz": inputs.get("nz"),
             "block_size_m": inputs.get("block_size"),
+        },
+        # FASE 22 (ACAD-13): el bundle entrega DOS columnas de contraste —
+        # `Density_Contrast_gcm3` en `model.vtr` y `Density_Contrast` en `model.dat`— y
+        # un contraste sin su referencia no es un número, es media resta. El manifiesto
+        # declara ahora contra qué se calcularon, y de dónde salió ese valor: si dice
+        # `contract_default_assumed`, la corrida es anterior a la Fase 20 y el dato no
+        # estaba en disco. Decirlo es la diferencia entre un default y una suposición
+        # disfrazada de medición.
+        "density_reference": {
+            "base_density_t_m3": _bd_value,
+            "source": _bd_source,
+            "unit_note": "1 t/m³ = 1 g/cm³; los ficheros rotulados g/cm3 llevan el mismo número.",
+            "applies_to": [
+                "model.vtr:Density_Contrast_gcm3",
+                "model.dat:Density_Contrast",
+            ],
+            "absolute_density_files": ["model.den", "model.gslib", "model.csv",
+                                       "model.dat:Density_gcm3"],
         },
         "fit_diagnostics": {
             "fit_level": fit_diag.get("fit_level"),
@@ -857,8 +939,15 @@ def create_run_bundle_zip(project_id: str, run_id: str) -> "tuple[bytes, str]":
     mfst  = _json.dumps(manifest, indent=2, ensure_ascii=False)
 
     utm_zone = inputs.get("utm_zone") or inputs.get("utm_zone_detected") or "19S"
-    aseg_dfn = _aseg_gdf2_dfn_text(nx, ny, nz, bs, str(utm_zone))
-    aseg_dat = _aseg_gdf2_dat_text(dens, nx, ny, nz, bs)
+    # FASE 22 (ACAD-13): la roca caja de la corrida, no el literal 2.6. Se lee UNA vez
+    # y la usan los dos ficheros ASEG-GDF2, para que la definición (.dfn) y el dato
+    # (.dat) no puedan volver a divergir — la misma cura de un-solo-escritor que la
+    # Fase 19 aplicó a los ejes UBC.
+    _base_density, _base_density_src = base_density_of_run(inputs, report)
+    aseg_dfn = _aseg_gdf2_dfn_text(nx, ny, nz, bs, str(utm_zone),
+                                   base_density=_base_density)
+    aseg_dat = _aseg_gdf2_dat_text(dens, nx, ny, nz, bs,
+                                   base_density=_base_density)
 
     # F5: CSV desde el parquet REAL (coordenadas verdaderas, no re-derivadas de nx/ny/nz).
     try:
@@ -902,7 +991,8 @@ def _aseg_gdf2_dfn_text(
     ny: int,
     nz: int,
     bs: float,
-    utm_zone: str = "19S",
+    utm_zone: str,
+    base_density: float,
 ) -> str:
     """
     FASE 6 — Genera el archivo .dfn de definición ASEG-GDF2.
@@ -924,13 +1014,19 @@ def _aseg_gdf2_dfn_text(
         ("Y_m",                "D", "15.2", "m",       "Northing (local SW-origin)"),
         ("Z_m",                "D", "12.2", "m",       "Depth positive downward"),
         ("Density_gcm3",       "D", "12.6", "g/cm3",   "Absolute density"),
-        ("Density_Contrast",   "D", "12.6", "g/cm3",   "Density minus 2.6 g/cm3 base"),
+        # FASE 22 (ACAD-13): el comentario decía «minus 2.6 g/cm3 base» como texto fijo.
+        # El .dfn es la DEFINICIÓN del .dat en una entrega regulatoria ASEG-GDF2: si
+        # declara una base que no es la usada, el fichero es incorrecto por contrato,
+        # no sólo por número.
+        ("Density_Contrast",   "D", "12.6", "g/cm3",
+         f"Density minus {float(base_density):.6g} g/cm3 host-rock base (run base_density)"),
         ("Sensitivity",        "D", "12.6", "",         "DOI sensitivity proxy [0,1]"),
         ("Is_Active",          "I",  "3",   "",         "1=rock 0=air"),
     ]
     lines = [
         f"! TerraQuantum ASEG-GDF2 Definition | project nx={nx} ny={ny} nz={nz} bs={bs}m | {ts}",
         "! NO-JORC/NI-43-101 EXPLORATION ONLY",
+        f"! Host-rock base density (base_density) = {float(base_density):.6g} g/cm3",
         f"DEFN 1 ST=RECD,RT=; END DEFN",
         f"DEFN 2 ST=RECD,RT=; DATUM=GDA94",
         f"DEFN 3 ST=RECD,RT=; PROJECTION=UTM",
@@ -950,19 +1046,28 @@ def _aseg_gdf2_dat_text(
     ny: int,
     nz: int,
     bs: float,
+    base_density: float,
 ) -> str:
     """
     FASE 6 — Genera el archivo .dat de datos ASEG-GDF2.
 
     Columnas: X_m, Y_m, Z_m, Density_gcm3, Density_Contrast, Sensitivity, Is_Active
     Nodata: -9999.000000 para celdas de aire.
+
+    FASE 22 (ACAD-13) — `Density_Contrast` se calculaba contra `BASE_DENSITY = 2.6`,
+    una constante local que nadie relacionaba con el `base_density` de la corrida. Era
+    la tercera copia del mismo literal (las otras dos: el `.vtr` y el TargetingEngine),
+    y la más grave de las tres: ASEG-GDF2 es formato de ENTREGA REGULATORIA en
+    Australia y Nueva Zelanda, y `model.dfn` declara por escrito contra qué base está
+    calculada la columna. Ahora la base entra por parámetro y el `.dfn` la declara.
     """
     NODATA = -9999.0
-    BASE_DENSITY = 2.6
+    base_density = float(base_density)
     hdr_lines = [
         "! TerraQuantum ASEG-GDF2 Data",
         "! Columns: X_m Y_m Z_m Density_gcm3 Density_Contrast Sensitivity Is_Active",
         "! See model.dfn for field definitions and CRS metadata",
+        f"! Density_Contrast = Density_gcm3 - {base_density:.6g} (run base_density)",
         "! NODATA=-9999.000000",
     ]
     rows: list[str] = list(hdr_lines)
@@ -984,7 +1089,7 @@ def _aseg_gdf2_dat_text(
                         f"{NODATA:.6f} {NODATA:.6f} 0.000000 0"
                     )
                 else:
-                    contrast = float(d) - BASE_DENSITY
+                    contrast = float(d) - base_density
                     rows.append(
                         f"{x:.2f} {y:.2f} {z:.2f} "
                         f"{float(d):.6f} {contrast:.6f} 1.000000 1"
