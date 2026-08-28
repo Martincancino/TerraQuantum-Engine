@@ -194,6 +194,38 @@ nombres parecidos, lo cual es en sí mismo un riesgo.)*
 
 ---
 
+#### Cierre — Fase 22 (2026-08-27), y en qué se quedó corta esta sección
+
+Los dos problemas están corregidos. El código citado arriba se conserva tal como estaba
+cuando se detectó: es la evidencia, no el estado actual. Lo que la fase midió y esta
+sección no había visto:
+
+**(a) El factor no era 1.000, sino 1.000 · dx³/1.000.** La sección leyó
+`block_volume = min(block_size**3, MAX_BLOCK_VOLUME_M3)` y no comprobó **con qué
+`block_size` se llama en producción**: la llamada de `geophysics_service.py` no pasa ese
+argumento, así que la firma cae en su default de 10 m y el volumen queda clavado en
+1.000 m³ *cualquiera sea la malla*. Medido sobre `data/projects`: **1.034 de 2.089**
+corridas usan un dx distinto de 10, y el `MAX_BLOCK_VOLUME_M3` recortaba en silencio toda
+celda de más de 100 m. Corregir sólo el sufijo `_kg` habría cerrado un factor 1.000 y
+dejado vivo uno de hasta 10⁹. La Fase 22 pasa el dx real, los índices reales de la malla,
+y retira el tope.
+
+**(b) El literal `2.6` estaba en TRES escritores, no en uno.** Además del que esta
+sección cita, el `Density_Contrast_gcm3` del `.vtr` (`export_service.VTK_BASE_DENSITY`) y
+el `Density_Contrast` del ASEG-GDF2, cuyo `.dfn` **declaraba por escrito** «Density minus
+2.6 g/cm3 base». Los dos últimos viajan al cliente dentro del ZIP industrial, y el
+ASEG-GDF2 es formato de **entrega regulatoria** en Australia y Nueva Zelanda: declarar una
+base que no es la usada hace el fichero incorrecto por contrato, no sólo por número.
+
+**(c) La pregunta de la §Pregunta 8 quedó respondida por medición, no por opinión.** No
+hay ningún consumidor de la columna —grep sobre backend, frontend, scripts de validación,
+notebooks y docs— y el propio repositorio ya había resuelto este mismo defecto en la ruta
+canónica **renombrando** (`d424c7c`: `modeled_rock_mass_kg` → `modeled_rock_mass_tonnes`).
+Se siguió ese precedente: `bulk_rock_mass_tonnes`, con la misma palabra, para que las dos
+columnas de masa del producto puedan compararse — y un test exige que den el mismo número.
+
+---
+
 ## 6. Lo que sí es sólido: el ranking probabilístico de blancos
 
 `rank_drill_targets` (`exploration/gravimetry.py:519`) es, a juicio de esta auditoría, la
@@ -413,10 +445,13 @@ intercepto.
 ### Problemas detectados
 
 1. **`bulk_rock_mass_kg` está en toneladas** — factor 1.000 entre el nombre y el valor
-   (`exploration/gravimetry.py:4214`, `4248`).
+   (`exploration/gravimetry.py:4214`, `4248`). **CERRADO por la Fase 22 (2026-08-27):**
+   renombrado a `bulk_rock_mass_tonnes`. La auditoría se quedó corta en el diagnóstico —
+   ver la nota al final de §5.1.
 2. **`density_contrast` se calcula contra un literal `2.6`** en lugar de `base_density`
    (`exploration/gravimetry.py:4213`), en una columna homónima pero distinta de la que
-   consume el frontend.
+   consume el frontend. **CERRADO por la Fase 22 (2026-08-27):** eran tres escritores,
+   no uno — ver §5.1.
 3. **Sección económica del reporte sin productores**: siete tarjetas que siempre dicen
    "No disponible".
 4. **Coincidencia por subcadena** en la lista de términos prohibidos del asistente.
@@ -547,6 +582,13 @@ unidades de 1.000× en una masa es exactamente el tipo de error que llega a un i
 tener consumidor?
 
 **Evidencia.** `exploration/gravimetry.py:4214` (el cálculo), `4248` (el nombre exportado).
+
+*(Respondida por el proyecto en la Fase 22, 2026-08-27: **corregir el nombre**, porque la
+búsqueda exhaustiva no encontró consumidor alguno y porque el repositorio ya había
+resuelto el mismo defecto así en su ruta canónica. Sigue siendo buena pregunta de examen:
+la opción «eliminar la columna» es defendible y se descartó por una razón que conviene
+discutir —el plan pedía conservarla— y el diagnóstico original subestimaba el error, que
+no es 1.000× sino 1.000·dx³/1.000. Ver el cierre de §5.1.)*
 
 ---
 
