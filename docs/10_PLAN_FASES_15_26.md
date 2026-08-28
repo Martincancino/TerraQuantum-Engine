@@ -1,8 +1,48 @@
-# TerraQuantum — PLAN DE FASES 15 a 26
+# TerraQuantum — PLAN DE FASES 15 a 30
 
-> **Revisión de cierre del plan §10** · 2026-08-23 · rama `fases-19-25-cierre`
-> Verificado contra el **árbol de trabajo**, no contra HEAD. Ninguna afirmación
-> se apoya en documentación: todas citan `ruta:línea`.
+> **Revisión de cierre del plan §10** · abierto 2026-08-23 · actualizado **2026-08-26**
+> Rama `fases-19-25-cierre`. Ninguna afirmación se apoya en documentación:
+> todas citan `ruta:línea` o una medición reproducible.
+
+> ### ESTADO — 2026-08-27
+>
+> **CERRADAS: 15, 16, 17, 18, 19, 20, 21, 22.** Las dos de física salieron caras y
+> valieron la pena: la **17** cambió el error de profundidad recuperada de
+> **150,1 m a 14,7 m**, y la **18/19** midió que el motor magnético calculaba con
+> `D_ef = 90° − D` — en Chile, **86° de desvío** y Pearson **r = −0,05** contra la
+> anomalía real.
+>
+> Las dos del 27-ago fueron de honestidad, y **las dos encontraron que el defecto
+> real no era el que la ficha describía**. La **20** buscaba avisar cuando se mueve
+> `base_density`; midió que ese campo **no viaja desde la UI** y que lo que sí pasa
+> es el simétrico: dos de los tres presets de litología imponen un piso de contraste
+> **positivo** (magnetita +1,90 t/m³) que deja la roca caja fuera de la caja
+> permitida y clava el **76,20 %** de las celdas al bound. La **21** cerró que el
+> veredicto **mejoraba si se corrían menos diagnósticos**, y al cablear el techo al
+> entregable destapó que el manifiesto del ZIP leía una clave que **nadie escribe**:
+> el cliente recibía el QA de resolución con `pearson_r: null` y sin `status`.
+>
+> La **22** completó el patrón de las dos anteriores, y esta vez el defecto real no era
+> más pequeño sino **más grande** que el de la ficha. ACAD-13 no vivía en un escritor
+> sino en **tres** —el `.vtr`, el parquet del TargetingEngine y el `Density_Contrast` del
+> **ASEG-GDF2**, cuyo fichero de definición *declaraba por escrito* «minus 2.6 g/cm3
+> base»—, y dos de los tres viajan al cliente dentro del ZIP industrial. ACAD-12 no era un
+> factor 1.000: la llamada de producción tampoco pasaba `block_size`, así que el volumen
+> quedaba clavado en el de una celda de 10 m en las **1.034 de 2.089** corridas que usan
+> otro dx. La decisión que el plan dejaba abierta —renombrar o multiplicar— se resolvió
+> **midiendo**: cero consumidores en todo el monorepo, y un precedente del propio
+> repositorio (`d424c7c`) que ya había resuelto el mismo defecto renombrando.
+>
+> **SIGUIENTE: Fase 23.**
+>
+> **Fases nuevas 20, 21, 26 y 30**, añadidas el 26-ago tras revisar una auditoría
+> delta externa. Ojo: **los dos «CRÍTICO» que esa delta proponía atacar primero no
+> se sostienen como los plantea**, y el desmentido está en tu propio repo —
+> `validation/HALLAZGO_2026-08-06_bound_por_defecto.md` (que **retira por escrito**
+> la recomendación sobre `density_min`) y
+> `validation/HALLAZGO_2026-08-06_techo_medium.md` (que advierte que subir el techo
+> a `HIGH` primero **sería peor que el estado actual**). Cada fase lo explica en su
+> propio bloque.
 
 ---
 
@@ -11,7 +51,7 @@
 En una sesión nueva de Claude Code, abierta en la raíz del proyecto:
 
 ```
-Lee docs/10_PLAN_FASES_15_26.md y ejecuta la Fase 19 completa.
+Lee docs/10_PLAN_FASES_15_26.md y ejecuta la Fase 20 completa.
 ```
 
 **El número de fase ES el orden de ejecución.** Empiezan en **15** porque las
@@ -195,8 +235,9 @@ los índices internos). El origen es `0 0 0`: sin georreferencia.
 | **NUEVO-2** | Cambiar de pestaña pierde el **mapeo de columnas, los puntos Helmert, los sondajes y 25 parámetros** porque `PreparacionView` se desmonta. (Los archivos y el bbox sí sobreviven — la memoria decía «los 41 parámetros», y es menos que eso) | `componentes/views/PreparacionView.tsx` |
 | **NUEVO-3** | El **CSV corregido** por el asistente de gravimetría se descarta al cambiar de pestaña, y el paquete se rearma sobre el **CSV crudo** | flujo PrepPanel → paquete |
 | **H-36** | `resultIsStale` es una **lista a mano ya atrasada**: los parámetros de la Fase 14 no están, así que cambiarlos no marca el resultado como desactualizado. (La otra mitad, `modelRunKey`, sí es un invariante sólido) | `store/useAppStore.ts` |
-| **ACAD-12** | `bulk_rock_mass_kg` **contiene toneladas** — factor 1.000. El propio comentario documenta el renombrado `tonnage → bulk_rock_mass_kg` como «compliance-safe»: el renombrado creó la mentira de unidad | `exploration/gravimetry.py:4233,4248` |
-| **ACAD-13** | La exportación calcula el contraste contra el **literal 2.6** mientras el motor usa `base_density`, que es configurable | `export_service.py:31,210` vs `geophysics_service.py:394` |
+| ✅ **ACAD-12** *(cerrado por la Fase 22, 08-27)* | `bulk_rock_mass_kg` **contenía toneladas** — factor 1.000. **Y era peor:** la llamada de producción no pasaba `block_size`, así que el volumen quedaba fijo en el de una celda de 10 m (**1.034 de 2.089** corridas usan otro dx) y un tope silencioso recortaba las grandes. Renombrada a `bulk_rock_mass_tonnes` — 0 consumidores medidos — con el dx y los índices reales | `exploration/gravimetry.py:4233,4248` |
+| ✅ **ACAD-13** *(cerrado por la Fase 22, 08-27)* | La exportación calculaba el contraste contra el **literal 2.6**. Eran **TRES** escritores, no uno: el `.vtr`, el TargetingEngine y el **ASEG-GDF2** (entrega regulatoria AU/NZ), más la nota del reporte. Dos viajan al cliente en el ZIP | `export_service.py:31,212` **y `:947,973`** · `gravimetry.py:4213` · `geophysics_service.py:5128` |
+| **NUEVO-9** *(abierto por la Fase 22, 08-27)* | El `config_hash` del manifiesto del ZIP (`_AUDIT_KEYS`) ignora `base_density`, `density_min` y `density_max`: dos corridas con roca caja distinta salen con el **mismo hash de auditoría**. Hay dos listas paralelas que sincronizar | `export_service.py:612`, `reporting/report_generator.py` |
 | **H-20** | El updater apunta a `github.com/TerraQuantum/terraquantum`; el remoto real es `Martincancino/TerraQuantum-Engine`. No hay workflow de releases ni llamada a `download_and_install`. El fallo se le presenta al usuario como si fuera falta de internet | `src-tauri/tauri.conf.json:34`, `lib.rs:975` |
 | **NUEVO-4** | El `.spec` **traga la excepción**: `_safe_submodules` devuelve `[]` ante cualquier fallo y `build_desktop.ps1` nunca instala ni verifica `requirements.txt` ⇒ el instalador puede salir sin OMF y sin avisar | `terraquantum_backend.spec:21-25,54-55` |
 | **H-39** | Los kernels de **MVI y tensor siguen ignorando `near_field_mode='prism'`** y usan siempre dipolo. La auditoría lo marca `[HECHO]`: ahí significaba «leído», no «arreglado» | `exploration/magnetometry.py` |
@@ -269,7 +310,7 @@ hallazgos vivos (H-39). Para alguien que llegue nuevo, hoy desinforma.
 
 ---
 
-### FASE 15 — Poner a salvo tres fases que solo existen en tu disco · **S** · 🔴 **P0** · *git*
+### FASE 15 (CERRADA) — Poner a salvo tres fases que solo existen en tu disco · **S** · 🔴 **P0** · *git*
 
 **Por qué va primero.** No es deuda técnica, es riesgo de pérdida. 189 commits
 separan la rama de `main` y las Fases 12, 13 y 14 no están en ningún commit.
@@ -339,7 +380,7 @@ en la máquina), no fallos tapados.
 
 ---
 
-### FASE 16 — La ingesta deja de adivinar el rol de una columna · **S** · 🔴 **P0** · *backend* · H-F11-1
+### FASE 16 (CERRADA) — La ingesta deja de adivinar el rol de una columna · **S** · 🔴 **P0** · *backend* · H-F11-1
 
 **Por qué va aquí.** Es el defecto más barato de arreglar y el que más usuarios
 muerde. Va antes que los otros porque corrompe el dato **de entrada**: todo lo
@@ -460,7 +501,7 @@ proyecto prohíbe cruzar; queda como trabajo de frontend, hermano de la Fase 20.
 
 ---
 
-### FASE 17 — La corrección de terreno usa la componente vertical · **M** · 🔴 **P0** · *backend* · ACAD-0, ACAD-9
+### FASE 17 (CERRADA) — La corrección de terreno usa la componente vertical · **M** · 🔴 **P0** · *backend* · ACAD-0, ACAD-9
 
 **Por qué va aquí.** Activa por defecto, entra en el dato que se invierte, error
 medido de 12× sobre una señal de 0,1–10 mGal. Que un **test tautológico**
@@ -641,7 +682,7 @@ tautológicos de arriba siguen como están: cada uno vive en un área distinta
 
 ---
 
-### FASE 18 — El experimento que cierra la rotación de 90° · **M** · 🔴 **P0** · *backend, medir* · ACAD-1
+### FASE 18 (CERRADA) — El experimento que cierra la rotación de 90° · **M** · 🔴 **P0** · *backend, medir* · ACAD-1
 
 **Por qué va aquí.** La inconsistencia está probada por lectura. Lo que **no**
 está probado es la consecuencia numérica, y el arreglo depende de saber cuál de
@@ -828,7 +869,7 @@ punta antes y después.**
 
 ---
 
-### FASE 19 — Una sola convención de ejes, con guardia · **M** · 🟠 P1 · *backend* · ACAD-1, ACAD-1c
+### FASE 19 (CERRADA) — Una sola convención de ejes, con guardia · **M** · 🟠 P1 · *backend* · ACAD-1, ACAD-1c
 
 **Por qué va aquí.** Depende de la 18. El defecto real no es la permutación que
 falta: es que **dos módulos documentan convenciones opuestas y nada los
@@ -979,7 +1020,400 @@ severo** que antes, no retocado.
 
 ---
 
-### FASE 20 — La preparación deja de evaporarse · **M** · 🟠 P1 · *frontend* · NUEVO-2, NUEVO-3
+### FASE 20 (CERRADA) — El contraste efectivo deja de ser invisible · **M** · 🔴 **P0** · *backend* · `density_min`
+
+**Por qué va aquí, y por qué NO es lo que dice la auditoría delta.** La delta lo llama
+«`density_min` desacoplado, PR-AUC 0,035, CRÍTICO». Ese número existe, pero **tu propio proyecto lo
+retiró por escrito**. `validation/HALLAZGO_2026-08-06_bound_por_defecto.md` abre con un banner de
+corrección que dice, textual:
+
+> «El titular original de este documento era incorrecto por sobre-generalización. […] En el
+> **flujo real** —grilla derivada del CSV, que es lo que manda la UI— el efecto catastrófico
+> **no ocurre**. […] **La recomendación de invertir el default queda RETIRADA.**»
+
+El 0,035 se midió con **malla forzada de 2250 m sobre un survey de 1500 m**, que no es el camino del
+usuario. Al barrer 6 regímenes con 48 inversiones, **ningún brazo domina**: a 250 m el permisivo gana
+(PR-AUC 0,890 vs 0,288), a 400 m el estricto gana 10× en profundidad, a 600-900 m da igual porque
+ninguno recupera. `density_min` es una **variable de régimen**, no un default roto — que es lo que
+`solver_configs.py` decía desde el primer día.
+
+**Citar el 0,035 como defecto abierto es repetir por quinta vez el error que el proyecto ya tiene
+documentado: medir una configuración y hablar de otra.**
+
+Lo que **sí** queda accionable lo nombra el mismo documento: el contraste efectivo no se declara en
+ninguna parte, nada acopla `density_min` con `base_density`, ningún test cubre el caso desacoplado —
+y precisamente **porque el valor correcto depende del régimen, el usuario necesita poder VER cuál le
+tocó**.
+
+**Trabajo.**
+1. Declarar el **contraste efectivo** (`density_min - base_density`) en el reporte y en la UI, con su
+   unidad, junto al **% de celdas que terminaron pegadas al bound** (en la medición iba de 91,3 % a
+   0,1 % según el brazo: es el indicador que delata el régimen).
+2. Acoplar la validación: si `base_density` se mueve y `density_min` no, **avisar del desacople**.
+   No forzar un valor.
+3. Test del caso desacoplado, que hoy no existe.
+4. **NO cambiar el default.** Está medido que no hay uno correcto.
+
+**Gate.** Una corrida con `base_density` movido y `density_min` sin mover produce un aviso visible
+**en la UI**, y el reporte declara el contraste efectivo y el % de celdas en el bound. El test falla
+si se borra el aviso.
+
+#### ✅ EJECUTADA — 2026-08-27
+
+Backend puro, como la ficha pedía. Guardia nueva: `tests/test_f20_effective_contrast.py`.
+
+**El titular: la regla que pedía el plan NO es la que dispara en el producto.** El plan
+pedía avisar «si `base_density` se mueve y `density_min` no». Esa regla está
+—`base_moved_min_at_default`, con su test— pero **no puede dispararse desde la UI**:
+`base_density` no viaja. El frontend nunca lo envía (`PrepPanel.tsx:1140` manda
+`density_min`/`density_max` y nada más) y `gravity_import_api.py:1859` no lo reenvía, así
+que se queda en su default 2,6 en toda corrida de paquete. Lo que SÍ ocurre es lo
+**simétrico**: el selector «Litología objetivo» mueve `density_min` y deja el fondo en 2,6,
+y **dos de sus tres presets imponen un piso de contraste POSITIVO sin decirlo**:
+
+| preset ofrecido en la UI (`prepPanelState.ts:265-269`) | `density_min` | `base_density` | piso efectivo |
+|---|---:|---:|---:|
+| Granito (2,6–3,0) | 2,6 | 2,6 | **0,00** — coherente |
+| **Magnetita (4,5–5,5)** | 4,5 | 2,6 | **+1,90** ← la roca caja queda FUERA de la caja |
+| **Cobre porfírico (4,3–4,8)** | 4,3 | 2,6 | **+1,70** ← ídem |
+| estado inicial (`custom`) | 0,0 | 2,6 | −2,60 — permisivo, declarado |
+
+Con piso positivo el contraste 0 —la roca caja— **no es representable**, y toda celda sin
+anomalía se recorta al bound inferior. Medido de punta a punta con la magnetita: **76,20 %**
+de las celdas activas terminan pegadas al bound y el modelo entero sale con densidad
+≥ 4,5 t/m³. Por eso la fase implementa **dos** reglas, ambas por VALOR y no por procedencia
+(el camino del paquete pasa `density_min` explícito SIEMPRE, así que `model_fields_set` no
+distinguiría nada): `positive_floor` (`density_min > base_density`) y la del plan
+(`base_density` fuera de su default de contrato con `density_min` exactamente en el suyo —
+leído del modelo pydantic, porque v1 declara 2,6 y v2 declara 0,0).
+
+**Lo que se declara.** `report.effective_contrast`: `base_density`, `density_min/max`,
+`contrast_min = density_min − base_density`, `contrast_max`, unidad, régimen con su nota,
+`cells_at_bound_pct` con desglose inferior/superior, `n_active_cells` y **de qué fuente
+salió el conteo** (R-03 post-clip, que descuenta vóxeles muertos; el solver como respaldo).
+También en el reporte HTML, §4.6. El aviso **no toca frontend**: viaja por `warnings[]` y
+`technicalSummary.warnings[]`, el canal que `lib/terraquantum/runWarnings.ts` ya normaliza y
+`WarningBanner` ya dibuja, montado en `DatosView.tsx:349` y `Exploration3DView.tsx:891`.
+
+**El % de celdas en el bound DISCRIMINA — y de paso destapa algo que nadie había medido.**
+Mismo mundo, mismo survey, mismo solver; sólo se mueve el piso:
+
+| régimen | piso de contraste | celdas en el bound |
+|---|---:|---:|
+| permisivo (2,6 / 0,0 — el default del paquete) | −2,60 | **0,00 %** |
+| acoplado (2,6 / 2,6 — no-negatividad) | 0,00 | **68,27 %** |
+| piso positivo (2,6 / 4,5 — preset magnetita) | +1,90 | **76,20 %** |
+
+Mismo orden y mismo salto al fondo que el barrido de dos brazos del hallazgo (91,3 % → 0,0 %).
+**El dato nuevo es la fila del medio: en la configuración ACOPLADA, la que se considera sana,
+el bound ya retiene el 68 % de las celdas activas** — es decir que en ese régimen el bound
+no es un guarda-raíl, es el regularizador. No se toca (el hallazgo retira por escrito la
+recomendación de mover el default), pero **ahora se ve**.
+
+**El default NO se cambió.** Punto 4 de la ficha, cumplido: la fase declara y avisa; no elige.
+
+**Y una errata de honestidad, de una línea:** la nota de `r05_geometry_audit` decía
+«asignadas density=base_density=**2.60** t/m3» **literal**, aunque la corrida usara otra base.
+Ahora declara la que usó.
+
+**Gate — mutación 11/11**, con hash del fichero verificado antes y después de cada una
+(el árbol vive en OneDrive y una restauración llegó a revertirse sola en la Fase 19):
+
+| mutación | qué rompe |
+|---|---|
+| M1 | el aviso deja de viajar por `warnings[]` |
+| M2 | el reporte no declara `effective_contrast` |
+| M3 | la regla `positive_floor` no dispara |
+| M4 | la regla `base_moved_min_at_default` no dispara |
+| M5 | el contraste se SUMA en vez de restarse |
+| M6 | el default de contrato se cablea a mano (v1/v2 dejan de distinguirse) |
+| M7 | el % de celdas ignora R-03 y usa el conteo sin corregir |
+| M8 | la nota de R-05 vuelve al `2.60` literal |
+| M9 | el HTML no dibuja la sección |
+| M10 | el aviso pierde los números y queda en adjetivos |
+| M11 | el % se inventa un `0,0` cuando no hubo diagnóstico |
+
+**Alcance que la fase NO tocó, con la línea exacta:**
+- **NUEVO-8 — `base_density` no viaja desde la UI.** No existe el campo en `PrepPanel` ni la
+  clave en la configuración del paquete (`gravity_import_api.py:1841-1890` enumera lo que
+  reenvía; `base_density` no está). La fase lo hace **visible** —el aviso nombra los dos
+  valores y el piso resultante— pero **cablearlo es frontend + API**, y la regla de oro lo
+  deja para su propia fase. Mientras tanto, elegir «Magnetita» en el selector sigue
+  produciendo un piso de +1,90 t/m³; la diferencia es que ahora **el usuario se entera**.
+- No se movió ningún default de `density_min`, ni se tocó `solver_configs.py`.
+
+---
+
+### FASE 21 (CERRADA) — El veredicto deja de mejorar cuando se mide menos · **S** · 🔴 **P0** · *backend* · ACAD-11
+
+**Por qué va aquí.** Es la mitad barata y segura del problema del techo, y cierra una mentira: hoy el
+tope a `MEDIUM` se aplica si el checkerboard **falla**, pero `NOT_RUN` **no tiene efecto**. Es decir:
+**el veredicto puede mejorar si corres menos diagnósticos.** En un producto cuyo argumento de venta
+es la honestidad, eso es lo único inaceptable.
+
+**Lo que esta fase NO hace: desbloquear `HIGH`.** Ver la Fase 26 y la Fase 30.
+
+**Trabajo.**
+1. Que `NOT_RUN` tope igual que `FAIL`, o que la corrida se niegue a emitir veredicto sin ese
+   diagnóstico. Una de las dos, decidida y escrita.
+2. **Declarar el techo al usuario.** Hoy ve «MEDIUM» sin saber que `HIGH` es inalcanzable por
+   construcción. Que el reporte diga que el nivel superior no está disponible, y por qué.
+3. Registrar en el reporte **cuál de las entradas del worst-of fijó el veredicto**: el diseño de B3
+   ya expone los componentes, falta decir cuál mandó.
+
+**Gate.** Una corrida con el checkerboard desactivado **no puede** dar un veredicto mejor que la
+misma corrida con el checkerboard activado y fallando. Verificado por mutación.
+
+#### ✅ EJECUTADA — 2026-08-27
+
+Backend puro. Guardia nueva: `tests/test_f21_verdict_ceiling.py`.
+
+**Punto 1 — la decisión, escrita.** De las dos que el plan admitía se eligió que **`NOT_RUN`
+topee igual que `FAIL`**, no que la corrida se niegue a emitir veredicto. Motivo: el
+checkerboard es un diagnóstico accesorio y **non-fatal** —`_checkerboard_qa` se traga la
+excepción y deja `_cb_qa = None`—, así que convertir su caída en un bloqueo dejaría sin
+veredicto a una corrida cuya física es válida, castigando al usuario por un fallo del motor.
+Topear conserva la semántica del worst-of (*ausencia de evidencia ≠ evidencia de resolución*)
+y vuelve el veredicto **monótono**: ningún diagnóstico que se deje de correr puede subir el
+nivel. `PASS` y `WARNING` sí son evidencia medida y no topean; **cualquier otro estado,
+incluido uno inesperado, se trata como no medido y topea** — el default seguro es el techo,
+no la libertad.
+
+`FAIL` y `NOT_RUN` topean igual pero **no se confunden**: uno etiqueta
+`checkerboard_resolution` y el otro `checkerboard_not_run`, con motivos distintos y con
+`structural` distinto (el FAIL no lo levanta más dato; el NOT_RUN sí lo levanta correr el QA).
+
+**Punto 2 — el techo, declarado.** `overall_verdict.ceiling`: nivel máximo alcanzable, quién
+lo topa, si es **estructural**, por qué (con el número medido: `pearson_r = 0,1162` idéntico
+a cuatro decimales en 9 corridas frente a un umbral de PASS de 0,60, porque el examen alterna
+signo **celda a celda** y eso está por debajo del límite físico de resolución de un campo
+potencial), qué haría falta para levantarlo y **dónde está la evidencia**. Y no sólo en el
+JSON: va en el **titular** —«MEDIUM» a secas se lee como *confianza media* cuando el sistema
+quiere decir *no tengo forma de decírtelo*—, en el reporte HTML §3.5, en el manifiesto del ZIP
+industrial y en la trilogía B3 que consume el copiloto.
+
+**Punto 3 — quién mandó.** `overall_verdict.signals` lista **todas** las entradas del worst-of
+con su nivel mapeado y `is_limiting`, ordenadas por severidad; `decided_by` nombra las que
+fijaron el mínimo (pueden empatar, y se nombran todas). `components` ya publicaba los valores
+crudos; faltaba decir cuál mandó.
+
+**Dos tests existentes se pusieron rojos, y NO se arreglaron moviendo un umbral.**
+`test_r06_false_alarm_chi2_only_does_not_cap` y `test_clean_all_high_stays_high` afirmaban
+`HIGH` **con el checkerboard AUSENTE del payload** — o sea, aprobaban apoyándose justo en el
+agujero que esta fase cierra. Se les declaró `checkerboard_qa: {"status": "PASS"}`: siguen
+midiendo lo suyo (que el falso positivo de r06 no capa; que un caso bueno no se degrada) y
+ahora la dependencia es visible en vez de tácita.
+
+**Y un defecto encontrado al cablear el techo al entregable:** el manifiesto del ZIP
+industrial leía `report["checkerboard_pearson_r"]` (`export_service.py:781`), una clave que
+**nadie escribe nunca** — grep sobre todo el backend: cero escrituras. El cliente recibía un
+bloque `checkerboard_qa` con `pearson_r: null` y **sin `status`**: el nombre del diagnóstico y
+ninguno de sus dos números. Ahora lee `checkerboard_qa` y lleva además el techo del veredicto.
+
+**Gate — mutación 17/17**, con hash de los cuatro ficheros verificado antes y después de cada
+una. Las cuatro primeras atacan el corazón de la fase:
+
+| mutación | qué rompe |
+|---|---|
+| M1 | **`NOT_RUN` vuelve a no topear — el defecto original** |
+| M2 | el checkerboard deja de topear del todo |
+| M3 | un status inesperado deja el techo libre |
+| M4 | `FAIL` y `NOT_RUN` dejan de distinguirse |
+| M5-M7 | el techo se declara siempre HIGH · pierde su número medido · miente sobre `structural` |
+| M8 | el titular deja de nombrar el techo |
+| M9-M11 | el ledger no marca quién mandó · sólo lista limitantes · pierde el orden |
+| M12 | `pearson_r` deja de viajar con los componentes |
+| M13-M14 | el HTML no dibuja el techo · ni el ledger |
+| M15-M16 | el ZIP vuelve a la clave muerta · omite el status |
+| M17 | el copiloto deja de decir el techo |
+
+**Lo que esta fase NO hizo, a propósito:** desbloquear `HIGH`. El orden sigue siendo **Fase 26
+primero, Fase 30 después**. Hoy el techo protege — 1 de cada 3 realizaciones de ruido desvía
+el blanco ~170 m con diagnósticos idénticos, y liberar el techo antes de que la señal
+discrimine produciría `HIGH` en corridas de 285 m de error.
+
+---
+
+### FASE 22 (CERRADA) — Las unidades de la exportación dejan de mentir · **S** · 🟠 P1 · *backend* · ACAD-12, ACAD-13
+
+**Por qué va aquí.** Dos errores pequeños en el mismo archivo de salida, ambos
+nacidos de un cambio cosmético: un renombrado «compliance-safe» que convirtió
+toneladas en kilos, y un literal que se quedó cuando `base_density` se volvió
+configurable. Se agrupan porque tocan la misma función.
+
+**Trabajo.**
+1. `bulk_rock_mass_kg`: o multiplicar por 1.000, o renombrar a
+   `bulk_rock_mass_t`. Decidir **mirando si alguien la consume**.
+2. Sustituir `VTK_BASE_DENSITY = 2.6` por la `base_density` de la corrida.
+
+**Gate.** Un test que invierte con `base_density ≠ 2.6` y exige que la columna
+exportada coincida con la que consume el frontend (`density_contrast_t_m3`).
+Hoy divergen.
+
+#### ✅ EJECUTADA — 2026-08-27
+
+Backend puro. Guardia nueva: `tests/test_f22_export_units.py` (29 tests).
+
+**Las dos fichas describían un defecto más pequeño que el real.** Ninguna de las dos era
+falsa; las dos se quedaron cortas, y en los dos casos por la misma razón: se leyó la
+función donde vive el número y no se comprobó **con qué la llama producción**.
+
+**ACAD-13 estaba en TRES escritores, no en uno.** La ficha nombra
+`VTK_BASE_DENSITY = 2.6`. Los otros dos:
+
+*(Líneas contadas sobre `HEAD` = `2418f21`; en el árbol de trabajo están desplazadas por
+las Fases 20 y 21, que aún no están commiteadas.)*
+
+| dónde | qué escribía | llega al cliente como |
+|---|---|---|
+| `export_service.py:31,212` — `build_vtk_core_arrays` | `Density_Contrast_gcm3` del `.vtr` | `model.vtr` del ZIP |
+| `gravimetry.py:4213` — `TargetingEngine.extract_and_export` | `density_contrast` del parquet | — (fichero legado) |
+| **`export_service.py:947,973` — `_aseg_gdf2_dat_text`** | **`Density_Contrast` del ASEG-GDF2** | **`model.dat` del ZIP** |
+
+El tercero es el grave: ASEG-GDF2 es **entrega regulatoria** en Australia y Nueva Zelanda,
+y su fichero de definición `model.dfn` **declaraba por escrito** «Density minus 2.6 g/cm3
+base». Declarar una base que no es la usada no hace el número feo: hace el fichero
+incorrecto por contrato. Y hay un cuarto sitio que repetía la mentira en prosa: la nota
+del bloque `vtk_export` del reporte (`geophysics_service.py:5128`) decía «Densidad base:
+2.6 g/cm³» como texto fijo, así que aun con el `.vtr` corregido el reporte seguiría
+diciéndole al usuario contra qué **no** se calculó.
+
+**El defecto es alcanzable en producción, y se midió por dónde.** `base_density` no
+aparece **ni una vez** en todo `api/`: por el camino del paquete y el del importador se
+queda siempre en 2,6, y ahí el literal acierta por accidente. Pero
+`POST /geophysics-invert` y `/v2/geophysics-invert` reciben el esquema crudo, así que la
+API directa y el scripting **sí** lo mueven — y con `base_density = 4,5` (magnetita, el
+ejemplo del propio contrato) el `.vtr` y el parquet que pinta el frontend divergen en
+**1,9 t/m³ constantes**: la pantalla y el fichero entregado describen dos cuerpos
+distintos.
+
+**ACAD-12: el factor no era 1.000, sino 1.000 · dx³/1.000.** La llamada de producción no
+pasaba `block_size`, de modo que la firma caía en su default de **10 m** y el volumen de
+celda quedaba clavado en 1.000 m³ *cualquiera fuese la malla* — y encima había un tope
+silencioso, `MAX_BLOCK_VOLUME_M3 = 1_000_000`, que recortaba toda celda de más de 100 m
+sin decirlo. Medido sobre `data/projects`: **1.034 de 2.089 corridas** usan un dx distinto
+de 10 (hasta 8.315 m), y sobre el parquet real en disco la columna vale exactamente
+`1.000 × densidad` con dx = 125 m, es decir **1,95 millones de veces** menos masa de la
+que la celda contiene. Tampoco se pasaban `ix/iy/iz`, que se re-derivaban como
+`floor(coord/10)`. Renombrar el sufijo y dejar eso vivo habría cerrado un factor 1.000 y
+conservado uno de hasta 10⁹.
+
+**Punto 1 — la decisión, medida y no opinada.** De las dos que el plan admitía se eligió
+**renombrar**, por tres razones que son datos y no criterio:
+1. **Cero consumidores.** Grep sobre el monorepo entero —backend, frontend, scripts de
+   validación, notebooks, docs—: nadie lee `bulk_rock_mass_kg`. Y el fichero que la lleva
+   es un residuo: `df_full` **sobrescribe** `block_model_001.parquet` al final de la misma
+   corrida (medido en disco: 28 columnas del esquema canónico, ninguna del TargetingEngine),
+   así que la columna sólo sobrevive en el `_anomaly.parquet` global.
+2. **El repositorio ya resolvió este mismo defecto así.** El commit `d424c7c` renombró
+   `modeled_rock_mass_kg` → `modeled_rock_mass_tonnes` en la ruta canónica. El
+   TargetingEngine es el sitio que ese renombrado no alcanzó.
+3. **Multiplicar por 1.000 habría producido un número igual de falso**, porque el volumen
+   estaba mal por su cuenta.
+
+**Desviación declarada del plan:** el nombre es `bulk_rock_mass_tonnes`, no
+`bulk_rock_mass_t`. Se sigue la palabra que el propio repositorio eligió en `d424c7c`,
+para que las **dos** columnas de masa del producto se llamen igual — y un test exige que
+den el **mismo número**, que es lo que convierte esto en una corrección y no en un cambio
+de etiqueta.
+
+**Punto 2 — el literal, sustituido en los cuatro sitios.** `VTK_BASE_DENSITY` **se borra**
+en vez de corregirse: el defecto no era su valor sino su existencia. `base_density` pasa a
+ser argumento **obligatorio y sin default** de `build_vtk_core_arrays`, `export_core_to_vtr`
+y los dos escritores ASEG — olvidarlo es un `TypeError`, no un sesgo silencioso. En el
+`.vtr` y en el TargetingEngine el valor es `inversor_core.base_density`, **el mismo objeto**
+con el que se construye `density_contrast_t_m3`, para que no puedan divergir. En el ZIP
+—que lee del disco, no de la corrida— se añade `base_density_of_run(inputs, report)`, que
+devuelve **el valor y su fuente**: `report.effective_contrast` (lo publicó la Fase 20),
+`inputs.json`, o `contract_default_assumed`. El manifiesto declara las tres cosas, porque
+un contraste sin su referencia es media resta, y «asumido» y «medido» no son lo mismo.
+
+**Tres defectos laterales encontrados al medir, y cerrados:**
+
+1. **`inputs.json` no traía `base_density` — en 0 de 2.089 corridas.** Y no porque nadie la
+   moviera: `build_run_inputs_snapshot` es una **lista blanca escrita a mano** de 16 claves
+   y ésa no estaba. El audit trail de la corrida no registraba la densidad respecto de la
+   cual toda la física está definida. Ahora sí. (No entra en `_AUDIT_KEYS`, así que el
+   `config_hash` de las corridas existentes **no** se mueve; hay un test que lo fija.)
+2. **`_densities_from_parquet` devolvía `[2.6] * n` cuando faltaba el parquet** — un modelo
+   uniforme de roca **inventado** que salía por `model.den`, `model.gslib` y `model.dat`
+   con la misma cara que un resultado de inversión. Ahora devuelve NaN, que el escritor UBC
+   ya traduce a NODATA: un fichero que dice «no hay dato» en lugar de uno que dice «hay
+   2,6 t/m³ en todas partes».
+3. **La misma función aceptaba `density_contrast` por el hueco de la densidad ABSOLUTA.**
+   De haberse alcanzado esa rama, el `.den`/`.gslib`/`Density_gcm3` habrían llevado un
+   contraste rotulado como densidad — el defecto de esta fase con el signo cambiado.
+   Medido: `density` está en **2.684 de 2.684** parquets de corrida y `density_absolute` en
+   **0**, así que las dos ramas extra eran código muerto con un filo. Retiradas.
+
+**Gate — mutación 24/24**, con hash de los tres ficheros verificado antes y después de cada
+una. Las cuatro primeras atacan el corazón de la fase:
+
+| mutación | qué rompe |
+|---|---|
+| M1 | **el `.vtr` vuelve a restar el literal 2.6 — el defecto original** |
+| M11 | **vuelve el nombre en kg sobre un valor en toneladas** |
+| M12 | vuelve el tope silencioso de volumen |
+| M13 | el TargetingEngine vuelve a restar el literal |
+| M2/M2b | `base_density` del `.vtr` recupera un default: olvidarlo deja de ser un error |
+| M3-M4 | producción pasa el literal al `.vtr` · la nota del reporte vuelve a decir 2.6 |
+| M5-M7d | el ASEG-GDF2 vuelve al literal en el dato, en la definición, en el bundle y por default |
+| M8-M10 | la base deja de leerse del reporte · una base no numérica se cuela · el manifiesto deja de declararla |
+| M14-M16 | producción deja de pasar `block_size` · `ix/iy/iz` · `base_density` |
+| M17-M18 | vuelve la roca inventada a 2.6 · un contraste vuelve a servirse como densidad absoluta |
+| M19-M20 | el snapshot pierde la base · `base_density` entra en `_AUDIT_KEYS` y mueve el hash existente |
+
+**El gate del plan, al pie de la letra y un poco más:** la corrida real con
+`base_density = 4,5` no compara arrays en memoria — **parsea el `.vtr` que quedó escrito en
+disco**, que es el fichero que el cliente abre en ParaView, y exige que coincida celda a
+celda con `density_contrast_t_m3`. Además comprueba que el caso **no es trivial**: que con
+el literal viejo la diferencia sería 1,9 t/m³ exactos. Sin eso, un test que pasara con
+`base_density = 2,6` se leería como gate y no mediría nada.
+
+**La campaña de mutación tuvo un falso negativo, y se corrigió el instrumento.** Una
+pasada informó `M16 ESCAPO`; al repetirla a mano se caza **3 de 3**. La causa: OneDrive
+revierte ficheros a mitad de la corrida, así que pytest llegó a ejecutarse contra el
+fichero **sin mutar** — y una campaña que corre contra código sano informa «escapó», que
+es el peor error posible en un gate por mutación. El arnés ahora verifica que la mutación
+sigue puesta **antes y después** de pytest y reintenta si no; con esa guardia el
+fenómeno se reprodujo y quedó registrado (`M7d INVALIDA`). Es la misma trampa que anotó la
+Fase 19, un escalón más arriba.
+
+**Lo que esta fase NO hizo, y queda declarado:**
+- **NUEVO-9 — el `config_hash` del ZIP es ciego a la roca caja.** `_AUDIT_KEYS`
+  (`export_service.py:612`) no incluye `base_density`, `density_min` ni `density_max`: dos
+  corridas que sólo difieren en la densidad de fondo salen con el **mismo hash de
+  auditoría**. Se deja abierto a propósito — tocarlo cambia el hash de todo lo existente y
+  hay dos listas paralelas que sincronizar (`reporting/report_generator.py`), lo que excede
+  una fase «S». Hay un test que fija el estado actual para que el cambio, cuando llegue,
+  sea deliberado.
+- **`DatosView.tsx:98` lee `persistedReport.density_contrast`, una clave que el backend
+  nunca escribe** ⇒ muestra «No disponible» siempre. Familia H-10/NUEVO-7. Es frontend, y
+  esta fase es backend.
+- El parquet del TargetingEngine sigue escribiéndose en una ruta **relativa al CWD** y
+  sobrescribiéndose dentro de la misma corrida. Se corrigió lo que contiene, no dónde vive.
+
+---
+
+### FASE 23 — La inversión conjunta recupera topografía y avisos · **M** · 🟠 P1 · *backend* · NUEVO-1
+
+**Por qué va aquí.** La Fase 1 cerró H-27 en dos de las tres rutas. La que quedó
+fuera es la conjunta — el caso de los dos CSV, el que más diferencia al producto
+de una hoja de cálculo. Un modelo conjunto puede caer a topografía plana y salir
+con sello de bueno.
+
+**Trabajo.**
+1. Cablear `topography_run_warnings` en `services/joint_inversion.py`, igual que
+   en las rutas gravimétrica y magnética.
+2. Comprobar los **tres eslabones** (emisión → respuesta → componente montado),
+   como exige la pregunta 2 de la plantilla de gate.
+
+**Gate.** Correr la conjunta sin DEM y exigir que el aviso aparezca en el JSON
+**y** en la UI. El test debe fallar si se borra el cableado.
+
+---
+
+### FASE 24 — La preparación deja de evaporarse · **M** · 🟠 P1 · *frontend* · NUEVO-2, NUEVO-3
 
 **Por qué va aquí.** Es la peor experiencia del producto y la más fácil de
 reproducir delante de un cliente: el usuario corrige un CSV, cambia de pestaña
@@ -1000,43 +1434,19 @@ el paquete generado contiene el corregido**, no el crudo.
 
 ---
 
-### FASE 21 — La inversión conjunta recupera topografía y avisos · **M** · 🟠 P1 · *backend* · NUEVO-1
+### FASE 25 — Lo que el backend dice y el frontend no escucha · **S** · 🟠 P1 · *frontend* · H-36, NUEVO-7
 
-**Por qué va aquí.** La Fase 1 cerró H-27 en dos de las tres rutas. La que quedó
-fuera es la conjunta — el caso de los dos CSV, el que más diferencia al producto
-de una hoja de cálculo. Un modelo conjunto puede caer a topografía plana y salir
-con sello de bueno.
+**Dos huecos del mismo tipo**, y por eso van juntos: el backend publica algo y
+el frontend no lo consume.
 
-**Trabajo.**
-1. Cablear `topography_run_warnings` en `services/joint_inversion.py`, igual que
-   en las rutas gravimétrica y magnética.
-2. Comprobar los **tres eslabones** (emisión → respuesta → componente montado),
-   como exige la pregunta 2 de la plantilla de gate.
+**NUEVO-7 — las `suggestions` del mapeo de columnas no llegan al usuario.** La
+Fase 16 hizo que la ingesta caracterice los roles y **proponga** una corrección
+cuando duda. Esa propuesta viaja en la respuesta y **ningún `.tsx` la lee**: 0
+consumidores en TypeScript. Es decir, la parte cara de la Fase 16 —el criterio
+que evita que un `X,Y,Z` entre torcido— está construida y muda. Cablearla es
+mostrar la sugerencia en el panel de mapeo y dejar que el usuario la acepte.
 
-**Gate.** Correr la conjunta sin DEM y exigir que el aviso aparezca en el JSON
-**y** en la UI. El test debe fallar si se borra el cableado.
-
----
-
-### FASE 22 — Las unidades de la exportación dejan de mentir · **S** · 🟠 P1 · *backend* · ACAD-12, ACAD-13
-
-**Por qué va aquí.** Dos errores pequeños en el mismo archivo de salida, ambos
-nacidos de un cambio cosmético: un renombrado «compliance-safe» que convirtió
-toneladas en kilos, y un literal que se quedó cuando `base_density` se volvió
-configurable. Se agrupan porque tocan la misma función.
-
-**Trabajo.**
-1. `bulk_rock_mass_kg`: o multiplicar por 1.000, o renombrar a
-   `bulk_rock_mass_t`. Decidir **mirando si alguien la consume**.
-2. Sustituir `VTK_BASE_DENSITY = 2.6` por la `base_density` de la corrida.
-
-**Gate.** Un test que invierte con `base_density ≠ 2.6` y exige que la columna
-exportada coincida con la que consume el frontend (`density_contrast_t_m3`).
-Hoy divergen.
-
----
-
-### FASE 23 — «Desactualizado» por tipos, no por lista · **S** · 🟠 P1 · *frontend* · H-36
+**Y H-36 — «desactualizado» por tipos, no por lista:**
 
 **Por qué va aquí.** La Fase 13 ya demostró en este repositorio que el
 complemento exacto por tipos funciona: un campo sin clasificar **no compila**.
@@ -1053,7 +1463,43 @@ typecheck**. Verificado añadiendo uno de mentira.
 
 ---
 
-### FASE 24 — El instalador falla en voz alta cuando falta una dependencia · **M** · 🟡 P2 · *empaque* · NUEVO-4, NUEVO-5, H-23
+### FASE 26 — Que la señal informe, antes de tocar el techo · **L** · 🟠 P1 · *backend, medir* · ACAD-10
+
+**Por qué existe esta fase.** Es el problema más grande del producto y **no estaba en el plan**. Tu
+propio hallazgo lo midió con 99 inversiones por la ruta de producción
+(`validation/HALLAZGO_2026-08-06_techo_medium.md`):
+
+- En el régimen donde el producto declara su fortaleza, **1 de cada 3 realizaciones de ruido** da un
+  blanco desplazado **~170 m en vez de ~19 m**.
+- Y TerraQuantum **no puede distinguir los dos casos**: Spearman(chi2_red, PR-AUC) = **+0,073** sobre
+  75 corridas; controlando por régimen, la **mediana de ρ es exactamente 0,000**.
+- El caso más claro: mismo mundo, mismo survey, misma λ, sólo cambia la semilla, y los
+  diagnósticos salen **idénticos** con resultados que difieren 10×.
+
+Mientras eso siga así, la escala de confianza no comunica «confianza media»: comunica **«no tengo
+forma de decirte»**. Y es lo que impide vender targeting con barras de error.
+
+**Trabajo** — las direcciones ya están escritas en el §4 del hallazgo, en orden de coste:
+1. **Cambiar la longitud de onda del examen**: en vez de alternar celda a celda, usar **bloques del
+   tamaño del objetivo declarado**. Convierte la pregunta en «¿resuelve este survey un cuerpo del
+   tamaño que digo buscar?», que **sí varía entre surveys**. El checkerboard actual devuelve el mismo
+   número siempre, **por diseño y no por avería**.
+2. Recalibrar el umbral contra lo que un buen survey gravimétrico **realmente** alcanza. Si el mejor
+   caso posible da 0,3, un PASS en 0,6 no clasifica: rechaza.
+3. Separar «resolución de estructura fina» de «confianza en el blanco». El propio comentario del
+   código (`geophysics_service.py:874-876`) reconoce que el targeting horizontal puede ser bueno con
+   resolución fina pobre, y aun así aplica el cap.
+4. Hacer informativo el detector de null-space para el caso frecuente (smear profundo
+   data-consistente), no sólo para la saturación total.
+5. **Barrer semillas** en tests y benchmarks. Hoy usan semilla fija, y una semilla no es una muestra.
+
+**Gate.** El gate es **un número, no un parche**: Spearman entre el diagnóstico nuevo y PR-AUC sobre
+**≥75 corridas en ≥5 regímenes**. Si no sube claramente por encima del **0,073** actual, la fase
+**no cierra** y el techo se queda donde está.
+
+---
+
+### FASE 27 — El instalador falla en voz alta cuando falta una dependencia · **M** · 🟡 P2 · *empaque* · NUEVO-4, NUEVO-5, H-23
 
 **Por qué va aquí.** La Fase 2 hizo que el **arranque** fallara en voz alta. El
 **build** todavía falla en silencio. No es hipotético: en esta máquina el
@@ -1074,7 +1520,7 @@ build **falle**. Hoy pasa y produce un instalador roto.
 
 ---
 
-### FASE 25 — El updater: o apunta bien, o se retira · **M** · 🟡 P2 · *empaque* · H-20
+### FASE 28 — El updater: o apunta bien, o se retira · **M** · 🟡 P2 · *empaque* · H-20
 
 **Por qué va aquí.** Hoy es un mecanismo de papel con un agravante: el mensaje de
 error le sugiere al usuario que quizá no tiene internet, cuando la causa real es
@@ -1095,7 +1541,7 @@ los otros dos.
 
 ---
 
-### FASE 26 — Terminar la revisión que el límite de sesión cortó · **M** · 🟡 P2 · *auditoría*
+### FASE 29 — Terminar la revisión que el límite de sesión cortó · **M** · 🟡 P2 · *auditoría*
 
 **Por qué va al final.** Ninguna fase anterior depende de ello. Pero hasta
 cerrarla, la respuesta a «¿está todo listo?» tiene un margen sin cuantificar.
@@ -1118,6 +1564,30 @@ evidencia no cuenta como verificada.
 
 ---
 
+### FASE 30 — Subir el techo a `HIGH` · **M** · 🟡 P2 · *backend* · ⚠️ **CONDICIONADA A LA FASE 26**
+
+**Por qué va la última, y por qué está condicionada.** La auditoría delta pone «recalibrar el
+checkerboard para desbloquear HIGH» como prioridad **2**. Tu propio hallazgo advierte por escrito que
+hacerlo en ese orden es un error:
+
+> «Subir el techo a `HIGH` sin arreglar antes lo del §1 **sería peor que el estado actual**. Hoy el
+> sistema no distingue bien de mal pero **tampoco afirma de más**. Si se libera el techo sin que la
+> señal discrimine, aparecerían `HIGH` en corridas de 285 m de error — el cuadrante **SOBRECONFIADO**,
+> que es el único inaceptable. **El orden correcto es: primero que la señal informe, después subir el
+> techo.**»
+
+Hoy el techo **te está protegiendo**. Quitarlo antes de la Fase 26 convierte un suelo conservador en
+una mentira con sello de calidad.
+
+**Esta fase no se abre si la Fase 26 no cerró con una señal que discrimine.**
+
+**Trabajo.** Liberar el tope y recalibrar la escala completa contra el barrido de la Fase 26.
+
+**Gate.** Sobre **≥150 corridas**, el cuadrante SOBRECONFIADO (error grande + confianza alta) sigue
+en **0** — pero esta vez con `HIGH` alcanzable, así que ese 0 mide **honestidad** y no un techo.
+
+---
+
 ## 6. LO QUE **NO** HAY QUE HACER
 
 Tan importante como el plan: dónde no gastar las semanas.
@@ -1128,9 +1598,23 @@ Tan importante como el plan: dónde no gastar las semanas.
 - **No implementar la sección económica.** NPV, LOM, pit y scheduling son
   **anti-scope permanente declarado** (H-8). Las tarjetas ya se borraron: que
   sigan borradas.
-- **No perseguir HIGH en el veredicto de confianza.** El checkerboard QA no
-  depende del dato, así que falla siempre y el worst-of lo usa de tope duro. Es
-  una propiedad del diseño, no un fallo.
+- **No desbloquear `HIGH` antes de que la señal discrimine.** Esto cambió de
+  matiz el 26-ago: el techo **sí** se puede levantar algún día, pero no primero.
+  Hoy el checkerboard devuelve el mismo número siempre —por diseño, no por
+  avería— y el worst-of lo usa de tope duro; eso **te está protegiendo**, porque
+  1 de cada 3 corridas se desvía 170 m sin que ningún diagnóstico lo delate
+  (ρ = 0,000). Liberar el techo antes produciría `HIGH` en corridas de 285 m de
+  error. El orden es **Fase 26 primero, Fase 30 después**, y la 30 no se abre si
+  la 26 no cerró con un número.
+- **No invertir el default de `density_min`.** La recomendación está **RETIRADA
+  por escrito** en `validation/HALLAZGO_2026-08-06_bound_por_defecto.md`: el
+  PR-AUC 0,035 se midió con malla forzada, no con el flujo real, y al barrer
+  regímenes **ningún brazo domina**. Es una variable de régimen. Lo accionable es
+  hacerla **visible** (Fase 20), no elegirla por el usuario.
+- **No citar números de una configuración hablando de otra.** Es el error que
+  este proyecto tiene documentado **cinco veces** — la última, la auditoría delta
+  del 26-ago citando el 0,035 retirado. Antes de usar un número de un hallazgo,
+  lee su banner de corrección.
 - **No «arreglar» ACAD-6** — no existe la contradicción que describe. Si se
   quiere tocar esa constante, el trabajo real es verificarla fuera de
   `n_active=256`.
