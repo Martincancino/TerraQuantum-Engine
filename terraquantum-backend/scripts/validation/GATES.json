@@ -128,6 +128,12 @@
       "que_hace": "Renderiza el informe HTML de la suite F9; la importa f9_gate_regression.py.",
       "tipo_manual": true
     },
+    "fase18_axis_convention_experiment.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "tipo_manual": true,
+      "que_hace": "FASE 18 - el experimento que MIDE la rotacion de 90 grados del motor magnetico (ACAD-1): D_ef = 90-D exacto. Mide e imprime; la correccion la hizo la Fase 19. No decide: no tiene exit != 0."
+    },
     "fase7_byte_identity.py": {
       "tipo": "gate",
       "decide": true,
