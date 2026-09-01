@@ -4,9 +4,9 @@
 > Rama `fases-19-25-cierre`. Ninguna afirmación se apoya en documentación:
 > todas citan `ruta:línea` o una medición reproducible.
 
-> ### ESTADO — 2026-08-27
+> ### ESTADO — 2026-08-31
 >
-> **CERRADAS: 15, 16, 17, 18, 19, 20, 21, 22.** Las dos de física salieron caras y
+> **CERRADAS: 15, 16, 17, 18, 19, 20, 21, 22, 23.** Las dos de física salieron caras y
 > valieron la pena: la **17** cambió el error de profundidad recuperada de
 > **150,1 m a 14,7 m**, y la **18/19** midió que el motor magnético calculaba con
 > `D_ef = 90° − D` — en Chile, **86° de desvío** y Pearson **r = −0,05** contra la
@@ -33,7 +33,16 @@
 > **midiendo**: cero consumidores en todo el monorepo, y un precedente del propio
 > repositorio (`d424c7c`) que ya había resuelto el mismo defecto renombrando.
 >
-> **SIGUIENTE: Fase 23.**
+> La **23** encontró el mismo patrón de las tres anteriores por tercera vez, y otra vez
+> en la dirección mala: la ficha de NUEVO-1 decía que a la conjunta «le falta el canal
+> de avisos», y lo medido es que pasaba `topography_elevations=None` **fijo** a los dos
+> motores — la misma corrida con y sin `sensor_elevations_masl` devolvía el modelo
+> **idéntico bit a bit**, con el **15,93 %** del contraste recuperado dentro de celdas
+> que son **aire**. Y el trabajo que el plan pedía —cablear `topography_run_warnings`—
+> habría sido **decorativo**: ese aviso sólo se emite en `flat_fallback`, un estado que
+> una ruta que nunca intenta interpolar no puede alcanzar.
+>
+> **SIGUIENTE: Fase 24.**
 >
 > **Fases nuevas 20, 21, 26 y 30**, añadidas el 26-ago tras revisar una auditoría
 > delta externa. Ojo: **los dos «CRÍTICO» que esa delta proponía atacar primero no
@@ -231,7 +240,7 @@ los índices internos). El origen es `0 0 0`: sin georreferencia.
 
 | ID | Qué pasa | Dónde |
 |---|---|---|
-| **NUEVO-1** | La **inversión conjunta** ignora la topografía por completo y su reporte no tiene el canal de avisos que la Fase 1 sí cableó en las rutas gravimétrica y magnética | `services/joint_inversion.py` |
+| ✅ **NUEVO-1** *(cerrado por la Fase 23, 08-31)* | La **inversión conjunta** ignoraba la topografía por completo y su reporte no tenía el canal de avisos de la Fase 1. **Y era peor que «falta el aviso»:** `topography_elevations=None` fijo ⇒ la cota del CSV **no tocaba la física** (mismo modelo bit a bit con y sin ella; **15,93 %** del contraste recuperado en celdas de **aire**). Ahora la superficie llega a las dos físicas y los tres campos de honestidad viajan por el canal que el frontend ya pinta | `services/joint_inversion.py`, `services/geo_utils.py` |
 | **NUEVO-2** | Cambiar de pestaña pierde el **mapeo de columnas, los puntos Helmert, los sondajes y 25 parámetros** porque `PreparacionView` se desmonta. (Los archivos y el bbox sí sobreviven — la memoria decía «los 41 parámetros», y es menos que eso) | `componentes/views/PreparacionView.tsx` |
 | **NUEVO-3** | El **CSV corregido** por el asistente de gravimetría se descarta al cambiar de pestaña, y el paquete se rearma sobre el **CSV crudo** | flujo PrepPanel → paquete |
 | **H-36** | `resultIsStale` es una **lista a mano ya atrasada**: los parámetros de la Fase 14 no están, así que cambiarlos no marca el resultado como desactualizado. (La otra mitad, `modelRunKey`, sí es un invariante sólido) | `store/useAppStore.ts` |
@@ -260,8 +269,9 @@ Verificado en el código, no en el CHANGELOG.
 - **H-17/18/19** — Splash finito con causa en español, `[Reintentar]` y
   `[Ver registros]`; Job Object con `KILL_ON_JOB_CLOSE`; comprobación de
   **identidad** del puerto, no solo de que alguien escuche.
-- **H-27** — El aviso de topografía plana llega al usuario extremo a extremo…
-  **salvo en la ruta conjunta** (ver NUEVO-1).
+- **H-27** — El aviso de topografía plana llega al usuario extremo a extremo en las
+  **tres** rutas. La conjunta se cerró en la **Fase 23** (08-31), y no sólo el aviso:
+  también la topografía, que esa ruta descartaba en silencio.
 - **H-28** — Cerrado **por invariante** (`modelRunKey`: el modelo lleva el sello
   de la corrida y la vista se niega a pintarlo si no coincide), que era la
   alternativa robusta de la Fase 1, no la barata.
@@ -1395,7 +1405,7 @@ Fase 19, un escalón más arriba.
 
 ---
 
-### FASE 23 — La inversión conjunta recupera topografía y avisos · **M** · 🟠 P1 · *backend* · NUEVO-1
+### FASE 23 (CERRADA) — La inversión conjunta recupera topografía y avisos · **M** · 🟠 P1 · *backend* · NUEVO-1
 
 **Por qué va aquí.** La Fase 1 cerró H-27 en dos de las tres rutas. La que quedó
 fuera es la conjunta — el caso de los dos CSV, el que más diferencia al producto
@@ -1410,6 +1420,172 @@ con sello de bueno.
 
 **Gate.** Correr la conjunta sin DEM y exigir que el aviso aparezca en el JSON
 **y** en la UI. El test debe fallar si se borra el cableado.
+
+#### ✅ EJECUTADA — 2026-08-31
+
+Backend puro. Guardia nueva: `tests/test_f23_joint_topography.py` (16 tests).
+
+**La ficha describía un defecto más pequeño que el real — tercera vez seguida.** NUEVO-1
+dice que a la conjunta «le falta el canal de avisos». Lo que había es que
+`joint_inversion.py` pasaba `topography_elevations=None` **fijo** a los dos motores
+(líneas 585 y 605 de `HEAD`), con una razón escrita en su propio docstring: con todas
+las celdas activas los bloques cross-gradient, de nC columnas, conforman con el modelo
+sin remapeo. Es decir, la topografía se había cambiado por comodidad algebraica, y eso
+no estaba declarado en ninguna parte que el usuario pueda leer.
+
+**Medido antes de tocar nada** (ladera de 240 m de desnivel, malla 8×8×8 de 60 m, las
+dos físicas con señal real):
+
+| | sin `sensor_elevations_masl` | con `sensor_elevations_masl` |
+|---|---|---|
+| huella del modelo | `f1c661a942a511aa` | **`f1c661a942a511aa`** |
+| celdas declaradas activas | 512 | 512 (de 360 reales) |
+| contraste recuperado **en el aire** | 15,93 % | 15,93 % |
+| `topography_used` / `warnings` | ausentes | ausentes |
+
+La cota que el usuario sube en su CSV **no tocaba la física**: el modelo sale idéntico
+bit a bit. Y llega de verdad — `sensor_elevations_masl` se rellena en
+`gravity_import_api.py:1861` (paquete) y `:2844` (importador v1), los dos caminos que
+también rellenan `magnetic_nt`, que es lo que despacha a la conjunta. Sobre
+`data/projects`: **617 corridas conjuntas**, ninguna declara estado de topografía; de
+las 1.761 que sí lo declaran, **651 (37 %) usaron superficie real**, así que el caso no
+es teórico. Las propias fixtures de la tormenta F8 llevan `elev_m` **siempre**
+(`f8_storm_lib.py:54`) y seis de sus corridas son conjuntas.
+
+**El trabajo que pedía el plan, tal cual, habría dado un gate decorativo — y así queda
+declarado.** «Cablear `topography_run_warnings`» no basta: esa función devuelve lista
+vacía salvo en `flat_fallback`, y una ruta que **nunca intenta interpolar** no puede
+llegar a ese estado. El gate del plan («correr la conjunta sin DEM y exigir que el aviso
+aparezca») tampoco puede dispararse: la Fase 1 decidió —y con razón— que un survey sin
+cota es una **entrada declarada por el usuario**, no una degradación, y no avisa. Por eso
+esta fase hace **las dos cosas**: usar la topografía y declararla. Es la misma trampa que
+cazó la Fase 19 en su propio gate heredado.
+
+**Cómo se resolvió la excusa algebraica.** El docstring tenía razón en el hecho y no en
+la conclusión: los bloques de acoplamiento tienen que conformar con el espacio del
+solver, pero eso se arregla **recortando** el bloque, no tirando el terreno — y la
+propia Fase 9C-1 ya lo hacía para la poda observable (`B[:, _obs_mask_g]`). Ahora ese
+recorte se **compone** con la máscara de aire: gravedad resuelve en (activas →
+observables), magnetometría en (activas), y cuatro proyectores pequeños llevan bloques y
+referencias de la malla al espacio de cada motor. El kernel cacheado —que existía
+porque la geometría no cambia entre iteraciones— sigue siendo válido: la máscara de aire
+tampoco cambia.
+
+**Medido después**, mismo experimento:
+
+| | sin cota | con cota | con cota, interpolación rota |
+|---|---|---|---|
+| `topography_used` | `flat` | `from_sensor_elevations_masl[linear+nearest_fallback]` | `flat_fallback` |
+| `mesh.n_active` / `n_air` | 512 / 0 | **360 / 152** | 512 / 0 |
+| contraste en el aire | 15,93 % | **0,00 %** | 15,93 % |
+| error del centroide de masa | 25,8 m | **5,6 m** | 25,8 m |
+| avisos al usuario | 0 | 0 | **1** (texto H-27) |
+| huella del modelo | `f1c661a942a511aa` | `d92901b4a2facc09` | `f1c661a942a511aa` |
+
+Las 152 celdas de aire que el motor enmascara son **exactamente** las 152 que la
+geometría de prueba tiene sobre el terreno. El misfit sigue en 0,006 %: el dato se
+sigue explicando, sin masa en el cielo. Y la primera columna es la prueba de que el
+camino histórico **no se movió**: misma huella que antes de la fase.
+
+**Una sola preparación de topografía para las tres rutas.** La regla estaba copiada en
+la ruta gravimétrica y en la magnética, y ausente en la conjunta — que es exactamente
+cómo se produce este defecto. Ahora vive en
+`geo_utils.prepare_topography_from_elevations` y la usan las tres: *una copia que no
+existe no se puede quedar atrás*. Las dos rutas que ya funcionaban quedaron
+**byte-idénticas**, verificado por huella del modelo antes y después de la extracción
+(`5de4575f45220e73` gravedad, `8b094f78e2acfe43` magnetometría).
+
+**Cuatro defectos laterales encontrados al medir, y cerrados:**
+
+1. **`solve_inversion_lsqr` aceptaba un kernel cacheado sin mirar su forma.** El motor
+   magnético sí compara `override_kernel.shape` con `(n_obs, n_active)`; el gravimétrico
+   lo tomaba tal cual. Con topografía activa, un kernel de malla completa habría
+   emparejado la columna *k* con la celda *k* equivocada: un modelo **desplazado**, no un
+   error. Ahora los dos gritan.
+2. **`mesh.n_active` del reporte conjunto contaba TODAS las celdas del core**, aire
+   incluido. Ahora cuenta terreno y publica `n_air` y `mesh.topography`.
+3. **La mixtura petrofísica del PGI se bootstrapeaba sobre la malla entera.** Con
+   topografía el aire entraría como un cúmulo enorme en `(base_density, 0)` y se llevaría
+   una de las K clases. Se ajusta sólo sobre terreno, y el reporte declara sobre
+   cuántas celdas se ajustó (`coupling.pgi_bootstrap_cells`).
+4. **El aviso de contraste efectivo de la Fase 20 tampoco llegaba a la conjunta**, que
+   invierte densidad con los mismos `base_density`/`density_min`. Viaja por el mismo
+   canal.
+
+**Una puerta de CI se puso en rojo al medirla, y no se cerró subiendo el techo.**
+`scripts/ci/ast_budgets.py` marcó `run_joint_inversion`: **861 líneas contra un techo de
+777** (816 con la tolerancia del +5 %). El propio arnés ofrece `--update` «si el
+crecimiento es deliberado»; se hizo lo otro, porque esa función ya es de las peores del
+repositorio (CC 87) y subirle el techo es la manera de que nunca se arregle. Se
+extrajeron dos piezas con nombre —`_preparar_topografia_conjunta` (43 líneas) y
+`_proyectores_al_espacio_del_solver` (30)— y el presupuesto vuelve al verde **sin tocar
+el techo**. Después del refactor el gate se volvió a medir **por mutación en el sitio
+nuevo del código**: un refactor no queda demostrado porque los tests sigan pasando.
+
+⚠️ **Y queda dicho lo incómodo:** la función acaba en **812 líneas**, a **4** del techo
+con tolerancia. La siguiente fase que la toque no podrá añadir nada sin partirla de
+verdad — que es la deuda que la Fase 8 sí pagó en `solve_inversion_lsqr` (2.030 → 152).
+
+**Los tres eslabones, comprobados (pregunta 2 de la plantilla).** *Emisión*: los tres
+campos en el `report`. *Respuesta*: el `report.json` que persiste
+`write_run_report_snapshot` — hay un test que lo lee **del disco**, no de memoria.
+*Componente montado*: `lib/terraquantum/runWarnings.ts::extractRunWarnings` lee
+`report.warnings[]` y lo pintan `Exploration3DView` (`data-testid="run-warnings"`) y
+`DatosView` (`datos-run-warnings`); es genérico **por corrida, no por motor**, y la
+conjunta cierra con el mismo `update_run_status("done")` que las otras dos, así que la
+vista pide su reporte igual. Por eso la fase es backend puro y **no toca un solo
+`.tsx`**; lo que sí hay es un test que afirma la **forma exacta** que ese lector
+consume (lista de strings no vacíos), porque una forma distinta dejaría el banner mudo
+sin error visible.
+
+**Gate — mutación 24/25**, con hash del fichero verificado antes y después de
+cada pytest (la guardia que la Fase 22 tuvo que inventar porque OneDrive revierte
+ficheros a media corrida, y una campaña que corre contra código sano informa
+«escapó»). **La primera vuelta dio 21/24, y los tres escapes enseñaron
+más que las 21 cazadas.** Dos (M4, M5) eran **ceguera del gate**: el bloque
+cross-gradient no se construye en k=1 —el warm-up va sin acoplamiento, por
+diseño— y el sintético convergía ahí, así que el recorte que la mutación
+rompía **nunca se ejecutaba**. Se añadió un test que fuerza k=2 y las dos se
+cazan. El tercero (M8) es de otra clase y por eso **sigue escapando, declarado**:
+quitar el filtro de aire del bloque 3D no cambia nada, porque el motor devuelve NaN
+en el aire y `nan_to_num` lo deja en contraste **exactamente 0**, que ningún corte
+deja pasar. Una línea que ninguna mutación distingue no es una defensa: se conserva
+como cinturón y tirantes, pero lo que la fase publica en su lugar es el invariante
+**medido** — `mesh.n_air_cells_filtered`, 0 en toda corrida sana — y ahí sí hay
+mutación que lo caza (M8b). Las tres primeras atacan el corazón de la fase:
+
+| mutación | qué rompe |
+|---|---|
+| M1 · M2 | **los motores vuelven a recibir `topography_elevations=None` — el defecto original** |
+| M3 | el kernel cacheado vuelve a la malla completa (el guard nuevo lo caza) |
+| M4-M7 | bloques y referencias de acoplamiento dejan de recortarse al espacio del solver |
+| M8b · M24 | el invariante del aire deja de medirse · con padding, la máscara no se reduce al core |
+| M9-M11 | `n_active` vuelve a contar aire · `n_air` miente · `mesh.topography` dice siempre plano |
+| M12-M17 | el canal de avisos: sin `warnings`, sin `topography_degraded`, sin el texto H-27, sin el de la Fase 20, y el reporte del disco sin ellos |
+| M18 | la mixtura PGI vuelve a ajustarse incluyendo aire |
+| M19-M20 | la preparación compartida ignora las elevaciones · el fallo de interpolación se disfraza de survey sin cota |
+| M21 | el motor gravimétrico vuelve a aceptar un kernel que no conforma |
+| M22-M23 | las **dos rutas que ya funcionaban** dejan de declarar su degradación |
+
+**Regresión:** 41/41 en `test_fase1_confianza_camino_dorado`, `test_fase0_joint_continuation`,
+`test_joint_observable_pruning`, `test_joint_structural_similarity`,
+`test_fase3_joint_coupling`, `test_magnetic_production_padding` y
+`test_bouguer_topo_consistency`.
+
+**Lo que esta fase NO hizo, y queda declarado:**
+- **La regla de la máscara activa sigue escrita dos veces.**
+  `potential_field_core.active_cells_from_topography` existe y la usan los caminos de UQ,
+  DOI y live-update (8 llamadas), pero los **dos solvers principales** conservan su copia
+  en línea — la de gravimetría porque lleva la variante cut-cell. La conjunta usa la
+  compartida. Unificar los dos motores es un cambio de motor, no de orquestador.
+- **La normalización `lambda_cross_eff` usa la norma del bloque COMPLETO** aunque el que
+  se inyecta es el recortado. Es la convención que ya tenía la ruta con poda; cambiarla
+  movería resultados existentes sin evidencia de que mejore, así que se conserva y se
+  declara.
+- **`extract_geological_bodies` sigue corriendo sobre el core completo**, aire incluido.
+  Esas celdas llevan contraste 0, así que no pueden formar cuerpo; no se tocó.
+- Nada del frontend: `NUEVO-2`, `NUEVO-3`, `H-36` y `NUEVO-7` siguen donde estaban (son
+  las Fases 24 y 25).
 
 ---
 

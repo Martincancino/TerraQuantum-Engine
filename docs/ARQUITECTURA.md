@@ -138,6 +138,8 @@ Cuando `noise_floor=0.02` y `noise_pct=0.02` (valores sentinel), estima ruido co
 
 **ACAD-0 (Cerrado Fase 17):** La corrección de terreno calculaba el módulo de la atracción en vez de la componente vertical. Error de 200× a 1 km. Ahora usa: `Δh² / (r·s·(r+s))` (columna en forma analítica cerrada).
 
+**NUEVO-1 (Cerrado Fase 23):** La inversión **conjunta** pasaba `topography_elevations=None` fijo a los dos motores: la cota del CSV no tocaba la física (mismo modelo bit a bit con y sin ella) y el **15,93 %** del contraste recuperado caía en celdas de aire. Ahora la superficie llega a las dos físicas —los bloques de acoplamiento se recortan al espacio del solver, como ya se hacía con la poda observable— y el reporte publica `topography_used`, `topography_degraded` y `warnings[]`, igual que las otras dos rutas. La preparación de la superficie vive ahora en `services/geo_utils.py::prepare_topography_from_elevations`, una sola vez para las tres.
+
 ### `gravimetry.py` — `GravimetryInversion`
 
 **Laplaciano 3D:**
@@ -368,7 +370,6 @@ Columnas: `x_m`, `y_m`, `z_m`, `density_t_m3`, `relative_score`, `is_active`, `i
 | ID | Descripción |
 |----|-------------|
 | H-39 | MVI y tensor ignoran `near_field_mode="prism"`, usan dipolo siempre |
-| NUEVO-1 | Inversión conjunta ignora topografía, sin canal de avisos |
 | Bimodal 33% | Sistema no puede distinguir resultado bueno de malo en régimen baseline |
 
 ### Pipeline de Datos

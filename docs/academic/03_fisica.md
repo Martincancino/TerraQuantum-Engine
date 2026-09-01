@@ -221,8 +221,15 @@ active_cells = voxel_top >= topo_depth
 **Fallback silencioso declarado.** Si no se proporciona topografía,
 `topography_elevations=None` equivale a **terreno plano a cota 0**
 (`exploration/potential_field_core.py:161-163`). El código lo identifica como un hallazgo
-de auditoría previo (H-27) y conserva el comportamiento sin cambiarlo, pero al menos ya
-está escrito en un solo sitio. Físicamente: se está asumiendo un semiespacio plano. Para
+de auditoría previo (H-27) y conserva el comportamiento sin cambiarlo.
+
+*(Matiz medido en la Fase 23: la función compartida existe y la usan ocho llamadas —los
+caminos de UQ, DOI y actualización en vivo—, pero los **dos solvers principales**
+conservan su propia copia en línea de la misma regla, la de gravimetría porque lleva
+además la variante cut-cell. Decir «escrito en un solo sitio½ no es exacto: está
+escrito en tres. La Fase 23 cerró la divergencia que eso ya había causado —la ruta
+conjunta descartaba la topografía en silencio— y unificó la PREPARACIÓN de la
+superficie, no la máscara.)* Físicamente: se está asumiendo un semiespacio plano. Para
 terrenos de relieve fuerte —y Chile los tiene— esto es una aproximación significativa.
 
 ---
