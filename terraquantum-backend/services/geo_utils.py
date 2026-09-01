@@ -410,3 +410,62 @@ def interpolate_surface_depths(sensor_xz, surface_depths, grid_xz):
 
     depths = np.where(finite, depths_linear, depths_nearest)
     return depths, "linear+nearest_fallback"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FASE 23 (NUEVO-1) — La preparación de la topografía, escrita UNA vez
+# ─────────────────────────────────────────────────────────────────────────────
+# La regla («elevaciones → profundidad desde el punto más alto → superficie de malla
+# interpolada; si falla, terreno plano CON aviso») estaba copiada en dos rutas —la
+# gravimétrica y la magnética— y NO estaba escrita en la tercera: la inversión
+# conjunta pasaba `topography_elevations=None` fijo. Consecuencia medida antes de
+# corregirlo: la conjunta devuelve el MISMO modelo bit a bit con y sin
+# `sensor_elevations_masl`, es decir, la columna de cota que el usuario subió en su
+# CSV no toca la física y nadie se lo dice.
+#
+# Que la regla viva en un solo sitio es lo que impide que la próxima ruta la olvide:
+# una copia que no existe no se puede quedar atrás.
+def prepare_topography_from_elevations(sensor_elevations, n_obs, sensor_xz, grid_xz):
+    """Superficie de malla desde las elevaciones de los sensores.
+
+    Devuelve ``(topo_depths | None, estado, meta)``. ``estado`` usa el vocabulario que
+    ya consumen ``topography_run_warnings`` y el reporte de las tres rutas:
+
+      * ``"flat"`` — no hay elevaciones utilizables. Es una entrada **declarada** por el
+        usuario (survey sin cota), no una degradación: no genera aviso.
+      * ``"from_sensor_elevations_masl[<modo>]"`` — superficie interpolada; ``<modo>`` es
+        el de :func:`interpolate_surface_depths` (``linear+nearest_fallback`` o ``nearest``).
+      * ``"flat_fallback"`` — la interpolación falló y la corrida sigue con terreno plano.
+        Ésta es la degradación silenciosa que H-27 obliga a declarar al usuario.
+
+    El datum es el sensor **más alto** (y = 0): ``profundidad = max_elev − elev``, positiva
+    hacia abajo. ``meta`` lleva los números para el log de cada ruta (``max_elev_masl``,
+    ``surface_mode``, ``surface_depth_range_m``) o el ``error`` que causó el fallback.
+
+    Parameters
+    ----------
+    sensor_elevations : secuencia de cotas en msnm, una por observación (o None).
+    n_obs             : nº de observaciones; si no coincide, la entrada se ignora ("flat").
+    sensor_xz         : array (n_obs, 2) — (x = Este, z = Norte) de cada estación.
+    grid_xz           : array (n_columnas, 2) — (x, z) de cada columna de la malla.
+    """
+    import numpy as np
+
+    if sensor_elevations is None or len(sensor_elevations) != int(n_obs):
+        return None, "flat", {}
+    try:
+        elev_arr = np.asarray(sensor_elevations, dtype=np.float64)
+        max_elev = float(np.max(elev_arr))
+        surface_depths = max_elev - elev_arr      # profundidad desde el punto más alto
+        depths, surface_mode = interpolate_surface_depths(
+            np.asarray(sensor_xz, dtype=np.float64),
+            surface_depths,
+            np.asarray(grid_xz, dtype=np.float64),
+        )
+        return depths, f"from_sensor_elevations_masl[{surface_mode}]", {
+            "max_elev_masl": max_elev,
+            "surface_mode": surface_mode,
+            "surface_depth_range_m": [float(surface_depths.min()), float(surface_depths.max())],
+        }
+    except Exception as exc:   # noqa: BLE001 — el fallback es el contrato, no un descuido
+        return None, "flat_fallback", {"error": str(exc)}

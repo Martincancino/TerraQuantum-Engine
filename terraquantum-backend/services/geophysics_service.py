@@ -2455,30 +2455,23 @@ def run_magnetic_inversion(params: GeophysicsInvertInput):
     # Reemplaza topography_elevations=None por la superficie suave interpolada desde
     # sensor_elevations_masl (interpolación LINEAL dentro del convex hull, nearest en
     # el padding). Fallback seguro a None si no hay elevaciones o falla la interpolación.
-    _topo_mag = None
-    _topo_used_mag = "flat"
-    _sensor_elevs_mag = getattr(params, "sensor_elevations_masl", None)
-    if _sensor_elevs_mag is not None and len(_sensor_elevs_mag) == len(obs):
-        try:
-            from services.geo_utils import interpolate_surface_depths as _interp_surface_mag
-            _elev_arr_mag = np.asarray(_sensor_elevs_mag, dtype=np.float64)
-            _max_elev_mag = float(np.max(_elev_arr_mag))
-            _surface_depths_mag = _max_elev_mag - _elev_arr_mag  # prof desde el punto más alto
-            _topo_mag, _surf_mode_mag = _interp_surface_mag(
-                sensor_coords[:, [0, 2]],                       # (x=Este, z=Norte)
-                _surface_depths_mag,
-                np.column_stack([x_c_full, z_c_full]),
-            )
-            _topo_used_mag = f"from_sensor_elevations_masl[{_surf_mode_mag}]"
-            _log.info(
-                "magnetic_topography_activated",
-                max_elev_masl=round(_max_elev_mag, 1),
-                surface_mode=_surf_mode_mag,
-            )
-        except Exception as _topo_exc_mag:
-            _log.warning("magnetic_topography_nonfatal", error=str(_topo_exc_mag))
-            _topo_mag = None
-            _topo_used_mag = "flat_fallback"
+    # FASE 23 (NUEVO-1): misma función que la ruta gravimetrica y la conjunta.
+    # (x=Este, z=Norte) es la convención de ejes de la Fase 18/19.
+    from services.geo_utils import prepare_topography_from_elevations
+    _topo_mag, _topo_used_mag, _topo_meta_mag = prepare_topography_from_elevations(
+        getattr(params, "sensor_elevations_masl", None),
+        len(obs),
+        sensor_coords[:, [0, 2]],
+        np.column_stack([x_c_full, z_c_full]),
+    )
+    if _topo_used_mag.startswith("from_sensor_elevations_masl"):
+        _log.info(
+            "magnetic_topography_activated",
+            max_elev_masl=round(float(_topo_meta_mag["max_elev_masl"]), 1),
+            surface_mode=_topo_meta_mag["surface_mode"],
+        )
+    elif _topo_used_mag == "flat_fallback":
+        _log.warning("magnetic_topography_nonfatal", error=_topo_meta_mag.get("error", ""))
 
     _update("running", 0.2, "building_kernel", "Construyendo kernel dipolar TMI...")
     forward = MagnetometryForward(
@@ -3479,42 +3472,37 @@ def _preparar_topografia(params: GeophysicsInvertInput, malla: _MallaGrav,
     # ── HITO 5 (B-05): Topografía activa desde sensor_elevations_masl ──────────
     # Se calcula ANTES del lambda scan para que todos los solvers (lambda, UQ, DOI)
     # usen la misma máscara de aire topográfica. Datum = sensor más alto (y=0).
-    _topography_elevations_padded = None
-    _topography_used = "flat"
-    _sensor_elevs = getattr(params, "sensor_elevations_masl", None)
-    if _sensor_elevs is not None and len(_sensor_elevs) == len(params.observations):
-        try:
-            from services.geo_utils import interpolate_surface_depths as _interp_surface
-            _elev_arr = np.asarray(_sensor_elevs, dtype=np.float64)
-            _max_elev = float(np.max(_elev_arr))
-            _surface_depths = _max_elev - _elev_arr  # profundidad desde el punto más alto
-
-            # ── FASE 24B Tarea 3: superficie de malla SUAVE (anti-staircase) ──────
-            # nearest-neighbor produce una superficie escalonada en bloques entre
-            # sensores → aristas ortogonales falsas → máscara de aire incorrecta →
-            # error de profundidad. interpolate_surface_depths usa interpolación LINEAL
-            # (superficie suave) con fallback nearest fuera del convex hull (padding).
-            # NOTA: el upgrade a DEM denso bilineal (30 m OpenTopography) muestreado en
-            # el (x,z) geográfico real de cada columna requiere la georef local→UTM de
-            # Fase 19 (no cableada en este path); cuando exista, sustituye a esta
-            # interpolación de sensores sin perder el comportamiento de fallback.
-            _topography_elevations_padded, _surface_mode = _interp_surface(
-                sensor_coords[:, [0, 2]],
-                _surface_depths,
-                np.column_stack([x_c_full, z_c_full]),
-            )
-            _topography_used = f"from_sensor_elevations_masl[{_surface_mode}]"
-            _log.info(
-                "topography_activated",
-                max_elev_masl=round(float(_max_elev), 1),
-                surface_mode=_surface_mode,
-                surface_depth_range_m=[round(float(_surface_depths.min()), 1),
-                                       round(float(_surface_depths.max()), 1)],
-            )
-        except Exception as _topo_exc:
-            _log.warning("topography_activation_nonfatal", error=str(_topo_exc))
-            _topography_elevations_padded = None
-            _topography_used = "flat_fallback"
+    # ── FASE 24B Tarea 3: superficie de malla SUAVE (anti-staircase) ──────────
+    # nearest-neighbor produce una superficie escalonada en bloques entre sensores
+    # → aristas ortogonales falsas → máscara de aire incorrecta → error de
+    # profundidad. `prepare_topography_from_elevations` interpola LINEALMENTE con
+    # fallback nearest fuera del convex hull (padding).
+    # NOTA: el upgrade a DEM denso bilineal (30 m OpenTopography) muestreado en el
+    # (x,z) geográfico real de cada columna requiere la georef local→UTM de la
+    # Fase 19 (no cableada en este path); cuando exista, sustituye a esta
+    # interpolación de sensores sin perder el comportamiento de fallback.
+    #
+    # FASE 23 (NUEVO-1): la regla está en `geo_utils`, no aquí. Estaba copiada en la
+    # ruta magnética y NO estaba en la conjunta, que pasaba `topography_elevations=None`
+    # fijo. Una copia que no existe no se puede quedar atrás. El comportamiento de esta
+    # ruta no cambia: verificado por huella del modelo antes y después de la extracción.
+    from services.geo_utils import prepare_topography_from_elevations
+    _topography_elevations_padded, _topography_used, _topo_meta = prepare_topography_from_elevations(
+        getattr(params, "sensor_elevations_masl", None),
+        len(params.observations),
+        sensor_coords[:, [0, 2]],
+        np.column_stack([x_c_full, z_c_full]),
+    )
+    if _topography_used.startswith("from_sensor_elevations_masl"):
+        _rango = _topo_meta["surface_depth_range_m"]
+        _log.info(
+            "topography_activated",
+            max_elev_masl=round(float(_topo_meta["max_elev_masl"]), 1),
+            surface_mode=_topo_meta["surface_mode"],
+            surface_depth_range_m=[round(float(_rango[0]), 1), round(float(_rango[1]), 1)],
+        )
+    elif _topography_used == "flat_fallback":
+        _log.warning("topography_activation_nonfatal", error=_topo_meta.get("error", ""))
     return _topography_elevations_padded, _topography_used
 
 

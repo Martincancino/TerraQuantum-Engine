@@ -21,10 +21,17 @@ acondicionamiento (Ws en gravedad, Wz_inv en magnetometría) y lo apila en G_aug
 Malla común
 ───────────
 Backend-only / álgebra lineal. Ambos motores se corren sobre la MISMA malla core
-(build_voxel_grid) con topografía plana → todas las celdas activas → n_active = nC =
-nx·ny·nz en orden Fortran idéntico al de los operadores de gradiente. Así los bloques
-cross-gradient son conformables con ambos solvers SIN remapeo entre mallas, y el bloque
-3D final lleva densidad y susceptibilidad sobre exactamente la misma malla activa.
+(build_voxel_grid) en orden Fortran idéntico al de los operadores de gradiente y sobre
+la MISMA máscara de aire, de modo que el bloque 3D final lleva densidad y
+susceptibilidad sobre exactamente la misma malla activa.
+
+FASE 23: hasta esta fase la malla era plana **por construcción**
+(`topography_elevations=None` fijo en los dos motores) para que los bloques
+cross-gradient, de nC columnas, conformaran con el modelo sin remapeo. Eso no exigía
+tirar la topografía: exige RECORTAR los bloques al espacio del solver, que es justo lo
+que la Fase 9C-1 ya hacía para la poda observable (`B[:, _obs_mask_g]`). Ahora ese
+recorte se compone con la máscara de aire, la topografía del CSV llega a las dos
+físicas, y su degradación se declara en `warnings[]`.
 
 NO se calcula física nueva aquí: se orquestan los dos motores existentes
 (GravimetryInversion / MagnetometryInversion) y los operadores de geophysics_math.
@@ -51,6 +58,7 @@ from services.block_model_store import (
 from core.logging import get_logger
 from exploration.clustering import extract_geological_bodies
 from exploration.geophysics_math import build_gradient_operators
+from exploration.potential_field_core import active_cells_from_topography
 from exploration.gravimetry import GravimetryForward, GravimetryInversion
 from exploration.magnetometry import MagnetometryForward, MagnetometryInversion
 from exploration.pgi_engine import gmm_responsibilities_2d, niw_map_update_2d
@@ -460,6 +468,83 @@ def _persist_joint_parquet(
 # ─────────────────────────────────────────────────────────────────────────────
 # Orquestador principal.
 # ─────────────────────────────────────────────────────────────────────────────
+def _preparar_topografia_conjunta(params, obs, sensor_coords, x_c, y_c, z_c, dx, nC):
+    """FASE 23 (NUEVO-1) — la conjunta deja de tirar la topografía del usuario.
+
+    Medido ANTES de esta fase, sobre una ladera de 240 m de desnivel: la misma corrida
+    con y sin `sensor_elevations_masl` devolvía el modelo **idéntico bit a bit** (huella
+    f1c661a942a511aa en las dos), con el **15,93 %** del contraste recuperado dentro de
+    celdas que son AIRE. La cota que el usuario sube en su CSV no tocaba la física y
+    nadie se lo decía: el reporte tampoco llevaba el `warnings[]` que la Fase 1 (H-27)
+    sí cabló en las rutas gravimétrica y magnética.
+
+    Devuelve `(topo_depths | None, estado, celdas_activas, n_activas)`. La preparación
+    de la superficie es la MISMA función que usan las otras dos rutas.
+
+    `dy` del motor = `block_size` escalar (así lo fijan GravimetryInversion y
+    MagnetometryInversion), que es la MISMA regla con la que cada motor recalcula su
+    máscara internamente. Si divergieran, el kernel cacheado dejaría de conformar — y
+    por eso ambos motores comprueban ahora la forma del kernel en voz alta.
+    """
+    from services.geo_utils import prepare_topography_from_elevations
+
+    topo, estado, meta = prepare_topography_from_elevations(
+        getattr(params, "sensor_elevations_masl", None),
+        len(obs),
+        sensor_coords[:, [0, 2]],           # (x=Este, z=Norte), convención Fase 18/19
+        np.column_stack([x_c, z_c]),
+    )
+    _topo_depth, active_cells, n_active = active_cells_from_topography(
+        y_c, float(dx), nC, topo, contexto="[JOINT] ",
+    )
+    if topo is not None:
+        n_air = nC - n_active
+        _log.info(
+            "joint_topography_activated",
+            topography_used=estado,
+            n_active=n_active, n_air=n_air,
+            air_fraction_pct=round(100.0 * n_air / max(nC, 1), 2),
+            max_elev_masl=round(float(meta.get("max_elev_masl", 0.0)), 1),
+        )
+    elif estado == "flat_fallback":
+        # H-27: la interpolación falló y la corrida sigue con terreno horizontal. Va al
+        # log Y al reporte; el aviso al usuario lo arma `topography_run_warnings`.
+        _log.warning("joint_topography_nonfatal", error=meta.get("error", ""))
+    return topo, estado, active_cells, n_active
+
+
+def _proyectores_al_espacio_del_solver(active_cells, obs_mask_g, *, has_topo, do_prune):
+    """FASE 23 — del espacio de la MALLA al espacio del SOLVER.
+
+    Los bloques de acoplamiento y las referencias PGI se construyen sobre la malla
+    completa (nC columnas, que es donde viven Dx/Dy/Dz). Cada motor resuelve en un
+    espacio más chico: gravedad en (activas → observables), magnetometría en (activas).
+    Recortar aquí —y no dentro del motor— es lo que ya hacía la Fase 9C-1 con la poda;
+    esta fase sólo compone la máscara de aire delante. Si el recorte se olvidara, el
+    `vstack` de `inject_extra_reg_blocks` lo rechaza por nombre en vez de reventar mucho
+    más abajo.
+
+    Devuelve `(cols_gravedad, cols_magnetico, vec_gravedad, vec_magnetico)`.
+    """
+    def cols_gravedad(B):
+        Bc = B[:, active_cells] if has_topo else B
+        return Bc[:, obs_mask_g] if do_prune else Bc
+
+    def cols_magnetico(B):
+        return B[:, active_cells] if has_topo else B
+
+    def vec_gravedad(v):
+        vc = np.asarray(v, dtype=np.float64)
+        vc = vc[active_cells] if has_topo else vc
+        return vc[obs_mask_g] if do_prune else vc
+
+    def vec_magnetico(v):
+        vc = np.asarray(v, dtype=np.float64)
+        return vc[active_cells] if has_topo else vc
+
+    return cols_gravedad, cols_magnetico, vec_gravedad, vec_magnetico
+
+
 def run_joint_inversion(params: GeophysicsInvertInput):
     """FASE 9C-2 — Inversión conjunta Gauss-Newton alternada con continuation.
 
@@ -467,7 +552,12 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     real (g≠0) Y magnética (magnetic_nt≠0). Devuelve el mismo contrato que los demás
     motores: {voxels, best_target, report, misfit_error_percent}.
     """
-    from services.geophysics_service import build_voxel_grid, write_run_report_snapshot
+    from services.geophysics_service import (
+        build_voxel_grid,
+        density_bound_run_warnings,
+        topography_run_warnings,
+        write_run_report_snapshot,
+    )
 
     project_id = params.project_id
     run_id = params.run_id
@@ -555,6 +645,13 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             detail=f"Malla conjunta con padding demasiado grande (nC={nC}>400000). Reduce nx/ny/nz o joint_n_pad.",
         )
 
+    # FASE 23 (NUEVO-1): la superficie del terreno y la máscara de aire, compartidas
+    # por las dos físicas (el porqué, medido, en el docstring de la función).
+    _topo_joint, _topography_used, _active_cells, _n_active = _preparar_topografia_conjunta(
+        params, obs, sensor_coords, x_c, y_c, z_c, dx, nC,
+    )
+    _has_topo = _topo_joint is not None
+
     boreholes_g, boreholes_m = _extract_boreholes(params)
 
     # Operadores de primera derivada co-localizados (geophysics_math, 9C-1).
@@ -582,7 +679,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         rho_full, score, misfit, sens = grav_inv.solve_inversion_lsqr(
             g_observed, kernel_cache, y_c,
             lambda_mag=lam_g, alpha_spatial=params.alpha_spatial,
-            topography_elevations=None,
+            topography_elevations=_topo_joint,   # FASE 23: era None fijo
             sensor_coords=sensor_coords, x_c=x_c, z_c=z_c,
             forward_model=grav_fwd,
             hx=_solve_hx, hy=_solve_hy, hz=_solve_hz,
@@ -602,7 +699,7 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         chi_full, score, misfit, sens = mag_inv.solve_magnetic_inversion_lsqr(
             d_observed=mag, override_kernel=kernel_cache, y_c=y_c,
             lambda_mag=lam_m, alpha_spatial=params.alpha_spatial,
-            topography_elevations=None,
+            topography_elevations=_topo_joint,   # FASE 23: era None fijo
             sensor_coords=sensor_coords, x_c=x_c, z_c=z_c,
             forward_model=mag_fwd,
             hx=_solve_hx, hy=_solve_hy, hz=_solve_hz,
@@ -617,17 +714,26 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         return np.nan_to_num(np.asarray(chi_full, dtype=np.float64), nan=0.0), score, misfit, meta
 
     # ── CACHÉ KERNEL: construir G_active una sola vez (geometría invariante) ────
-    # En joint mode (topo=None, prune=False) todos los vóxeles son activos en
-    # cada llamada → kernel idéntico en toda iteración; cachear evita ~14-30
-    # reconstrucciones costosas de KDTree + prism loops.
+    # La máscara de aire no cambia entre iteraciones (la topografía es fija), así que
+    # el kernel sigue siendo cacheable; cachear evita ~14-30 reconstrucciones costosas
+    # de KDTree + prism loops.
+    # FASE 23: el kernel se construye sobre las celdas ACTIVAS, que es el espacio en el
+    # que ambos motores esperan un kernel pre-construido. Sin topografía
+    # (`_has_topo=False`) las columnas son todas y el camino histórico no se mueve.
     _x_c_arr   = np.asarray(x_c, dtype=np.float64)
+    _y_c_arr   = np.asarray(y_c, dtype=np.float64)
     _z_c_arr   = np.asarray(z_c, dtype=np.float64)
     _sensor_arr = np.asarray(sensor_coords, dtype=np.float64)
+    if _has_topo:
+        _kx, _ky, _kz = (_x_c_arr[_active_cells], _y_c_arr[_active_cells],
+                         _z_c_arr[_active_cells])
+    else:
+        _kx, _ky, _kz = _x_c_arr, y_c, _z_c_arr
     grav_fwd_kernel_cache = grav_fwd._build_sparse_kernel(
-        _x_c_arr, y_c, _z_c_arr, _sensor_arr,
+        _kx, _ky, _kz, _sensor_arr,
     )
     mag_fwd_kernel_cache = mag_fwd._build_sparse_kernel(
-        _x_c_arr, y_c, _z_c_arr, _sensor_arr,
+        _kx, _ky, _kz, _sensor_arr,
     )
     _log.info(
         f"[CACHÉ KERNEL] G_gravity: {grav_fwd_kernel_cache.shape} ({grav_fwd_kernel_cache.nnz:,} NNZ) | "
@@ -640,15 +746,20 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     # B_chi[:, _obs_mask_g] al motor de gravedad, los bloques cross-gradient
     # conforman con el espacio post-poda sin remapeo: B.shape[1] = n_obs_g = Wz.shape[0].
     # El motor magnético no tiene poda (prune_observable_domain no existe en magnetometry.py)
-    # y opera siempre sobre n_active = nC → no requiere slicing.
+    # y opera siempre sobre n_active → sólo requiere el recorte por aire.
     _do_prune = bool(getattr(params, 'joint_observable_pruning', True))
-    _obs_mask_g = _obs_mask_from_kernel(grav_fwd_kernel_cache)
+    _obs_mask_g = _obs_mask_from_kernel(grav_fwd_kernel_cache)   # vive en espacio ACTIVO
     _n_obs_g = int(np.sum(_obs_mask_g))
-    _n_dead_g = nC - _n_obs_g
+    _n_dead_g = _n_active - _n_obs_g
     _log.info(
-        f"[JOINT R-05] Dominio observable (gravedad): {_n_obs_g:,}/{nC:,} "
-        f"({100.0 * _n_obs_g / nC:.1f}%) | muertos: {_n_dead_g:,} | "
+        f"[JOINT R-05] Dominio observable (gravedad): {_n_obs_g:,}/{_n_active:,} "
+        f"({100.0 * _n_obs_g / max(_n_active, 1):.1f}%) | muertos: {_n_dead_g:,} | "
         f"poda={'ON' if _do_prune else 'OFF (joint_observable_pruning=False)'}"
+    )
+
+    (_cols_para_gravedad, _cols_para_magnetico,
+     _vec_para_gravedad, _vec_para_magnetico) = _proyectores_al_espacio_del_solver(
+        _active_cells, _obs_mask_g, has_topo=_has_topo, do_prune=_do_prune,
     )
 
     # ── Iteración 0 — Warm-up: motores independientes (sin cross-gradient) ───
@@ -702,11 +813,16 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     _gmm_means = _gmm_covs = _gmm_weights = None
     _prior_means = _prior_covs = _prior_weights = None
     _pgi_disabled_reason = None
+    # Bootstrap sobre celdas CORE (excluye el padding ~background → no sesga el GMM).
+    # FASE 23: y sobre celdas ACTIVAS — el aire entraría como un cúmulo enorme en
+    # (base_density, 0) y se llevaría una de las K clases petrofísicas. El número de
+    # celdas que alimentó la mixtura viaja al reporte: una petrofísica ajustada sobre
+    # aire no se distingue de una buena si nadie dice sobre qué se ajustó.
+    _gmm_mask = (is_core & _active_cells) if _has_topo else is_core
     if _use_pgi and _pgi_alpha > 0.0:
         try:
-            # Bootstrap sobre celdas CORE (excluye el padding ~background → no sesga el GMM).
             _gmm_means, _gmm_covs, _gmm_weights = _fit_joint_gmm_2d(
-                m_rho[is_core], m_chi[is_core], _pgi_n_classes
+                m_rho[_gmm_mask], m_chi[_gmm_mask], _pgi_n_classes
             )
             _prior_means = _gmm_means.copy()
             _prior_covs = _gmm_covs.copy()
@@ -758,9 +874,11 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         if _pgi_on:
             X_cur = np.column_stack([m_rho, m_chi])
             if _pgi_dynamic:
-                resp = gmm_responsibilities_2d(X_cur, _gmm_means, _gmm_covs, _gmm_weights)
+                # FASE 23: el refit ve sólo roca; el aire no informa petrofísica.
+                X_fit = X_cur[_active_cells] if _has_topo else X_cur
+                resp = gmm_responsibilities_2d(X_fit, _gmm_means, _gmm_covs, _gmm_weights)
                 _gmm_means, _gmm_covs, _gmm_weights = niw_map_update_2d(
-                    X_cur, resp, _prior_means, _prior_covs, _prior_weights,
+                    X_fit, resp, _prior_means, _prior_covs, _prior_weights,
                     prior_kappa=_pgi_prior_strength, prior_nu=_pgi_prior_strength,
                 )
                 _pgi_mean_shift = float(
@@ -778,13 +896,12 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             max_block_nnz = max(max_block_nnz, B_chi.nnz)
             B_chi_norm = float(np.sqrt(B_chi.power(2).sum()))
             lambda_cross_eff_g = lambda_cross * cross_beta * G_norm / max(B_chi_norm, 1e-12)
-            # Joint v1.1: recortar columnas al dominio observable → B.shape[1] = n_obs_g
-            _B_chi_g = B_chi[:, _obs_mask_g] if _do_prune else B_chi
+            # Joint v1.1 + Fase 23: columnas al espacio del solver (aire → observables).
+            _B_chi_g = _cols_para_gravedad(B_chi)
             grav_blocks.append(lambda_cross_eff_g * _B_chi_g)
             grav_rhs.append(np.zeros(_B_chi_g.shape[0], dtype=np.float64))
         if _pgi_on and rho_ref_abs is not None:
-            _ref_g = (rho_ref_abs - base_rho)
-            _ref_g = _ref_g[_obs_mask_g] if _do_prune else _ref_g
+            _ref_g = _vec_para_gravedad(rho_ref_abs - base_rho)
             _n_g = _ref_g.shape[0]
             grav_blocks.append(_sqrt_pgi_alpha * sp.eye(_n_g, format="csr", dtype=np.float64))
             grav_rhs.append(_sqrt_pgi_alpha * _ref_g)
@@ -808,11 +925,15 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             max_block_nnz = max(max_block_nnz, B_rho.nnz)
             B_rho_norm = float(np.sqrt(B_rho.power(2).sum()))
             lambda_cross_eff_m = lambda_cross * cross_beta * G_norm / max(B_rho_norm, 1e-12)
-            mag_blocks.append(lambda_cross_eff_m * B_rho)
-            mag_rhs.append(np.zeros(B_rho.shape[0], dtype=np.float64))
+            _B_rho_m = _cols_para_magnetico(B_rho)
+            mag_blocks.append(lambda_cross_eff_m * _B_rho_m)
+            mag_rhs.append(np.zeros(_B_rho_m.shape[0], dtype=np.float64))
         if _pgi_on and chi_ref is not None:
-            mag_blocks.append(_sqrt_pgi_alpha * sp.eye(nC, format="csr", dtype=np.float64))
-            mag_rhs.append(_sqrt_pgi_alpha * np.asarray(chi_ref, dtype=np.float64))
+            _ref_m = _vec_para_magnetico(chi_ref)
+            mag_blocks.append(
+                _sqrt_pgi_alpha * sp.eye(_ref_m.shape[0], format="csr", dtype=np.float64)
+            )
+            mag_rhs.append(_sqrt_pgi_alpha * _ref_m)
         _mb = mag_blocks or None
         _mrhs = mag_rhs if mag_blocks else None
         m_chi_new, _ms, misfit_m, meta_m = _solve_magnetic(
@@ -876,6 +997,10 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         y_c = y_c[is_core]
         z_c = z_c[is_core]
     ix, iy, iz = ix_out, iy_out, iz_out
+    # FASE 23: la máscara de aire se reduce con el modelo, o el bloque 3D dejaría de
+    # saber cuál de sus celdas es terreno.
+    _active_out = _active_cells[is_core] if _pad_on else _active_cells
+    _n_active_core = int(np.sum(_active_out))
 
     # ── Empaquetado: densidad y susceptibilidad en la MISMA malla activa ─────
     rho_contrast = m_rho - base_rho
@@ -883,6 +1008,19 @@ def run_joint_inversion(params: GeophysicsInvertInput):
     rho_cut = max(0.02, 0.02 * float(np.max(abs_contrast)) if abs_contrast.size else 0.02)
     susc_cut = max(1e-6, 0.01 * float(np.max(m_chi)) if m_chi.size else 1e-6)
     keep = (abs_contrast >= rho_cut) | (m_chi >= susc_cut)
+    # FASE 23 — el aire no es un vóxel del modelo. Hoy esto NO puede cambiar el bloque y
+    # se dice: el motor devuelve NaN en las celdas de aire y `nan_to_num` las deja en
+    # contraste EXACTAMENTE 0, que ningún corte (`rho_cut` ≥ 0,02) deja pasar. Medido: al
+    # quitar este filtro el bloque sale idéntico — ninguna mutación lo distingue. Por eso
+    # no se deja como filtro mudo, que pasaría por defensa sin serlo, sino como
+    # INVARIANTE que se cuenta y se publica: si alguna vez una celda de aire llega con
+    # contraste, el reporte lo dirá en vez de tragarlo.
+    _n_aire_filtrado = 0
+    if _has_topo:
+        _n_aire_filtrado = int(np.count_nonzero(keep & ~_active_out))
+        if _n_aire_filtrado:
+            _log.warning("joint_air_cells_filtered_from_block", n=_n_aire_filtrado)
+        keep = keep & _active_out
 
     # Score combinado normalizado para ranking (estructural, sin física inventada).
     def _norm01(v):
@@ -947,11 +1085,27 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         ),
     }
 
+    # ── FASE 23 (NUEVO-1) — el canal de avisos que la Fase 1 cabló en las otras dos ──
+    # Mismo canal y mismo texto: `report.warnings[]` es lo que extrae
+    # `lib/terraquantum/runWarnings.ts` y pinta `WarningBanner`, así que la conjunta
+    # aparece en la vista 3D y en el informe SIN tocar una línea de frontend.
+    # Se suma el aviso de contraste efectivo de la Fase 20: la conjunta invierte
+    # densidad con los MISMOS `base_density`/`density_min` y hereda el mismo desacople.
+    _run_warnings = (topography_run_warnings(_topography_used)
+                     + density_bound_run_warnings(params))
+
     report = {
         "method": "joint_inversion_cross_gradient_phase9c2",
         "engine": "Alternating Gauss-Newton + exponential continuation (Gallardo–Meju cross-gradient)",
         "is_joint_inversion": True,
-        "mesh": {"nx": nx, "ny": ny, "nz": nz, "block_size": dx, "n_active": int(nC_core),
+        "mesh": {"nx": nx, "ny": ny, "nz": nz, "block_size": dx,
+                 # FASE 23: `n_active` contaba TODAS las celdas del core, aire incluido.
+                 "n_active": int(_n_active_core),
+                 "n_air": int(nC_core - _n_active_core),
+                 # Invariante: celdas de aire que venían con contraste sobre el corte.
+                 # Debe ser 0 siempre; se publica para que deje de ser una suposición.
+                 "n_air_cells_filtered": int(_n_aire_filtrado),
+                 "topography": _topography_used,
                  "common_core_grid": True,
                  "padding": {
                      "active": bool(_pad_on),
@@ -1000,6 +1154,8 @@ def run_joint_inversion(params: GeophysicsInvertInput):
             "pgi_gmm_means_rho_chi": (
                 np.round(_gmm_means, 5).tolist() if (_use_pgi and _gmm_means is not None) else None
             ),
+            # FASE 23: celdas que alimentaron la mixtura — core Y bajo el terreno.
+            "pgi_bootstrap_cells": int(np.sum(_gmm_mask)) if _use_pgi else None,
             "note": (
                 "cross_gradient acopla ESTRUCTURA con dirección unitaria (escala-invariante); "
                 "gramian (Zhdanov) usa el gradiente CRUDO del modelo fijo → pondera por la "
@@ -1021,6 +1177,11 @@ def run_joint_inversion(params: GeophysicsInvertInput):
         "susceptibility_bounds_si": [params.susc_min, params.susc_max],
         "observation_count": int(len(obs)),
         "anomaly_voxels": len(voxels),
+        # ── FASE 23 (NUEVO-1): honestidad de la topografía, también en la conjunta ──
+        # Mismos tres campos que gravedad y magnetometría, con el mismo vocabulario.
+        "topography_used": _topography_used,
+        "topography_degraded": _topography_used == "flat_fallback",
+        "warnings": _run_warnings,
         "disclaimer": (
             "Inversión conjunta (Fase 9C-2): densidad y susceptibilidad recuperadas sobre "
             "la misma malla por acoplamiento ESTRUCTURAL (cross-gradient). El acoplamiento "

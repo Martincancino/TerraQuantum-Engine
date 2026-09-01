@@ -1997,6 +1997,17 @@ class GravimetryInversion:
         z_c_arr = np.asarray(z_c, dtype=np.float64)
         if kernel_sparse is not None:
             G_active = kernel_sparse
+            # FASE 23: el kernel cacheado (único llamador: la inversión conjunta) vive en el
+            # espacio de las celdas ACTIVAS. Se aceptaba sin mirar su forma, así que un
+            # kernel de malla completa entrando en una corrida CON topografía habría
+            # emparejado columna k con celda k equivocada — un modelo desplazado, no un
+            # error. El motor magnético ya comprobaba esto (`override_kernel`); ahora los dos.
+            if G_active.shape != (n_sensors, est.n_active):
+                raise ValueError(
+                    f"kernel_sparse con forma {G_active.shape} no coincide con "
+                    f"(n_obs={n_sensors}, n_active={est.n_active}). El kernel cacheado debe "
+                    "construirse sobre las celdas activas bajo la topografía."
+                )
             logger.debug("[GRAV] Usando kernel cacheado (sin reconstrucción).")
         else:
             G_active = forward_model._build_sparse_kernel(
