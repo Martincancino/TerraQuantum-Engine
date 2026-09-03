@@ -1771,7 +1771,7 @@ de la Fase 1 · **45/45** en las tres guardias de CI del backend que leen el fro
 
 ---
 
-### FASE 25 — Lo que el backend dice y el frontend no escucha · **S** · 🟠 P1 · *frontend* · H-36, NUEVO-7
+### FASE 25 (CERRADA) — Lo que el backend dice y el frontend no escucha · **S** · 🟠 P1 · *frontend* · H-36, NUEVO-7
 
 **Dos huecos del mismo tipo**, y por eso van juntos: el backend publica algo y
 el frontend no lo consume.
@@ -1797,6 +1797,164 @@ mismo agujero se repetirá con la fase siguiente si no se cierra por construcci�
 
 **Gate.** Añadir un parámetro nuevo al store **sin clasificarlo rompe el
 typecheck**. Verificado añadiendo uno de mentira.
+
+#### ✅ EJECUTADA — 2026-09-03
+
+Frontend puro; el backend **no se tocó** (y no hacía falta: la parte cara ya
+estaba construida en él). Guardia nueva: `e2e/fase25_backend_escuchado.spec.ts`
+(9 recorridos, 4 de ellos sin navegador). Pieza nueva:
+`componentes/prep/invalidaResultado.ts` (~310 l: la declaración y el constructor
+de la huella). `PrepPanel.tsx` pierde el bloque de la huella; el efecto se muda a
+`views/PreparacionView.tsx`.
+
+**NUEVO-7 no era decorativo, y eso se comprobó ANTES de escribir código.** La
+pregunta que podía tumbar media fase era: ¿llega la sugerencia por la ruta que
+usa el frontend, y está el paso de mapeo en pantalla cuando llega? Las dos
+respuestas son sí, y la segunda es **estructural, no empírica**: `suggestions`
+sólo se calcula dentro de `if missing:` (`column_mapping_service.py:680-681`) y
+`needs_mapping = bool(missing)` (`:663`), así que **es imposible tener
+sugerencias con `needs_mapping` en false**. El selector del rol sugerido sale
+además siempre en «— sin asignar —», porque `missing` son los requeridos que
+`roles` no resolvió y `prefillMap` sólo rellena desde `plan.roles`: la sugerencia
+es exactamente lo que llenaría ese hueco. Medido además en vivo con `TestClient`
+sobre un CSV `X,Y,Z,Bouguer_mGal` — las dos rutas
+(`/v2/gravity-import/analyze-columns` y `.../enrich-package`) devolvieron
+`suggestions` con claves `x` e `y`.
+
+**Dónde se pinta, y por qué ahí.** `suggestions` viene indexada **por rol**
+(`Record<rol, {column, confidence, reason}>`), así que va DENTRO del selector de
+ese rol y no en un cartel aparte: el dato útil es el valor que llenaría ese
+desplegable, y el canal para escribirlo (`onChange` → `setField(role, v)`) ya
+existía. Un cartel arriba habría obligado al usuario a traducir «rol y → columna
+Y» y a buscar el selector correcto.
+
+**Y se PROPONE, nunca se aplica sola.** El backend fija `confidence: "medium"` en
+los tres sitios que construyen una sugerencia, y tiene un test que impide que sea
+`"high"` («se propone, se confirma, no se aplica sola»,
+`test_fase16_roles_de_columna.py:381-384`). Auto-rellenar el mapa habría
+reabierto el defecto que la Fase 16 cerró —adivinar el rol de una columna— y por
+eso hay una mutación dedicada a ese «arreglo» incorrecto (M2).
+
+**H-36: la lista a mano ya se había quedado atrás, y por más de lo que decía la
+ficha.** La ficha dice «no incluye parámetros de Fase 14». Al contrastar las 23
+entradas contra lo que `handleGeneratePackage` mete de verdad en el `config_json`
+aparecieron **cinco** ausencias, no una:
+
+| Ausente de la lista vieja | A dónde viaja | Por qué duele |
+|---|---|---|
+| `implicitGeologyParams` | `config.implicit_geology` | **La que el plan nombra** (Fase 14): mueve el `m_ref` del smallness |
+| `acknowledgeSpatialRisk` | `config.acknowledge_spatial_risk` | Es un **gate** del backend: sin él se rechaza, con él entra |
+| `acknowledgeRegionalScale` | `config.acknowledge_regional_scale` | Ídem |
+| `correctedFile` | el fichero **primario** + fuerza `allow_g_raw` | Cambiar de archivo sí avisa (`clearActiveRun`); aplicar correcciones **no pasaba por ahí** |
+| `prepSondajes` | `boreholes_json` | Es el **anclaje**, y la fuente de litologías del prior implícito |
+
+`correctedFile` es el más caro: no es un parámetro, **es el dato de entrada**.
+Sustituía el CSV bajo un modelo que seguía en pantalla, y además el valor
+efectivo de `allow_g_raw` cambiaba sin que la entrada `allowGRaw` de la lista se
+moviera.
+
+🔴 **Y una sexta ausencia que no era una entrada sino un panel entero.**
+`markResultStale()` tenía **UN solo llamador en todo el frontend**: `PrepPanel`,
+el flujo CLÁSICO, el que vive colapsado bajo «Avanzado». El flujo **PRINCIPAL**
+—`PrepEnrichPanel`, por donde entra el usuario— no tenía huella **ninguna**, y
+seis de sus campos viajan al backend en cada generación (`utmZone`,
+`gravimeterType`, `surveyDate`, `useHelmert`, `ctrlPoints`, `columnMap`). Cerrar
+H-36 sólo donde estaba escrito habría dejado el tipo exhaustivo sobre la mitad
+que casi nadie toca. Por eso el efecto se muda a `PreparacionView`: es el padre
+común de los dos paneles, está montado siempre que cualquiera de los dos puede
+cambiar (`<details>` colapsa, no desmonta) y desde la Fase 24 puede leer el
+estado entero del store sin pasar por ningún panel.
+
+**Dos entradas de la lista vieja eran ruido, y se declaran como tales en vez de
+retirarse.** `latSouth` y `lonEast` **no viajan**: sólo alimentan
+`validateCoords()`; al backend va únicamente la esquina NO (`lat`=`latNorth`,
+`lon`=`lonWest`). Se quedan declaradas, con el motivo escrito: `validateCoords()`
+exige las cuatro esquinas o ninguna, así que media caja cambiada es una caja
+distinta. **Marcar de más avisa sin motivo; marcar de menos calla con motivo.**
+
+**Lo que sí se afinó, porque un aviso que salta sin causa se aprende a ignorar.**
+Se midió que `pgiParams` y `remanenceParams` sólo viajan si están `enabled`, y
+que `ctrlPoints` sólo viaja con `useHelmert`. Antes, mover el `alpha_pgi` con el
+PGI apagado marcaba el resultado como desactualizado **sin que nada saliera del
+navegador**. El descriptor admite una `huella` que recibe también el estado de su
+máquina, y esos tres casos la usan. Residuo declarado y NO cerrado: el paquete
+exige además `pkgDataType === "magnetic"` para la remanencia, y eso depende de
+qué ficheros hay y no de esa máquina — con gravimetría sola sigue marcando de más.
+
+**Gate — las 4 preguntas.** *(1) ¿Existe?* 9 recorridos: 5 en Playwright con el
+backend sustituido en la frontera HTTP + 4 sin navegador que importan la
+declaración. *(2) ¿Mide los tres eslabones?* Sí. La afirmación más dura del
+recorrido A no es que el texto aparezca sino que **lo aceptado VIAJA**: se
+intercepta el `multipart/form-data` de `/enrich-package` y se lee
+`column_map_json`. *(3) ¿Discrimina?* Dos controles negativos: A2 afirma que el
+desplegable **sigue vacío** hasta que el usuario acepta, y B2 que **dar la vuelta
+sin tocar nada** no marca nada — que importa porque `despertarPreparacion()`
+ESCRIBE en el store al volver a la pestaña. *(4) ¿Falla si se rompe lo que dice
+defender?* **Verificado por mutación: 6/6.**
+
+| # | Mutación | Recorridos que caen | Mensaje |
+|---|---|---|---|
+| M1 | la sugerencia deja de bajar a `RoleSelect` | **A1, A2, A3** | `toBeVisible()` sobre `role-suggestion-x` |
+| M2 | la sugerencia se **auto-aplica** en `prefillMap` | **A1, A2, A3** | A2: `toHaveValue("")` recibe `"X"` |
+| M3 | el flujo principal vuelve a no tener huella | **B1, C1** | C1: «debería invalidar: `enriquecer.utmZone`» |
+| M4 | `huellaPrevia` no arranca con la huella del 1.er render | **B2** | `toHaveCount(0)` recibe `1` |
+| M5 | `implicitGeologyParams` reclasificado a `NO_INVALIDA` | **C1, C4** | «debería invalidar: AUSENTE `implicitGeologyParams`» |
+| M6 | `prepSondajes` se compara por `.length` | **C3** | el sondaje corregido no mueve la huella |
+| M7 | un campo de máquina sin clasificar | *(tipos)* | `tsc` **TS2741** en `invalidaResultado.ts` |
+
+M7 se verificó **cuatro veces**, una por máquina (`ContextoState` → línea 80,
+`ParametrosState` → 120, `AvanzadoState` → 158, `EnriquecerState` → 230), y cada
+una señala la línea exacta del complemento que falta.
+
+🔴 **La mutación encontró DOS agujeros en el propio gate, arreglados antes de
+cerrar.**
+
+1. **La huella de `prepSondajes` contaba intervalos.** En su primera versión era
+   `v => v.length`, que es más barato y está **mal**: el caso interesante es
+   justo re-subir el mismo sondaje con densidades o litologías corregidas —
+   mismo número de filas, otro anclaje y otro prior implícito. M6 revive ese
+   fallo y C3 es la afirmación que lo caza.
+2. **El recorrido B1 moría por TIMEOUT y no por aserción.** Aislado pasaba en
+   ~55 s; encadenado con B2 reventaba los 60 s por defecto. Un rojo por timeout
+   no dice nada del código y **contaminó de hecho la lectura de M4**: hubo que
+   correr B1 aislado para ver que M4 sólo tumba B2. Se declaró `test.slow()` en
+   vez de recortar el recorrido — cargar el modelo por la vía real es lo que hace
+   que el aviso signifique algo.
+
+**El límite honesto del tipo, escrito porque es fácil creer lo contrario.** El
+complemento exacto obliga a **clasificar** cada parámetro; no acierta por ti la
+clasificación. Mover una clave de `*_INVALIDA` a `*_NO_INVALIDA` **compila igual
+de bien** — M5 lo demuestra: `tsc` salió 0 y quien la cazó fue la tabla del
+recorrido C, no el compilador. Por eso esa tabla es una **lista explícita** y no
+un recorrido de las declaraciones: derivarla de lo declarado la haría pasar
+siempre.
+
+**Números.** 23 entradas a mano → **34 parámetros declarados** (7 contexto + 12
+parámetros + 4 avanzado + 6 enriquecer + 5 store), y su complemento escrito uno a
+uno: 24 motivos de exclusión (3 + 3 + 5 + 11 + 2).
+
+**Regresión:** `tsc` 0 errores · `eslint` 0 errores sobre lo tocado ·
+`next build` OK · **9/9** en el recorrido nuevo · y el e2e de la Fase 1 que fija
+este mismo aviso desde el flujo CLÁSICO (`fase1_confianza.spec.ts:282`, mueve
+`densityMin`) sigue verde, que es lo que confirma que mudar el efecto a
+`PreparacionView` no rompió el camino que ya existía.
+
+**Lo que esta fase NO hizo, y queda declarado:**
+- **`role_confidence` sigue sin pintarse.** El plan lo publica por rol
+  (`role_confidence: Record<string, string>`) y ningún `.tsx` lo lee. Es el
+  hermano natural de `suggestions` y viviría en el mismo sitio (`RoleSelect`),
+  pero **no es NUEVO-7** y meterlo habría ensanchado la fase por parecido.
+- **El mensaje del backend nombra un campo que en esa rama está siempre vacío.**
+  `gravity_import_api.py:1444` dice «ver 'suspicions'/'suggestions'», y ese texto
+  sólo se emite cuando `_needs_conf` es true, o sea cuando `needs_mapping` es
+  **false**, o sea cuando `missing` está vacío — y entonces `suggestions` es `{}`
+  por construcción. Errata de redacción, sin efecto sobre el usuario, y **de
+  backend**: esta fase es *frontend* y la Regla de Oro no se salta por una cadena
+  de texto. Queda anotada.
+- **La remanencia sigue marcando de más con gravimetría sola** (residuo medido,
+  arriba).
+- **`PrepEnrichPanel` y `PrepPanel` siguen teniendo archivos separados**: sigue
+  siendo la deuda que declaró la Fase 24, y sigue sin dueño.
 
 ---
 

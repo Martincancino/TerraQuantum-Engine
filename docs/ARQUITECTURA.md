@@ -41,7 +41,7 @@ TerraQuantum es una plataforma de inversión geofísica exploratoria 3D para dat
 ```
 CSV crudo
    ↓
-[analyze-columns] → plan de mapeo + sugerencias (NUEVO-7: sugerencias no se muestran en UI)
+[analyze-columns] → plan de mapeo + sugerencias (Fase 25: la sugerencia se PROPONE en el rol, se acepta a mano)
    ↓
 [parse-rows] → filas parseadas (Python, no JS)
    ↓
@@ -269,6 +269,8 @@ Foco `f_i = 1/sqrt(c_i² + eps²)` — itera hasta convergencia
 **Deshacible:** `sliceX/Y/Z`, `sliceAxis`, `showIsosurfaces`, `viewMode`, `visualLayer`, `clipBox`, `showMviVectors`, `jointThreshold`, `doiThreshold` + 7 más.  
 **No deshacible:** `model`, `activeRun`, `modelRunKey`, datos de backend.
 
+**Qué invalida un resultado (Fase 25, H-36):** declarado por tipos en `componentes/prep/invalidaResultado.ts` con el mismo patrón de complemento exacto que `NO_DESHACIBLE`. El criterio es uno y comprobable: **invalida el resultado lo que cambia el paquete que se manda al backend**. La huella que dispara el aviso «resultado desactualizado» se CONSTRUYE desde esa declaración —no se escribe aparte—, y el efecto vive en `PreparacionView`, padre común de los dos flujos.
+
 **Mecanismo:** Middleware de deltas (no snapshots) · Límite de historial · Barrera al cambiar archivo.
 
 ### Capas de Render
@@ -376,7 +378,7 @@ Columnas: `x_m`, `y_m`, `z_m`, `density_t_m3`, `relative_score`, `is_active`, `i
 
 | ID | Descripción |
 |----|-------------|
-| NUEVO-7 | `suggestions` del mapeo de columnas: 0 consumidores en TypeScript |
+| ~~NUEVO-7~~ | ✅ Fase 25 (09-03): la sugerencia se pinta DENTRO del selector de su rol, con el rango que la motiva y su confianza, y se acepta con un botón. Nunca se auto-aplica: el backend la emite siempre como `medium` y auto-rellenarla reabriría el defecto que cerró la Fase 16 |
 | NUEVO-9 | El `config_hash` del manifiesto del ZIP (`_AUDIT_KEYS`) ignora `base_density`, `density_min` y `density_max`: dos corridas con roca caja distinta salen con el MISMO hash de auditoría (abierto por la Fase 22) |
 
 ### Orquestador / API
@@ -396,7 +398,7 @@ Columnas: `x_m`, `y_m`, `z_m`, `density_t_m3`, `relative_score`, `is_active`, `i
 | ~~NUEVO-2~~ | ✅ Fase 24 (09-02): el estado de preparación vive en el store (`prepContexto`/`prepParametros`/`prepAvanzado`/`prepEnriquecer`/`prepSondajes`) y sobrevive al cambio de pestaña |
 | ~~NUEVO-3~~ | ✅ Fase 24 (09-02): el CSV corregido sobrevive **y** el validador local reconoce las columnas que el asistente escribe — sin lo segundo el botón del paquete quedaba apagado y el corregido no llegaba nunca |
 | H-34 | Turbo en leyenda de `MultiPhysicsControls` describe colores que ya no se pintan |
-| H-36 | `resultIsStale` no incluye parámetros de Fase 14 |
+| ~~H-36~~ | ✅ Fase 25 (09-03): la lista a mano (23 entradas) es ahora un tipo exhaustivo (`componentes/prep/invalidaResultado.ts`): **34 parámetros** declarados sobre las 4 máquinas de preparación + la rodaja del store, con el complemento escrito. Faltaban 5 que SÍ viajan al backend (`implicitGeologyParams` de la Fase 14, los dos `acknowledge_*`, `correctedFile` y `prepSondajes`), y el flujo PRINCIPAL no tenía huella ninguna |
 | VolumeRaymarch | Implementado completo pero no montado en vista clásica |
 
 ---
