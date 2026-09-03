@@ -28,6 +28,11 @@ import numpy as np
 import pytest
 
 try:
+    from tests.seed_sweep import bench_seeds, median_of, spread_report
+except ImportError:                                    # ejecucion directa del archivo
+    from seed_sweep import bench_seeds, median_of, spread_report
+
+try:
     from exploration.gravimetry import GravimetryForward, GravimetryInversion
 except ImportError:
     import sys, os
@@ -110,25 +115,40 @@ def two_body_inversion_result():
     assert np.max(np.abs(g_obs)) > 0, "g_obs es cero — revisar geometría"
     assert np.isfinite(g_obs).all()
 
-    rng = np.random.default_rng(seed=42)
-    noise = rng.normal(0.0, 0.02 * float(np.sqrt(np.mean(g_obs**2))), size=len(g_obs))
-    g_noisy = g_obs + noise
-
-    inv = GravimetryInversion(NX, NY, NZ, BLOCK)
-    density, _score, _misfit, _sens = inv.solve_inversion_lsqr(
-        g_noisy, None, y_c,
-        lambda_mag=LAMBDA,
-        alpha_spatial=1.0,
-        forward_model=forward,
-        sensor_coords=sensors,
-        x_c=x_c,
-        z_c=z_c,
-    )
-    contrast_rec = density - inv.base_density
-    return x_c, y_c, z_c, contrast_true, contrast_rec
+    # FASE 26 (direccion 5): una realizacion de ruido POR SEMILLA. El kernel —lo caro—
+    # se construyo una sola vez arriba; cada semilla solo anade un solve.
+    seeds = bench_seeds()
+    sigma = 0.02 * float(np.sqrt(np.mean(g_obs**2)))
+    recs = []
+    for sd in seeds:
+        rng = np.random.default_rng(seed=int(sd))
+        g_noisy = g_obs + rng.normal(0.0, sigma, size=len(g_obs))
+        inv = GravimetryInversion(NX, NY, NZ, BLOCK)
+        density, _score, _misfit, _sens = inv.solve_inversion_lsqr(
+            g_noisy, None, y_c,
+            lambda_mag=LAMBDA,
+            alpha_spatial=1.0,
+            forward_model=forward,
+            sensor_coords=sensors,
+            x_c=x_c,
+            z_c=z_c,
+        )
+        recs.append(density - inv.base_density)
+    return x_c, y_c, z_c, contrast_true, recs, seeds
 
 
 # ── Helpers post-inversión ────────────────────────────────────────────────────
+
+def _dists(x_c, y_c, z_c, recs, x_lo, x_hi, true_x, true_y):
+    """Distancia del centroide recuperado al verdadero, UNA POR SEMILLA."""
+    out = []
+    for rec in recs:
+        cx, cy = _centroid_in_window(x_c, y_c, z_c, rec, x_lo, x_hi)
+        out.append(float("nan") if cx is None
+                   else float(np.sqrt((cx - true_x) ** 2 + (cy - true_y) ** 2)))
+    return out
+
+
 
 def _centroid_in_window(x_c, y_c, z_c, contrast_rec, x_lo, x_hi):
     """Centroide (x, y) del top-30% del contraste en la ventana x=[x_lo, x_hi]."""
@@ -152,23 +172,24 @@ def test_two_body_centroid_a(two_body_inversion_result):
     """
     Benchmark 4a — Centroide del cuerpo A (ρ=0.5, x=500m, y=300m) ± 150m.
     """
-    x_c, y_c, z_c, contrast_true, contrast_rec = two_body_inversion_result
+    x_c, y_c, z_c, contrast_true, recs, seeds = two_body_inversion_result
 
     n_a = int(np.sum((np.sqrt((x_c - BODY_A_X)**2 + (y_c - BODY_A_Y)**2 + (z_c - Z_CENTER)**2)) <= BODY_A_R))
     assert n_a >= 1, f"Cuerpo A tiene solo {n_a} vóxeles — dominio insuficiente"
 
     half_x = NX * BLOCK / 2
-    cx_a, cy_a = _centroid_in_window(x_c, y_c, z_c, contrast_rec, 0.0, half_x)
-    assert cx_a is not None, (
+    dists = _dists(x_c, y_c, z_c, recs, 0.0, half_x, BODY_A_X, BODY_A_Y)
+    assert any(d == d for d in dists), (
         "No se recuperó contraste positivo en el dominio del cuerpo A (x < "
-        f"{half_x:.0f}m). Revisar lambda o cutoff_radius."
+        f"{half_x:.0f}m) en NINGUNA semilla. Revisar lambda o cutoff_radius."
     )
 
-    dist_a = np.sqrt((cx_a - BODY_A_X)**2 + (cy_a - BODY_A_Y)**2)
-    assert dist_a <= CENTROID_TOL_M, (
-        f"Benchmark 4a FAIL — Centroide A: rec=({cx_a:.1f}m, {cy_a:.1f}m) | "
-        f"verdadero=({BODY_A_X:.0f}m, {BODY_A_Y:.0f}m) | "
-        f"dist={dist_a:.1f}m | tol=±{CENTROID_TOL_M:.0f}m (Plan §13.2)"
+    mediana = median_of(dists)
+    assert mediana <= CENTROID_TOL_M, (
+        f"Benchmark 4a FAIL — Centroide A, distancia al verdadero "
+        f"({BODY_A_X:.0f}m, {BODY_A_Y:.0f}m), MEDIANA sobre {len(seeds)} semillas: "
+        f"{mediana:.1f}m | tol=±{CENTROID_TOL_M:.0f}m (Plan §13.2)\n"
+        f"    {spread_report(seeds, dists, unit='m')}"
     )
 
 
@@ -177,23 +198,24 @@ def test_two_body_centroid_b(two_body_inversion_result):
     """
     Benchmark 4b — Centroide del cuerpo B (ρ=0.3, x=1500m, y=500m) ± 150m.
     """
-    x_c, y_c, z_c, contrast_true, contrast_rec = two_body_inversion_result
+    x_c, y_c, z_c, contrast_true, recs, seeds = two_body_inversion_result
 
     n_b = int(np.sum((np.sqrt((x_c - BODY_B_X)**2 + (y_c - BODY_B_Y)**2 + (z_c - Z_CENTER)**2)) <= BODY_B_R))
     assert n_b >= 1, f"Cuerpo B tiene solo {n_b} vóxeles — dominio insuficiente"
 
     half_x = NX * BLOCK / 2
-    cx_b, cy_b = _centroid_in_window(x_c, y_c, z_c, contrast_rec, half_x, NX * BLOCK)
-    assert cx_b is not None, (
+    dists = _dists(x_c, y_c, z_c, recs, half_x, NX * BLOCK, BODY_B_X, BODY_B_Y)
+    assert any(d == d for d in dists), (
         "No se recuperó contraste positivo en el dominio del cuerpo B (x ≥ "
-        f"{half_x:.0f}m). Revisar lambda o cutoff_radius."
+        f"{half_x:.0f}m) en NINGUNA semilla. Revisar lambda o cutoff_radius."
     )
 
-    dist_b = np.sqrt((cx_b - BODY_B_X)**2 + (cy_b - BODY_B_Y)**2)
-    assert dist_b <= CENTROID_TOL_M, (
-        f"Benchmark 4b FAIL — Centroide B: rec=({cx_b:.1f}m, {cy_b:.1f}m) | "
-        f"verdadero=({BODY_B_X:.0f}m, {BODY_B_Y:.0f}m) | "
-        f"dist={dist_b:.1f}m | tol=±{CENTROID_TOL_M:.0f}m (Plan §13.2)"
+    mediana = median_of(dists)
+    assert mediana <= CENTROID_TOL_M, (
+        f"Benchmark 4b FAIL — Centroide B, distancia al verdadero "
+        f"({BODY_B_X:.0f}m, {BODY_B_Y:.0f}m), MEDIANA sobre {len(seeds)} semillas: "
+        f"{mediana:.1f}m | tol=±{CENTROID_TOL_M:.0f}m (Plan §13.2)\n"
+        f"    {spread_report(seeds, dists, unit='m')}"
     )
 
 
@@ -203,16 +225,23 @@ def test_two_body_separation(two_body_inversion_result):
     Benchmark 4c — Los dos cuerpos son distinguibles: hay contraste positivo
     en ambos dominios espaciales (x<1000m y x≥1000m).
     """
-    x_c, y_c, z_c, contrast_true, contrast_rec = two_body_inversion_result
+    x_c, y_c, z_c, contrast_true, recs, seeds = two_body_inversion_result
 
-    threshold = 0.20 * float(np.nanmax(contrast_rec))
     half_x = NX * BLOCK / 2
+    izq, der = [], []
+    for rec in recs:
+        threshold = 0.20 * float(np.nanmax(rec))
+        ok = np.isfinite(rec) & (rec > threshold)
+        izq.append(float(np.sum((x_c < half_x) & ok)))
+        der.append(float(np.sum((x_c >= half_x) & ok)))
 
-    left = np.sum((x_c < half_x) & (contrast_rec > threshold) & np.isfinite(contrast_rec))
-    right = np.sum((x_c >= half_x) & (contrast_rec > threshold) & np.isfinite(contrast_rec))
-
-    assert left >= 1, f"No se recuperó anomalía en dominio cuerpo A (x < {half_x:.0f}m)"
-    assert right >= 1, f"No se recuperó anomalía en dominio cuerpo B (x ≥ {half_x:.0f}m)"
+    # La MEDIANA de las semillas tiene que separar los dos cuerpos, no una tirada.
+    assert median_of(izq) >= 1, (
+        f"No se recuperó anomalía en dominio cuerpo A (x < {half_x:.0f}m)\n"
+        f"    {spread_report(seeds, izq, unit=' vox')}")
+    assert median_of(der) >= 1, (
+        f"No se recuperó anomalía en dominio cuerpo B (x ≥ {half_x:.0f}m)\n"
+        f"    {spread_report(seeds, der, unit=' vox')}")
 
 
 # ── Ejecución directa ─────────────────────────────────────────────────────────
@@ -228,17 +257,21 @@ if __name__ == "__main__":
     forward = GravimetryForward(BLOCK, BLOCK, BLOCK, cutoff_radius=3500.0)
     kernel = forward.build_sparse_kernel(x_c, y_c, z_c, sensors)
     g_obs = kernel @ contrast
-    rng = np.random.default_rng(42)
-    g_noisy = g_obs + rng.normal(0.0, 0.02 * float(np.sqrt(np.mean(g_obs**2))), size=len(g_obs))
-    inv = GravimetryInversion(NX, NY, NZ, BLOCK)
-    density, _s, _m, _e = inv.solve_inversion_lsqr(
-        g_noisy, None, y_c, lambda_mag=LAMBDA, alpha_spatial=1.0,
-        forward_model=forward, sensor_coords=sensors, x_c=x_c, z_c=z_c,
-    )
-    contrast_rec = density - inv.base_density
-    print(f"  Inversión: {time.perf_counter()-t0:.1f}s")
+    seeds = bench_seeds()
+    sigma = 0.02 * float(np.sqrt(np.mean(g_obs**2)))
+    recs = []
+    for sd in seeds:
+        rng = np.random.default_rng(int(sd))
+        g_noisy = g_obs + rng.normal(0.0, sigma, size=len(g_obs))
+        inv = GravimetryInversion(NX, NY, NZ, BLOCK)
+        density, _s, _m, _e = inv.solve_inversion_lsqr(
+            g_noisy, None, y_c, lambda_mag=LAMBDA, alpha_spatial=1.0,
+            forward_model=forward, sensor_coords=sensors, x_c=x_c, z_c=z_c,
+        )
+        recs.append(density - inv.base_density)
+    print(f"  {len(seeds)} inversiones: {time.perf_counter()-t0:.1f}s")
 
-    result = (x_c, y_c, z_c, contrast, contrast_rec)
+    result = (x_c, y_c, z_c, contrast, recs, seeds)
 
     passed = failed = 0
     for fn in [test_two_body_separation, test_two_body_centroid_a, test_two_body_centroid_b]:

@@ -237,6 +237,7 @@ def run_checkerboard_test(
     alpha_spatial: float = DEFAULT_ALPHA_SPATIAL,
     noise_pct: float = 0.02,
     noise_floor: float = 0.001,
+    seed: int = 42,
     verbose: bool = True,
 ) -> dict:
     """
@@ -296,7 +297,10 @@ def run_checkerboard_test(
     g_synthetic_clean = kernel @ true_contrast
 
     # Ruido gaussiano realista
-    rng = np.random.default_rng(seed=42)
+    # FASE 26 (direccion 5): la semilla es un PARAMETRO. Estaba clavada en 42 y el
+    # script publicaba un `pearson_r` como si fuera una propiedad del survey; es una
+    # realizacion. Ver `tests/seed_sweep.py` y `validation/exp_resolution.py`.
+    rng = np.random.default_rng(seed=int(seed))
     sigma_noise = noise_floor + noise_pct * np.abs(g_synthetic_clean)
     noise = rng.normal(scale=sigma_noise)
     g_observed = g_synthetic_clean + noise
@@ -339,6 +343,7 @@ def run_checkerboard_test(
     metrics["ny"] = ny
     metrics["nz"] = nz
     metrics["block_size"] = block_size
+    metrics["seed"] = int(seed)
 
     ts_end = datetime.now(timezone.utc)
     elapsed_s = (ts_end - ts_start).total_seconds()
@@ -421,6 +426,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha_spatial",type=float, default=DEFAULT_ALPHA_SPATIAL)
     parser.add_argument("--noise_pct",    type=float, default=0.02)
     parser.add_argument("--noise_floor",  type=float, default=0.001)
+    parser.add_argument("--seed",         type=int,   default=42,
+                        help="Realizacion de ruido. Una semilla NO es una muestra: "
+                             "barrer varias es lo que dice si el numero es del survey "
+                             "o de la tirada (Fase 26, direccion 5).")
     parser.add_argument("--quiet",        action="store_true",
                         help="Suprimir reporte detallado (solo métricas JSON)")
     return parser.parse_args()
@@ -439,6 +448,7 @@ if __name__ == "__main__":
         alpha_spatial=args.alpha_spatial,
         noise_pct=args.noise_pct,
         noise_floor=args.noise_floor,
+        seed=args.seed,
         verbose=not args.quiet,
     )
 

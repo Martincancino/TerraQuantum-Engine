@@ -40,6 +40,11 @@ import numpy as np
 import pytest
 
 try:
+    from tests.seed_sweep import bench_seeds, median_of, spread_report
+except ImportError:                                    # ejecucion directa del archivo
+    from seed_sweep import bench_seeds, median_of, spread_report
+
+try:
     from exploration.gravimetry import GravimetryForward, GravimetryInversion
 except ImportError:
     import sys, os
@@ -138,23 +143,28 @@ def dike_benchmark_data():
         sensors_grid = _build_sensors_grid()
         kernel_grid = fwd.build_sparse_kernel(x_c, y_c, z_c, sensors_grid)
         g_grid = kernel_grid @ contrast_true
-        rng = np.random.default_rng(seed=42)
-        g_noisy = g_grid + rng.normal(
-            0.0, 0.02 * float(np.sqrt(np.mean(g_grid**2))), size=len(g_grid)
-        )
-        inv = GravimetryInversion(NX, NY, NZ, BLOCK)
-        density, _s, _m, _e = inv.solve_inversion_lsqr(
-            g_noisy, None, y_c,
-            lambda_mag=LAMBDA, alpha_spatial=1.0,
-            forward_model=fwd, sensor_coords=sensors_grid,
-            x_c=x_c, z_c=z_c,
-        )
-        contrast_rec = density - inv.base_density
+        # FASE 26 (direccion 5): una realizacion de ruido POR SEMILLA. El forward puro
+        # (`g_profile`) no lleva ruido y no depende de la semilla: sigue siendo uno.
+        seeds = bench_seeds()
+        sigma = 0.02 * float(np.sqrt(np.mean(g_grid**2)))
+        recs = []
+        for sd in seeds:
+            rng = np.random.default_rng(seed=int(sd))
+            g_noisy = g_grid + rng.normal(0.0, sigma, size=len(g_grid))
+            inv = GravimetryInversion(NX, NY, NZ, BLOCK)
+            density, _s, _m, _e = inv.solve_inversion_lsqr(
+                g_noisy, None, y_c,
+                lambda_mag=LAMBDA, alpha_spatial=1.0,
+                forward_model=fwd, sensor_coords=sensors_grid,
+                x_c=x_c, z_c=z_c,
+            )
+            recs.append(density - inv.base_density)
 
         return {
             "x_c": x_c, "y_c": y_c, "z_c": z_c,
             "contrast_true": contrast_true,
-            "contrast_rec": contrast_rec,
+            "contrast_recs": recs,
+            "seeds": seeds,
             "sensors_profile": sensors_profile,
             "g_profile": g_profile,
         }
@@ -219,19 +229,27 @@ def test_dipping_dike_top_depth(dike_benchmark_data):
     """
     d = dike_benchmark_data
     y_c = d["y_c"]
-    contrast_rec = d["contrast_rec"]
+    seeds = d["seeds"]
 
-    threshold = 0.20 * float(np.nanmax(contrast_rec))
-    significant = np.isfinite(contrast_rec) & (contrast_rec > threshold)
-    assert significant.any(), "No se recupero ningun contraste significativo en la inversion"
+    errs, tops = [], []
+    for rec in d["contrast_recs"]:
+        threshold = 0.20 * float(np.nanmax(rec))
+        significant = np.isfinite(rec) & (rec > threshold)
+        if not significant.any():
+            errs.append(float("nan")); tops.append(float("nan")); continue
+        top = float(np.min(y_c[significant]))
+        tops.append(top)
+        errs.append(abs(top - TOP_Y))
+    assert any(e == e for e in errs), (
+        "No se recupero ningun contraste significativo en NINGUNA semilla")
 
-    top_depth_rec = float(np.min(y_c[significant]))
-    top_err = abs(top_depth_rec - TOP_Y)
-
-    assert top_err <= TOP_TOL_M, (
-        f"Benchmark 2b FAIL — Top recuperado = {top_depth_rec:.1f}m | "
-        f"verdadero = {TOP_Y:.1f}m | error = {top_err:.1f}m | "
-        f"tolerancia = +/-{TOP_TOL_M:.0f}m (Plan §13.2)"
+    mediana = median_of(errs)
+    assert mediana <= TOP_TOL_M, (
+        f"Benchmark 2b FAIL — error de profundidad del tope (verdadero {TOP_Y:.1f}m), "
+        f"MEDIANA sobre {len(seeds)} semillas: {mediana:.1f}m | "
+        f"tolerancia = +/-{TOP_TOL_M:.0f}m (Plan §13.2)\n"
+        f"    error {spread_report(seeds, errs, unit='m')}\n"
+        f"    tope  {spread_report(seeds, tops, unit='m')}"
     )
 
 
@@ -252,19 +270,23 @@ if __name__ == "__main__":
 
     sensors_grid = _build_sensors_grid()
     g_grid = fwd.build_sparse_kernel(x_c, y_c, z_c, sensors_grid) @ contrast
-    rng = np.random.default_rng(42)
-    g_noisy = g_grid + rng.normal(0.0, 0.02 * float(np.sqrt(np.mean(g_grid**2))), size=len(g_grid))
-    inv = GravimetryInversion(NX, NY, NZ, BLOCK)
-    density, _s, _m, _e = inv.solve_inversion_lsqr(
-        g_noisy, None, y_c, lambda_mag=LAMBDA, alpha_spatial=1.0,
-        forward_model=fwd, sensor_coords=sensors_grid, x_c=x_c, z_c=z_c,
-    )
-    contrast_rec = density - inv.base_density
-    print(f"  Tiempo total: {time.perf_counter()-t0:.1f}s")
+    seeds = bench_seeds()
+    sigma = 0.02 * float(np.sqrt(np.mean(g_grid**2)))
+    recs = []
+    for sd in seeds:
+        rng = np.random.default_rng(int(sd))
+        g_noisy = g_grid + rng.normal(0.0, sigma, size=len(g_grid))
+        inv = GravimetryInversion(NX, NY, NZ, BLOCK)
+        density, _s, _m, _e = inv.solve_inversion_lsqr(
+            g_noisy, None, y_c, lambda_mag=LAMBDA, alpha_spatial=1.0,
+            forward_model=fwd, sensor_coords=sensors_grid, x_c=x_c, z_c=z_c,
+        )
+        recs.append(density - inv.base_density)
+    print(f"  Tiempo total ({len(seeds)} semillas): {time.perf_counter()-t0:.1f}s")
 
     data = {
         "x_c": x_c, "y_c": y_c, "z_c": z_c,
-        "contrast_true": contrast, "contrast_rec": contrast_rec,
+        "contrast_true": contrast, "contrast_recs": recs, "seeds": seeds,
         "sensors_profile": sensors_profile, "g_profile": g_profile,
     }
 

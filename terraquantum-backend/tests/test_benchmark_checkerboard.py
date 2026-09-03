@@ -27,6 +27,11 @@ import numpy as np
 import pytest
 
 try:
+    from tests.seed_sweep import bench_seeds, median_of, spread_report
+except ImportError:
+    from seed_sweep import bench_seeds, median_of, spread_report
+
+try:
     from exploration.gravimetry import GravimetryForward, GravimetryInversion
 except ImportError:
     import sys, os
@@ -89,9 +94,13 @@ def _build_sensors():
     return np.column_stack([sx_g.ravel(), np.zeros(sx_g.size), sz_g.ravel()])
 
 
-def _run_checkerboard_inversion(x_c, y_c, z_c, contrast):
+def _run_checkerboard_inversion(x_c, y_c, z_c, contrast, seed: int = 42):
     """Computa datos y recupera modelo; retorna contraste recuperado.
     USE_BOUNDED_SOLVER debe estar en False antes de llamar (configurado por fixture).
+
+    FASE 26 (direccion 5): `seed` es un PARAMETRO. Antes estaba clavado en 42 y el
+    benchmark afirmaba una tasa de recuperacion de signo sobre una sola realizacion
+    de ruido. Ver `tests/seed_sweep.py`.
     """
     sensors = _build_sensors()
     forward = GravimetryForward(BLOCK, BLOCK, BLOCK, cutoff_radius=4000.0)
@@ -101,7 +110,7 @@ def _run_checkerboard_inversion(x_c, y_c, z_c, contrast):
     assert np.max(np.abs(g_obs)) > 0, "g_obs checkerboard es cero"
     assert np.isfinite(g_obs).all()
 
-    rng = np.random.default_rng(seed=42)
+    rng = np.random.default_rng(seed=int(seed))
     noise = rng.normal(0.0, 0.02 * float(np.sqrt(np.mean(g_obs**2))), size=len(g_obs))
     g_noisy = g_obs + noise
 
@@ -125,7 +134,9 @@ def _run_checkerboard_inversion(x_c, y_c, z_c, contrast):
 @pytest.fixture(scope="module")
 def checker_inversion_result():
     """
-    Corre la inversion del tablero una unica vez.
+    Corre la inversion del tablero una vez POR SEMILLA (FASE 26, direccion 5).
+    El kernel se reconstruye dentro de `_run_checkerboard_inversion`, que es lo caro;
+    aun asi el barrido cabe porque el dominio es pequeno (16x8x16).
     USE_BOUNDED_SOLVER forzado a False (LSQR+clip) para evitar TRF >500s
     en dominios < 8000 voxeles.
     """
@@ -140,65 +151,54 @@ def checker_inversion_result():
         assert n_checker >= N_CELLS * N_CELLS, (
             f"Tablero tiene solo {n_checker} voxeles — revisar dominio"
         )
-        contrast_rec = _run_checkerboard_inversion(x_c, y_c, z_c, contrast_true)
-        return x_c, y_c, z_c, contrast_true, contrast_rec
+        seeds = bench_seeds()
+        recs = [_run_checkerboard_inversion(x_c, y_c, z_c, contrast_true, seed=s)
+                for s in seeds]
+        return x_c, y_c, z_c, contrast_true, recs, seeds
     finally:
         _cfg.USE_BOUNDED_SOLVER = _orig_bounded
 
 
 # -- Tests ---------------------------------------------------------------------
 
-@pytest.mark.benchmark
-def test_checkerboard_sign_recovery(checker_inversion_result):
-    """
-    Benchmark 3 — Resolucion espacial: > 80% celdas con signo correcto.
-    """
-    x_c, y_c, z_c, contrast_true, contrast_rec = checker_inversion_result
-
+def _sign_recovery_pct(x_c, y_c, z_c, contrast_rec) -> float:
+    """% de celdas del tablero con el signo correcto, para UNA realizacion."""
     correct = 0
     total = N_CELLS * N_CELLS
-    cell_results = []
-
     in_depth = (y_c >= CHECKER_Y_TOP) & (y_c < CHECKER_Y_BOT) & np.isfinite(contrast_rec)
-
     for ix in range(N_CELLS):
         x_lo, x_hi = ix * CELL_SIZE, (ix + 1) * CELL_SIZE
         for iz in range(N_CELLS):
             z_lo, z_hi = iz * CELL_SIZE, (iz + 1) * CELL_SIZE
             cell_mask = in_depth & (x_c >= x_lo) & (x_c < x_hi) & (z_c >= z_lo) & (z_c < z_hi)
-
             if not cell_mask.any():
                 total -= 1
                 continue
-
-            mean_contrast = float(np.mean(contrast_rec[cell_mask]))
-            true_sign = _checker_sign(ix, iz)
-            recovered_sign = 1 if mean_contrast >= 0 else -1
-
-            if recovered_sign == true_sign:
+            if (1 if float(np.mean(contrast_rec[cell_mask])) >= 0 else -1) == _checker_sign(ix, iz):
                 correct += 1
-
-            cell_results.append({
-                "cell": (ix, iz),
-                "true_sign": true_sign,
-                "mean_rec": round(mean_contrast, 4),
-                "recovered_sign": recovered_sign,
-                "pass": recovered_sign == true_sign,
-            })
-
     assert total > 0, "No se encontraron celdas del tablero en el dominio"
+    return 100.0 * correct / total
 
-    sign_pct = correct / total
-    details = "\n  ".join(
-        f"({r['cell'][0]},{r['cell'][1]}) true={r['true_sign']:+d} rec={r['mean_rec']:+.4f} "
-        f"{'PASS' if r['pass'] else 'FAIL'}"
-        for r in cell_results
-    )
 
-    assert sign_pct >= SIGN_CORRECT_MIN, (
-        f"Benchmark 3 FAIL — Signo correcto: {correct}/{total} = {sign_pct:.0%} "
-        f"(criterio Tier 1: >={SIGN_CORRECT_MIN:.0%})\n"
-        f"  Detalle por celda:\n  {details}"
+@pytest.mark.benchmark
+def test_checkerboard_sign_recovery(checker_inversion_result):
+    """
+    Benchmark 3 — Resolucion espacial: > 80% celdas con signo correcto.
+
+    FASE 26 (direccion 5): el criterio es la MEDIANA sobre N realizaciones de ruido,
+    no una sola. Una semilla no es una muestra: el barrido de validacion midio que en
+    este tipo de regimen 1 de cada 3 realizaciones cambia materialmente el resultado.
+    El mensaje publica TODAS las semillas para que la dispersion se vea aunque pase.
+    """
+    x_c, y_c, z_c, contrast_true, recs, seeds = checker_inversion_result
+
+    pcts = [_sign_recovery_pct(x_c, y_c, z_c, rec) for rec in recs]
+    mediana = median_of(pcts)
+
+    assert mediana >= SIGN_CORRECT_MIN * 100.0, (
+        f"Benchmark 3 FAIL — Signo correcto (MEDIANA sobre {len(seeds)} semillas): "
+        f"{mediana:.0f}% (criterio Tier 1: >={SIGN_CORRECT_MIN:.0%})\n"
+        f"    {spread_report(seeds, pcts, unit='%')}"
     )
 
 
@@ -235,11 +235,12 @@ if __name__ == "__main__":
     contrast = _build_checker_contrast(x_c, y_c, z_c)
     print(f"[checkerboard] {NX}x{NY}x{NZ} = {NX*NY*NZ} vox, {N_CELLS}x{N_CELLS} celdas")
 
+    seeds = bench_seeds()
     t0 = time.perf_counter()
-    contrast_rec = _run_checkerboard_inversion(x_c, y_c, z_c, contrast)
-    print(f"  Inversion: {time.perf_counter()-t0:.1f}s")
+    recs = [_run_checkerboard_inversion(x_c, y_c, z_c, contrast, seed=sd) for sd in seeds]
+    print(f"  {len(seeds)} inversiones (una por semilla): {time.perf_counter()-t0:.1f}s")
 
-    result = (x_c, y_c, z_c, contrast, contrast_rec)
+    result = (x_c, y_c, z_c, contrast, recs, seeds)
 
     passed = failed = 0
     for fn, arg in [
