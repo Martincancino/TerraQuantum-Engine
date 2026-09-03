@@ -27,8 +27,27 @@ Lo que esta fase **NO** hace: desbloquear `HIGH`. Ver Fase 26 y Fase 30, en ese 
 señal discrimine sería PEOR que el estado actual (1 de cada 3 realizaciones de ruido
 desvía el blanco ~170 m con diagnósticos idénticos).
 
-Gate: una corrida con el checkerboard DESACTIVADO no puede dar un veredicto mejor que la
-misma corrida con el checkerboard activado y fallando.
+Gate: una corrida con el diagnóstico de resolución DESACTIVADO no puede dar un veredicto
+mejor que la misma corrida con el diagnóstico activado y fallando.
+
+────────────────────────────────────────────────────────────────────────────────
+ACTUALIZADO POR LA FASE 26 — qué cambió y qué NO
+────────────────────────────────────────────────────────────────────────────────
+La Fase 26 midió que el tablero era imposible de aprobar por TRES motivos (no sólo
+la longitud de onda que suponía el hallazgo) y lo reemplazó por un perfil de
+resolución que sí varía entre surveys. Consecuencias para este archivo:
+
+  · El tablero histórico YA NO TOPEA: se conserva publicado como control.
+    Los tests que medían la monotonía del techo ahora la miden sobre la señal
+    que sí manda, `survey_resolution`.
+  · `HIGH` sigue sin ser alcanzable, pero por un motivo distinto y honesto: una
+    RETENCIÓN declarada (`high_hold_pending_fase30`) con condición de salida
+    escrita, en vez de un examen que ningún survey podía aprobar. Por eso los
+    tests que afirmaban `level == "HIGH"` con el tablero en PASS ahora afirman
+    `MEDIUM` limitado ÚNICAMENTE por la retención — que es la misma propiedad
+    («ninguna señal medida degrada un caso sano») dicha sobre el mecanismo nuevo.
+  · La propiedad central de la Fase 21 —medir menos no puede mejorar el
+    veredicto— se conserva intacta y se comprueba sobre las DOS señales.
 """
 from __future__ import annotations
 
@@ -42,6 +61,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schemas.geophysics_schema import GeophysicsInvertInput
 from services.geophysics_service import (
+    _VERDICT_CEILING_EVIDENCE,
     _VERDICT_ORD,
     apply_reconciled_verdict,
     build_reconciled_verdict,
@@ -50,10 +70,26 @@ from services.geophysics_service import (
 
 NX, NY, NZ, BLOCK = 6, 8, 6, 20.0
 
+# FASE 26 — la retención declarada de `HIGH`, mientras la Fase 30 no la levante.
+HOLD = "high_hold_pending_fase30"
 
-def _payload_todo_alto(cb: dict | None) -> dict:
+
+def _resolution(resolves: bool = True) -> dict:
+    """Perfil de resolución declarado, con o sin resolución."""
+    return {
+        "computed": True,
+        "resolves_anywhere": resolves,
+        "resolvability_index": 0.2478 if resolves else 0.0269,
+        "shallowest_band_resolution_m": 250.0 if resolves else None,
+        "deepest_resolved_m": 500.0 if resolves else 0.0,
+        "max_block_tested_m": 750.0,
+        "sigma_used": {"snr_signal": 3.64 if resolves else 0.19},
+    }
+
+
+def _payload_todo_alto(cb: dict | None, res: dict | None = None) -> dict:
     """Payload donde TODAS las demás señales son HIGH: lo único que puede topear es el
-    checkerboard. Aísla la variable de esta fase."""
+    diagnóstico de resolución (y la retención declarada de la Fase 26)."""
     p = {
         "confidence_level": "HIGH",
         "model_reliability_level": "HIGH_RELIABILITY",
@@ -63,6 +99,8 @@ def _payload_todo_alto(cb: dict | None) -> dict:
     }
     if cb is not None:
         p["checkerboard_qa"] = cb
+    if res is not None:
+        p["resolution_qa"] = res
     return p
 
 
@@ -72,12 +110,23 @@ def _payload_todo_alto(cb: dict | None) -> dict:
 
 def test_not_run_cannot_beat_fail():
     """EL GATE, en su forma más directa: el diagnóstico ausente no puede dar mejor
-    veredicto que el diagnóstico presente y fallando."""
-    con_fail = build_reconciled_verdict(_payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162}))
-    sin_qa = build_reconciled_verdict(_payload_todo_alto(None))
+    veredicto que el diagnóstico presente y fallando.
 
-    assert _VERDICT_ORD[sin_qa["level"]] <= _VERDICT_ORD[con_fail["level"]]
-    assert sin_qa["level"] == con_fail["level"] == "MEDIUM"
+    FASE 26: se mide sobre `resolution_qa`, que es la señal que topea ahora. Un survey
+    que no resuelve NADA sale LOW; el mismo survey con el diagnóstico caído no puede
+    salir mejor que... bueno, sí puede salir MEDIUM en vez de LOW — y eso es correcto y
+    deliberado: `NOT_RUN` no puede AFIRMAR que el survey no resuelve nada, sólo que no
+    se midió. Lo que el gate prohíbe es que la ausencia deje el techo LIBRE.
+    """
+    no_resuelve = build_reconciled_verdict(
+        _payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162}, _resolution(False)))
+    sin_qa = build_reconciled_verdict(_payload_todo_alto(None, None))
+
+    assert no_resuelve["level"] == "LOW"
+    assert sin_qa["level"] == "MEDIUM"
+    # Lo esencial: la ausencia NO deja el techo libre.
+    assert sin_qa["ceiling"]["max_attainable_level"] == "MEDIUM"
+    assert sin_qa["components"]["survey_resolution"]["status"] == "NOT_RUN"
 
 
 @pytest.mark.parametrize("cb", [
@@ -89,41 +138,53 @@ def test_not_run_cannot_beat_fail():
     {"status": "SOMETHING_UNEXPECTED"},     # estado que nadie previó
 ])
 def test_every_flavour_of_not_measured_caps_to_medium(cb):
-    """`PASS`/`WARNING` son evidencia medida; TODO lo demás se trata como no medido.
+    """El tablero, en cualquiera de sus formas, ya no cambia el nivel: es un control.
 
-    Incluye el estado inesperado a propósito: si mañana alguien agrega un status nuevo, el
-    default seguro es topear, no dejar el techo libre por descuido.
+    FASE 26 — antes esto probaba que TODO lo que no fuera PASS/WARNING topeaba. Hoy el
+    tablero no topea en ninguna de sus formas, y lo que se comprueba es lo simétrico y
+    más fuerte: su estado es IRRELEVANTE para el nivel. El techo lo pone otra cosa.
     """
-    v = build_reconciled_verdict(_payload_todo_alto(cb))
-    assert v["level"] == "MEDIUM"
+    v = build_reconciled_verdict(_payload_todo_alto(cb, _resolution(True)))
+    ref = build_reconciled_verdict(
+        _payload_todo_alto({"status": "PASS", "pearson_r": 0.9}, _resolution(True)))
+    assert v["level"] == ref["level"] == "MEDIUM"
+    assert v["limiting_factors"] == ref["limiting_factors"] == [HOLD]
     assert v["ceiling"]["max_attainable_level"] == "MEDIUM"
 
 
-@pytest.mark.parametrize("status,esperado", [
-    ("PASS", "HIGH"),
-    ("WARNING", "HIGH"),
-    ("FAIL", "MEDIUM"),
-    ("NOT_RUN", "MEDIUM"),
+@pytest.mark.parametrize("res,esperado", [
+    (_resolution(True), "MEDIUM"),      # resuelve algo -> no aporta tope propio
+    (None, "MEDIUM"),                   # no se midió -> topea, pero no puede AFIRMAR
+    (_resolution(False), "LOW"),        # medido y no resuelve nada -> base no fiable
 ])
-def test_the_verdict_is_monotone_in_the_evidence(status, esperado):
-    """Ordena: sólo la evidencia medida y suficiente deja el techo libre."""
-    v = build_reconciled_verdict(_payload_todo_alto({"status": status, "pearson_r": 0.5}))
+def test_the_verdict_is_monotone_in_the_evidence(res, esperado):
+    """Ordena: la evidencia medida y NEGATIVA es la única que puede bajar a LOW, y la
+    ausencia nunca deja el techo libre. FASE 26 — sobre la señal que sí varía."""
+    v = build_reconciled_verdict(_payload_todo_alto({"status": "FAIL", "pearson_r": 0.11}, res))
     assert v["level"] == esperado
+    assert _VERDICT_ORD[v["ceiling"]["max_attainable_level"]] <= _VERDICT_ORD["MEDIUM"]
 
 
-def test_not_run_and_fail_are_distinguishable_even_capping_the_same():
-    """Topean igual pero NO se confunden: el reporte dice cuál de los dos fue."""
-    fail = build_reconciled_verdict(_payload_todo_alto({"status": "FAIL", "pearson_r": 0.11}))
-    nada = build_reconciled_verdict(_payload_todo_alto(None))
+def test_not_run_and_measured_are_distinguishable():
+    """No medido y medido-negativo NO se confunden: el reporte dice cuál de los dos fue.
 
-    assert fail["limiting_factors"] == ["checkerboard_resolution"]
-    assert nada["limiting_factors"] == ["checkerboard_not_run"]
-    assert fail["components"]["checkerboard_qa"] == "FAIL"
-    assert nada["components"]["checkerboard_qa"] == "NOT_RUN"
-    # Y el motivo del techo NO es el mismo texto: uno habla del examen, otro de su ausencia.
-    assert fail["ceiling"]["reason"] != nada["ceiling"]["reason"]
-    assert fail["ceiling"]["structural"] is True        # más dato no lo levanta
-    assert nada["ceiling"]["structural"] is False       # correr el QA sí puede cambiarlo
+    FASE 26 — la distinción se mudó a `survey_resolution`, y ahora además tienen
+    consecuencias DISTINTAS (MEDIUM vs LOW), no sólo textos distintos.
+    """
+    nada_resuelve = build_reconciled_verdict(
+        _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11}, _resolution(False)))
+    sin_medir = build_reconciled_verdict(_payload_todo_alto(None, None))
+
+    assert nada_resuelve["components"]["survey_resolution"]["status"] == "RESOLVES_NOTHING"
+    assert sin_medir["components"]["survey_resolution"]["status"] == "NOT_RUN"
+    assert nada_resuelve["limiting_factors"] == ["survey_resolution"]
+    assert set(sin_medir["limiting_factors"]) == {"survey_resolution", HOLD}
+    r1 = nada_resuelve["components"]["survey_resolution"]["reason"]
+    r2 = sin_medir["components"]["survey_resolution"]["reason"]
+    assert r1 != r2
+    # El tablero histórico sigue publicado, y declarado como lo que es.
+    assert nada_resuelve["components"]["checkerboard_qa"] == "FAIL"
+    assert nada_resuelve["components"]["checkerboard_role"].startswith("historical")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -131,45 +192,57 @@ def test_not_run_and_fail_are_distinguishable_even_capping_the_same():
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_ceiling_explains_itself_with_the_measured_evidence():
-    v = build_reconciled_verdict(_payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162}))
+    """FASE 26 — el techo sigue declarándose, y ahora dice su motivo REAL.
+
+    Hasta la Fase 25 el motivo era «el tablero devolvió FAIL», que era cierto pero
+    circular: el tablero devolvía FAIL siempre. El motivo de hoy es una retención de
+    producto con condición de salida, y el texto tiene que sostener las dos mitades:
+    por qué el examen viejo no servía, y por qué el techo sigue puesto igualmente.
+    """
+    v = build_reconciled_verdict(
+        _payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162}, _resolution(True)))
     c = v["ceiling"]
 
     assert c["max_attainable_level"] == "MEDIUM"
-    assert c["capped_by"] == ["checkerboard_resolution"]
-    assert c["structural"] is True
-    # El motivo trae el número medido y el umbral, no un adjetivo.
-    assert "0,1162" in c["reason"] and "0,60" in c["reason"]
-    assert "no depende" in c["reason"]
-    assert "Recolectar más dato NO lo levanta" in c["reason"]
-    # Y dice qué haría falta, en el orden correcto (Fase 26 antes que Fase 30).
-    assert "DESPUÉS" in c["how_to_lift"]
-    assert "170 m" in c["how_to_lift"] and "285 m" in c["how_to_lift"]
-    assert c["evidence"] == "validation/HALLAZGO_2026-08-06_techo_medium.md"
-
-
-def test_ceiling_is_high_when_the_qa_actually_passes():
-    """El techo no es un adorno fijo: con evidencia suficiente queda libre."""
-    c = build_reconciled_verdict(_payload_todo_alto({"status": "PASS", "pearson_r": 0.72}))["ceiling"]
-    assert c["max_attainable_level"] == "HIGH"
-    assert c["capped_by"] == []
+    assert c["capped_by"] == [HOLD]
+    # Ya NO es estructural: no queda ningún examen imposible de aprobar.
     assert c["structural"] is False
-    assert c["how_to_lift"] is None
+    # El motivo trae el número medido del examen viejo y sus tres causas.
+    assert "0,1162" in c["reason"]
+    assert "celda a celda" in c["reason"]
+    assert "solver distinto" in c["reason"]
+    # Y por qué el techo sigue puesto pese a tener ya un examen que informa.
+    assert "170 m" in c["reason"]
+    assert "Fase 30" in c["how_to_lift"] and "SOBRECONFIADO" in c["how_to_lift"]
+    assert "150" in c["how_to_lift"]
+    assert _VERDICT_CEILING_EVIDENCE in c["evidence"]
 
 
-def test_headline_says_the_top_level_was_unavailable():
+def test_ceiling_carries_the_resolution_signal_that_replaced_the_checkerboard():
+    """El techo publica el número NUEVO, no sólo el viejo: si alguien lee el `ceiling`
+    tiene que poder ver qué resuelve este survey, en metros."""
+    c = build_reconciled_verdict(
+        _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11}, _resolution(True)))["ceiling"]
+    rs = c["resolution_signal"]
+    assert rs["status"] == "RESOLVES"
+    assert rs["shallowest_band_resolution_m"] == 250.0
+    assert rs["resolvability_index"] == pytest.approx(0.2478)
+
+
+def test_headline_says_the_top_level_is_held():
     """El usuario lee el titular, no el JSON. «MEDIUM» a secas se lee como "confianza
-    media"; lo que el sistema quiere decir es que el nivel superior no estaba disponible."""
-    v = build_reconciled_verdict(_payload_todo_alto({"status": "FAIL", "pearson_r": 0.11}))
-    assert "HIGH no estaba disponible" in v["headline"]
-    assert "checkerboard" in v["headline"]
-
-    limpio = build_reconciled_verdict(_payload_todo_alto({"status": "PASS", "pearson_r": 0.8}))
-    assert "HIGH no estaba disponible" not in limpio["headline"]
+    media"; lo que el sistema quiere decir es que el nivel superior no está habilitado."""
+    v = build_reconciled_verdict(
+        _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11}, _resolution(True)))
+    assert "HIGH no está habilitado" in v["headline"]
+    assert "Fase 30" in v["headline"]
 
 
 def test_pearson_r_travels_with_the_components():
-    """El número que produjo el FAIL queda auditable junto al status."""
-    v = build_reconciled_verdict(_payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162}))
+    """El número que produjo el FAIL queda auditable junto al status — sigue siendo la
+    evidencia de que el examen viejo era constante, aunque ya no topee."""
+    v = build_reconciled_verdict(
+        _payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162}, _resolution(True)))
     assert v["components"]["checkerboard_pearson_r"] == pytest.approx(0.1162)
 
 
@@ -178,8 +251,8 @@ def test_pearson_r_travels_with_the_components():
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_signal_ledger_names_the_entry_that_decided():
-    p = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11})
-    p["priority_class"] = "UNCLASSIFIED"          # LOW: éste manda, no el checkerboard
+    p = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11}, _resolution(True))
+    p["priority_class"] = "UNCLASSIFIED"          # LOW: éste manda, no la retención
     v = build_reconciled_verdict(p)
 
     assert v["level"] == "LOW"
@@ -188,16 +261,16 @@ def test_signal_ledger_names_the_entry_that_decided():
     por_nombre = {s["signal"]: s for s in v["signals"]}
     assert por_nombre["priority_class"]["level"] == "LOW"
     assert por_nombre["priority_class"]["is_limiting"] is True
-    # El checkerboard aportó, pero NO mandó: aparece con su nivel y sin la marca.
-    assert por_nombre["checkerboard_resolution"]["level"] == "MEDIUM"
-    assert por_nombre["checkerboard_resolution"]["is_limiting"] is False
+    # La retención aportó, pero NO mandó: aparece con su nivel y sin la marca.
+    assert por_nombre[HOLD]["level"] == "MEDIUM"
+    assert por_nombre[HOLD]["is_limiting"] is False
     # Las señales HIGH también quedan registradas: el ledger es completo, no una lista
     # de culpables.
     assert por_nombre["survey_confidence"]["level"] == "HIGH"
 
 
 def test_signal_ledger_is_sorted_by_severity():
-    p = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11})
+    p = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11}, _resolution(True))
     p["priority_class"] = "UNCLASSIFIED"
     niveles = [_VERDICT_ORD[s["level"]] for s in build_reconciled_verdict(p)["signals"]]
     assert niveles == sorted(niveles)
@@ -205,21 +278,21 @@ def test_signal_ledger_is_sorted_by_severity():
 
 def test_ties_are_all_reported_as_limiting():
     """El worst-of puede empatar: se nombran TODAS las entradas que fijaron el mínimo."""
-    p = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11})
+    p = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11}, _resolution(True))
     p["model_reliability_level"] = "MEDIUM_RELIABILITY"
     v = build_reconciled_verdict(p)
     assert v["level"] == "MEDIUM"
-    assert set(v["decided_by"]) == {"model_reliability", "checkerboard_resolution"}
+    assert set(v["decided_by"]) == {"model_reliability", HOLD}
     assert v["decided_by"] == v["limiting_factors"]
 
 
 def test_ledger_and_decided_by_survive_apply():
     """`apply_reconciled_verdict` adjunta el veredicto completo al payload persistido."""
-    p = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11})
+    p = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.11}, _resolution(True))
     apply_reconciled_verdict(p)
     ov = p["overall_verdict"]
     assert ov["ceiling"]["max_attainable_level"] == "MEDIUM"
-    assert ov["decided_by"] == ["checkerboard_resolution"]
+    assert ov["decided_by"] == [HOLD]
     assert any(s["is_limiting"] for s in ov["signals"])
 
 
@@ -259,8 +332,7 @@ def _gravity_input(run_id: str) -> GeophysicsInvertInput:
 
 @pytest.fixture
 def checkerboard_caido(monkeypatch):
-    """El QA de resolución revienta. Es NON-FATAL: la corrida sigue y hasta la Fase 21
-    salía SIN el bloque `checkerboard_qa` — y por tanto sin techo."""
+    """El tablero histórico revienta. Es NON-FATAL: la corrida sigue."""
     import services.geophysics_service as svc
 
     def _boom(*_a, **_k):
@@ -269,25 +341,38 @@ def checkerboard_caido(monkeypatch):
     monkeypatch.setattr(svc, "_run_checkerboard_qa_fast", _boom)
 
 
-def test_e2e_disabling_the_checkerboard_does_not_improve_the_verdict(monkeypatch):
+@pytest.fixture
+def resolucion_caida(monkeypatch):
+    """FASE 26 — el PERFIL de resolución revienta. También es non-fatal, y también
+    tiene que dejar el techo puesto: el gate de la Fase 21 aplicado a la señal nueva."""
+    import services.resolution_qa as rqa
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("fallo sintético del perfil de resolución")
+
+    monkeypatch.setattr(rqa, "run_resolution_profile_qa", _boom)
+
+
+def test_e2e_disabling_the_resolution_qa_does_not_improve_the_verdict(monkeypatch):
     """GATE E2E, literal — mismo mundo, mismo survey, misma configuración; lo único que
     cambia es si el QA de resolución llegó a calcularse.
 
     Antes de la Fase 21 la corrida SIN diagnóstico salía con el techo libre y la corrida
     CON diagnóstico (que falla siempre) salía capada: medir menos daba mejor veredicto.
+    FASE 26 — mismo gate, sobre el diagnóstico que manda hoy.
     """
-    import services.geophysics_service as svc
+    import services.resolution_qa as rqa
 
     sana = run_geophysics_inversion(_gravity_input("f21_gate_con_qa"))["report"]
 
     def _boom(*_a, **_k):
-        raise RuntimeError("fallo sintético del checkerboard QA")
+        raise RuntimeError("fallo sintético del perfil de resolución")
 
-    monkeypatch.setattr(svc, "_run_checkerboard_qa_fast", _boom)
+    monkeypatch.setattr(rqa, "run_resolution_profile_qa", _boom)
     caida = run_geophysics_inversion(_gravity_input("f21_gate_sin_qa"))["report"]
 
-    assert sana["checkerboard_qa"]["status"] == "FAIL"
-    assert "checkerboard_qa" not in caida
+    assert sana["resolution_qa"]["computed"] is True
+    assert "resolution_qa" not in caida
 
     nivel_sana = sana["overall_verdict"]["level"]
     nivel_caida = caida["overall_verdict"]["level"]
@@ -303,24 +388,28 @@ def test_e2e_healthy_run_is_capped_and_says_so():
     rep = run_geophysics_inversion(_gravity_input("f21_e2e_sano"))["report"]
     ov = rep["overall_verdict"]
 
-    # El QA corrió y falló (es lo que hace SIEMPRE: el examen es sub-resolución).
+    # El tablero histórico corrió y falló (es lo que hace SIEMPRE) y se sigue publicando.
     assert rep["checkerboard_qa"]["status"] == "FAIL"
+    # FASE 26 — pero quien topea es la retención declarada, no el tablero.
     assert ov["ceiling"]["max_attainable_level"] == "MEDIUM"
-    assert "checkerboard_resolution" in ov["ceiling"]["capped_by"]
+    assert ov["ceiling"]["capped_by"] == [HOLD]
     assert ov["level"] in ("MEDIUM", "LOW")
-    assert any(s["signal"] == "checkerboard_resolution" for s in ov["signals"])
+    assert any(sig["signal"] == HOLD for sig in ov["signals"])
+    # Y el perfil nuevo SÍ llegó al reporte, con su número en metros.
+    assert rep["resolution_qa"]["computed"] is True
+    assert ov["components"]["survey_resolution"]["status"] in ("RESOLVES", "RESOLVES_NOTHING")
 
 
-def test_e2e_broken_qa_run_is_capped_too(checkerboard_caido):
-    """La corrida cuyo QA reventó: antes salía con el techo LIBRE; ahora queda capada,
-    con el motivo correcto (no se midió) y sin fingir que el examen se aprobó."""
+def test_e2e_broken_resolution_qa_run_is_capped_too(resolucion_caida):
+    """La corrida cuyo QA de resolución reventó: no puede salir con el techo LIBRE ni
+    fingir que el examen se aprobó. Es el gate de la Fase 21, sobre la señal de hoy."""
     rep = run_geophysics_inversion(_gravity_input("f21_e2e_caido"))["report"]
     ov = rep["overall_verdict"]
 
-    assert "checkerboard_qa" not in rep            # el bloque efectivamente no llegó
-    assert ov["components"]["checkerboard_qa"] == "NOT_RUN"
+    assert "resolution_qa" not in rep              # el bloque efectivamente no llegó
+    assert ov["components"]["survey_resolution"]["status"] == "NOT_RUN"
     assert ov["ceiling"]["max_attainable_level"] == "MEDIUM"
-    assert ov["ceiling"]["capped_by"] == ["checkerboard_not_run"]
+    assert "survey_resolution" in ov["limiting_factors"]
     assert ov["level"] in ("MEDIUM", "LOW")
     assert _VERDICT_ORD[ov["level"]] <= _VERDICT_ORD["MEDIUM"]
 
@@ -332,14 +421,15 @@ def test_e2e_broken_qa_run_is_capped_too(checkerboard_caido):
 def test_html_verdict_section_renders_the_ceiling_and_the_ledger():
     from reporting.report_generator import _reconciled_verdict_section_html
 
-    v = build_reconciled_verdict(_payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162}))
+    v = build_reconciled_verdict(
+        _payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162}, _resolution(True)))
     html = _reconciled_verdict_section_html(v)
 
     assert "Techo del Veredicto" in html
     assert "Entradas del Worst-Of" in html
     assert "fij" in html                            # la marca de "fijó el veredicto"
-    assert "checkerboard_resolution" in html
-    assert "0,1162" in html or "0.1162" in html
+    assert HOLD in html                             # quién topea, nombrado
+    assert "0,1162" in html or "0.1162" in html     # el número del control histórico
 
 
 def test_html_verdict_section_tolerates_a_legacy_verdict_without_ceiling():
@@ -366,7 +456,7 @@ def test_industrial_manifest_carries_the_qa_and_the_ceiling(tmp_path, monkeypatc
     from services.export_service import _build_bundle_manifest
 
     report = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162,
-                                 "sign_recovery_pct": 51.3})
+                                 "sign_recovery_pct": 51.3}, _resolution(True))
     apply_reconciled_verdict(report)
     report["technicalSummary"] = {"overall_level": "MEDIUM"}
     report["fitDiagnostics"] = {"fit_level": "ACCEPTABLE"}
@@ -385,7 +475,7 @@ def test_industrial_manifest_says_not_run_when_the_qa_did_not_run():
     """Sin bloque de QA el manifiesto dice NOT_RUN, no un hueco silencioso."""
     import services.export_service as export_service
 
-    report = _payload_todo_alto(None)
+    report = _payload_todo_alto(None, _resolution(True))
     apply_reconciled_verdict(report)
     man = export_service._build_bundle_manifest("p", "r", {}, report, "hash")
 
@@ -398,10 +488,10 @@ def test_copilot_trilogy_states_the_ceiling():
     """El copiloto no puede decir «MEDIUM» sin decir hasta dónde se podía llegar."""
     from api.chat_api import _format_trilogy
 
-    payload = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162})
+    payload = _payload_todo_alto({"status": "FAIL", "pearson_r": 0.1162}, _resolution(True))
     apply_reconciled_verdict(payload)
     texto = _format_trilogy(payload)
 
     assert "Techo alcanzable en esta corrida: MEDIUM" in texto
-    assert "checkerboard_resolution" in texto
+    assert HOLD in texto
     assert "Por qué ese techo:" in texto

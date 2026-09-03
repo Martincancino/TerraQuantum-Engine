@@ -955,6 +955,47 @@ def build_best_target(df_full, technical_summary: dict = None, uncertainty_diagn
         artifact_mask = saturated & at_floor
     n_artifact = int(artifact_mask.sum())
 
+    # ── FASE 26 — el null-space que SÍ ocurre: smear de piso sin saturación ──────
+    # `artifact_mask` (arriba) exige que la celda esté saturada al bound Y en el piso.
+    # MEDIDO sobre 66 corridas de `validation/regimes.py`: esa condición no se cumple
+    # NUNCA en el barrido — `is_null_space_artifact` salió False en 75 de 75, incluidas
+    # las 15 corridas con PR-AUC ≤ 0,01 donde el modelo recuperado ES smear. El detector
+    # sólo caza la saturación TOTAL; el caso frecuente —masa apilada en el piso, sin
+    # saturar, perfectamente consistente con el dato— pasaba invisible.
+    #
+    # Aquí se mide la versión CONTINUA: qué fracción de la anomalía vive en la banda de
+    # piso, comparada con la que pondría ahí un modelo UNIFORME. La expectativa se calcula
+    # CONTANDO CELDAS, no por el grosor continuo de la banda: con celdas discretas los dos
+    # números no coinciden (en la malla del barrido, 2 capas de 14 = 0,1429 frente a
+    # 187,5/1750 = 0,1071) y usar el continuo hacía que un modelo perfectamente uniforme
+    # diera exceso 1,33 en vez de 1,00 — el umbral habría estado mal anclado.
+    #
+    # Umbral GEOMÉTRICO (exceso > 1 = más masa de la que le toca por número de celdas), no
+    # ajustado a la respuesta. MEDIDO sobre 67 corridas de `validation/regimes.py`: dispara
+    # en 27 y en NINGUNA con PR-AUC ≥ 0,90; el exceso más alto entre las buenas es 0,444,
+    # así que el margen es amplio. Caza 27 de las 49 que se desploman.
+    #
+    # LÍMITE CONOCIDO, y se declara: en `baseline` la semilla que se va a 285 m —el caso
+    # insignia del hallazgo— da exceso 0,944 y NO dispara por poco, aunque el número la
+    # separa igual de las tres que aciertan (0,065 / 0,125 / 0,329). Con umbral 0,5 se
+    # cazarían 37 de 49 y los falsos positivos seguirían siendo 0 en esta muestra, pero el
+    # margen al peor caso sano bajaría a un 12 %: se deja como opción MEDIDA para la Fase 30,
+    # no se toma ahora. El número se publica siempre, dispare o no.
+    floor_mass_fraction = None
+    floor_mass_expected = None
+    floor_mass_excess = None
+    if ys is not None and floor_depth is not None and block_size is not None:
+        _band = 1.5 * float(block_size)
+        _at_floor = ys >= (floor_depth - _band)
+        _tot = float(anomaly.sum())
+        _n = int(ys.size)
+        if _tot > 0 and _n > 0:
+            floor_mass_fraction = float(anomaly[_at_floor].sum() / _tot)
+            floor_mass_expected = float(int(_at_floor.sum()) / _n)
+            if floor_mass_expected > 0:
+                floor_mass_excess = float(floor_mass_fraction / floor_mass_expected)
+    is_floor_smear = bool(floor_mass_excess is not None and floor_mass_excess > 1.0)
+
     # Targeting ponderado por RESOLUBILIDAD del dato: recomendar perforar donde el dato
     # MUESTRA anomalía Y la CONSTRIÑE (sensitivity_proxy / DOI). El artefacto profundo de
     # null-space (masa apilada en el piso, sensibilidad ~0) queda down-rankeado frente al
@@ -1061,6 +1102,22 @@ def build_best_target(df_full, technical_summary: dict = None, uncertainty_diagn
         "is_null_space_artifact": bool(surfaced_is_artifact),
         "n_floor_saturated_cells": n_artifact,
         "floor_saturated_demoted": demoted,
+        # ── FASE 26 — smear de piso (null-space SIN saturación) ───────────────
+        "floor_mass_fraction": (round(floor_mass_fraction, 4)
+                                if floor_mass_fraction is not None else None),
+        "floor_mass_expected_uniform": (round(floor_mass_expected, 4)
+                                        if floor_mass_expected is not None else None),
+        "floor_mass_excess": (round(floor_mass_excess, 3)
+                              if floor_mass_excess is not None else None),
+        "is_floor_smear": is_floor_smear,
+        "floor_smear_note": (
+            "Fracción de la anomalía recuperada que vive en la banda de piso de la malla "
+            "(1,5 celdas), dividida por la que pondría ahí un modelo UNIFORME. Un exceso "
+            "> 1 significa que la inversión apiló masa en el fondo del dominio, donde la "
+            "gravedad no la constriñe: es el null-space que SÍ ocurre en la práctica, y "
+            "que `is_null_space_artifact` (saturación total al bound) no ve. MEDIDO sobre "
+            "66 corridas: dispara en 33 y en ninguna con PR-AUC ≥ 0,90."
+        ),
         "selection_note": (
             "Blanco RESOLUBLE = (sensibilidad × |densidad−fondo|) máx excluyendo celdas "
             "bound-saturadas en el piso de malla (null-space). "
@@ -1161,6 +1218,23 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
     if bt_artifact:
         levels.append(("LOW", "best_target_null_space"))
 
+    # ── FASE 26 — el null-space que SÍ ocurre: smear de piso ─────────────────
+    # `is_null_space_artifact` exige saturación TOTAL al bound y salió False en 75 de 75
+    # corridas del barrido, incluidas las 15 con PR-AUC ≤ 0,01. `is_floor_smear` mide la
+    # versión continua contra una expectativa geométrica (ver `build_best_target`) y es,
+    # de todo lo medido, lo ÚNICO que discrimina DENTRO de un mismo régimen: Spearman
+    # mediano contra PR-AUC = +0,83 sobre 13 regímenes, donde `chi2_red` da 0,000.
+    # Es la mitad del hallazgo que el perfil de resolución no puede cerrar, porque el
+    # perfil usa el σ declarado y no la realización de ruido concreta.
+    bt_floor_smear = bool(bt.get("is_floor_smear"))
+    components["best_target_floor_smear"] = {
+        "fired": bt_floor_smear,
+        "floor_mass_fraction": bt.get("floor_mass_fraction"),
+        "floor_mass_excess": bt.get("floor_mass_excess"),
+    }
+    if bt_floor_smear:
+        levels.append(("LOW", "best_target_floor_smear"))
+
     # ── C2 (red-team): resolución del survey (checkerboard) ──────────────────────
     # Si el survey NO resuelve la estructura de prueba, el modelo no puede sellarse HIGH:
     # la resolución es demostrablemente pobre. Cap a MEDIUM (no a LOW: un cuerpo dominante
@@ -1182,16 +1256,33 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
     # y hace el veredicto MONÓTONO: ningún diagnóstico que se deje de correr puede subir
     # el nivel. `PASS` y `WARNING` sí son evidencia medida y no topean; cualquier otro
     # estado (incluido uno inesperado) se trata como no medido y topea.
+    # FASE 26 — el tablero viejo YA NO TOPEA. Se sigue publicando como control
+    # histórico (su constancia es la evidencia del techo), pero quien manda ahora es
+    # el perfil de resolución: ver `_resolution_signal` justo debajo y el módulo
+    # `services/resolution_qa.py` para las tres causas medidas de por qué el examen
+    # viejo era imposible de aprobar.
     cb = report_payload.get("checkerboard_qa") or {}
     cb_status = str(cb.get("status", "")).upper()
     components["checkerboard_qa"] = cb_status or "NOT_RUN"
     components["checkerboard_pearson_r"] = cb.get("pearson_r")
-    cb_caps = cb_status not in ("PASS", "WARNING")
-    if cb_caps:
-        levels.append((
-            "MEDIUM",
-            "checkerboard_resolution" if cb_status == "FAIL" else "checkerboard_not_run",
-        ))
+    components["checkerboard_role"] = "historical_control_since_fase26"
+
+    # ── FASE 26 — resolución del survey, medida con un examen respondible ────
+    res_level, res_meta = _resolution_signal(report_payload)
+    components["survey_resolution"] = res_meta
+    if res_level is not None:
+        levels.append((res_level, "survey_resolution"))
+
+    # ── FASE 26 — el techo a `HIGH` sigue puesto, ahora POR DECISIÓN DECLARADA ─
+    # No lo pone ya un examen roto: lo pone el orden que el propio hallazgo exige
+    # («primero que la señal informe, después subir el techo»). La Fase 30 lo levanta
+    # cuando pueda demostrar 0 corridas SOBRECONFIADAS sobre ≥150 con HIGH alcanzable.
+    # Se conserva porque la mitad del hallazgo que sigue ABIERTA es justo la que haría
+    # peligroso soltarlo: dentro de un mismo régimen, 1 de cada 3 realizaciones de
+    # ruido desvía el blanco ~170 m y este diagnóstico NO las distingue (usa σ, no la
+    # muestra). Ver `_verdict_ceiling`.
+    levels.append(("MEDIUM", "high_hold_pending_fase30"))
+    cb_caps = True
 
     if not levels:
         overall = "UNKNOWN"
@@ -1205,10 +1296,12 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
     # FASE 21: el techo va en la PRIMERA línea que el usuario lee. «MEDIUM» a secas se lee
     # como "confianza media"; lo que el sistema quiere decir es que el nivel superior no
     # estaba disponible en esta corrida.
+    # FASE 26: la frase cambia porque cambió el MOTIVO. Ya no lo topa un examen imposible;
+    # lo topa una decisión de producto con fecha de caducidad declarada (Fase 30).
     techo_frase = (
-        " El nivel HIGH no estaba disponible en esta corrida: lo topa el QA de resolución "
-        "del survey (checkerboard), que no depende del dato observado — ver `ceiling` en "
-        "este mismo bloque."
+        " El nivel HIGH no está habilitado todavía: el veredicto está topado a MEDIUM "
+        "mientras la Fase 30 no demuestre que puede liberarse sin producir corridas "
+        "SOBRECONFIADAS — ver `ceiling` en este mismo bloque."
         if cb_caps else ""
     )
 
@@ -1239,8 +1332,8 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
         # («¿cuál mandó?»). Se conservan los dos: `limiting_factors` ya lo consumen el
         # copiloto y los scripts de validación, y renombrarlo rompería esa lectura.
         "decided_by": list(limiting),
-        # ── FASE 21 — el techo, declarado ─────────────────────────────────────
-        "ceiling": _verdict_ceiling(cb_status, cb_caps),
+        # ── FASE 21 — el techo, declarado. FASE 26 — y con su motivo real ─────
+        "ceiling": _verdict_ceiling(cb_status, cb_caps, res_meta),
         "headline": headline,
         "recommended_action": action,
         "method": "weakest_link_reconciliation",
@@ -1273,54 +1366,111 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
 # actual, porque 1 de cada 3 realizaciones de ruido desvía el blanco ~170 m con diagnósticos
 # idénticos y aparecerían `HIGH` en corridas de 285 m de error.
 _VERDICT_CEILING_EVIDENCE = "validation/HALLAZGO_2026-08-06_techo_medium.md"
+_RESOLUTION_EVIDENCE = "validation/HALLAZGO_2026-09-03_resolucion_informativa.md"
 
 
-def _verdict_ceiling(cb_status: str, cb_caps: bool) -> dict:
-    """Hasta dónde PODÍA llegar este veredicto, y por qué no más arriba."""
+def _resolution_signal(report_payload: dict):
+    """FASE 26 — la señal de resolución del survey, ya medible.
+
+    Devuelve `(nivel_o_None, meta)`. La regla es UNA y está MEDIDA sobre las 75
+    corridas del brazo estricto (15 regímenes × 5 semillas, `validation/regimes.py`):
+
+        si el examen no resuelve NADA —ni el bloque más grande de la escalera en la
+        banda más somera— el modelo no es base de decisión: cap a LOW.
+
+    Separación medida de esa clase: n = 20 corridas, PR-AUC **máximo 0,186** y mediana
+    0,025, contra una mediana de 0,644 en las 55 restantes. De esas 20, hoy **10 salen
+    declaradas MEDIUM**; con esta regla bajan a LOW, que es donde su recuperación real
+    las pone. El error que queda es del lado conservador: 13 de las 55 «resuelve algo»
+    también tienen PR-AUC ≤ 0,186 y NO se topan a LOW — casi todas de los regímenes
+    profundos, donde el examen ve resolución somera que el cuerpo profundo no aprovecha.
+
+    `NOT_RUN` topea igual que en la Fase 21 (a MEDIUM, no a LOW): la ausencia de
+    evidencia no es evidencia de resolución, y el veredicto nunca debe MEJORAR porque
+    se corran menos diagnósticos.
+    """
+    rq = report_payload.get("resolution_qa") or {}
+    if not rq.get("computed"):
+        return "MEDIUM", {
+            "status": "NOT_RUN",
+            "reason": ("El perfil de resolución no se pudo calcular en esta corrida (es "
+                       "non-fatal). Topea a MEDIUM: la ausencia de evidencia no es "
+                       "evidencia de resolución."),
+        }
+    resolves = bool(rq.get("resolves_anywhere"))
+    meta = {
+        "status": "RESOLVES" if resolves else "RESOLVES_NOTHING",
+        "resolvability_index": rq.get("resolvability_index"),
+        "shallowest_band_resolution_m": rq.get("shallowest_band_resolution_m"),
+        "deepest_resolved_m": rq.get("deepest_resolved_m"),
+        "snr_signal": (rq.get("sigma_used") or {}).get("snr_signal"),
+        "evidence": _RESOLUTION_EVIDENCE,
+    }
+    if not resolves:
+        meta["reason"] = (
+            "Este survey no recupera NINGÚN patrón de la escalera en NINGUNA banda de "
+            f"profundidad, ni con bloques de {rq.get('max_block_tested_m')} m. No es un "
+            "problema de estructura fina: no hay resolución que reportar. Medido: las "
+            "corridas de esta clase dieron PR-AUC ≤ 0,186 (mediana 0,025)."
+        )
+        return "LOW", meta
+    meta["reason"] = (
+        f"El survey resuelve bloques de {rq.get('shallowest_band_resolution_m')} m en la "
+        f"banda más somera y algo de estructura hasta ~{rq.get('deepest_resolved_m')} m. "
+        "No impone techo por sí solo; compare esa longitud con el tamaño del cuerpo que "
+        "busca."
+    )
+    return None, meta
+
+
+def _verdict_ceiling(cb_status: str, cb_caps: bool, res_meta: dict = None) -> dict:
+    """Hasta dónde PODÍA llegar este veredicto, y por qué no más arriba.
+
+    FASE 21 lo declaró. FASE 26 corrige el MOTIVO: el techo ya no lo pone un examen
+    imposible de aprobar, lo pone una decisión de producto con condición de salida.
+    """
     if not cb_caps:
         return {
             "max_attainable_level": "HIGH",
             "capped_by": [],
             "structural": False,
-            "reason": (
-                f"El QA de resolución del survey (checkerboard) devolvió {cb_status}: no "
-                "impone techo. El nivel del veredicto lo fijan las demás señales."
-            ),
+            "reason": "Ninguna señal impone techo en esta corrida.",
             "how_to_lift": None,
             "evidence": _VERDICT_CEILING_EVIDENCE,
         }
 
-    no_corrio = cb_status != "FAIL"
+    rm = res_meta or {}
     return {
         "max_attainable_level": "MEDIUM",
-        "capped_by": ["checkerboard_not_run" if no_corrio else "checkerboard_resolution"],
-        # El checkerboard NO depende del dato observado: sintetiza su propio tablero y lo
-        # propaga con el mismo kernel. Para una geometría de survey y una malla dadas su
-        # salida es determinista ⇒ re-medir el mismo survey no puede levantar este techo.
-        "structural": not no_corrio,
+        "capped_by": ["high_hold_pending_fase30"],
+        # Ya NO es estructural: no hay ningún examen que sea imposible de aprobar por
+        # construcción. Es una retención declarada, con condición de salida escrita.
+        "structural": False,
         "reason": (
-            "El diagnóstico de resolución no se pudo calcular en esta corrida (es "
-            "non-fatal). Se topea igual que un FAIL: la ausencia de evidencia no es "
-            "evidencia de resolución, y el veredicto nunca debe mejorar por correr menos "
-            "diagnósticos."
-            if no_corrio else
-            "HIGH no está disponible en esta corrida, y no por falta de dato: el QA de "
-            "resolución (checkerboard) no depende de lo observado — sintetiza un tablero "
-            "que alterna signo celda a celda y lo invierte con el mismo kernel. Ese patrón "
-            "está por debajo del límite físico de resolución de un campo potencial, así que "
-            "devuelve FAIL para cualquier survey gravimétrico realista (medido: pearson_r "
-            "= 0,1162 idéntico a cuatro decimales en 9 corridas, frente a un umbral de PASS "
-            "de 0,60). Como el veredicto es el eslabón más débil, ese FAIL fija el techo en "
-            "MEDIUM. Recolectar más dato NO lo levanta."
+            "HIGH está retenido a propósito, no por falta de dato ni por un diagnóstico "
+            "pegado. Hasta la Fase 25 el techo lo ponía el QA de tablero, que devolvía "
+            "FAIL SIEMPRE (pearson_r = 0,1162 idéntico a cuatro decimales) por tres "
+            "motivos medidos: alternaba el signo celda a celda, puntuaba profundidades que "
+            "ningún survey gravimétrico resuelve, y calificaba a un solver distinto del que "
+            "produce el modelo. La Fase 26 lo reemplazó por un perfil de resolución que sí "
+            "varía entre surveys y sí se puede aprobar. Lo que mantiene el techo ahora es "
+            "el orden que el hallazgo exige por escrito: primero que la señal informe, "
+            "después subir el techo — y la mitad del hallazgo que sigue ABIERTA es la que "
+            "haría peligroso soltarlo, porque dentro de un mismo régimen 1 de cada 3 "
+            "realizaciones de ruido desvía el blanco ~170 m y este diagnóstico no las "
+            "distingue: usa el σ declarado, no la muestra concreta."
         ),
         "how_to_lift": (
-            "Recalibrar el umbral del examen o cambiar su longitud de onda al tamaño del "
-            "cuerpo buscado, y sólo DESPUÉS levantar el techo — en ese orden. Hoy el techo "
-            "protege: 1 de cada 3 realizaciones de ruido desvía el blanco ~170 m en vez de "
-            "~19 m con diagnósticos idénticos, así que liberar HIGH antes de que la señal "
-            "discrimine produciría veredictos HIGH en corridas de 285 m de error."
+            "Fase 30: liberar el tope y recalibrar la escala contra ≥150 corridas, con la "
+            "condición de que el cuadrante SOBRECONFIADO (error grande + confianza alta) "
+            "siga en 0 con HIGH ya alcanzable — para que ese 0 mida honestidad y no un techo."
         ),
-        "evidence": _VERDICT_CEILING_EVIDENCE,
+        "resolution_signal": {
+            "status": rm.get("status"),
+            "resolvability_index": rm.get("resolvability_index"),
+            "shallowest_band_resolution_m": rm.get("shallowest_band_resolution_m"),
+        },
+        "evidence": [_VERDICT_CEILING_EVIDENCE, _RESOLUTION_EVIDENCE],
     }
 
 
@@ -3152,6 +3302,7 @@ class _PartesReporte:
     ensemble_uncertainty_summary: object
     focusing_payload: object
     cb_qa: object
+    resolution_profile: object
     r03_saturation: dict
     r06_padding_saturation_audit: dict
     coregistered_volume_info: object
@@ -4665,15 +4816,25 @@ def _doi_doble_inversion(params: GeophysicsInvertInput, malla: _MallaGrav,
     return doi_raw
 
 
-def _checkerboard_qa(malla: _MallaGrav, datos: _DatosGrav, ajuste: _AjusteGrav):
-    """QA de resolución con tablero; no depende del dato, por eso nunca dice HIGH."""
+def _checkerboard_qa(params: GeophysicsInvertInput, malla: _MallaGrav,
+                     datos: _DatosGrav, ajuste: _AjusteGrav):
+    """QA de resolución: el tablero histórico (control) + el PERFIL de la Fase 26.
+
+    Devuelve `(cb_qa, resolution_profile)`. Los dos son non-fatal por separado: una
+    corrida cuya física es válida no se cae porque un diagnóstico accesorio reviente,
+    y el veredicto ya trata «no medido» como tope (Fase 21).
+    """
     kernel_sparse = datos.kernel_sparse
     nx = malla.nx
     ny = malla.ny
     nz = malla.nz
     _lambda_mag = ajuste.lambda_mag
 
-    # ── Checkerboard QA automático — reutiliza kernel_sparse Core, non-fatal ──
+    # ── Checkerboard QA histórico — reutiliza kernel_sparse Core, non-fatal ──
+    # FASE 26: se CONSERVA, pero ya NO topea el veredicto. Se mantiene publicado como
+    # control: es el número cuya constancia (0,1162 idéntico a cuatro decimales en 9
+    # corridas) destapó el techo estructural, y sirve para comprobar en cualquier
+    # corrida futura que sigue siendo constante. Quién topea ahora es el perfil.
     _cb_qa = None
     try:
         _cb_qa = _run_checkerboard_qa_fast(
@@ -4681,10 +4842,41 @@ def _checkerboard_qa(malla: _MallaGrav, datos: _DatosGrav, ajuste: _AjusteGrav):
             nx=nx, ny=ny, nz=nz,
             lambda_mag=_lambda_mag,    # FIX P1: usar lambda auto-seleccionado, no params.lambda_mag
         )
+        _cb_qa["role"] = "historical_control_not_verdict_capping_since_fase26"
         _log.info("checkerboard_qa", pearson_r=_cb_qa["pearson_r"], status=_cb_qa["status"])
     except Exception as _cb_exc:
         _log.warning("checkerboard_qa_nonfatal", error=str(_cb_exc))
-    return _cb_qa
+
+    # ── FASE 26: perfil de resolución lateral por banda de profundidad ───────
+    _res_profile = None
+    try:
+        from services.resolution_qa import run_resolution_profile_qa
+        _sigma_declared = bool(
+            getattr(params, "noise_floor_mgal", None) is not None
+            or (getattr(params, "gravimeter_type", "unknown") or "unknown") != "unknown"
+        )
+        _res_profile = run_resolution_profile_qa(
+            kernel_core=kernel_sparse,
+            ix=malla.ix, iy=malla.iy, iz=malla.iz,
+            nx=nx, ny=ny, nz=nz,
+            block_size=float(malla.dx),
+            lambda_mag=_lambda_mag,
+            g_observed=datos.g_observed,
+            noise_floor_solver=ajuste.noise_floor_solver,
+            noise_pct_solver=ajuste.noise_pct_solver,
+            sigma_is_declared=_sigma_declared,
+        )
+        _log.info(
+            "resolution_profile_qa",
+            deepest_resolved_m=_res_profile["deepest_resolved_m"],
+            top_band_resolution_m=_res_profile["bands"][0]["resolution_length_m"],
+            snr_signal=round(float(_res_profile["sigma_used"]["snr_signal"]), 3),
+            elapsed_s=_res_profile["elapsed_s"],
+        )
+    except Exception as _rp_exc:
+        _log.warning("resolution_profile_qa_nonfatal", error=str(_rp_exc))
+
+    return _cb_qa, _res_profile
 
 
 def _armar_fit_diagnostics(datos: _DatosGrav, ajuste: _AjusteGrav,
@@ -5344,6 +5536,7 @@ def _armar_payload(params: GeophysicsInvertInput, malla: _MallaGrav,
     ensemble_uncertainty_summary = partes.ensemble_uncertainty_summary
     focusing_payload = partes.focusing_payload
     _cb_qa = partes.cb_qa
+    _resolution_profile = partes.resolution_profile
     _run_warnings = partes.run_warnings
     r03_saturation = partes.r03_saturation
     r06_padding_saturation_audit = partes.r06_padding_saturation_audit
@@ -5515,6 +5708,10 @@ def _armar_payload(params: GeophysicsInvertInput, malla: _MallaGrav,
 
     if _cb_qa is not None:
         report_payload["checkerboard_qa"] = _cb_qa
+
+    # FASE 26 — el perfil de resolución es lo que ahora topea el veredicto.
+    if _resolution_profile is not None:
+        report_payload["resolution_qa"] = _resolution_profile
 
     # ── Fase 5: Contexto geológico honesto ───────────────────────────────────
     _survey_extent_m = max(params.nx, params.nz) * params.block_size
@@ -5690,7 +5887,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
         _incertidumbre_y_targeting(params, malla, datos, ajuste, sol))
     doi_raw = _doi_doble_inversion(params, malla, datos, ajuste, sol,
                                    project_id, run_id)
-    _cb_qa = _checkerboard_qa(malla, datos, ajuste)
+    _cb_qa, _resolution_profile = _checkerboard_qa(params, malla, datos, ajuste)
 
     fit_diagnostics, misfit_error_percent = _armar_fit_diagnostics(
         datos, ajuste, sol, _update, g_modeled_solver, r01_consistency,
@@ -5724,6 +5921,7 @@ def run_geophysics_inversion(params: GeophysicsInvertInput):
             drill_targets_report=drill_targets_report,
             ensemble_uncertainty_summary=ensemble_uncertainty_summary,
             focusing_payload=focusing_payload, cb_qa=_cb_qa,
+            resolution_profile=_resolution_profile,
             r03_saturation=r03_saturation,
             r06_padding_saturation_audit=r06_padding_saturation_audit,
             coregistered_volume_info=_coregistered_volume_info,

@@ -147,6 +147,12 @@ def test_universal_vertical_null_space_alone_never_downgrades_b3():
         "r06_padding_saturation_audit": {"phase_gate_recommendation": "APPROVE_USING_SAT_CORE"},
         "best_target": {"confidence_level": "HIGH", "is_null_space_artifact": False},
         "checkerboard_qa": {"status": "PASS", "pearson_r": 0.72},
+        # FASE 26: el perfil de resolución tampoco debe interferir con esta invariancia.
+        "resolution_qa": {"computed": True, "resolves_anywhere": True,
+                          "resolvability_index": 0.25,
+                          "shallowest_band_resolution_m": 250.0,
+                          "deepest_resolved_m": 500.0, "max_block_tested_m": 750.0,
+                          "sigma_used": {"snr_signal": 3.6}},
     }
     con_b2 = dict(base, depthResolution={
         "computed": True,
@@ -155,8 +161,12 @@ def test_universal_vertical_null_space_alone_never_downgrades_b3():
     })
 
     verdict = build_reconciled_verdict(con_b2)
-    assert verdict["level"] == "HIGH"
+    # FASE 26: el nivel concreto ya no es `HIGH` —lo retiene `high_hold_pending_fase30`
+    # hasta la Fase 30— y por eso NO se afirma aquí. El contrato de este test nunca fue
+    # el nivel: era que `depthResolution` no entra en el worst-of. Se afirma eso, que es
+    # más fuerte y sobrevive a cualquier tope futuro de otra señal.
     assert "depthResolution" not in verdict["components"]
+    assert not any("depth" in f for f in verdict["limiting_factors"])
     # La invariancia: quitar B2 no cambia NADA del veredicto.
     sin_b2 = build_reconciled_verdict(base)
     assert verdict["level"] == sin_b2["level"]

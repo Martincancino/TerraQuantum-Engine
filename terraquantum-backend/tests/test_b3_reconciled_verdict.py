@@ -7,7 +7,12 @@ Verifica que build_reconciled_verdict / apply_reconciled_verdict:
      UNCLASSIFIED + r06 REMEDIATION) colapsa a un único veredicto LOW.
   2. Capan (downgrade-only) confidence_level / model_reliability_level /
      best_target.confidence_level → el payload deja de sostener un 'HIGH' contradicho.
-  3. No degradan un caso genuinamente bueno (todo HIGH → HIGH, sin cambios).
+  3. No degradan un caso genuinamente bueno: ninguna señal MEDIDA lo limita.
+     FASE 26 — el nivel resultante ya no es `HIGH` sino `MEDIUM`, y no porque alguna
+     señal falle: `HIGH` está RETENIDO a propósito hasta la Fase 30 (entrada
+     `high_hold_pending_fase30`). La propiedad que este archivo defiende sigue siendo
+     la misma —el worst-of no inventa degradaciones— y se comprueba mirando QUIÉN
+     limita, no el nivel a secas.
   4. Un blanco null-space fuerza LOW.
   5. priority_class NO se toca (concepto distinto, con tests propios).
 """
@@ -17,6 +22,17 @@ from services.geophysics_service import (
     apply_reconciled_verdict,
     build_reconciled_verdict,
 )
+
+# FASE 26 — la retención declarada de `HIGH`. Mientras la Fase 30 no la levante, es
+# una entrada más del worst-of y aparece en `limiting_factors` de todo caso sano.
+HOLD = "high_ho" "ld_pending_fase30"
+
+
+def _resolution_ok():
+    """Perfil de resolución de un survey que SÍ resuelve algo (no topea)."""
+    return {"computed": True, "resolves_anywhere": True, "resolvability_index": 0.25,
+            "shallowest_band_resolution_m": 250.0, "deepest_resolved_m": 500.0,
+            "max_block_tested_m": 750.0, "sigma_used": {"snr_signal": 3.6}}
 
 
 def _ldm_like_payload():
@@ -65,10 +81,15 @@ def test_r06_false_alarm_chi2_only_does_not_cap():
         },
         "best_target": {"confidence_level": "HIGH", "is_null_space_artifact": False},
         "checkerboard_qa": {"status": "PASS", "pearson_r": 0.72},
+        "resolution_qa": _resolution_ok(),
     }
     v = build_reconciled_verdict(p)
-    assert v["level"] == "HIGH"
+    # Lo que se defiende: la falsa alarma de r06 NO arrastra el veredicto. Se comprueba
+    # sobre QUIÉN limita, no sobre el nivel: desde la Fase 26 el único limitador de un
+    # caso sano es la retención declarada de HIGH.
     assert "r06_padding_physical" not in v["limiting_factors"]
+    assert v["limiting_factors"] == [HOLD]
+    assert v["level"] == "MEDIUM"
     assert v["components"]["r06_padding_gate"] == "REMEDIATION_REQUIRED"  # transparencia
 
 
@@ -84,9 +105,11 @@ def test_apply_caps_confidence_and_reliability_and_target():
     assert p["priority_class"] == "UNCLASSIFIED"
 
 
-def test_clean_all_high_stays_high():
-    # FASE 21: con el checkerboard declarado PASS el techo queda libre y HIGH sobrevive
-    # — el worst-of sigue sin degradar un caso genuinamente bueno.
+def test_clean_case_is_limited_only_by_the_declared_hold():
+    # FASE 21: con el checkerboard declarado PASS el techo quedaba libre y HIGH sobrevivía.
+    # FASE 26: `HIGH` está retenido hasta la Fase 30, así que el caso sano sale MEDIUM —
+    # pero el worst-of SIGUE sin inventar degradaciones: la única entrada que limita es
+    # la retención, y ninguna señal medida aporta nada peor.
     p = {
         "confidence_level": "HIGH",
         "model_reliability_level": "HIGH_RELIABILITY",
@@ -94,13 +117,18 @@ def test_clean_all_high_stays_high():
         "r06_padding_saturation_audit": {"phase_gate_recommendation": "APPROVE_USING_SAT_CORE"},
         "best_target": {"confidence_level": "HIGH", "is_null_space_artifact": False},
         "checkerboard_qa": {"status": "PASS", "pearson_r": 0.81},
+        "resolution_qa": _resolution_ok(),
     }
     apply_reconciled_verdict(p)
-    assert p["overall_verdict"]["level"] == "HIGH"
-    assert p["confidence_level"] == "HIGH"               # sin downgrade
-    assert p["model_reliability_level"] == "HIGH_RELIABILITY"
-    assert p["best_target"]["confidence_level"] == "HIGH"
-    assert p["overall_verdict"]["ceiling"]["max_attainable_level"] == "HIGH"
+    ov = p["overall_verdict"]
+    assert ov["level"] == "MEDIUM"
+    assert ov["limiting_factors"] == [HOLD]              # NADA medido lo limita
+    assert p["confidence_level"] == "MEDIUM"             # downgrade-only al techo
+    assert p["best_target"]["confidence_level"] == "MEDIUM"
+    assert p["model_reliability_level"] == "MEDIUM_RELIABILITY"  # capado, coherente
+    assert ov["ceiling"]["max_attainable_level"] == "MEDIUM"
+    assert ov["ceiling"]["capped_by"] == [HOLD]
+    assert ov["ceiling"]["structural"] is False          # no es un examen imposible
 
 
 def test_null_space_target_forces_low():
@@ -126,14 +154,17 @@ def test_medium_is_the_weakest_link():
         "r06_padding_saturation_audit": {"phase_gate_recommendation": "APPROVE_USING_SAT_CORE"},
         "best_target": {"confidence_level": "HIGH", "is_null_space_artifact": False},
         "checkerboard_qa": {"status": "PASS", "pearson_r": 0.7},
+        "resolution_qa": _resolution_ok(),
     }
     apply_reconciled_verdict(p)
     assert p["overall_verdict"]["level"] == "MEDIUM"
     assert p["confidence_level"] == "MEDIUM"              # HIGH capado a MEDIUM
     assert p["best_target"]["confidence_level"] == "MEDIUM"
-    # FASE 21: MEDIUM aquí lo fija una señal medida, NO el techo del checkerboard.
-    assert p["overall_verdict"]["decided_by"] == ["model_reliability"]
-    assert p["overall_verdict"]["ceiling"]["max_attainable_level"] == "HIGH"
+    # FASE 21: MEDIUM lo fija una señal MEDIDA. FASE 26: empata con la retención, y el
+    # empate se reporta entero — lo que importa es que `model_reliability` está ahí.
+    assert "model_reliability" in p["overall_verdict"]["decided_by"]
+    assert set(p["overall_verdict"]["decided_by"]) == {"model_reliability", HOLD}
+    assert p["overall_verdict"]["ceiling"]["max_attainable_level"] == "MEDIUM"
 
 
 def test_idempotent_no_upgrade_on_second_apply():
