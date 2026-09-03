@@ -393,8 +393,8 @@ Columnas: `x_m`, `y_m`, `z_m`, `density_t_m3`, `relative_score`, `is_active`, `i
 
 | ID | Descripción |
 |----|-------------|
-| NUEVO-2 | Cambiar pestaña pierde mapeo de columnas, sondajes y 25 parámetros |
-| NUEVO-3 | CSV corregido descartado al cambiar pestaña; paquete sobre CSV crudo |
+| ~~NUEVO-2~~ | ✅ Fase 24 (09-02): el estado de preparación vive en el store (`prepContexto`/`prepParametros`/`prepAvanzado`/`prepEnriquecer`/`prepSondajes`) y sobrevive al cambio de pestaña |
+| ~~NUEVO-3~~ | ✅ Fase 24 (09-02): el CSV corregido sobrevive **y** el validador local reconoce las columnas que el asistente escribe — sin lo segundo el botón del paquete quedaba apagado y el corregido no llegaba nunca |
 | H-34 | Turbo en leyenda de `MultiPhysicsControls` describe colores que ya no se pintan |
 | H-36 | `resultIsStale` no incluye parámetros de Fase 14 |
 | VolumeRaymarch | Implementado completo pero no montado en vista clásica |

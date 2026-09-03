@@ -241,8 +241,8 @@ los índices internos). El origen es `0 0 0`: sin georreferencia.
 | ID | Qué pasa | Dónde |
 |---|---|---|
 | ✅ **NUEVO-1** *(cerrado por la Fase 23, 08-31)* | La **inversión conjunta** ignoraba la topografía por completo y su reporte no tenía el canal de avisos de la Fase 1. **Y era peor que «falta el aviso»:** `topography_elevations=None` fijo ⇒ la cota del CSV **no tocaba la física** (mismo modelo bit a bit con y sin ella; **15,93 %** del contraste recuperado en celdas de **aire**). Ahora la superficie llega a las dos físicas y los tres campos de honestidad viajan por el canal que el frontend ya pinta | `services/joint_inversion.py`, `services/geo_utils.py` |
-| **NUEVO-2** | Cambiar de pestaña pierde el **mapeo de columnas, los puntos Helmert, los sondajes y 25 parámetros** porque `PreparacionView` se desmonta. (Los archivos y el bbox sí sobreviven — la memoria decía «los 41 parámetros», y es menos que eso) | `componentes/views/PreparacionView.tsx` |
-| **NUEVO-3** | El **CSV corregido** por el asistente de gravimetría se descarta al cambiar de pestaña, y el paquete se rearma sobre el **CSV crudo** | flujo PrepPanel → paquete |
+| ✅ **NUEVO-2** *(cerrado por la Fase 24, 09-02)* | Cambiar de pestaña perdía el mapeo de columnas, los puntos Helmert, los sondajes y 25 parámetros. **Y era más:** «25» es exacto pero **5 de esos 25 no tienen control** (constantes disfrazadas), así que lo perdido de verdad eran **19**; y los que se evaporaban en total eran **61** campos en el núcleo montado. **La errata:** «los archivos sí sobreviven» sólo valía para el flujo CLÁSICO — el **PRINCIPAL** perdía el archivo entero. Dos consecuencias sin declarar: un survey magnético quedaba **invalidable** (`dataType` volvía a `gravity` con el fichero aún cargado) y ese fichero **seguía viajando invisible** en el paquete | `views/PreparacionView.tsx`, `store/useAppStore.ts` |
+| ✅ **NUEVO-3** *(cerrado por la Fase 24, 09-02)* | El CSV corregido se descartaba al cambiar de pestaña y el paquete se rearmaba sobre el crudo. **Y era peor: eran DOS capas.** El validador local comparaba la cabecera **por igualdad** contra una lista que **no contenía ninguna de las cuatro columnas que el propio asistente escribe** ⇒ `can_invert: false` ⇒ «Validar» y «Generar paquete» **deshabilitados**: dentro de un mismo montaje el corregido **no podía llegar nunca** al backend, y el único modo de reactivar el botón era cambiar de pestaña, que lo reactivaba *destruyendo la corrección*. Además `allow_g_raw` cambiaba de `true` a `false`: el backend recibía otra **configuración**, no sólo otro fichero | `PrepPanel.tsx:193,1101,1202` |
 | **H-36** | `resultIsStale` es una **lista a mano ya atrasada**: los parámetros de la Fase 14 no están, así que cambiarlos no marca el resultado como desactualizado. (La otra mitad, `modelRunKey`, sí es un invariante sólido) | `store/useAppStore.ts` |
 | ✅ **ACAD-12** *(cerrado por la Fase 22, 08-27)* | `bulk_rock_mass_kg` **contenía toneladas** — factor 1.000. **Y era peor:** la llamada de producción no pasaba `block_size`, así que el volumen quedaba fijo en el de una celda de 10 m (**1.034 de 2.089** corridas usan otro dx) y un tope silencioso recortaba las grandes. Renombrada a `bulk_rock_mass_tonnes` — 0 consumidores medidos — con el dx y los índices reales | `exploration/gravimetry.py:4233,4248` |
 | ✅ **ACAD-13** *(cerrado por la Fase 22, 08-27)* | La exportación calculaba el contraste contra el **literal 2.6**. Eran **TRES** escritores, no uno: el `.vtr`, el TargetingEngine y el **ASEG-GDF2** (entrega regulatoria AU/NZ), más la nota del reporte. Dos viajan al cliente en el ZIP | `export_service.py:31,212` **y `:947,973`** · `gravimetry.py:4213` · `geophysics_service.py:5128` |
@@ -1589,7 +1589,7 @@ mutación que lo caza (M8b). Las tres primeras atacan el corazón de la fase:
 
 ---
 
-### FASE 24 — La preparación deja de evaporarse · **M** · 🟠 P1 · *frontend* · NUEVO-2, NUEVO-3
+### FASE 24 (CERRADA) — La preparación deja de evaporarse · **M** · 🟠 P1 · *frontend* · NUEVO-2, NUEVO-3
 
 **Por qué va aquí.** Es la peor experiencia del producto y la más fácil de
 reproducir delante de un cliente: el usuario corrige un CSV, cambia de pestaña
@@ -1607,6 +1607,167 @@ decir, **corrige, y su corrección no llega**.
 **Gate.** Un e2e que mapea columnas, corrige el CSV, navega a otra pestaña,
 vuelve, y comprueba que los 25 parámetros y el CSV corregido siguen ahí — **y que
 el paquete generado contiene el corregido**, no el crudo.
+
+#### ✅ EJECUTADA — 2026-09-02
+
+Frontend puro; el backend no se tocó. Guardia nueva:
+`e2e/fase24_preparacion_persistente.spec.ts` (8 recorridos). Piezas nuevas:
+`store/preparacion.ts` (47 l), `componentes/prep/prepEnrichState.ts` (158 l, un
+traslado sin lógica nueva salvo una caducidad).
+
+**El defecto era DOS defectos apilados, y el de abajo no estaba en ninguna ficha.**
+NUEVO-3 dice «el CSV corregido se descarta al cambiar de pestaña y el paquete se
+rearma sobre el crudo». Al medirlo apareció una capa por debajo: el validador local
+`parseCsvForValidation` compara la cabecera con una lista **por igualdad**
+(`header.indexOf`), y el asistente de correcciones titula su columna con
+`outputGravityColName(...)`, que sólo puede valer `g_corrected`,
+`free_air_anomaly`, `bouguer_anomaly` o `complete_bouguer_anomaly`. **Ninguno de los
+cuatro estaba en la lista** — `"bouguer"` no casa con `"bouguer_anomaly"`. Ejecutando
+la propia función:
+
+| columna de salida del asistente | `gIdx` | `can_invert` |
+|---|---|---|
+| `g_corrected` | −1 | **false** |
+| `free_air_anomaly` | −1 | **false** |
+| `bouguer_anomaly` | −1 | **false** |
+| `complete_bouguer_anomaly` | −1 | **false** |
+| *(el CSV crudo, de control)* | 4 | true |
+
+Con `can_invert: false`, `PrepPanel` deshabilita **«Validar CSV»** y **«Generar
+paquete CSV»**. Es decir: **dentro de un mismo montaje el CSV corregido no podía
+llegar nunca al backend**, y el único modo de reactivar el botón era irse a otra
+pestaña — que lo reactivaba *porque destruía la corrección*. ⚠️ Sin arreglar esta
+capa, la otra mitad de la fase habría sido **decorativa**: el corregido habría
+sobrevivido, y el botón habría quedado apagado para siempre.
+
+**El número del plan se sostiene; su referente no.** «25 parámetros» = `ContextoState`
+(10) + `ParametrosState` (15), exacto. Pero **5 de esos 25 no tienen setter ni input
+en todo el panel** (`inclinationDeg`, `declinationDeg`, `fieldIntensityNt`, `suscMin`,
+`suscMax` — medido por la Fase 10 y escrito en `deshaciblePrep.ts:54-60`): son
+constantes disfrazadas de estado y «sobrevivían» ya, porque renacían iguales. Lo que
+el usuario perdía de verdad son **19 de los 25**. Y el total que se evaporaba es mucho
+mayor: 1 (`PreparacionView`) + 17 (`PrepEnrichPanel`) + 43 (`PrepPanel`) = **61 campos**
+en el núcleo siempre montado, 79 con los paneles auxiliares y 104 con el asistente y la
+sala de mapas abiertos.
+
+**Errata del propio expediente: «los archivos y el bbox sí sobreviven» es media
+verdad.** `fileGravimetry` tiene **un solo escritor** (`PrepPanel.tsx:674`), así que eso
+es cierto del flujo CLÁSICO. El flujo **PRINCIPAL** (`PrepEnrichPanel`, por donde entra
+el usuario) guardaba `gravFile`/`magFile` en su propio reducer y no tocaba el store:
+ahí se perdía **el archivo entero**, no sólo el mapeo.
+
+**Dos consecuencias de NUEVO-2 que nadie había escrito, y que el gate ahora fija:**
+
+1. **Un survey magnético quedaba en un callejón sin salida.** `fileMagnetometry` vive en
+   el store y sobrevivía; `dataType` vivía en `contexto` y volvía a `"gravity"`. El botón
+   de validar evalúa `!(dataType === "magnetic" ? fileMagnetometry : file)`: con sólo un
+   CSV magnético cargado, al volver quedaba **apagado sin forma de encenderlo**.
+2. **Y el archivo magnético se volvía invisible pero seguía viajando.** Su única señal en
+   pantalla (`PrepPanel.tsx:1248`) está gateada por `dataType === "magnetic"`, mientras el
+   paquete lo sigue metiendo (`:1111`). El usuario generaba un paquete conjunto creyendo
+   que era gravimétrico.
+
+**Qué sube al store y qué NO, con el criterio escrito.** Suben cuatro máquinas
+(`contexto`, `parametros`, `avanzado`, `enriquecer`) y los sondajes confirmados —
+5 campos nuevos de `AppState`, clasificados uno a uno en `store/deshacible.ts`.
+**`operacion` (9 campos) se queda local a propósito**: son banderas de vuelo, errores y
+mensajes. MEDIDO: **0 `AbortController`** en los tres paneles, así que un `loading`
+superviviente sería un spinner eterno sobre una petición que ya se resolvió en el vacío;
+y `packageMessage` se escribe **después** del `a.click()` que ya dejó el fichero en el
+disco — restaurarlo afirma como presente un hecho del pasado. `csvValidation` no se
+pierde: un efecto la recalcula al montar. Lo que sí sobrevive y sería mentira se apaga en
+`despertarPreparacion()`: cargas en vuelo, errores viejos y **modales abiertos** (montan
+componentes y relanzarían peticiones que nadie pidió).
+
+**Hacer que el estado sobreviva OBLIGÓ a declarar su caducidad.** El flujo principal
+**no tenía** `ARCHIVOS_CAMBIARON`: cambiar el CSV dejaba en pantalla la `ResultCard` del
+anterior —con su `packageText` completo detrás de «Descargar»— y reenviaba su
+`columnMap`. Hoy ese agujero dura una visita porque el desmontaje lo tapa por accidente;
+esta fase quita el accidente, así que duraría la sesión. Se le añadió la transición que
+le faltaba. **No es un extra: es la condición de la fase.**
+
+**Un `useReducer` no es un store, y hay una diferencia que muerde.** El despacho lee el
+estado **fresco** (`leer()`), no el del render: `resetOnFileChange` y el `onChange` de los
+bounds despachan dos acciones seguidas a la misma máquina, y con el valor capturado la
+segunda pisaría a la primera. React encolaba por nosotros. Efecto lateral bueno del
+cambio: como `escribir` es una función de módulo, el `finally { GENERACION_TERMINADA }`
+de una petición en vuelo **aterriza aunque el panel ya esté desmontado**.
+
+**El historial de la Fase 13 perdió su premisa y se re-justificó, no se dejó como estaba.**
+`useReducerConHistorial` borraba el historial al desmontar porque «el estado vuelve a su
+inicial». Eso ya es falso. La razón que queda —y basta— es el APLICADOR: cierra sobre el
+componente, y un delta sin dueño montado hace que `deshacerAmbito` borre la pila al primer
+clic. Además la semilla del delta pasó a ser el estado **efectivo** y no el de fábrica: sin
+ese cambio, volver a la pestaña habría grabado un comando espurio **cuyo `antes` son los
+valores por defecto**, y un solo Ctrl+Z habría borrado todo el trabajo bajo la etiqueta
+«Preset de densidad (+7)».
+
+**Gate — las 4 preguntas.** *(1) ¿Existe?* 8 recorridos Playwright con el backend
+sustituido en la frontera HTTP. *(2) ¿Mide los tres eslabones?* Sí, y el más duro es el
+tercero: se **intercepta el `multipart/form-data`** de `/build-package`, se extrae el
+adjunto `file` y se afirma sobre su CONTENIDO (`# Corrected gravity CSV` presente,
+`gravity_mgal` ausente) y sobre `allow_g_raw` del query string — no sobre el nombre del
+fichero ni sobre lo que se ve. *(3) ¿Discrimina?* El recorrido **G** es control negativo:
+dar la vuelta sin tocar nada tiene que dejar los valores de fábrica. *(4) ¿Falla si se
+rompe lo que dice defender?* **Verificado por mutación: 10/10**, cada una revirtiendo una
+parte del arreglo, reconstruyendo y corriendo los 8 recorridos.
+
+| # | Mutación | Recorridos que caen | Mensaje |
+|---|---|---|---|
+| M1 | `prepEnriquecer` no sobrevive | **B, H** | «✓ crudo.csv» no aparece |
+| M2 | `prepParametros` no sobrevive | **A** | `Expected "4.5", Received "0.0"` |
+| M2b | `prepContexto` no sobrevive | **A, F** | «Modo magnetometría» no aparece |
+| M3 | el paquete usa `file` en vez de `correctedFile ?? file` | **C** | «el paquete NO lleva el CSV corregido» |
+| M4 | `prepAvanzado` no sobrevive | **C** | la insignia «Correcciones aplicadas» no aparece |
+| M5 | el CSV corregido no caduca con el archivo | **D** | «lleva el corregido del archivo ANTERIOR» |
+| M6 | un campo de `AppState` sin clasificar | *(tipos)* | `tsc` TS2741 **y** `test_todo_campo_del_store_esta_clasificado` |
+| M7 | el flujo principal no caduca su mapeo | **E** | la tarjeta de mapeo sigue en pantalla |
+| M8 | `prepSondajes` no sobrevive | **H** | «+ sondajes (anclaje)» no aparece |
+| M9 | el validador vuelve a ser ciego a la columna corregida | **C** | «Validar CSV» **deshabilitado** |
+
+M3, M4 y M9 caen todas en el recorrido C y lo hacen con **tres mensajes distintos**, que es
+lo que permite saber cuál de las tres causas se rompió.
+
+🔴 **Y la mutación encontró un agujero en el propio gate, que se arregló antes de cerrar.**
+En su primera versión el recorrido D comprobaba que la insignia «Correcciones aplicadas»
+desaparecía al cambiar de archivo. Esa insignia la dibuja `correctionReport`, **no**
+`correctedFile`: con M5 aplicada —el CSV corregido inmortal— los **8 recorridos salían en
+verde** mientras el paquete viajaba con el corregido de OTRO archivo. Es el mismo defecto
+que la fase persigue (dato que sobrevive y no se ve) con el signo cambiado. D pasó a mirar
+el cable en vez de la pantalla.
+
+**Acoplamiento declarado (regla del gate: si una mutación enciende más de lo previsto, se
+dice).** M1 se predijo como «B y E» y salió **«B y H»**: el recorrido H afirma el rótulo
+`+ sondajes (anclaje)`, que `PrepEnrichPanel` sólo dibuja si hay un archivo de origen
+cargado — así que depende también de `prepEnriquecer`. Y E no depende de M1: su guardián es
+M7, confirmado por separado. La predicción estaba mal; el gate, no.
+
+**Regresión:** `tsc` 0 errores · `eslint` 0 errores (17 avisos preexistentes) ·
+`next build` OK · **48/48 e2e** (los 40 previos + los 8 nuevos), incluidos los siete de la
+Fase 13 que fijan el contrato *«la barrera borra la HISTORIA, no el estado»* y el de H-29
+de la Fase 1 · **45/45** en las tres guardias de CI del backend que leen el frontend
+(`test_fase13_undo_redo`, `test_fase10_contratos`, `test_fase9_camino_de_usuario`).
+
+**Lo que esta fase NO hizo, y queda declarado:**
+- **El historial de preparación sigue sin sobrevivir al cambio de pestaña.** El estado sí;
+  el Ctrl+Z no. Es la misma semántica que la barrera de archivos y está escrita en
+  `useReducerConHistorial.ts`. Hacerlo sobrevivir exige que el aplicador deje de depender
+  del montaje, que es un cambio del historial y no del panel.
+- **Los 16 campos del `GravityCorrectionWizard` y los 10 de `BoreholeUploadPanel` no se
+  persisten.** Del asistente sobrevive su producto (el CSV corregido y su reporte), no su
+  posición; de los sondajes sobreviven **los intervalos confirmados**, que son lo que viaja
+  como anclaje y lo que se ve en dos rótulos distintos. La vista de detalle del panel de
+  sondajes (tabla y mapa en planta) se reconstruye subiendo el fichero otra vez.
+- **La tolerancia de duplicados de `parseCsvForValidation` sigue siendo `1.0`** sin unidad,
+  y sus listas de columnas de posición no reconocen `lat_deg`/`lon_deg` (los que escribe el
+  asistente). Es un AVISO, no un bloqueo, y la confusión metros/grados es anterior a esta
+  fase: se midió y no se tocó.
+- **`PrepEnrichPanel` y `PrepPanel` siguen teniendo archivos separados** — el mismo CSV hay
+  que subirlo dos veces. Unificarlos es tentador y **hoy sería peligroso**: la caducidad de
+  H-29 vive en los manejadores de `PrepPanel`, así que un archivo compartido cambiado desde
+  el flujo principal dejaría vivos los reconocimientos de riesgo del anterior. Unificar los
+  archivos obliga a unificar la caducidad, y es su propia fase.
+- Nada de `H-36` ni `NUEVO-7`: son la Fase 25.
 
 ---
 
