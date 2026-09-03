@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 
 import PrepPanel from "../PrepPanel";
 import PrepEnrichPanel from "../PrepEnrichPanel";
@@ -8,6 +8,7 @@ import BoreholeUploadPanel from "../BoreholeUploadPanel";
 import MultimodalComboPanel from "../MultimodalComboPanel";
 import HistorialPrepControls from "../prep/HistorialPrepControls";
 import { useAppStore } from "../../store/useAppStore";
+import { huellaDeInvalidacion } from "../prep/invalidaResultado";
 
 /**
  * PreparacionView — flujo SIMPLE de preparación de datos.
@@ -40,6 +41,73 @@ export default function PreparacionView() {
   useEffect(() => {
     despertarPreparacion();
   }, [despertarPreparacion]);
+
+  // ── FASE 25 (H-36) — «resultado desactualizado», declarado por tipos ────────
+  //
+  // El aviso existe desde la Fase 1 (§9H.2) y es de la familia de H-28: mostrar
+  // algo que ya no corresponde. El modelo SÍ es de esta corrida, pero el usuario
+  // movió parámetros de preparación DESPUÉS de invertir, y la pantalla enseñaba
+  // la configuración nueva junto al resultado viejo sin distinguirlos. No se
+  // borra el resultado —sigue siendo un dato real—: se MARCA.
+  //
+  // Vivía dentro de `PrepPanel` y desde ahí sólo alcanzaba a la mitad del
+  // problema. Dos medidas de esta fase lo mudaron aquí:
+  //
+  //   · La lista era A MANO (23 variables en un `JSON.stringify`) y ya se había
+  //     quedado atrás: le faltaban `implicitGeologyParams` (FASE 14, la que el
+  //     plan nombra), los dos `acknowledge_*`, el CSV corregido y los sondajes.
+  //   · `markResultStale()` tenía UN llamador en todo el frontend, y era el
+  //     flujo CLÁSICO —el colapsado bajo «Avanzado»—. El flujo PRINCIPAL, por
+  //     donde entra el usuario, no marcaba nada aunque seis de sus campos
+  //     viajan al backend en cada generación.
+  //
+  // Esta vista es el padre común de los dos paneles y está montada siempre que
+  // cualquiera de los dos puede cambiar: `<details>` colapsa, no desmonta. Y
+  // desde la Fase 24 las cuatro máquinas viven en el store, así que aquí se lee
+  // el estado entero sin pasar por ningún panel.
+  //
+  // El QUÉ invalida no se decide aquí: se declara en `prep/invalidaResultado.ts`
+  // por tipos, donde un parámetro sin clasificar no compila.
+  const prepContexto = useAppStore((s) => s.prepContexto);
+  const prepParametros = useAppStore((s) => s.prepParametros);
+  const prepAvanzado = useAppStore((s) => s.prepAvanzado);
+  const prepEnriquecer = useAppStore((s) => s.prepEnriquecer);
+  const latNorth = useAppStore((s) => s.latNorth);
+  const latSouth = useAppStore((s) => s.latSouth);
+  const lonEast = useAppStore((s) => s.lonEast);
+  const lonWest = useAppStore((s) => s.lonWest);
+  const fileGravimetry = useAppStore((s) => s.fileGravimetry);
+  const fileMagnetometry = useAppStore((s) => s.fileMagnetometry);
+  const markResultStale = useAppStore((s) => s.markResultStale);
+
+  const huella = useMemo(
+    () =>
+      huellaDeInvalidacion({
+        contexto: prepContexto,
+        parametros: prepParametros,
+        avanzado: prepAvanzado,
+        enriquecer: prepEnriquecer,
+        store: {
+          latNorth, latSouth, lonEast, lonWest,
+          fileGravimetry, fileMagnetometry,
+          prepSondajes: boreholeIntervals,
+        },
+      }),
+    [
+      prepContexto, prepParametros, prepAvanzado, prepEnriquecer,
+      latNorth, latSouth, lonEast, lonWest,
+      fileGravimetry, fileMagnetometry, boreholeIntervals,
+    ],
+  );
+  // La referencia arranca con la huella del PRIMER render, así que volver a la
+  // pestaña no marca nada por el mero hecho de montar: sólo un cambio posterior.
+  const huellaPrevia = useRef(huella);
+  useEffect(() => {
+    if (huellaPrevia.current === huella) return;
+    huellaPrevia.current = huella;
+    // `markResultStale` sólo marca si hay un modelo de una corrida en pantalla.
+    markResultStale();
+  }, [huella, markResultStale]);
 
   return (
     <div className="h-full w-full overflow-y-auto custom-scrollbar animate-fadeIn">

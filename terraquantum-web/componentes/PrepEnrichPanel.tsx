@@ -1029,6 +1029,24 @@ function prefillMap(
   return out;
 }
 
+// FASE 25 (NUEVO-7) — el tipo se DERIVA del plan en vez de importarse suelto,
+// igual que hace `SuspicionsBanner` con `suspicions`: `ColumnSuggestion` no está
+// re-exportado en `frontendApi.ts` y añadir un export nuevo para pintarlo sería
+// tocar el contrato para un detalle de vista.
+type ColumnSuggestion = NonNullable<ColumnMappingPlan["suggestions"]>[string];
+
+/** El backend manda `confidence` como cadena libre y NO la valida contra un
+ *  dominio cerrado (misma decisión que con `confidence` del plan: cerrarlo en el
+ *  Pydantic convertiría un valor inesperado en un 500 en plena ingesta). Se
+ *  estrecha aquí, al pintarlo, y un valor desconocido se muestra tal cual en vez
+ *  de desaparecer. Hoy el backend sólo emite `medium`, y tiene un test que
+ *  impide que sea `high`. */
+const CONFIANZA_ES: Record<string, string> = {
+  high: "alta",
+  medium: "media",
+  low: "baja",
+};
+
 const GRAVITY_UNITS = ["mGal", "µGal", "Gal", "m/s2"];
 const COORD_SYSTEMS: { value: string; label: string }[] = [
   { value: "", label: "(auto-detectar)" },
@@ -1063,6 +1081,26 @@ function ColumnMappingStep({
 
   const requiredOk = plan.required_roles.every((r) => columnMap[r]);
   const invalid = Object.entries(plan.invalid_overrides ?? {});
+  // ── FASE 25 (NUEVO-7) — las sugerencias, por fin leídas ───────────────────
+  //
+  // La Fase 16 hizo que la ingesta caracterizara los roles por RANGO físico y
+  // PROPUSIERA una columna cuando el nombre no basta. La propuesta viajaba en el
+  // plan desde entonces y MEDIDO al abrir esta fase: 0 consumidores en
+  // TypeScript. La parte cara de la Fase 16 —el criterio que evita que un
+  // `X,Y,Z` entre torcido— estaba construida y muda.
+  //
+  // Se indexa por ROL, que es como el backend la emite
+  // (`Record<rol, {column, confidence, reason}>`), y por eso se pinta DENTRO del
+  // selector de ese rol y no en un cartel aparte: el dato útil es exactamente el
+  // valor que llenaría ese desplegable, y el canal para escribirlo ya existe.
+  //
+  // Y se PROPONE, nunca se aplica sola. El backend fija `confidence: "medium"`
+  // en los tres sitios que la construyen y hay un test suyo que impide que sea
+  // "high" («se propone, se confirma, no se aplica sola»). Auto-rellenarla aquí
+  // reabriría el defecto que la Fase 16 cerró: adivinar el rol de una columna.
+  const sugerencias: Record<string, ColumnSuggestion | undefined> =
+    plan.suggestions ?? {};
+
   return (
     <div className="rounded-2xl border border-amber-900/60 bg-amber-950/10 p-5 flex flex-col gap-5">
       <div>
@@ -1091,6 +1129,7 @@ function ColumnMappingStep({
             columns={plan.raw_columns}
             value={columnMap[role] ?? ""}
             onChange={(v) => setField(role, v)}
+            suggestion={sugerencias[role]}
           />
         ))}
         {plan.optional_roles.map((role) => (
@@ -1101,6 +1140,7 @@ function ColumnMappingStep({
             columns={plan.raw_columns}
             value={columnMap[role] ?? ""}
             onChange={(v) => setField(role, v)}
+            suggestion={sugerencias[role]}
           />
         ))}
       </div>
@@ -1181,6 +1221,7 @@ function RoleSelect({
   value,
   onChange,
   required,
+  suggestion,
 }: {
   role: string;
   label: string;
@@ -1188,7 +1229,15 @@ function RoleSelect({
   value: string;
   onChange: (v: string) => void;
   required?: boolean;
+  /** FASE 25 (NUEVO-7) — la propuesta del backend para ESTE rol, si la hay. */
+  suggestion?: ColumnSuggestion;
 }) {
+  // La sugerencia se retira en cuanto el rol ya apunta a la columna propuesta:
+  // repetirla entonces sería pedir que se confirme algo ya confirmado. Si el
+  // usuario elige OTRA columna se queda a la vista, y es deliberado: la segunda
+  // opinión por rango sigue discrepando, y ése es justo el aviso que la Fase 16
+  // construyó (el caso `X,Y,Z` que mandaba el northing a profundidad).
+  const mostrarSugerencia = suggestion && suggestion.column !== value;
   return (
     <div>
       <label className="block text-[10px] uppercase text-neutral-500 tracking-widest mb-1">
@@ -1207,6 +1256,30 @@ function RoleSelect({
           </option>
         ))}
       </select>
+      {mostrarSugerencia && (
+        <div
+          data-testid={`role-suggestion-${role}`}
+          data-suggested-column={suggestion.column}
+          className="mt-1.5 rounded border border-amber-700/60 bg-amber-950/20 px-2.5 py-2 flex flex-col gap-1.5"
+        >
+          <p className="text-[10px] font-mono text-amber-300/90 leading-4">
+            Sugerencia del backend:{" "}
+            <span className="font-bold text-amber-200">«{suggestion.column}»</span>{" "}
+            <span className="text-amber-500/80">
+              (confianza {CONFIANZA_ES[suggestion.confidence] ?? suggestion.confidence})
+            </span>
+          </p>
+          <p className="text-[10px] font-mono text-neutral-500 leading-4">{suggestion.reason}</p>
+          <button
+            type="button"
+            data-testid={`role-suggestion-accept-${role}`}
+            onClick={() => onChange(suggestion.column)}
+            className="self-start rounded border border-amber-600/70 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-300 hover:bg-amber-900/40"
+          >
+            Usar «{suggestion.column}»
+          </button>
+        </div>
+      )}
     </div>
   );
 }

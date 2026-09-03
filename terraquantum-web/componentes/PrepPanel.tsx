@@ -1102,39 +1102,19 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
       error: errorViewFromString(msg, "No se pudo generar el paquete CSV."),
     });
 
-  // ── FASE 1 (§9H.2): invalidación "stale" ───────────────────────────────────
-  // Misma familia que H-28 ("mostrar algo que ya no corresponde"), un escalón más
-  // sutil: el modelo SÍ es de esta corrida, pero el usuario movió parámetros de
-  // preparación después de invertir. La pantalla mostraba la configuración nueva
-  // junto al resultado viejo sin distinguirlos. No se borra el resultado —sigue
-  // siendo un dato real— se MARCA como desactualizado.
-  const inversionParamsFingerprint = useMemo(
-    () =>
-      JSON.stringify([
-        densityMin, densityMax, lambdaMode, lambdaCustom, gravimeterType,
-        paddingKappaLog, anchorKappaLog, autoKappa, enableDepthPrior,
-        inclinationDeg, declinationDeg, fieldIntensityNt, suscMin, suscMax,
-        utmZone, strict, allowGRaw,
-        latNorth, latSouth, lonEast, lonWest,
-        pgiParams, remanenceParams,
-      ]),
-    [
-      densityMin, densityMax, lambdaMode, lambdaCustom, gravimeterType,
-      paddingKappaLog, anchorKappaLog, autoKappa, enableDepthPrior,
-      inclinationDeg, declinationDeg, fieldIntensityNt, suscMin, suscMax,
-      utmZone, strict, allowGRaw,
-      latNorth, latSouth, lonEast, lonWest,
-      pgiParams, remanenceParams,
-    ],
-  );
-  const markResultStale = useAppStore((s) => s.markResultStale);
-  const prevParamsFingerprintRef = useRef(inversionParamsFingerprint);
-  useEffect(() => {
-    if (prevParamsFingerprintRef.current === inversionParamsFingerprint) return;
-    prevParamsFingerprintRef.current = inversionParamsFingerprint;
-    // markResultStale sólo marca si hay un modelo de una corrida en pantalla.
-    markResultStale();
-  }, [inversionParamsFingerprint, markResultStale]);
+  // ── FASE 1 (§9H.2) + FASE 25 (H-36): la invalidación "stale" se MUDÓ ───────
+  //
+  // Vivía aquí, y aquí sólo podía ver la mitad del problema: este panel es el
+  // flujo CLÁSICO, el que vive colapsado bajo «Avanzado». MEDIDO al abrir la
+  // Fase 25: `markResultStale()` tenía UN llamador en todo el frontend —éste— y
+  // el flujo PRINCIPAL (`PrepEnrichPanel`) no era ninguno, con seis campos suyos
+  // viajando al backend en cada generación.
+  //
+  // Ahora el efecto vive en `views/PreparacionView.tsx`, que es el padre común
+  // de los dos paneles y está montado siempre que cualquiera de los dos puede
+  // cambiar (`<details>` colapsa, no desmonta). La declaración de QUÉ invalida
+  // está en `prep/invalidaResultado.ts`, por tipos: un parámetro sin clasificar
+  // no compila.
 
   const handleGeneratePackage = async () => {
     clearPackageError();
