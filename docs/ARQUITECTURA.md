@@ -102,7 +102,7 @@ exploration/
 ├── gravimetry.py          (~4000L) — GravimetryForward, GravimetryInversion
 ├── magnetometry.py        (~3200L) — MagnetometryForward, MagnetometryInversion
 ├── implicit_modeling.py   — HRBF, prior litológico
-└── checkerboard_test.py   — QA de resolución espacial
+└── checkerboard_test.py   — tablero histórico (control; ya NO topea el veredicto)
 ```
 
 ### `protocols.py`
@@ -313,27 +313,36 @@ corridas = tq.batch(
 ### B3 — Veredicto Reconciliado (worst-of)
 
 ```python
-# geophysics_service.py:877-881
-if cb_status == "FAIL":
-    levels.append(("MEDIUM", "checkerboard_resolution"))
+# geophysics_service.py — desde la Fase 26
+res_level, res_meta = _resolution_signal(report_payload)   # LOW si no resuelve NADA
+if bt.get("is_floor_smear"):
+    levels.append(("LOW", "best_target_floor_smear"))
+levels.append(("MEDIUM", "high_hold_pending_fase30"))      # retención DECLARADA
 ```
 
-El checkerboard alterna celda a celda (longitud de onda 250m, por debajo del límite físico de resolución). Retorna `pearson_r ≈ 0.116` constante en todo survey realista. **HIGH es inalcanzable por construcción** hasta ejecutar Fase 26.
+**Historia del techo, en tres fases.** Hasta la 25 lo ponía el tablero: alterna celda a celda (250 m de longitud de onda en malla de 125 m), devolvía `pearson_r ≈ 0.116` constante y `FAIL` en el 100 % de las corridas ⇒ `HIGH` inalcanzable **por construcción**. La Fase 26 midió que eran **tres** causas, no una (la longitud de onda es la menor: corregirla sola llega a 0.247, con el PASS en 0.60), y lo reemplazó por `services/resolution_qa.py`. El tablero se conserva **publicado como control** (`role: historical_control_since_fase26`) y ya **no topea**.
 
-**ACAD-11 (Abierto):** `NOT_RUN` no topa igual que `FAIL` (Fase 21 lo corrige).
+**ACAD-11 (Cerrado, Fase 21):** `NOT_RUN` topa igual que `FAIL`.
+**ACAD-10 (Cerrado, Fase 26):** el diagnóstico de resolución informa. ρ contra PR-AUC = **+0.8081** sobre 75 corridas de confirmación (`chi2_red` da **−0.0675** en el mismo conjunto).
+
+### Perfil de resolución (`services/resolution_qa.py`, Fase 26)
+
+Por banda de profundidad × escalera de bloques laterales: tablero que alterna en (x, z) dentro de la banda, escalado a la **amplitud de señal** (`sqrt(rms_obs² − σ²)`), con el σ **declarado**, puntuado sobre el **mapa en planta**. Salida: **longitud de resolución en metros** por banda + `resolvability_index`. Coste medido: **0.89 s** en una corrida de ~30 s.
 
 ### B2 — Profundidad (`depth_confidence`)
 
 Índice DOI de doble inversión. `_DOI_NULLSPACE_CUTOFF = 1.0`. Medido: `LOW` en 75/75 corridas.
 
-### B1 — Null-Space (`null_space_artifact`)
+### B1 — Null-Space (`null_space_artifact` + `is_floor_smear`)
 
-Condición: saturación total en el piso. Demasiado estrecha. Medido: `False` en 75/75, incluyendo 15 casos con PR-AUC ≤ 0.01 donde el modelo SÍ es smear del null-space.
+`is_null_space_artifact` exige saturación **total** en el piso: demasiado estrecha. Medido `False` en 75/75 del barrido y en 75/75 de la confirmación, incluidos los casos con PR-AUC ≤ 0.01 donde el modelo SÍ es smear.
 
-### Secuencia Correcta para Desbloquear HIGH
+**Fase 26 — `is_floor_smear`:** la versión continua. Anomalía en la banda de piso ÷ la que pondría ahí un modelo uniforme (contada en celdas); dispara con exceso > 1. Es el **único** diagnóstico medido que discrimina DENTRO de un mismo régimen: ρ mediano contra PR-AUC = **+0.71** (`chi2_red` da −0.10). En la confirmación dispara 25/75 con **0 falsos positivos** (PR-AUC máximo 0.204 entre las disparadas).
 
-**Fase 26 primero:** Checkerboard con bloques del tamaño del objetivo · gate: Spearman ≥ umbral sobre ≥75 corridas / ≥5 regímenes.  
-**Fase 30 después:** Desbloquear HIGH — **solo si la Fase 26 cerró con discriminación real**.  
+### Secuencia para Desbloquear HIGH
+
+**Fase 26 — CERRADA (2026-09-03).** Gate pasado: ρ = **+0.8081** sobre 75 corridas / 15 regímenes (listones: 0.073 de `chi2_red`, 0.275 del tablero viejo).
+**Fase 30 — DESBLOQUEADA, no ejecutada.** Quitar una sola entrada del worst-of: `high_hold_pending_fase30`. Dos límites medidos que hay que llevarse al gate de ≥150 corridas: `is_floor_smear` caza **25 de 45** desplomes (no los 45), y 13 de 55 corridas cuyo examen «resuelve algo» tienen PR-AUC ≤ 0.19 y no se topan a LOW.
 Subir el techo sin señal discriminante = sobreconfianza (el único cuadrante inaceptable).
 
 ---
@@ -410,7 +419,10 @@ Columnas: `x_m`, `y_m`, `z_m`, `density_t_m3`, `relative_score`, `is_active`, `i
 | `PRECONDITIONED_OPERATING_LAMBDA` | `0.1` | `geophysics_service.py:59` | Calibrado en n_active=256, benchmark 8×4×8. **No verificado a escala regional.** |
 | `_DOI_NULLSPACE_CUTOFF` | `1.0` | `geophysics_service.py` | Límite DOI para B2 |
 | `padding_kappa` | `1e5` | `magnetometry.py` | Regularización de padding magnético |
-| `_CHECKERBOARD_PASS_THRESHOLD` | `0.60` | `checkerboard_test.py` | Umbral inalcanzable por cualquier survey realista (Fase 26 lo recalibra) |
+| `_CHECKERBOARD_PASS_THRESHOLD` | `0.60` | `checkerboard_test.py` | Del tablero histórico. Inalcanzable por cualquier survey realista |
+| `PASS_PEARSON_R` | `0.60` | `resolution_qa.py` | Mismo valor, examen respondible: un survey sano saca 0.70–0.79 y uno degradado 0.03. La Fase 26 no bajó la vara, hizo el examen contestable |
+| `BLOCK_LADDER_CELLS` | `(1,2,3,4,6)` | `resolution_qa.py` | Escalera de tamaños de bloque, en celdas |
+| umbral de `is_floor_smear` | `> 1.0` | `geophysics_service.py` | Geométrico: «más masa en el piso de la que le toca por número de celdas». No ajustado |
 | `MAX_LOC` | `300` | `scripts/ci/ast_budgets.py` | Máximo LOC por función |
 | `MAX_CC` | `40` | `scripts/ci/ast_budgets.py` | Complejidad ciclomática máxima |
 | `MAX_ARGS` | `12` | `scripts/ci/ast_budgets.py` | Máximo argumentos por función |

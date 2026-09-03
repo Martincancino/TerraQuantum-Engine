@@ -148,6 +148,45 @@ a mano.
 
 ---
 
+## Fase 26 — CERRADA (2026-09-03): el techo `MEDIUM`, cerrado por el lado correcto
+
+[`HALLAZGO_2026-09-03_resolucion_informativa.md`](HALLAZGO_2026-09-03_resolucion_informativa.md).
+149 inversiones más por la ruta de producción: **74 de selección** (las 5 semillas del
+barrido) y **75 de confirmación** (5 semillas frescas, 62,4 min, 0 errores).
+
+**El hallazgo (b) de arriba culpaba a la longitud de onda del tablero. Son tres causas, y
+ésa es la menor.** Corregirla sola sube `pearson_r` de 0,116 a 0,247, con el PASS en 0,60.
+Las otras dos: el examen **puntúa profundidades que ningún survey gravimétrico resuelve**
+(el mismo tablero, puntuado en la banda somera con bloques grandes, saca **0,704**), y
+**califica a un solver distinto del que produce el modelo** — con el mismo dato observado,
+`lsqr(damp=λ)` sobre el kernel Core devuelve PR-AUC **0,04** donde producción devuelve
+**1,000**.
+
+**El gate, sobre las 75 de confirmación:**
+
+| diagnóstico | ρ vs PR-AUC | ρ DENTRO de régimen |
+|---|---:|---:|
+| `chi2_red` — el listón del plan (0,073) | **−0,0675** | −0,100 |
+| tablero de hoy | +0,1996 | — |
+| **`resolvability_index`** (nuevo) | **+0,8081** | +0,200 |
+| `floor_mass_excess` (nuevo, negado) | +0,6523 | **+0,7071** |
+
+**Y la otra mitad del hallazgo también cierra.** Lo que distingue, con el survey FIJO, la
+corrida de 5,6 m de la de 285,5 m es la **masa apilada en el piso de la malla** — un dato
+que el producto ya calculaba y no miraba. En `baseline`: 0,065 / 0,125 / 0,329 en las tres
+que aciertan y **0,944** en la que se va a 285 m.
+
+**Dirección 5 del plan, aplicada a este framework y a los benchmarks:** una semilla no es
+una muestra. Los tres benchmarks científicos del backend pasan a afirmar sobre la MEDIANA
+de N semillas declaradas (`tests/seed_sweep.py`), y este mismo barrido lo confirma: las
+medianas por régimen se mueven muchísimo entre los dos juegos de semillas
+(`contrast_0.2` 0,273 → 0,985; `coverage_6` 0,225 → 0,704), mientras el diagnóstico
+apenas se mueve (`baseline` 0,2476 → 0,2478). Mide el survey, no la tirada.
+
+Reproducir: `python -m validation.exp_resolution --set confirm`.
+
+---
+
 ## Cómo se llegó ahí: el barrido anterior fue RETIRADO
 
 El primer barrido (127 min, 75 inversiones) **se retiró por decisión propia**, no porque

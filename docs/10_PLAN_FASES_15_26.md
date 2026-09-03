@@ -4,9 +4,9 @@
 > Rama `fases-19-25-cierre`. Ninguna afirmación se apoya en documentación:
 > todas citan `ruta:línea` o una medición reproducible.
 
-> ### ESTADO — 2026-08-31
+> ### ESTADO — 2026-09-03
 >
-> **CERRADAS: 15, 16, 17, 18, 19, 20, 21, 22, 23.** Las dos de física salieron caras y
+> **CERRADAS: 15 a 26.** Las dos de física salieron caras y
 > valieron la pena: la **17** cambió el error de profundidad recuperada de
 > **150,1 m a 14,7 m**, y la **18/19** midió que el motor magnético calculaba con
 > `D_ef = 90° − D` — en Chile, **86° de desvío** y Pearson **r = −0,05** contra la
@@ -42,7 +42,25 @@
 > habría sido **decorativo**: ese aviso sólo se emite en `flat_fallback`, un estado que
 > una ruta que nunca intenta interpolar no puede alcanzar.
 >
-> **SIGUIENTE: Fase 24.**
+> La **24** y la **25** cerraron los dos huecos de frontend, y las dos volvieron a
+> encontrar el defecto **más grande** que la ficha: NUEVO-3 eran DOS capas —el validador
+> local no reconocía ninguna de las 4 columnas que escribe su propio asistente, así que
+> «Generar paquete» quedaba apagado y el CSV corregido **no podía llegar nunca** al
+> backend—, y a la 25 le faltaban **5 entradas y un panel entero**.
+>
+> La **26** es la cuarta vez seguida que la ficha describe un defecto distinto del real, y
+> la primera en que el trabajo que el plan pedía habría sido **insuficiente**: el techo a
+> `MEDIUM` no lo causaba (sólo) la longitud de onda del tablero, sino **tres** causas
+> independientes, y ésa es la menor —corregirla sola sube `pearson_r` de 0,116 a 0,247,
+> con el PASS en 0,60. Las otras dos: el examen **puntúa profundidades que ningún survey
+> gravimétrico resuelve** (el mismo tablero, puntuado en la banda somera con bloques
+> grandes, saca **0,704**) y **califica a un solver distinto del que produce el modelo**
+> (con el mismo dato, PR-AUC 0,04 donde producción da 1,000). El diagnóstico nuevo pasa de
+> ρ = **+0,073** a **+0,87** contra PR-AUC, y de propina cierra la otra mitad del hallazgo
+> —distinguir la corrida de 5,6 m de la de 285,5 m dentro del **mismo** régimen— con un
+> dato que el producto ya calculaba y no miraba.
+>
+> **SIGUIENTE: Fase 27.**
 >
 > **Fases nuevas 20, 21, 26 y 30**, añadidas el 26-ago tras revisar una auditoría
 > delta externa. Ojo: **los dos «CRÍTICO» que esa delta proponía atacar primero no
@@ -114,7 +132,9 @@ ZIP industrial, roles de columna en la ingesta, unidades de exportación, empaqu
 y updater, bugs de confianza del camino dorado, código muerto, dependencias,
 constante de λ, CI de validación.
 
-**NO verificado (queda como Fase 26):** los gates de las 14 fases uno a uno, la
+**NO verificado (queda como Fase 29** — este párrafo decía «Fase 26» y era una
+errata: la renumeración del 26-ago movió ese trabajo a la 29, que es la que lo
+describe en el §5**):** los gates de las 14 fases uno a uno, la
 ejecución real de la suite, estructura y complejidad hoy, el operador de
 suavidad de 4º orden y la frontera de Dirichlet, seguridad y red, listas de
 tolerancia, higiene del repositorio, código muerto nuevo en el frontend.
@@ -1958,7 +1978,7 @@ este mismo aviso desde el flujo CLÁSICO (`fase1_confianza.spec.ts:282`, mueve
 
 ---
 
-### FASE 26 — Que la señal informe, antes de tocar el techo · **L** · 🟠 P1 · *backend, medir* · ACAD-10
+### FASE 26 (CERRADA) — Que la señal informe, antes de tocar el techo · **L** · 🟠 P1 · *backend, medir* · ACAD-10
 
 **Por qué existe esta fase.** Es el problema más grande del producto y **no estaba en el plan**. Tu
 propio hallazgo lo midió con 99 inversiones por la ruta de producción
@@ -1991,6 +2011,137 @@ forma de decirte»**. Y es lo que impide vender targeting con barras de error.
 **Gate.** El gate es **un número, no un parche**: Spearman entre el diagnóstico nuevo y PR-AUC sobre
 **≥75 corridas en ≥5 regímenes**. Si no sube claramente por encima del **0,073** actual, la fase
 **no cierra** y el techo se queda donde está.
+
+#### ✅ EJECUTADA — 2026-09-03
+
+Backend puro; el frontend **no se tocó** (y hay consecuencia: ver el riesgo al final).
+Registro completo con todas las tablas:
+[`validation/HALLAZGO_2026-09-03_resolucion_informativa.md`](../validation/HALLAZGO_2026-09-03_resolucion_informativa.md).
+
+**El diagnóstico del plan era correcto pero incompleto, y el trabajo que pedía habría
+sido insuficiente.** La dirección 1 —cambiar la longitud de onda— es real, pero al
+medirla contra el código resultó ser **la menor de tres causas independientes**, y por sí
+sola no acerca el examen al aprobado:
+
+| bloque del tablero | 1 celda (hoy) | 2 celdas | 3 celdas | 4 celdas | umbral de PASS |
+|---|---:|---:|---:|---:|---:|
+| `pearson_r` | **0,116** | 0,212 | 0,192 | 0,247 | **0,60** |
+
+Las otras dos, que nadie había medido:
+
+- **Puntúa profundidades que ningún survey gravimétrico resuelve.** El Pearson se calcula
+  sobre la malla entera, incluidas capas donde la recuperación es ~0 para cualquier
+  survey: un survey perfecto tampoco aprobaría. Mismo kernel, misma λ, mismo tablero —
+  puntuado sólo dentro de la banda 0–250 m con bloques de 750 m: **r = 0,704**. El examen
+  no medía este survey; medía el promedio entre lo resoluble y lo que nunca lo será.
+- **Califica a un solver distinto del que produce el modelo.** El QA invierte con
+  `lsqr(damp=λ)` sobre el kernel Core: sin padding, sin bounds, sin depth-weighting. Con
+  **el mismo dato observado** y 17 semillas, ese solver devuelve PR-AUC **0,039–0,041** y
+  el centroide a ~85 m donde producción devuelve **0,583–1,000** y ~466 m. Aunque
+  aprobara, no describiría el modelo que el usuario está mirando.
+
+**Lo que se construyó.** `services/resolution_qa.py` (nuevo, ~300 l): un **perfil de
+resolución** por banda de profundidad × escalera de tamaños de bloque lateral, escalado a
+la amplitud de **señal** (`sqrt(rms_obs² − σ²)`) y con el σ **declarado**, puntuado sobre
+el **mapa en planta**. Sale una **longitud de resolución en metros** por banda —«este
+survey resuelve bloques de 250 m arriba, 500 m hasta 750 m, y nada más abajo»— que el
+usuario compara con el tamaño del cuerpo que busca. Cuesta **0,85 s** en una corrida de
+~30 s (2,8 %), porque cada LSQR del examen son 8 ms.
+
+**El gate, con dos listones en vez de uno.** El 0,073 del plan es ρ(`chi2_red`, PR-AUC).
+Al re-medirlo salió que **el tablero de hoy ya da ρ = +0,275** sobre esas mismas 75
+corridas: superar 0,073 era demasiado fácil, así que el diagnóstico nuevo se comparó
+contra los dos.
+
+| diagnóstico | ρ vs PR-AUC (74 corridas de selección) | ρ (15 medianas por régimen) |
+|---|---:|---:|
+| `chi2_red` — el control del plan | +0,0601 | +0,1479 |
+| tablero de hoy | +0,2747 | +0,3381 |
+| **`resolvability_index`** | **+0,8746** | **+0,9324** |
+
+**Y el conjunto de CONFIRMACIÓN — 75 corridas, 15 regímenes, 5 semillas frescas (EL GATE):**
+
+| diagnóstico | ρ vs PR-AUC (75 corridas) | ρ **DENTRO** de régimen (mediana) |
+|---|---:|---:|
+| `chi2_red` — el control del plan | **−0,0675** | −0,100 |
+| tablero de hoy | +0,1996 | — |
+| `misfit_pct` (negado) | +0,3564 | — |
+| **`resolvability_index`** | **+0,8081** | +0,200 |
+| `floor_mass_excess` (negado) | +0,6523 | **+0,7071** |
+
+**GATE PASADO.** +0,8081 contra el 0,073 del plan y contra el +0,275 del tablero. El
+número encoge respecto al conjunto de selección (+0,8746 → +0,8081), que es exactamente lo
+que debe pasar cuando el diseño se eligió en otro sitio; sigue siendo un orden de magnitud
+por encima del listón. En este conjunto `chi2_red` sale **negativo**.
+
+**El escalar primario NO es el mejor que se midió, a propósito.** Variantes con una banda
+o un peldaño escogidos llegaban a **+0,9173**; se descartaron porque la ganancia son tres
+centésimas y el coste es un parámetro elegido mirando la respuesta. El índice es la media
+de **todo** el examen y no tiene ninguno. Y como el diseño se eligió mirando datos, el
+número del gate se mide en un conjunto de **confirmación** con 5 semillas frescas y los
+dos escalares **pre-registrados** en `validation/exp_resolution.py`.
+
+**La otra mitad del hallazgo también se cerró, y el dato ya estaba en la casa.** El perfil
+no puede distinguir realizaciones de ruido —usa σ, no la muestra—, así que la pregunta
+seguía abierta: ¿qué separa, con el survey FIJO, la corrida de 5,6 m de la de 285,5 m?
+Midiendo 13 candidatos derivados del modelo recuperado, uno lo hace:
+
+| candidato | ρ agrupado | ρ **DENTRO** de régimen (mediana) |
+|---|---:|---:|
+| `chi2_red` | +0,038 | **+0,000** |
+| **masa en la banda de piso** (negado) | +0,677 | **+0,741** |
+
+`floor_mass_excess` = anomalía en la banda de piso ÷ la que pondría ahí un modelo
+uniforme (contada en celdas). En `baseline`, mismo mundo y misma λ: 0,065 / 0,125 / 0,329
+en las tres que aciertan y **0,944** en la que se va a 285 m — un factor 14×, donde
+`chi2_red` variaba un 16 % sin orden. **Cierra la dirección 4:** `is_null_space_artifact`
+exige saturación TOTAL al bound y salió `False` en 75 de 75, incluidas las 15 con PR-AUC ≤
+0,01 donde el modelo *es* smear.
+
+**Un callejón sin salida que vale registrar.** La primera versión leía el perfil en la
+banda del blanco recuperado. `best_target.depth_m` sale **62,5 o 187,5 m en las 74
+corridas** —con el cuerpo a 250, 400, 600 o 900 m— y cae **más somero cuanto más profundo
+está el cuerpo** (900 m → 62,5 m en 5 de 5): anclar ahí le daría a las corridas **peores**
+el examen **más fácil**. Sobreconfianza fabricada. El resumen final es agnóstico de
+profundidad a propósito.
+
+**Dirección 5 — una semilla no es una muestra.** `tests/seed_sweep.py` (nuevo) y los tres
+benchmarks científicos (`checkerboard`, `two_body`, `dipping_dike`) pasan de afirmar sobre
+`default_rng(42)` a afirmar sobre la **mediana de N semillas declaradas**, publicando
+**todas** en el mensaje de fallo. `TQ_BENCH_SEEDS` sube N sin tocar código.
+`exploration/checkerboard_test.py` recibe `--seed`.
+
+**El veredicto.** El tablero **deja de topear** y queda publicado como control histórico
+(`role: historical_control_since_fase26`) — su constancia es la evidencia del techo.
+Entran dos señales medidas: `survey_resolution` (LOW si el examen no resuelve **nada**: esa
+clase son 20 corridas con PR-AUC **máximo 0,186** frente a 0,644 del resto, y **10 de las
+20 salían hoy MEDIUM**) y `best_target_floor_smear`.
+
+**`HIGH` sigue retenido, y ahora se dice por qué.** No lo topa ya un examen imposible: lo
+topa `high_hold_pending_fase30`, con `structural: false` y condición de salida escrita. Es
+lo que el plan ordena y lo que el hallazgo de agosto exige por escrito («primero que la
+señal informe, después subir el techo»), y sigue siendo prudente: `floor_mass_excess` caza
+27 de 49 desplomes, no los 49.
+
+**Verificado por mutación (la pregunta 4).** 5 mutaciones en `tests/test_f26_resolution_qa.py`
+—volver a puntuar toda la malla, volver al tablero celda a celda, ignorar el ruido, poner
+un umbral plano al smear de piso, y un índice constante— más 2 mutaciones sobre los
+benchmarks con semillas (λ absurdo y centroide del cuerpo equivocado), que se pusieron
+**rojas** publicando cada semilla y se restauraron con hash verificado. **22/22** en el
+archivo nuevo y **81/81** en el conjunto de veredicto/reporte.
+
+**Erratas del expediente, medidas de paso.** El hallazgo de agosto atribuía el techo a la
+longitud de onda: es **una** de tres causas y la menos importante. Y su §4 proponía
+«recalibrar el umbral»: lo medido dice que el umbral de 0,60 **no había que bajarlo** —
+había que hacer el examen respondible; con el examen nuevo un survey sano lo pasa (0,70–0,79)
+y uno degradado no (0,03).
+
+**Riesgo abierto — NUEVO-10.** `resolution_qa`, `floor_mass_excess` y el bloque `ceiling`
+**entero** no los lee ningún `.tsx`: `HonestReportWidgets.tsx:50` consume `overall_verdict`
+pero sólo `level` y `limiting_factors`, y `RecoveryCoverageWidgets.tsx:135` sigue leyendo
+`checkerboard_qa`. La UI mostrará el literal `high_hold_pending_fase30` sin explicación.
+Misma familia que NUEVO-7/H-36 de la Fase 25; **no se toca aquí** porque la regla del
+proyecto prohíbe backend y frontend en la misma fase.
 
 ---
 
@@ -2075,6 +2226,15 @@ Hoy el techo **te está protegiendo**. Quitarlo antes de la Fase 26 convierte un
 una mentira con sello de calidad.
 
 **Esta fase no se abre si la Fase 26 no cerró con una señal que discrimine.**
+**DESBLOQUEADA — 2026-09-03:** la Fase 26 cerró con **ρ = +0,8081** sobre las 75 corridas
+de confirmación (contra +0,073 de `chi2_red` —que en ese conjunto sale **−0,0675**— y
++0,275 del tablero viejo) y con un discriminador DENTRO de régimen (ρ mediano **+0,7071**)
+donde `chi2_red` da −0,100. Lo que la Fase 30 tiene que quitar es una sola entrada:
+`high_hold_pending_fase30` en `build_reconciled_verdict`. Dos cosas medidas que hay que
+llevarse al gate de las ≥150 corridas: (a) `floor_mass_excess` caza **27 de 49** desplomes,
+no los 49 — subir el umbral de 1,0 a 0,5 cazaría 37 con 0 falsos positivos *en la muestra
+de 67*, pero deja el margen al peor caso sano en un 12 %; (b) 13 de 55 corridas cuyo examen
+«resuelve algo» tienen PR-AUC ≤ 0,186 y no se topan a LOW, casi todas en régimen profundo.
 
 **Trabajo.** Liberar el tope y recalibrar la escala completa contra el barrido de la Fase 26.
 
