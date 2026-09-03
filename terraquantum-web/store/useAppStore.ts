@@ -10,7 +10,26 @@ import type { BoreholeViewData } from '../lib/render/BoreholeLayer';
 import type { SectionData } from '../lib/render/SectionPaintLayer';
 import type { DoiOverlayData } from '../lib/render/DoiOverlayLayer';
 import type { FavorabilityResult } from '../componentes/datos/favorability_types';
-import type { GeorefConfidence, ProjectFootprint, CrsInfo, ElevationRange, PercentileStats, GravityImportPreviewResponse, GravityCsvInvertResponse } from '../lib/terraquantum/frontendApi';
+import type { GeorefConfidence, ProjectFootprint, CrsInfo, ElevationRange, PercentileStats, GravityImportPreviewResponse, GravityCsvInvertResponse, boreholeSurveyToIntervals } from '../lib/terraquantum/frontendApi';
+// FASE 24 — las máquinas de estado del panel de preparación. Se importan los
+// VALORES iniciales (no sólo los tipos) porque el store tiene que arrancar en el
+// mismo sitio en el que arrancaban los `useReducer` que sustituye. Viven en
+// `componentes/prep/*State.ts` y no en un `.tsx`: son módulos de datos sin JSX,
+// así que el store no arrastra ningún componente a su grafo.
+import {
+  avanzadoInicial,
+  contextoInicial,
+  parametrosInicial,
+  type AvanzadoState,
+  type ContextoState,
+  type ParametrosState,
+} from '../componentes/prep/prepPanelState';
+import { enriquecerInicial, type EnriquecerState } from '../componentes/prep/prepEnrichState';
+
+/** Un intervalo de sondaje ya confirmado, en el formato que consume el payload
+ *  de inversión. Es exactamente lo que devuelve `boreholeSurveyToIntervals`: se
+ *  deriva del contrato en vez de copiarlo a mano (Fase 10, H-16). */
+export type BoreholeInterval = ReturnType<typeof boreholeSurveyToIntervals>[number];
 
 // Tipos mínimos para campos que antes eran any[]
 export interface HeatmapPoint {
@@ -446,6 +465,39 @@ export interface AppState {
   // al montar el <Canvas>; ExportPanel la lee para exportar PNG de alta resolución.
   capturePngSnapshot: ((targetWidthPx: number) => string) | null;
   setCapturePngSnapshot: (fn: ((targetWidthPx: number) => string) | null) => void;
+
+  // ── 16. FASE 24 — El estado de PREPARACIÓN, que ya no se evapora ───────────
+  //
+  // NUEVO-2: `app/page.tsx` monta las vistas por igualdad de string, así que
+  // salir de la pestaña DESMONTA `PreparacionView` y con ella el estado de sus
+  // paneles. Aquí vive ahora la parte que es TRABAJO DEL USUARIO. Cada campo es
+  // el objeto entero de una de las máquinas que creó la Fase 10, no sus piezas
+  // sueltas: los reducers siguen siendo los dueños de las transiciones y este
+  // store sólo es dónde descansa el resultado.
+  //
+  // Lo que NO está aquí, y es una decisión medida, no un olvido:
+  //  · `OperacionState` (9 campos) sigue siendo local. Son banderas de vuelo,
+  //    errores y mensajes de éxito. MEDIDO: no hay un solo `AbortController` en
+  //    los tres paneles, así que un `loading` que sobreviviera dejaría un
+  //    spinner eterno sobre una petición que ya se resolvió en el vacío; y
+  //    `packageMessage` se escribe DESPUÉS del `a.click()` que ya dejó el
+  //    fichero en el disco del usuario — restaurarlo afirma como presente un
+  //    hecho del pasado. `csvValidation` se recalcula sola al montar.
+  //  · Los 16 campos de `GravityCorrectionWizard` y los 10 de
+  //    `BoreholeUploadPanel`: ver `store/deshacible.ts`.
+  prepContexto: ContextoState;
+  setPrepContexto: (v: ContextoState) => void;
+  prepParametros: ParametrosState;
+  setPrepParametros: (v: ParametrosState) => void;
+  prepAvanzado: AvanzadoState;
+  setPrepAvanzado: (v: AvanzadoState) => void;
+  prepEnriquecer: EnriquecerState;
+  setPrepEnriquecer: (v: EnriquecerState) => void;
+  prepSondajes: BoreholeInterval[];
+  setPrepSondajes: (v: BoreholeInterval[]) => void;
+  /** Al volver a la pestaña, apaga lo que describe algo que ya no está pasando:
+   *  cargas en vuelo, errores viejos y modales abiertos. Ver el cuerpo. */
+  despertarPreparacion: () => void;
 }
 
 /** Identidad estable de una corrida — clave de procedencia del modelo 3D (H-28).
@@ -884,4 +936,75 @@ export const useAppStore = create<AppState>(conHistorial((set, get) => ({
   // 15. F5 — Puente de captura PNG
   capturePngSnapshot: null,
   setCapturePngSnapshot: (fn) => set({ capturePngSnapshot: fn }),
+
+  // 16. FASE 24 — Preparación que sobrevive al cambio de pestaña
+  prepContexto: contextoInicial,
+  setPrepContexto: (v) => set({ prepContexto: v }),
+  prepParametros: parametrosInicial,
+  setPrepParametros: (v) => set({ prepParametros: v }),
+  prepAvanzado: avanzadoInicial,
+  setPrepAvanzado: (v) => set({ prepAvanzado: v }),
+  prepEnriquecer: enriquecerInicial,
+  setPrepEnriquecer: (v) => set({ prepEnriquecer: v }),
+  prepSondajes: [],
+  setPrepSondajes: (v) => set({ prepSondajes: v }),
+
+  // Lo que sobrevive es el TRABAJO, no la sesión de trabajo. Al volver a la
+  // pestaña hay tres clases de estado que serían mentira si se restauraran, y
+  // las tres se apagan aquí, en un solo sitio y con el motivo escrito:
+  //
+  //  1. **Cargas en vuelo.** Sin `AbortController` (medido: 0 en los tres
+  //     paneles), la petición que había en marcha al salir se resolvió contra un
+  //     componente desmontado. Un `loading: true` restaurado es un spinner que
+  //     no va a apagarse nunca y un botón «Generar» que no se puede volver a
+  //     pulsar.
+  //  2. **Errores.** Describen un intento concreto que el usuario ya abandonó.
+  //  3. **Modales abiertos.** Sus booleanos MONTAN componentes: restaurar
+  //     `showCorrectionWizard` re-monta el asistente y **relanza su petición de
+  //     arranque** sin que nadie la pida; y como los 16 campos del asistente NO
+  //     se persisten, volvería vacío por el paso 1. Sobreviviría la ventana, no
+  //     el trabajo — que es peor que cerrarla.
+  //
+  // El paso de MAPEO no es un modal y no entra aquí: es JSX sobre datos que ya
+  // están en memoria, y es justo lo que la fase viene a salvar.
+  despertarPreparacion: () => {
+    const { prepAvanzado, prepEnriquecer } = get();
+    const avanzadoSucio =
+      prepAvanzado.showCorrectionWizard ||
+      prepAvanzado.showPgiModal ||
+      prepAvanzado.showRemanenceModal ||
+      prepAvanzado.showImplicitGeologyModal;
+    const enriquecerSucio =
+      prepEnriquecer.loading ||
+      prepEnriquecer.mapRoomLoading ||
+      prepEnriquecer.error !== null ||
+      prepEnriquecer.mapRoomError !== null;
+    // Sin nada que apagar no se escribe: un `set` con objetos nuevos y valores
+    // idénticos re-renderiza a los 12 componentes suscritos al store entero.
+    if (!avanzadoSucio && !enriquecerSucio) return;
+    set({
+      ...(avanzadoSucio
+        ? {
+            prepAvanzado: {
+              ...prepAvanzado,
+              showCorrectionWizard: false,
+              showPgiModal: false,
+              showRemanenceModal: false,
+              showImplicitGeologyModal: false,
+            },
+          }
+        : {}),
+      ...(enriquecerSucio
+        ? {
+            prepEnriquecer: {
+              ...prepEnriquecer,
+              loading: false,
+              error: null,
+              mapRoomLoading: false,
+              mapRoomError: null,
+            },
+          }
+        : {}),
+    });
+  },
 })));

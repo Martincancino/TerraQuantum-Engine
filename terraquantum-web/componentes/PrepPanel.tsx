@@ -11,18 +11,22 @@ import { type VoxelData } from "../lib/terraQuantumGeology";
 import { isJsonObject, readStringField, readNumberField } from "./datos/helpers";
 import type { BackendVoxelModel } from "./datos/types";
 import {
-  avanzadoInicial, avanzadoReducer,
-  contextoInicial, contextoReducer,
+  avanzadoReducer,
+  contextoReducer,
   operacionInicial, operacionReducer,
-  parametrosInicial, parametrosReducer,
+  parametrosReducer,
   type ContextoState, type ParametrosState,
   type CsvIssue, type CsvValidationResult, type DensityPreset, type LambdaMode,
 } from "./prep/prepPanelState";
 import {
   useReducerConHistorial,
+  useReducerExterno,
   limpiarHistorialPreparacion,
   type OpcionesReducerConHistorial,
 } from "../lib/historial/useReducerConHistorial";
+import {
+  ACCESO_AVANZADO, ACCESO_CONTEXTO, ACCESO_PARAMETROS,
+} from "../store/preparacion";
 import {
   CLAVES_CONTEXTO, CLAVES_PARAMETROS,
   etiquetarContexto, etiquetarParametros,
@@ -189,8 +193,30 @@ function parseCsvForValidation(text: string): CsvValidationResult {
   const header = lines[0].split(/[,;\t]/).map((h) => h.trim().toLowerCase());
   const dataLines = lines.slice(1).filter((l) => l.trim());
 
-  // Detectar columna de gravedad
-  const gCandidates = ["gravity_mgal", "g_mgal", "bouguer", "free_air", "gravity", "g", "tmi", "magnetic_nt"];
+  // Detectar columna de gravedad.
+  //
+  // ─── FASE 24 — las cuatro últimas son la SEGUNDA CAPA de NUEVO-3 ───────────
+  //
+  // MEDIDO al abrir la fase, ejecutando esta misma función: el CSV que escribe
+  // el asistente de correcciones titula su columna con
+  // `outputGravityColName(output_gravity_type)` (`GravityCorrectionWizard.tsx:88`),
+  // que sólo puede valer `g_corrected`, `free_air_anomaly`, `bouguer_anomaly` o
+  // `complete_bouguer_anomaly`. La comparación de abajo es `indexOf`, o sea
+  // IGUALDAD, no subcadena: `"bouguer"` no casa con `"bouguer_anomaly"`.
+  // **Ninguno de los cuatro se reconocía**, así que aplicar correcciones dejaba
+  // `can_invert: false` y con él DESHABILITADOS «Validar CSV» (:1557) y
+  // «Generar paquete CSV» (:2148).
+  //
+  // Es decir: NUEVO-3 no era sólo «se pierde al cambiar de pestaña». Dentro de
+  // un mismo montaje el CSV corregido **no podía llegar nunca** al backend, y el
+  // único modo de reactivar el botón era irse a otra pestaña — que lo reactivaba
+  // porque destruía la corrección. Sin esta línea, la otra mitad de la fase
+  // (hacer que el corregido sobreviva) habría sido decorativa: el botón habría
+  // quedado apagado para siempre.
+  const gCandidates = [
+    "gravity_mgal", "g_mgal", "bouguer", "free_air", "gravity", "g", "tmi", "magnetic_nt",
+    "g_corrected", "free_air_anomaly", "bouguer_anomaly", "complete_bouguer_anomaly",
+  ];
   const gIdx = gCandidates.map((c) => header.indexOf(c)).find((i) => i >= 0) ?? -1;
 
   // Detectar columnas de posición
@@ -403,7 +429,11 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
     latSouth, setLatSouth,
     lonEast, setLonEast,
     lonWest, setLonWest,
-    gravityPreviewResult: result, setGravityPreviewResult: setResult
+    gravityPreviewResult: result, setGravityPreviewResult: setResult,
+    // FASE 24 — el estado de las tres máquinas que sobreviven al cambio de
+    // pestaña. Se leen por aquí y no con selectores propios porque este
+    // componente ya está suscrito al store entero (no añade suscripciones).
+    prepContexto, prepParametros, prepAvanzado,
   } = useAppStore();
 
   const file = fileGravimetry; // Retrocompatibilidad para endpoints que solo toman 'file'
@@ -421,22 +451,34 @@ export default function PrepPanel({ boreholes }: PrepPanelProps = {}) {
   // este archivo NO se toquen. Mover el estado y reescribir la vista a la vez
   // haría imposible saber cuál de los dos cambios rompió algo — la misma
   // disciplina con la que la Fase 8 partió la espina dorsal del backend.
+  // FASE 24 — de las cuatro máquinas, TRES suben al store y una se queda.
+  //
+  // `operacion` se queda LOCAL, y no por descuido: sus 9 campos son banderas de
+  // vuelo, errores y mensajes de éxito. Sin `AbortController` (medido: 0 en los
+  // tres paneles), un `loading` que sobreviviera sería un spinner eterno sobre
+  // una petición que ya se resolvió en el vacío; y `packageMessage` se escribe
+  // DESPUÉS del `a.click()` que dejó el fichero en el disco del usuario, así que
+  // restaurarlo afirmaría como presente un hecho del pasado. `csvValidation` no
+  // se pierde: el efecto de más abajo la recalcula sola al montar.
   const [operacion, dispatchOperacion] = useReducer(operacionReducer, operacionInicial);
-  const [avanzado, dispatchAvanzado] = useReducer(avanzadoReducer, avanzadoInicial);
+  const avanzado = prepAvanzado;
+  const dispatchAvanzado = useReducerExterno(avanzadoReducer, {
+    valor: prepAvanzado, ...ACCESO_AVANZADO,
+  });
 
   // FASE 13: las DOS máquinas que declaran intención del usuario ganan
-  // historial. `operacion` y `avanzado` se quedan con `useReducer` pelado a
-  // propósito — el motivo de cada exclusión está escrito en `deshaciblePrep.ts`.
+  // historial. `operacion` y `avanzado` se quedan sin él a propósito — el motivo
+  // de cada exclusión está escrito en `deshaciblePrep.ts`.
   // Los reducers no se tocan: el envoltorio intercepta su acción de restaurar
   // ANTES de delegar, así que la comprobación `never` de los cuatro sigue viva.
   const [contexto, dispatchContexto] = useReducerConHistorial(
     contextoReducer,
-    contextoInicial,
+    { valor: prepContexto, ...ACCESO_CONTEXTO },
     OPCIONES_CONTEXTO,
   );
   const [parametros, dispatchParametros] = useReducerConHistorial(
     parametrosReducer,
-    parametrosInicial,
+    { valor: prepParametros, ...ACCESO_PARAMETROS },
     OPCIONES_PARAMETROS,
   );
 

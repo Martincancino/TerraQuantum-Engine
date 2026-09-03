@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect } from "react";
 
 import PrepPanel from "../PrepPanel";
 import PrepEnrichPanel from "../PrepEnrichPanel";
 import BoreholeUploadPanel from "../BoreholeUploadPanel";
 import MultimodalComboPanel from "../MultimodalComboPanel";
 import HistorialPrepControls from "../prep/HistorialPrepControls";
-import { boreholeSurveyToIntervals } from "../../lib/terraquantum/frontendApi";
+import { useAppStore } from "../../store/useAppStore";
 
 /**
  * PreparacionView — flujo SIMPLE de preparación de datos.
@@ -22,9 +22,24 @@ import { boreholeSurveyToIntervals } from "../../lib/terraquantum/frontendApi";
 export default function PreparacionView() {
   // Sondajes confirmados en BoreholeUploadPanel, en el formato que el payload de
   // inversión consume. Se anexan al paquete (anclaje) en el panel de enriquecimiento.
-  const [boreholeIntervals, setBoreholeIntervals] = useState<
-    ReturnType<typeof boreholeSurveyToIntervals>
-  >([]);
+  //
+  // FASE 24 (NUEVO-2) — viven en el store. Éste era el ÚNICO `useState` de la
+  // vista y era el peor de todos: los intervalos son lo que VIAJA al backend
+  // como anclaje, y al perderse el paquete salía sin anclaje mientras la
+  // interfaz no decía nada. Que sobrevivan mantiene alineado lo que se ve
+  // («N sondaje(s) anclado(s)» en PrepPanel, «+ sondajes (anclaje)» en el combo
+  // del flujo principal) con lo que se envía.
+  const boreholeIntervals = useAppStore((s) => s.prepSondajes);
+  const setBoreholeIntervals = useAppStore((s) => s.setPrepSondajes);
+
+  // FASE 24 — al volver a la pestaña se apaga lo que describiría algo que ya no
+  // está pasando: cargas en vuelo sin `AbortController`, errores de un intento
+  // abandonado y modales que al re-montarse relanzarían peticiones que nadie
+  // pidió. El motivo largo de cada una está en `despertarPreparacion`.
+  const despertarPreparacion = useAppStore((s) => s.despertarPreparacion);
+  useEffect(() => {
+    despertarPreparacion();
+  }, [despertarPreparacion]);
 
   return (
     <div className="h-full w-full overflow-y-auto custom-scrollbar animate-fadeIn">

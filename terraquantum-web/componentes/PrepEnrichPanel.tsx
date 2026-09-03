@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useReducer } from "react";
+import React, { useMemo } from "react";
 
 import {
   enrichPackage,
@@ -16,6 +16,16 @@ import {
 } from "../lib/terraquantum/frontendApi";
 import MapRoomPanel from "./MapRoomPanel";
 import { useAppStore } from "../store/useAppStore";
+// FASE 24 — la máquina de este panel vive en `prep/prepEnrichState.ts` y su
+// estado en el store: cambiar de pestaña ya no se lleva el archivo, el mapeo de
+// columnas ni los puntos Helmert (NUEVO-2).
+import {
+  enriquecerReducer,
+  type ControlPointRow,
+  type EnriquecerState,
+} from "./prep/prepEnrichState";
+import { useReducerExterno } from "../lib/historial/useReducerConHistorial";
+import { ACCESO_ENRIQUECER } from "../store/preparacion";
 
 /**
  * PrepEnrichPanel — flujo SIMPLE de Preparación con enriquecimiento.
@@ -45,14 +55,6 @@ const STATUS_META: Record<
   skipped: { label: "No aplica", classes: "border-neutral-700 bg-neutral-900 text-neutral-400" },
   needs_context: { label: "Falta contexto", classes: "border-amber-700 bg-amber-950/40 text-amber-300" },
   not_derivable: { label: "No derivable", classes: "border-rose-800 bg-rose-950/40 text-rose-300" },
-};
-
-// FASE 19 (Caso B) — fila editable de punto de control (todo string en la UI).
-type ControlPointRow = {
-  localX: string;
-  localY: string;
-  realE: string;
-  realN: string;
 };
 
 /** Filas completas y numéricas (las parciales/vacías se descartan). */
@@ -97,108 +99,6 @@ type Props = {
 };
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FASE 10 — Estado del panel de preparación con enriquecimiento.
-// Se mueve en BLOQUES: «hace falta mapeo» y «salió el paquete» son dos finales
-// distintos de la misma llamada, y cada uno apaga lo que el otro enciende.
-// ─────────────────────────────────────────────────────────────────────────────
-
-type PaqueteEnriquecido = {
-  filename: string;
-  packageText: string;
-  summary: EnrichmentSummary;
-  warnings: string[];
-  nStations: number;
-};
-
-type EnriquecerState = {
-  gravFile: File | null;
-  magFile: File | null;
-  utmZone: string;
-  gravimeterType: string;
-  surveyDate: string;
-  useHelmert: boolean;
-  ctrlPoints: ControlPointRow[];
-  loading: boolean;
-  error: string | null;
-  mappingPlan: ColumnMappingPlan | null;
-  columnMap: Record<string, string>;
-  sniffReport: SniffReport | null;
-  sampleRows: Record<string, string>[];
-  mapRoomStations: Record<string, number | string>[] | null;
-  mapRoomLoading: boolean;
-  mapRoomError: string | null;
-  result: PaqueteEnriquecido | null;
-};
-
-const enriquecerInicial: EnriquecerState = {
-  gravFile: null, magFile: null,
-  utmZone: "", gravimeterType: "unknown", surveyDate: "",
-  useHelmert: false,
-  ctrlPoints: [
-    { localX: "", localY: "", realE: "", realN: "" },
-    { localX: "", localY: "", realE: "", realN: "" },
-  ],
-  loading: false, error: null,
-  mappingPlan: null, columnMap: {}, sniffReport: null, sampleRows: [],
-  mapRoomStations: null, mapRoomLoading: false, mapRoomError: null,
-  result: null,
-};
-
-type EnriquecerAction =
-  | { type: "CAMPO"; campo: keyof EnriquecerState; valor: EnriquecerState[keyof EnriquecerState] }
-  | { type: "GENERACION_PEDIDA" }
-  | { type: "GENERACION_TERMINADA" }
-  | { type: "GENERACION_FALLO"; mensaje: string }
-  /** El backend no pudo con las columnas: hay que mapear antes de enriquecer. */
-  | { type: "HACE_FALTA_MAPEO"; plan: ColumnMappingPlan; sniff: SniffReport | null;
-      filas: Record<string, string>[]; mapaPrevio: Record<string, string>; mensaje: string | null }
-  | { type: "PAQUETE_LISTO"; paquete: PaqueteEnriquecido; sniff: SniffReport | null }
-  | { type: "MAPA_ACTUALIZADO"; mapa: Record<string, string> }
-  | { type: "SALA_DE_MAPAS_PEDIDA" }
-  | { type: "SALA_DE_MAPAS_OK"; estaciones: Record<string, number | string>[] }
-  | { type: "SALA_DE_MAPAS_FALLO"; mensaje: string };
-
-function enriquecerReducer(estado: EnriquecerState, accion: EnriquecerAction): EnriquecerState {
-  switch (accion.type) {
-    case "CAMPO":
-      return { ...estado, [accion.campo]: accion.valor };
-    case "GENERACION_PEDIDA":
-      // Empezar de nuevo borra el resultado anterior: dejarlo en pantalla
-      // mientras se recalcula es la forma más barata de mentir.
-      return { ...estado, loading: true, error: null, result: null };
-    case "GENERACION_TERMINADA":
-      return { ...estado, loading: false };
-    case "GENERACION_FALLO":
-      return { ...estado, loading: false, error: accion.mensaje };
-    case "HACE_FALTA_MAPEO":
-      return {
-        ...estado,
-        mappingPlan: accion.plan,
-        sniffReport: accion.sniff,
-        sampleRows: accion.filas,
-        columnMap: accion.mapaPrevio,
-        error: accion.mensaje,
-        result: null,
-      };
-    case "PAQUETE_LISTO":
-      // Y al revés: si salió el paquete, el paso de mapeo se cierra.
-      return { ...estado, mappingPlan: null, sniffReport: accion.sniff,
-               result: accion.paquete, error: null };
-    case "MAPA_ACTUALIZADO":
-      return { ...estado, columnMap: accion.mapa };
-    case "SALA_DE_MAPAS_PEDIDA":
-      return { ...estado, mapRoomLoading: true, mapRoomError: null };
-    case "SALA_DE_MAPAS_OK":
-      return { ...estado, mapRoomLoading: false, mapRoomStations: accion.estaciones };
-    case "SALA_DE_MAPAS_FALLO":
-      return { ...estado, mapRoomLoading: false, mapRoomError: accion.mensaje };
-    default: {
-      const _exhaustivo: never = accion;
-      return _exhaustivo;
-    }
-  }
-}
 
 export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
   // ── FASE 10 (H-16) — 17 `useState` → una máquina con transiciones con nombre ──
@@ -207,7 +107,14 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
   // «el backend pide mapeo» toca cuatro piezas a la vez, «el paquete salió» toca
   // otras tres. Con piezas sueltas nada impedía mostrar el paso de mapeo Y el
   // resultado de una generación anterior al mismo tiempo.
-  const [ui, dispatch] = useReducer(enriquecerReducer, enriquecerInicial);
+  //
+  // FASE 24: el estado ya no es local. Y hay un efecto lateral que conviene
+  // nombrar porque cierra un agujero sin código extra: `escribir` es una función
+  // de módulo, así que el `finally { GENERACION_TERMINADA }` de una generación
+  // en vuelo aterriza aunque el usuario se haya ido a otra pestaña. Antes ese
+  // despacho moría con el componente; ahora apaga el `loading` de verdad.
+  const ui = useAppStore((s) => s.prepEnriquecer);
+  const dispatch = useReducerExterno(enriquecerReducer, { valor: ui, ...ACCESO_ENRIQUECER });
   const {
     gravFile, magFile, utmZone, gravimeterType, surveyDate, useHelmert, ctrlPoints,
     loading, error, mappingPlan, columnMap, sniffReport, sampleRows,
@@ -241,7 +148,20 @@ export default function PrepEnrichPanel({ boreholes, boreholeNode }: Props) {
     setter(next);
     const changed = (current?.name ?? null) !== (next?.name ?? null) ||
       (current?.size ?? null) !== (next?.size ?? null);
-    if (changed) clearActiveRun();
+    if (changed) {
+      // FASE 24 — la caducidad que faltaba en ESTE panel (H-29 se había aplicado
+      // sólo al flujo clásico). Caduca lo que describía al archivo anterior: el
+      // plan de mapeo, el mapa de columnas, el sniff, las filas de muestra, el
+      // paquete generado y las estaciones de la sala de mapas.
+      //
+      // No es un extra de la fase: es su condición. Hasta ahora el desmontaje al
+      // cambiar de pestaña tapaba este agujero por accidente y duraba una
+      // visita; al hacer que el estado sobreviva, duraría la sesión entera —
+      // con la `ResultCard` del archivo A en pantalla y su `packageText` completo
+      // detrás del botón «Descargar» mientras el cargado es el B.
+      dispatch({ type: "ARCHIVOS_CAMBIARON" });
+      clearActiveRun();
+    }
   };
 
 
@@ -1143,7 +1063,6 @@ function ColumnMappingStep({
 
   const requiredOk = plan.required_roles.every((r) => columnMap[r]);
   const invalid = Object.entries(plan.invalid_overrides ?? {});
-
   return (
     <div className="rounded-2xl border border-amber-900/60 bg-amber-950/10 p-5 flex flex-col gap-5">
       <div>

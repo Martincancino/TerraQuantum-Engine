@@ -19,9 +19,14 @@
 // 3D (store de Zustand) y el panel de preparación (reducers de la Fase 10).
 
 /** Los dos orígenes de comandos. Cada uno tiene su pila: deshacer en el visor
- *  no puede sacar una acción del panel de preparación, porque el usuario no
- *  las percibe como una sola secuencia (viven en pestañas distintas y el
- *  estado de preparación ni siquiera sobrevive al cambio de pestaña). */
+ *  no puede sacar una acción del panel de preparación, porque el usuario no las
+ *  percibe como una sola secuencia — viven en pestañas distintas y sus controles
+ *  nunca están en pantalla a la vez.
+ *
+ *  (Aquí decía además «y el estado de preparación ni siquiera sobrevive al
+ *  cambio de pestaña». **La FASE 24 lo dejó falso**: ese estado vive ahora en el
+ *  store y sobrevive; lo que no sobrevive es su HISTORIAL, y el porqué está en
+ *  `useReducerConHistorial.ts`. La separación de pilas no dependía de eso.) */
 export type Ambito = "visor" | "preparacion";
 
 export const AMBITOS: readonly Ambito[] = ["visor", "preparacion"] as const;

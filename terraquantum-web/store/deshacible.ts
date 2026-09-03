@@ -268,6 +268,36 @@ export const NO_DESHACIBLE: Record<Exclude<CampoDeEstado, ClaveDeshacible>, stri
   inputDepth: "Entrada del simulador; 0 llamadores.",
   inputGrav: "Entrada del simulador; 0 llamadores.",
 
+  // ── (i) FASE 24 — el estado de PREPARACIÓN ────────────────────────────────
+  //
+  // Las cuatro máquinas que la Fase 10 creó y la Fase 24 subió al store. Ninguna
+  // es deshacible DESDE AQUÍ, y no porque no valga la pena deshacerlas: dos de
+  // ellas ya tienen historial, pero en el ámbito «preparacion»
+  // (`componentes/prep/deshaciblePrep.ts`), no en el del visor. Meterlas en
+  // `CLAVES_DESHACIBLES` las metería en `ORDEN_VIGILADO`, y entonces un Ctrl+Z
+  // pulsado mirando el modelo 3D restauraría un bound de densidad de otra
+  // pestaña — dos historiales pisándose sobre el mismo estado.
+  prepContexto:
+    "Lo que el usuario DECLARA sobre el survey (roca esperada, zona UTM, gravímetro). Sí se " +
+    "deshace, pero en el ámbito «preparacion» y con sus propias claves vigiladas " +
+    "(`deshaciblePrep.ts`, CLAVES_CONTEXTO): su historial es el del panel, no el del visor.",
+  prepParametros:
+    "Las perillas de la inversión. Mismo caso que `prepContexto`: tienen historial propio en " +
+    "el ámbito «preparacion» (CLAVES_PARAMETROS, 12 de 15), y los tres que quedan fuera —los " +
+    "dos reconocimientos de riesgo y el despliegue de kappas— tienen su motivo escrito allí.",
+  prepAvanzado:
+    "Modales y lo que traen de vuelta, incluido el CSV corregido. `deshaciblePrep.ts` ya midió " +
+    "por qué no se deshace: sus booleanos MONTAN componentes (deshacer un cierre relanza una " +
+    "petición de red) y guarda un `File` que es el producto de una corrida real del backend.",
+  prepEnriquecer:
+    "El flujo PRINCIPAL de preparación: archivos, mapeo de columnas, puntos Helmert y el " +
+    "paquete enriquecido. No tiene historial en ningún ámbito, y es deliberado: su unidad de " +
+    "trabajo es «generar el paquete», que sale del navegador y no se des-hace.",
+  prepSondajes:
+    "Intervalos de sondaje confirmados en BoreholeUploadPanel. Son un DATO parseado por el " +
+    "backend a partir del CSV del usuario, no una perilla: se reemplazan confirmando otro " +
+    "survey, y el camino para deshacerlos es volver a confirmar, no un atajo de teclado.",
+
   // ── (h) No serializable y vivo ────────────────────────────────────────────
   capturePngSnapshot:
     "Puntero a una función VIVA del renderer que registra CanvasExportBridge al montar el " +
