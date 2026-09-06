@@ -35,10 +35,17 @@ jobs:
           # paso falla ruidosamente — que es lo correcto.
           python-version-file: terraquantum-backend/.python-version
           cache: pip
-          cache-dependency-path: terraquantum-backend/requirements.txt
+          cache-dependency-path: terraquantum-backend/requirements.lock
 
       - name: Install backend dependencies
-        run: pip install -r requirements.txt
+        # Fase 27 (H-23): se instala el CIERRE con hashes, no el fichero de
+        # intención. `requirements.txt` declara rangos deliberados y por eso
+        # resolvía distinto en cada corrida: MEDIDO el 2026-09-03, hoy da
+        # `zarr 3.3.0` donde el comentario del propio archivo anota «verificado
+        # 3.2.1». Con `--require-hashes` la CI instala un conjunto FIJO y
+        # verificado, y aborta si un artefacto no coincide con su sha256.
+        # El lock se regenera con `py -3.14 scripts/ci/gen_lockfile.py`.
+        run: pip install --require-hashes -r requirements.lock
 
       - name: Compile check (syntax errors)
         # Fase 3 (H-5): antes esta línea compilaba `Camiones` y `workers`, que no
@@ -84,7 +91,7 @@ jobs:
           python scripts/ci/deps_closure.py
           python scripts/ci/study_duplication.py --gate
           python scripts/ci/generate_frontend_types.py --check
-          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py tests/test_fase5_superficie_config.py tests/test_fase7_nucleo_compartido.py tests/test_fase8_espina_dorsal.py tests/test_fase9_camino_de_usuario.py tests/test_fase10_contratos.py tests/test_fase13_undo_redo.py -q
+          pytest tests/test_fase3_capas.py tests/test_fase3_ci_guards.py tests/test_fase3_presupuestos_ast.py tests/test_fase3_f9_no_evaluado.py tests/test_fase3_calibracion_absoluta.py tests/test_fase5_superficie_config.py tests/test_fase7_nucleo_compartido.py tests/test_fase8_espina_dorsal.py tests/test_fase9_camino_de_usuario.py tests/test_fase10_contratos.py tests/test_fase13_undo_redo.py tests/test_f27_build_guards.py -q
 
       - name: Canario de física (regresión W_z sobre esfera sintética)
         # H-4: la regresión física NUNCA corría automáticamente. Y el arreglo no
@@ -148,6 +155,42 @@ jobs:
       - name: Build
         run: npm run build
 
+  # ── El shell de escritorio (Rust) ───────────────────────────────────────────
+  # Fase 28. Este job NO existía. `src-tauri/src/lib.rs` lleva desde la Fase 2
+  # los tests que defienden H-17 (todo error de arranque habla español y dice qué
+  # hacer), H-19 (responder no es ser el nuestro) y H-21 (elección de puerto), y
+  # MEDIDO el 2026-09-05 no los corría NADIE: ni la CI —que no tenía un solo paso
+  # de cargo— ni `check.ps1`, la puerta pre-push. Nueve tests escritos como gate
+  # y ejecutados por nadie durante 26 días.
+  #
+  # Se compila sólo la librería: el bundle NSIS necesita los sidecars de
+  # PyInstaller y Node, que no se construyen aquí. `cargo test --lib` sí ejercita
+  # todo lo que decide, incluidas las guardas de la Fase 28 sobre el endpoint del
+  # updater y la clasificación de sus estados.
+  desktop-shell:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraquantum-web/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: terraquantum-web/src-tauri
+
+      - name: Dependencias de sistema de Tauri
+        # Tauri enlaza contra GTK/WebKitGTK en Linux aunque el producto sea
+        # Windows: sin esto `cargo test` ni siquiera compila.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Tests del shell (arranque honesto + updater)
+        run: cargo test --lib
+
   # ── Regresión física completa: sólo de noche o a mano ───────────────────────
   # H-4 cerrado del todo. Este job es el que "congela la física", y su honestidad
   # depende de dos cosas que hay que leer juntas:
@@ -178,10 +221,13 @@ jobs:
         with:
           python-version-file: terraquantum-backend/.python-version
           cache: pip
-          cache-dependency-path: terraquantum-backend/requirements.txt
+          cache-dependency-path: terraquantum-backend/requirements.lock
 
       - name: Install backend dependencies
-        run: pip install -r requirements.txt
+        # Fase 27 (H-23): mismo cierre verificado que el job de PR. Aquí importa
+        # el doble: este job es el que declara que la FÍSICA no ha cambiado, y
+        # hasta ahora podía instalar versiones distintas cada noche.
+        run: pip install --require-hashes -r requirements.lock
 
       - name: Ingesta generativa a fondo (N grande)
         # CORRECCIÓN MEDIDA a la auditoría: decía que el generativo estaba "fuera

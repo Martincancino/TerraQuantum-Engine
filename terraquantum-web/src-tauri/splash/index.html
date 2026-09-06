@@ -197,6 +197,10 @@
           info: payload.state !== "error",
           title: payload.message,
           detail: payload.detail,
+          // Fase 28: los avisos de actualización llevan acción y código, igual
+          // que los de arranque. Antes se emitía sólo un diagnóstico sin salida.
+          hint: payload.hint,
+          code: payload.code,
           actions: payload.state === "checking"
             ? []
             : [{ label: "Cerrar", local: closeThisWindow }]

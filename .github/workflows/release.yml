@@ -1,0 +1,134 @@
+# TerraQuantum — publicación de una versión firmada (Fase 28, H-20).
+#
+# ┌─ LEER ANTES DE ESPERAR NADA DE ESTE FICHERO ────────────────────────────────┐
+# │ Este workflow NO hace que el updater funcione todavía, y decirlo es la mitad │
+# │ del trabajo de la Fase 28.                                                  │
+# │                                                                             │
+# │ MEDIDO el 2026-09-05:                                                       │
+# │   · `api.github.com/repos/Martincancino/TerraQuantum-Engine` -> 404         │
+# │     mientras `git ls-remote origin` SÍ lista `main` y `fases-19-25-cierre`. │
+# │     Es decir: el repositorio existe y es PRIVADO.                            │
+# │   · `api.github.com/users/Martincancino/repos` -> `[]` (cero repos públicos).│
+# │   · `git ls-remote --tags origin` -> vacío. No hay ninguna release.          │
+# │                                                                             │
+# │ Los *assets* de una release de un repositorio privado NO son descargables    │
+# │ sin autenticación, y el updater consulta sin credenciales. Mientras el repo  │
+# │ siga privado, el endpoint seguirá devolviendo 404 a todos los usuarios       │
+# │ AUNQUE este workflow publique correctamente. Por eso la Fase 28 no puede     │
+# │ «cerrar» H-20 con un instalador que se actualiza solo: lo que cierra es que  │
+# │ el aviso DIGA LA VERDAD mientras eso no exista.                             │
+# │                                                                             │
+# │ Para que el updater funcione de verdad hace falta UNA decisión del usuario:  │
+# │   (a) hacer público este repositorio, o                                      │
+# │   (b) crear un repositorio PÚBLICO sólo de releases y apuntar ahí el         │
+# │       `endpoints` de `tauri.conf.json` (el test                              │
+# │       `el_updater_apunta_a_nuestro_repositorio` habrá que actualizarlo), o   │
+# │   (c) alojar el `latest.json` y el instalador en un servidor propio.         │
+# │ Ninguna es técnica: es de negocio, y no se toma sin ti.                      │
+# └─────────────────────────────────────────────────────────────────────────────┘
+#
+# SECRETOS que hay que crear a mano (Settings -> Secrets -> Actions). Sin ellos
+# el job falla en el primer paso, a propósito — un build que produce un
+# instalador sin firmar es justo lo que H-20 denunciaba:
+#   · TAURI_SIGNING_PRIVATE_KEY           contenido de ~/.tauri/terraquantum_updater.key
+#   · TAURI_SIGNING_PRIVATE_KEY_PASSWORD  su contraseña ("" si no tiene)
+#
+# El CLI de Tauri comprueba las dos cosas por su cuenta (cadenas leídas del
+# binario `@tauri-apps/cli` 2.11.4): «A public key has been found, but no private
+# key…» y «…does not match the public key from `plugins > updater > pubkey`».
+
+name: TerraQuantum Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag a publicar (p. ej. v0.3.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: terraquantum-web/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: terraquantum-backend/.python-version
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: La versión del tag y la de tauri.conf.json tienen que coincidir
+        # Si divergen, el manifiesto anuncia una versión que el instalador no
+        # tiene y `check()` compara contra la equivocada. Hoy divergen de hecho:
+        # hay tags LOCALES v0.2.0 y v0.4.0 y `tauri.conf.json` dice 0.2.0.
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          CONF=$(python -c "import json,io;print(json.load(io.open('terraquantum-web/src-tauri/tauri.conf.json',encoding='utf-8'))['version'])")
+          if [ "${TAG#v}" != "$CONF" ]; then
+            echo "::error::el tag $TAG no coincide con tauri.conf.json ($CONF)"
+            exit 1
+          fi
+          echo "TQ_VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "TQ_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Dependencias del backend (cierre con hashes, Fase 27)
+        # `build_desktop.ps1` resuelve el intérprete contra `.python-version` y
+        # aborta si el mayor.menor no coincide. Aquí coincide porque
+        # `setup-python` lee EL MISMO fichero; si algún día dejaran de leer lo
+        # mismo, el script lo dirá en voz alta en vez de empaquetar con el
+        # árbol de dependencias equivocado.
+        working-directory: terraquantum-backend
+        run: |
+          pip install --require-hashes -r requirements.lock
+          pip install -r requirements-build.txt
+
+      - name: Dependencias del frontend
+        working-directory: terraquantum-web
+        run: npm ci
+
+      - name: Construir el instalador firmado
+        # `scripts/build_desktop.ps1` encadena los cuatro pasos (backend
+        # PyInstaller -> frontend standalone -> staging -> tauri build) y el
+        # bundler firma porque `bundle.createUpdaterArtifacts` es true.
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: ./scripts/build_desktop.ps1
+
+      - name: Escribir latest.json
+        # El bundler NO genera el manifiesto: sólo el .exe y su .sig (medido
+        # sobre bundle/nsis/). Lo escribe nuestro script, que además valida
+        # contra el contrato del plugin antes de guardarlo.
+        shell: bash
+        run: |
+          BUNDLE=terraquantum-web/src-tauri/target/release/bundle/nsis
+          EXE=$(ls "$BUNDLE"/*-setup.exe)
+          python scripts/release/make_latest_json.py \
+            --version "$TQ_VERSION" \
+            --url "https://github.com/${{ github.repository }}/releases/download/$TQ_TAG/$(basename "$EXE")" \
+            --signature-file "$EXE.sig" \
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --out "$BUNDLE/latest.json"
+
+      - name: Publicar
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TQ_TAG }}
+          files: |
+            terraquantum-web/src-tauri/target/release/bundle/nsis/*-setup.exe
+            terraquantum-web/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+            terraquantum-web/src-tauri/target/release/bundle/nsis/latest.json

@@ -193,6 +193,12 @@ REGISTRO: dict[str, dict] = {
                             "tests/conftest.py"),
     "TQ_GEN_N": _v("int", "prueba", "tests/test_ingesta_generativa.py", "externo",
                    "tests/test_ingesta_generativa.py"),
+    # Añadida por la Fase 26 (barrido de semillas) y NO declarada aquí: este
+    # inventario llevaba en rojo desde entonces. Lo encontró la Fase 27 al medir
+    # su propio gate — la misma patología que la Fase 15 documentó («dos puertas
+    # de CI en rojo que nadie sabía»).
+    "TQ_BENCH_SEEDS": _v("int", "prueba", "tests/seed_sweep.py", "externo",
+                         "tests/seed_sweep.py"),
     "TQ_RUN_LARGE_BENCH": _v("bool", "prueba", "tests/test_projected_solver.py", "externo",
                              "tests/test_projected_solver.py"),
     "TQ_RUN_LARGE_FLOW": _v("bool", "prueba", "tests/test_field_data_complete_flow.py",

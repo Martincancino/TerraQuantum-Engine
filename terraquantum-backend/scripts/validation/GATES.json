@@ -72,6 +72,12 @@
       "tipo_manual": true,
       "que_hace": "FASE 14 - Mide si un contacto geologico implicito (HRBF) MEJORA la inversion contra verdad conocida (dique inclinado 60 grados, anti-inverse-crime x3), con brazo de control de geologia FALSA. NO es puerta: su respuesta puede ser legitimamente 'no mejora'."
     },
+    "f29_operador_suavidad.py": {
+      "tipo": "diagnostico",
+      "decide": false,
+      "tipo_manual": true,
+      "que_hace": "FASE 29 - Mide ACAD-3 (el operador de suavidad es de CUARTO orden, no del primero que cita Li & Oldenburg 1998) y ACAD-4 (la frontera de Dirichlet homogenea que emerge del recorte de L a las celdas activas y que nadie eligio). Factorial 2x2 orden x frontera sobre el dique inclinado con anti-inverse-crime x3, semillas pareadas y un CONTROL que exige que sin celdas inactivas Dirichlet y Neumann salgan IDENTICOS. NO es puerta: su respuesta puede ser legitimamente 'no cambia nada', y para ACAD-3 lo es."
+    },
     "f2b_gate_cabinet.py": {
       "tipo": "gate",
       "decide": true,

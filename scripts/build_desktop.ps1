@@ -13,18 +13,32 @@
   viven en %APPDATA%\TerraQuantum\data. Nada sale de la máquina.
 
   Requisitos (una vez): Rust (rustup), VS Build Tools con "Desktop development with C++",
-  Node.js, y las deps del backend + la cadena de build pineada:
-      python -m pip install -r terraquantum-backend/requirements-build.txt
+  Node.js, y las deps del backend + la cadena de build pineada. OJO con el
+  interprete: se usa el que declara terraquantum-backend/.python-version, que en
+  esta maquina es `py -3.14` y NO el `python` del PATH (3.11.9, sin numpy).
+      py -3.14 -m pip install --require-hashes -r terraquantum-backend/requirements.lock
+      py -3.14 -m pip install -r terraquantum-backend/requirements-build.txt
 
   Uso:
       powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
       #   -SkipBackend   no re-empaqueta el backend (usa dist/ existente)
       #   -SkipFrontend  no re-construye el frontend (usa .next/standalone existente)
+      #   -InstallDeps   instala el cierre verificado (--require-hashes) antes de empaquetar
+
+  Fase 27: este script ya no empaqueta a ciegas. Comprueba el interprete contra
+  .python-version, comprueba el entorno contra requirements.lock, y propaga el
+  fallo del .spec (que ahora aborta si le falta una dependencia). Antes, las tres
+  cosas fallaban en silencio y el instalador salia incompleto.
 #>
 [CmdletBinding()]
 param(
     [switch]$SkipBackend,
-    [switch]$SkipFrontend
+    [switch]$SkipFrontend,
+    # Fase 27: instala el cierre verificado con hashes ANTES de empaquetar. Por
+    # defecto NO se instala nada: el script comprueba y aborta diciendo el
+    # comando exacto. Un script de build que modifica en silencio el Python del
+    # usuario es justo la clase de accion que este proyecto no permite.
+    [switch]$InstallDeps
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,24 +50,93 @@ $Resources  = Join-Path $SrcTauri "resources"
 
 function Section($n) { Write-Host "`n=== $n ===" -ForegroundColor Cyan }
 
+# ── 0) El interprete: el que declara .python-version, no el que caiga ─────────
+# Fase 27 (H-23). Hasta aqui el script llamaba a `python` a secas y NUNCA lo
+# comparaba con `.python-version`. MEDIDO en la maquina de desarrollo el
+# 2026-09-03: el `python` del PATH es **3.11.9 y no tiene numpy**, mientras
+# `.python-version` declara **3.14.4** y `py -3.14` si lo tiene (numpy 2.4.4).
+# Con `pyinstaller` instalado en ese 3.11 el build habria arrancado y producido
+# un ejecutable contra un arbol de dependencias que no es el del producto.
+# La version MAYOR.MENOR es fatal (decide el arbol entero de dependencias); el
+# parche solo avisa, porque exigirlo bloquearia un 3.14.5 sano sin ganar nada.
+function Get-PyVersion($exe, $preArgs) {
+    try {
+        $raw = & $exe @preArgs -c "import sys;print('.'.join(map(str,sys.version_info[:3])))"
+    } catch { return $null }
+    if ($LASTEXITCODE -ne 0) { return $null }
+    if (-not $raw) { return $null }
+    return ($raw | Select-Object -First 1).ToString().Trim()
+}
+
+$VersionFile = Join-Path $Backend ".python-version"
+if (-not (Test-Path $VersionFile)) { throw "Falta ${VersionFile}: el interprete es parte del build." }
+$WantedFull = (Get-Content $VersionFile -Raw).Trim()
+$WantedMM   = ($WantedFull.Split('.')[0..1]) -join '.'
+
+$PyExe = $null; $PyArgs = @(); $PyFound = $null
+$probe = Get-PyVersion "py" @("-$WantedMM")
+if ($probe) { $PyExe = "py"; $PyArgs = @("-$WantedMM"); $PyFound = $probe }
+else {
+    $probe = Get-PyVersion "python" @()
+    if ($probe) { $PyExe = "python"; $PyArgs = @(); $PyFound = $probe }
+}
+if (-not $PyExe) {
+    throw "No se encontro ningun interprete de Python ejecutable (`py -$WantedMM` ni `python`)."
+}
+
+$FoundMM = ($PyFound.Split('.')[0..1]) -join '.'
+if ($FoundMM -ne $WantedMM) {
+    throw ("Interprete equivocado: se encontro Python $PyFound y .python-version exige $WantedFull.`n" +
+           "  El arbol de dependencias de $FoundMM NO es el del producto (p. ej. zarr==3.x exige >=3.12).`n" +
+           "  Instala Python $WantedFull y vuelve a lanzar; el script usara `py -$WantedMM` automaticamente.")
+}
+if ($PyFound -ne $WantedFull) {
+    Write-Host "  AVISO: Python $PyFound; .python-version declara $WantedFull (mismo $WantedMM, se continua)." -ForegroundColor Yellow
+}
+Write-Host "  interprete: $PyExe $PyArgs -> Python $PyFound" -ForegroundColor DarkGray
+
 # ── 1) Backend -> exe (PyInstaller) ───────────────────────────────────────────
 if (-not $SkipBackend) {
     Section "1/4  Empaquetando backend con PyInstaller"
     Push-Location $Backend
     try {
+        # Fase 27 (NUEVO-4): instalar —o al menos COMPROBAR— el cierre verificado
+        # antes de empaquetar. Sin esto, una dependencia ausente no paraba nada:
+        # el `.spec` recolectaba [] y el instalador salia sin ella, en silencio.
+        if ($InstallDeps) {
+            Write-Host "  instalando el cierre verificado (--require-hashes)..." -ForegroundColor DarkGray
+            & $PyExe @PyArgs -m pip install --require-hashes -r requirements.lock
+            if ($LASTEXITCODE -ne 0) { throw "Fallo la instalacion de requirements.lock." }
+        }
+        & $PyExe @PyArgs scripts/ci/check_env_against_lock.py
+        if ($LASTEXITCODE -ne 0) {
+            throw ("El entorno no puede construir el instalador (ver arriba).`n" +
+                   "  Corrigelo con:  $PyExe $PyArgs -m pip install --require-hashes -r requirements.lock`n" +
+                   "  O relanza este script con -InstallDeps.")
+        }
+
         # Fase 2 (H-23): el pin de PyInstaller solo sirve si alguien lo comprueba.
         # Una version distinta produce un binario distinto del mismo codigo, y este
         # binario se firma y se distribuye. Se avisa, no se bloquea: el build sigue
         # siendo posible, pero deja de ser reproducible en silencio.
         $pinned = (Select-String -Path "requirements-build.txt" -Pattern "^pyinstaller==(.+)$").Matches.Groups[1].Value
-        $installed = (python -c "import PyInstaller; print(PyInstaller.__version__)").Trim()
+        $installed = $null
+        try { $installed = & $PyExe @PyArgs -c "import PyInstaller; print(PyInstaller.__version__)" } catch { $installed = $null }
+        if ($LASTEXITCODE -ne 0 -or -not $installed) {
+            throw ("PyInstaller no esta instalado en Python $PyFound.`n" +
+                   "      $PyExe $PyArgs -m pip install -r requirements-build.txt")
+        }
+        $installed = ($installed | Select-Object -First 1).ToString().Trim()
         if ($pinned -and $installed -ne $pinned) {
             Write-Host "  AVISO: pyinstaller instalado $installed, pineado $pinned -> el binario puede diferir." -ForegroundColor Yellow
-            Write-Host "         python -m pip install -r requirements-build.txt" -ForegroundColor Yellow
+            Write-Host "         $PyExe $PyArgs -m pip install -r requirements-build.txt" -ForegroundColor Yellow
         } else {
             Write-Host "  pyinstaller $installed (coincide con el pin)" -ForegroundColor DarkGray
         }
-        python -m PyInstaller terraquantum_backend.spec --noconfirm --log-level WARN
+        & $PyExe @PyArgs -m PyInstaller terraquantum_backend.spec --noconfirm --log-level WARN
+        # El .spec aborta a proposito si le falta una dependencia (Fase 27). Antes
+        # este `if` era la UNICA red: miraba si el exe existia, no si estaba completo.
+        if ($LASTEXITCODE -ne 0) { throw "PyInstaller fallo (codigo $LASTEXITCODE) — el instalador NO se construye." }
         if (-not (Test-Path "dist/terraquantum-backend.exe")) { throw "PyInstaller no produjo el exe." }
     } finally { Pop-Location }
 } else { Section "1/4  Backend: omitido (usa dist/ existente)" }

@@ -51,6 +51,11 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Tope de la consulta de actualizaciones (Fase 28). Ni el plugin ni reqwest
+/// ponen ninguno: sin esto, «Buscar actualizaciones…» puede quedarse colgado
+/// indefinidamente contra una red que acepta la conexión y luego calla.
+const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Puertos preferidos. Si están ocupados se usa el siguiente libre del tramo.
 const BACKEND_PORT: u16 = 8010;
 const FRONTEND_PORT: u16 = 3000;
@@ -944,6 +949,154 @@ struct UpdateEvent {
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
+    /// Qué tiene que hacer el usuario. Los errores de ARRANQUE ya lo llevaban
+    /// (`BootError::hint`); los de actualización no, y por eso podían quedarse
+    /// en un diagnóstico sin salida. Fase 28.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+}
+
+/// Las causas REALMENTE distintas de preguntar «¿hay una versión nueva?».
+///
+/// La Fase 2 (H-20) tenía tres: `available`, `current` y un `error` que se
+/// comía todo lo demás y además atribuía la culpa a la falta de internet. Con
+/// el endpoint apuntando a un repositorio que no es nuestro, el ÚNICO estado
+/// alcanzable era ese `error`: el usuario con internet perfecto leía «si no
+/// tienes internet es lo esperable». Eso no es un aviso honesto, es una excusa.
+///
+/// Aquí se separa lo que tiene causas y acciones distintas:
+///   - que no haya nada publicado todavía NO es un fallo de red;
+///   - que el canal esté mal montado es un defecto NUESTRO, no del equipo del
+///     usuario, y el texto tiene que decirlo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateOutcome {
+    /// El manifiesto existe y anuncia una versión mayor que la instalada.
+    Available,
+    /// El manifiesto existe y la instalada ya es la última.
+    Current,
+    /// El servidor contestó, pero ahí no hay manifiesto que leer: todavía no
+    /// se ha publicado ninguna versión. La conexión FUNCIONA.
+    NotPublished,
+    /// No hubo respuesta que interpretar: sin red, DNS, TLS o tiempo agotado.
+    Offline,
+    /// El canal de actualizaciones está mal montado (endpoint ausente o no
+    /// https, manifiesto ilegible, sin binario para esta plataforma).
+    Broken,
+}
+
+/// Traduce el error del plugin a una causa. Es lo ÚNICO de esta fase que
+/// depende del crate, y por eso se mantiene diminuto.
+///
+/// Medido sobre `tauri-plugin-updater` 2.10.1 (`src/updater.rs:483-530`): cuando
+/// el servidor responde con un status NO exitoso, el bucle de `check()`
+/// **no guarda el error** —sólo hace `log::error!`— así que termina en
+/// `remote_release.ok_or(Error::ReleaseNotFound)`. Es decir: **un 404 llega
+/// aquí como `ReleaseNotFound`, no como un error de red.** Ésa es exactamente
+/// la distinción que el usuario necesita y que antes se perdía.
+fn outcome_of_error(err: &tauri_plugin_updater::Error) -> UpdateOutcome {
+    use tauri_plugin_updater::Error as E;
+    match err {
+        // El servidor contestó; lo que no hay es manifiesto.
+        E::ReleaseNotFound => UpdateOutcome::NotPublished,
+        // Transporte: no hubo respuesta que interpretar. `E::Reqwest` cubre
+        // conexión, DNS, TLS, timeout y también «contestó algo que no era JSON»
+        // (un proxy corporativo interceptando); el crate no los distingue en su
+        // texto, así que el nuestro NO afirma cuál de los dos fue.
+        // `E::Network` sólo lo produce la descarga, nunca `check()` (medido en
+        // updater.rs:690), pero la clasificación correcta es la misma.
+        //
+        // OJO: `E::Reqwest` no se puede construir en un test —el crate no
+        // reexporta `reqwest` y su error no tiene constructor público—, así que
+        // esta rama la defiende `el_arm_de_transporte_sigue_existiendo`, que
+        // mira la fuente. Sin ese guard, borrarla sería una mutación invisible.
+        E::Reqwest(_) | E::Io(_) | E::Network(_) => UpdateOutcome::Offline,
+        // Todo lo demás —endpoint ausente o no https, manifiesto ilegible, sin
+        // binario para esta plataforma— es configuración NUESTRA.
+        _ => UpdateOutcome::Broken,
+    }
+}
+
+/// Convierte una causa en lo que ve el usuario. Función PURA: es la que se
+/// puede examinar entera, y la que decide que ningún estado mienta.
+fn update_event(
+    outcome: UpdateOutcome,
+    current: &str,
+    new_version: Option<&str>,
+    cause: Option<String>,
+) -> UpdateEvent {
+    match outcome {
+        UpdateOutcome::Available => UpdateEvent {
+            state: "available",
+            message: format!(
+                "Hay una versión nueva: {}.",
+                new_version.unwrap_or("desconocida")
+            ),
+            detail: Some(format!(
+                "Tienes la {current}. TerraQuantum NO la instala solo: esta ventana \
+                 sólo comprueba y avisa."
+            )),
+            hint: Some(
+                "Descarga el instalador de la página de versiones e instálalo encima. \
+                 Tus datos en %APPDATA%\\TerraQuantum se conservan."
+                    .to_string(),
+            ),
+            code: Some("UPDATE_DISPONIBLE"),
+        },
+        UpdateOutcome::Current => UpdateEvent {
+            state: "current",
+            message: format!("Ya tienes la última versión ({current})."),
+            detail: None,
+            hint: None,
+            code: Some("UPDATE_AL_DIA"),
+        },
+        // El estado honesto de HOY: no hay ninguna release publicada. Decirlo
+        // así es la mitad de esta fase. Este texto no puede hablar de internet
+        // —el servidor acaba de contestar—, y hay un test que lo exige.
+        UpdateOutcome::NotPublished => UpdateEvent {
+            state: "notice",
+            message: "Todavía no se ha publicado ninguna versión.".to_string(),
+            detail: Some(format!(
+                "El servidor de versiones respondió, así que tu conexión funciona: \
+                 lo que no hay todavía es ningún manifiesto que leer. Tienes la {current}."
+            )),
+            hint: Some(
+                "No tienes que hacer nada. Cuando se publique la primera versión, \
+                 esta misma ventana te la anunciará."
+                    .to_string(),
+            ),
+            code: Some("UPDATE_SIN_PUBLICAR"),
+        },
+        // Aquí —y SÓLO aquí— la falta de internet es una explicación honesta.
+        // Y se ofrece como POSIBILIDAD, no como certeza: el crate no distingue
+        // DNS de TLS ni de un proxy que intercepta, así que nosotros tampoco
+        // podemos, y afirmarlo sería repetir el defecto con otro texto.
+        UpdateOutcome::Offline => UpdateEvent {
+            state: "error",
+            message: "No se pudo obtener la información de versiones.".to_string(),
+            detail: cause.map(|c| format!("Causa técnica: {c}")),
+            hint: Some(
+                "Lo más habitual es no tener conexión, y entonces no hay nada que \
+                 hacer: TerraQuantum funciona igual sin internet. Si tu red pasa por \
+                 un proxy corporativo, puede estar bloqueando la consulta."
+                    .to_string(),
+            ),
+            code: Some("UPDATE_SIN_RED"),
+        },
+        UpdateOutcome::Broken => UpdateEvent {
+            state: "error",
+            message: "El canal de actualizaciones de esta instalación está mal configurado."
+                .to_string(),
+            detail: cause.map(|c| format!("Causa técnica: {c}")),
+            hint: Some(
+                "Es un defecto nuestro, no de tu equipo: tus datos y tus cálculos no \
+                 se ven afectados. Repórtalo adjuntando «Ayuda → Ver registros de arranque»."
+                    .to_string(),
+            ),
+            code: Some("UPDATE_MAL_CONFIGURADO"),
+        },
+    }
 }
 
 /// H-20 — el updater deja de ser un mecanismo de papel: hay un camino de
@@ -969,39 +1122,39 @@ fn check_updates(app: &AppHandle) {
                      Tus datos no viajan."
                         .to_string(),
                 ),
+                hint: None,
+                code: None,
             },
         );
-        let payload = match handle.updater() {
+        let current = handle.package_info().version.to_string();
+        // El plugin NO pone timeout por su cuenta (`UpdaterBuilder.timeout = None`,
+        // y reqwest por defecto tampoco), así que una conexión que acepta y
+        // luego calla —un portal cautivo, un cortafuegos que traga— dejaba esta
+        // ventana en «Consultando…» PARA SIEMPRE. Es la misma patología del
+        // splash infinito que cerró H-17; aquí se cierra con un tope explícito.
+        let payload = match handle
+            .updater_builder()
+            .timeout(UPDATE_CHECK_TIMEOUT)
+            .build()
+        {
             Ok(updater) => match updater.check().await {
-                Ok(Some(update)) => UpdateEvent {
-                    state: "available",
-                    message: format!("Hay una versión nueva: {}.", update.version),
-                    detail: Some(format!(
-                        "Tienes la {}. Descárgala desde la página de versiones \
-                         e instálala; tus datos en %APPDATA%\\TerraQuantum se conservan.",
-                        update.current_version
-                    )),
-                },
-                Ok(None) => UpdateEvent {
-                    state: "current",
-                    message: "Ya tienes la última versión.".to_string(),
-                    detail: None,
-                },
-                Err(e) => UpdateEvent {
-                    state: "error",
-                    message: "No se pudo comprobar si hay actualizaciones.".to_string(),
-                    detail: Some(format!(
-                        "{e}. Si no tienes internet es lo esperable: TerraQuantum \
-                         funciona igual sin conexión."
-                    )),
-                },
+                Ok(Some(update)) => update_event(
+                    UpdateOutcome::Available,
+                    &update.current_version.to_string(),
+                    Some(&update.version.to_string()),
+                    None,
+                ),
+                Ok(None) => update_event(UpdateOutcome::Current, &current, None, None),
+                Err(e) => update_event(outcome_of_error(&e), &current, None, Some(e.to_string())),
             },
-            Err(e) => UpdateEvent {
-                state: "error",
-                message: "El comprobador de actualizaciones no está disponible.".to_string(),
-                detail: Some(e.to_string()),
-            },
+            // No se pudo ni construir el comprobador: eso es configuración.
+            Err(e) => update_event(UpdateOutcome::Broken, &current, None, Some(e.to_string())),
         };
+        log::info!(
+            "comprobación de actualizaciones: {} ({})",
+            payload.code.unwrap_or("SIN_CODIGO"),
+            payload.message
+        );
         let _ = handle.emit("tq://update", payload);
     });
 }
@@ -1215,6 +1368,235 @@ mod tests {
             assert!(!err.hint.trim().is_empty(), "{} sin acción", err.code);
             assert!(err.message.ends_with('.'), "{} sin puntuación", err.code);
         }
+    }
+
+    // ── Fase 28 (H-20) — el updater deja de mentir sobre por qué falla ──────
+    //
+    // El defecto no era «no se comprueba» (eso lo cerró la Fase 2): era que la
+    // ÚNICA respuesta alcanzable culpaba a la conexión del usuario de un error
+    // que estaba en nuestro fichero de configuración.
+
+    /// El corazón de la fase: 404 y «sin red» son causas DISTINTAS, y el crate
+    /// las distingue. Colapsarlas es lo que hacía el código anterior.
+    #[test]
+    fn un_404_no_es_falta_de_internet() {
+        use tauri_plugin_updater::Error as E;
+        // El servidor contestó (404 → ReleaseNotFound, updater.rs:483-530).
+        assert_eq!(
+            outcome_of_error(&E::ReleaseNotFound),
+            UpdateOutcome::NotPublished,
+            "un 404 significa «no hay nada publicado», no «no tienes internet»"
+        );
+        // No hubo respuesta.
+        assert_eq!(
+            outcome_of_error(&E::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "sin ruta al host"
+            ))),
+            UpdateOutcome::Offline
+        );
+        assert_eq!(
+            outcome_of_error(&E::Network("conexión reiniciada".into())),
+            UpdateOutcome::Offline
+        );
+    }
+
+    /// Lo que está mal montado es NUESTRO, y no puede disfrazarse de fallo del
+    /// usuario ni de «todavía no hay versiones».
+    #[test]
+    fn la_mala_configuracion_no_se_disfraza_de_otra_cosa() {
+        use tauri_plugin_updater::Error as E;
+        for err in [
+            E::EmptyEndpoints,
+            E::InsecureTransportProtocol,
+            // La PLURAL es la que sale con nuestra configuración: no fijamos
+            // `.target(...)`, así que el crate prueba una lista y falla con
+            // `TargetsNotFound` (updater.rs:597). Un manifiesto publicado sin la
+            // clave `windows-x86_64` cae aquí — y ojo, `get_urls` corre ANTES de
+            // comparar versiones, así que ni siquiera «ya estás al día» se salva.
+            E::TargetsNotFound(vec!["windows-x86_64".into()]),
+            E::TargetNotFound("windows-x86_64".into()),
+            E::UnsupportedOs,
+            E::UnsupportedArch,
+        ] {
+            assert_eq!(
+                outcome_of_error(&err),
+                UpdateOutcome::Broken,
+                "{err} debería señalarnos a nosotros"
+            );
+        }
+        // Un manifiesto ilegible tampoco es culpa de la red.
+        let roto = serde_json::from_str::<i32>("no soy json").unwrap_err();
+        assert_eq!(
+            outcome_of_error(&E::Serialization(roto)),
+            UpdateOutcome::Broken
+        );
+    }
+
+    /// `E::Reqwest` no tiene constructor público y el crate no reexporta
+    /// `reqwest`, así que su rama NO se puede ejercitar desde un test. Sin este
+    /// guard, borrarla sería una mutación que ningún test vería: la falta de red
+    /// caería en `_ => Broken` y le diríamos al usuario que la culpa es nuestra.
+    /// El trozo de `lib.rs` que NO es este módulo de tests.
+    ///
+    /// Los dos guards de abajo miran la fuente, y si miraran el fichero entero
+    /// **se satisfarían a sí mismos**: el literal que buscan aparece también
+    /// dentro de su propia aserción, así que borrar el código real los dejaría
+    /// en verde. Lo comprobé por mutación y las dos escapaban. Es la misma
+    /// patología que destapó la Fase 14 («mi propio guard era inerte»).
+    fn fuente_de_produccion() -> &'static str {
+        let fuente = include_str!("lib.rs");
+        let corte = fuente
+            .find("#[cfg(test)]")
+            .expect("lib.rs tiene módulo de tests");
+        &fuente[..corte]
+    }
+
+    #[test]
+    fn el_arm_de_transporte_sigue_existiendo() {
+        assert!(
+            fuente_de_produccion()
+                .contains("E::Reqwest(_) | E::Io(_) | E::Network(_) => UpdateOutcome::Offline"),
+            "la rama de transporte de outcome_of_error desapareció o cambió de forma: \
+             sin ella, la falta de red caería en `_ => Broken` y le diríamos al \
+             usuario que la culpa es nuestra"
+        );
+    }
+
+    /// Ni el plugin ni reqwest ponen timeout por su cuenta. Quitar el nuestro
+    /// devuelve la ventana a «Consultando…» para siempre contra una red que
+    /// acepta y calla — el splash infinito de H-17, en otra ventana. Ningún test
+    /// de comportamiento puede verlo sin levantar la app, así que lo mira aquí.
+    #[test]
+    fn la_consulta_sigue_teniendo_tope_de_tiempo() {
+        assert!(
+            fuente_de_produccion().contains(".timeout(UPDATE_CHECK_TIMEOUT)"),
+            "se perdió el tope de tiempo de la consulta de actualizaciones"
+        );
+        assert!(
+            UPDATE_CHECK_TIMEOUT <= Duration::from_secs(60),
+            "un tope de más de un minuto no es un tope: el usuario ya se fue"
+        );
+    }
+
+    /// El estado de HOY. Si este texto vuelve a hablar de internet, volvemos al
+    /// defecto que la fase cierra.
+    #[test]
+    fn sin_versiones_publicadas_no_se_culpa_a_la_conexion() {
+        let ev = update_event(UpdateOutcome::NotPublished, "0.2.0", None, None);
+        let todo = format!("{} {:?} {:?}", ev.message, ev.detail, ev.hint).to_lowercase();
+        assert!(
+            !todo.contains("internet") && !todo.contains("sin conexión"),
+            "el servidor acaba de contestar: culpar a la red es mentir — {todo}"
+        );
+        assert!(todo.contains("respondió"), "tiene que decir que SÍ hubo respuesta");
+        assert_ne!(ev.state, "error", "no haber publicado nada aún no es un error");
+    }
+
+    /// …y al revés: cuando de verdad no hay red, hay que decirlo.
+    #[test]
+    fn sin_red_si_se_puede_hablar_de_internet() {
+        let ev = update_event(UpdateOutcome::Offline, "0.2.0", None, Some("dns".into()));
+        assert_eq!(ev.state, "error");
+        assert!(ev.hint.unwrap().to_lowercase().contains("internet"));
+    }
+
+    /// El gate de la fase: los cuatro desenlaces son DISTINGUIBLES. No basta con
+    /// que existan en el código; tienen que producir estado, código y texto
+    /// distintos, que es lo que llega a la ventana.
+    #[test]
+    fn los_cuatro_desenlaces_son_distinguibles() {
+        let casos = [
+            UpdateOutcome::Available,
+            UpdateOutcome::Current,
+            UpdateOutcome::NotPublished,
+            UpdateOutcome::Offline,
+            UpdateOutcome::Broken,
+        ];
+        let mut codigos = Vec::new();
+        let mut mensajes = Vec::new();
+        for c in casos {
+            let ev = update_event(c, "0.2.0", Some("0.3.0"), Some("causa".into()));
+            codigos.push(ev.code.expect("todo desenlace lleva código"));
+            mensajes.push(ev.message);
+        }
+        let unicos: std::collections::HashSet<_> = codigos.iter().collect();
+        assert_eq!(unicos.len(), codigos.len(), "dos desenlaces comparten código");
+        let unicos: std::collections::HashSet<_> = mensajes.iter().collect();
+        assert_eq!(unicos.len(), mensajes.len(), "dos desenlaces comparten mensaje");
+    }
+
+    /// Misma disciplina que los errores de arranque (`docs/02` §4.1): español,
+    /// puntuado, y con una acción. Un diagnóstico sin salida no vale.
+    #[test]
+    fn todo_desenlace_habla_espanol_y_dice_que_hacer() {
+        for c in [
+            UpdateOutcome::Available,
+            UpdateOutcome::Current,
+            UpdateOutcome::NotPublished,
+            UpdateOutcome::Offline,
+            UpdateOutcome::Broken,
+        ] {
+            let ev = update_event(c, "0.2.0", Some("0.3.0"), Some("causa técnica".into()));
+            assert!(ev.message.ends_with('.'), "{:?} sin puntuación", ev.code);
+            // `Current` es el único que no necesita acción: no hay nada que hacer.
+            if c != UpdateOutcome::Current {
+                assert!(ev.hint.is_some(), "{:?} no dice qué hacer", ev.code);
+            }
+            // El Display del crate está en INGLÉS: puede ir como causa técnica,
+            // nunca como el mensaje que da la cara.
+            assert!(!ev.message.contains("Could not fetch"));
+        }
+    }
+
+    /// El aviso no puede prometer una instalación que no existe (punto 3 del
+    /// plan de la Fase 28): el botón de instalar sigue sin cablearse.
+    #[test]
+    fn el_aviso_no_promete_instalar_nada() {
+        let ev = update_event(UpdateOutcome::Available, "0.2.0", Some("0.3.0"), None);
+        let detalle = ev.detail.expect("tiene que explicar qué hace el usuario");
+        assert!(
+            detalle.contains("NO la instala solo"),
+            "hay que decir que la instalación es manual: {detalle}"
+        );
+    }
+
+    /// H-20 en su forma literal: el endpoint apuntaba a `TerraQuantum/terraquantum`,
+    /// que NO es nuestro — `api.github.com/users/TerraQuantum` devuelve 200 y es
+    /// la cuenta de un TERCERO (id 90737998). Medido el 2026-09-05.
+    #[test]
+    fn el_updater_apunta_a_nuestro_repositorio() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let endpoints = conf["plugins"]["updater"]["endpoints"]
+            .as_array()
+            .expect("sin endpoints declarados");
+        assert!(!endpoints.is_empty(), "la lista de endpoints está vacía");
+        for e in endpoints {
+            let url = e.as_str().expect("endpoint no textual");
+            assert!(
+                url.starts_with("https://"),
+                "en release un endpoint no-https es Error::InsecureTransportProtocol: {url}"
+            );
+            assert!(
+                !url.contains("/TerraQuantum/terraquantum/"),
+                "apunta a la cuenta de un tercero: {url}"
+            );
+            assert!(
+                url.contains("/Martincancino/TerraQuantum-Engine/"),
+                "el endpoint tiene que ser el remoto real: {url}"
+            );
+            assert!(
+                url.ends_with("/latest.json"),
+                "el manifiesto del plugin se llama latest.json: {url}"
+            );
+        }
+        assert!(
+            conf["plugins"]["updater"]["pubkey"]
+                .as_str()
+                .is_some_and(|k| !k.is_empty()),
+            "sin pubkey no se puede verificar ninguna firma"
+        );
     }
 
     #[test]

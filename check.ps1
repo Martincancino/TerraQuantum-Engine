@@ -29,6 +29,26 @@ python scripts/ci/deps_closure.py
 if ($LASTEXITCODE -ne 0) { $fail = $true; Write-Host "  FALLO cierre de dependencias" -ForegroundColor Red }
 Pop-Location
 
+# Fase 28: el shell de escritorio tambien tiene tests que DECIDEN (arranque
+# honesto H-17/H-19/H-21, y desde ahora la clasificacion del updater H-20), y
+# hasta hoy no los corria NADIE: ni esta puerta ni la CI. Nueve tests escritos
+# como gate y ejecutados por nadie. Con la cache templada cuesta segundos.
+Write-Host "[1b/4] cargo test shell de escritorio..." -ForegroundColor Cyan
+if (Get-Command cargo -ErrorAction SilentlyContinue) {
+    Push-Location "$root\terraquantum-web\src-tauri"
+    # Sin esto, `2>&1` sobre un .exe en PowerShell 5.1 envuelve stderr en
+    # ErrorRecords y, con ErrorActionPreference=Stop, LANZA aunque cargo salga 0.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & cargo test --lib
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
+    Pop-Location
+    if ($code -ne 0) { $fail = $true; Write-Host "  FALLO cargo test" -ForegroundColor Red }
+} else {
+    Write-Host "  cargo no esta en el PATH: omitido (la CI si lo corre)" -ForegroundColor DarkGray
+}
+
 Write-Host "[2/4] tsc --noEmit frontend..." -ForegroundColor Cyan
 Push-Location "$root\terraquantum-web"
 npx tsc --noEmit

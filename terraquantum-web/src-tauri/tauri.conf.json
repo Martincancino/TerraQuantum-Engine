@@ -31,7 +31,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGMzQyMzk2MDQyRkEyNjQKUldSa29pOEVsaU0wYjhZeDFsMEkwc0ova05ra0hZaWErS1RPVUhWWDVpeXhTaHBCWEZBS281QWUK",
       "endpoints": [
-        "https://github.com/TerraQuantum/terraquantum/releases/latest/download/latest.json"
+        "https://github.com/Martincancino/TerraQuantum-Engine/releases/latest/download/latest.json"
       ]
     }
   },

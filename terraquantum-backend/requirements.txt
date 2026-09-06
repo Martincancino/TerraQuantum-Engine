@@ -111,3 +111,9 @@ omf==1.0.1
 properties==0.6.1
 vectormath==0.2.2
 pypng==0.20220715.0
+# Fase 27 (NUEVO-5): `six` era la CUARTA de esa lista y la unica sin pinear —el
+# comentario de arriba nombra cuatro y pineaba tres. La declaran `omf` (sin
+# ningun especificador) y `properties` (`>=1.7.3`), asi que sin esta linea una
+# publicacion futura de `six` cambia el binario firmado de la MISMA version de
+# TerraQuantum, que es exactamente lo que las otras tres lineas impiden.
+six==1.17.0

@@ -85,6 +85,14 @@ OPCIONALES: dict[str, str] = {
     "simpeg": "sólo scripts de comparación externa contra SimPEG; no es camino de producción",
     "SimPEG": "idem `simpeg` (el paquete cambió de capitalización entre versiones)",
     "discretize": "malla de SimPEG, sólo en comparaciones externas",
+    "PyInstaller": (
+        "cadena de BUILD, no de servicio: vive en requirements-build.txt aparte "
+        "a propósito (no debe viajar al contenedor ni al entorno del usuario). "
+        "Sólo lo importa tests/test_f27_build_guards.py, y bajo "
+        "`pytest.importorskip`: en la CI ese test se salta y los otros 40 —que "
+        "prueban la MISMA guarda del .spec con recolectores simulados— corren "
+        "igual. Fase 27"
+    ),
 }
 
 

@@ -1,0 +1,360 @@
+{
+ "config": {
+  "seeds": 3,
+  "refine": 3,
+  "alphas": [
+   1.0
+  ],
+  "mundo": "ambos",
+  "out": "C:/Users/marti/AppData/Local/Temp/claude/c--Users-marti-OneDrive-Documentos-TerraQuantum/a8a4183d-9098-4f6f-bffa-e71496b2db12/scratchpad/f29/acad_report_v2.json"
+ },
+ "mundo": {
+  "discrepancia_pct": 4.08
+ },
+ "dominio": {
+  "plano": {
+   "n_active": 2016,
+   "n_dead": 0,
+   "n_sol": 2016,
+   "celdas_frontera_con_arista_cortada": 0,
+   "max_abs_suma_de_fila_L_active": 0.0
+  },
+  "topografia": {
+   "n_active": 1936,
+   "n_dead": 0,
+   "n_sol": 1936,
+   "celdas_frontera_con_arista_cortada": 48,
+   "max_abs_suma_de_fila_L_active": 1.0
+  }
+ },
+ "resultados": {
+  "plano|orden4_dirichlet_PRODUCCION|1": [
+   {
+    "pr_auc": 0.6035898006799357,
+    "iou@vol": 0.3894736842105263,
+    "pearson_r": 0.5283722890619289,
+    "nitidez_contacto": 0.019675187757557864,
+    "abs_media_primera_banda": 0.0056583340106207336,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 0,
+    "alpha": 1.0,
+    "modo": "orden4_dirichlet_PRODUCCION",
+    "mundo": "plano",
+    "huella": 5301.5026706386325
+   },
+   {
+    "pr_auc": 0.603487302082107,
+    "iou@vol": 0.42702702702702705,
+    "pearson_r": 0.5629738421318756,
+    "nitidez_contacto": 0.019455104128240523,
+    "abs_media_primera_banda": 0.005950451076788329,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 1,
+    "alpha": 1.0,
+    "modo": "orden4_dirichlet_PRODUCCION",
+    "mundo": "plano",
+    "huella": 5294.631893721667
+   },
+   {
+    "pr_auc": 0.6952803713844888,
+    "iou@vol": 0.4585635359116022,
+    "pearson_r": 0.611107674308097,
+    "nitidez_contacto": 0.0194733971630058,
+    "abs_media_primera_banda": 0.00627985348315024,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 2,
+    "alpha": 1.0,
+    "modo": "orden4_dirichlet_PRODUCCION",
+    "mundo": "plano",
+    "huella": 5293.539240057759
+   }
+  ],
+  "plano|orden4_neumann|1": [
+   {
+    "pr_auc": 0.6035898006799357,
+    "iou@vol": 0.3894736842105263,
+    "pearson_r": 0.5283722890619289,
+    "nitidez_contacto": 0.019675187757557864,
+    "abs_media_primera_banda": 0.0056583340106207336,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 0,
+    "alpha": 1.0,
+    "modo": "orden4_neumann",
+    "mundo": "plano",
+    "huella": 5301.5026706386325
+   },
+   {
+    "pr_auc": 0.603487302082107,
+    "iou@vol": 0.42702702702702705,
+    "pearson_r": 0.5629738421318756,
+    "nitidez_contacto": 0.019455104128240523,
+    "abs_media_primera_banda": 0.005950451076788329,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 1,
+    "alpha": 1.0,
+    "modo": "orden4_neumann",
+    "mundo": "plano",
+    "huella": 5294.631893721667
+   },
+   {
+    "pr_auc": 0.6952803713844888,
+    "iou@vol": 0.4585635359116022,
+    "pearson_r": 0.611107674308097,
+    "nitidez_contacto": 0.0194733971630058,
+    "abs_media_primera_banda": 0.00627985348315024,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 2,
+    "alpha": 1.0,
+    "modo": "orden4_neumann",
+    "mundo": "plano",
+    "huella": 5293.539240057759
+   }
+  ],
+  "plano|orden1_dirichlet|1": [
+   {
+    "pr_auc": 0.6201086717832761,
+    "iou@vol": 0.40425531914893614,
+    "pearson_r": 0.5303504254917157,
+    "nitidez_contacto": 0.01889285114227315,
+    "abs_media_primera_banda": 0.005664502108962609,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 0,
+    "alpha": 1.0,
+    "modo": "orden1_dirichlet",
+    "mundo": "plano",
+    "huella": 5301.573302125853
+   },
+   {
+    "pr_auc": 0.6160013688762035,
+    "iou@vol": 0.42702702702702705,
+    "pearson_r": 0.562218071967313,
+    "nitidez_contacto": 0.018727396613325002,
+    "abs_media_primera_banda": 0.005947869715653332,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 1,
+    "alpha": 1.0,
+    "modo": "orden1_dirichlet",
+    "mundo": "plano",
+    "huella": 5294.733902086793
+   },
+   {
+    "pr_auc": 0.6914900388723226,
+    "iou@vol": 0.45054945054945056,
+    "pearson_r": 0.6059887514579834,
+    "nitidez_contacto": 0.01862717931579195,
+    "abs_media_primera_banda": 0.006272217267406994,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 2,
+    "alpha": 1.0,
+    "modo": "orden1_dirichlet",
+    "mundo": "plano",
+    "huella": 5293.554786387222
+   }
+  ],
+  "plano|orden1_neumann|1": [
+   {
+    "pr_auc": 0.6201086717832761,
+    "iou@vol": 0.40425531914893614,
+    "pearson_r": 0.5303504254917157,
+    "nitidez_contacto": 0.01889285114227315,
+    "abs_media_primera_banda": 0.005664502108962609,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 0,
+    "alpha": 1.0,
+    "modo": "orden1_neumann",
+    "mundo": "plano",
+    "huella": 5301.573302125853
+   },
+   {
+    "pr_auc": 0.6160013688762035,
+    "iou@vol": 0.42702702702702705,
+    "pearson_r": 0.562218071967313,
+    "nitidez_contacto": 0.018727396613325002,
+    "abs_media_primera_banda": 0.005947869715653332,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 1,
+    "alpha": 1.0,
+    "modo": "orden1_neumann",
+    "mundo": "plano",
+    "huella": 5294.733902086793
+   },
+   {
+    "pr_auc": 0.6914900388723226,
+    "iou@vol": 0.45054945054945056,
+    "pearson_r": 0.6059887514579834,
+    "nitidez_contacto": 0.01862717931579195,
+    "abs_media_primera_banda": 0.006272217267406994,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 2,
+    "alpha": 1.0,
+    "modo": "orden1_neumann",
+    "mundo": "plano",
+    "huella": 5293.554786387222
+   }
+  ],
+  "topografia|orden4_dirichlet_PRODUCCION|1": [
+   {
+    "pr_auc": 0.1762991349966531,
+    "iou@vol": 0.11864406779661017,
+    "pearson_r": 0.1861204094243015,
+    "nitidez_contacto": 0.044189054310096405,
+    "abs_media_primera_banda": 0.06564644572688369,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 0,
+    "alpha": 1.0,
+    "modo": "orden4_dirichlet_PRODUCCION",
+    "mundo": "topografia",
+    "huella": 5101.748317013844
+   },
+   {
+    "pr_auc": 0.10818050185788838,
+    "iou@vol": 0.03125,
+    "pearson_r": 0.01745138864081595,
+    "nitidez_contacto": 0.03940370860044737,
+    "abs_media_primera_banda": 0.08311961237443735,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 1,
+    "alpha": 1.0,
+    "modo": "orden4_dirichlet_PRODUCCION",
+    "mundo": "topografia",
+    "huella": 5106.091139251839
+   },
+   {
+    "pr_auc": 0.16294806728740918,
+    "iou@vol": 0.13304721030042918,
+    "pearson_r": 0.1728506452759772,
+    "nitidez_contacto": 0.04794487340327108,
+    "abs_media_primera_banda": 0.08122377719794961,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 2,
+    "alpha": 1.0,
+    "modo": "orden4_dirichlet_PRODUCCION",
+    "mundo": "topografia",
+    "huella": 5094.0705634001615
+   }
+  ],
+  "topografia|orden4_neumann|1": [
+   {
+    "pr_auc": 0.16617350538754513,
+    "iou@vol": 0.11864406779661017,
+    "pearson_r": 0.1787406815890806,
+    "nitidez_contacto": 0.04440859055381789,
+    "abs_media_primera_banda": 0.06779645051401799,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 0,
+    "alpha": 1.0,
+    "modo": "orden4_neumann",
+    "mundo": "topografia",
+    "huella": 5101.837169426048
+   },
+   {
+    "pr_auc": 0.1147395409571412,
+    "iou@vol": 0.03125,
+    "pearson_r": 0.01621282841555378,
+    "nitidez_contacto": 0.040795884111261574,
+    "abs_media_primera_banda": 0.08511674333090412,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 1,
+    "alpha": 1.0,
+    "modo": "orden4_neumann",
+    "mundo": "topografia",
+    "huella": 5106.053827965314
+   },
+   {
+    "pr_auc": 0.16325203267428687,
+    "iou@vol": 0.1282051282051282,
+    "pearson_r": 0.1622312826286483,
+    "nitidez_contacto": 0.04933040442265428,
+    "abs_media_primera_banda": 0.08379241085595675,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 2,
+    "alpha": 1.0,
+    "modo": "orden4_neumann",
+    "mundo": "topografia",
+    "huella": 5094.239131563872
+   }
+  ],
+  "topografia|orden1_dirichlet|1": [
+   {
+    "pr_auc": 0.1755311301716868,
+    "iou@vol": 0.1282051282051282,
+    "pearson_r": 0.18209963624408634,
+    "nitidez_contacto": 0.048379097959608104,
+    "abs_media_primera_banda": 0.06860216465647892,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 0,
+    "alpha": 1.0,
+    "modo": "orden1_dirichlet",
+    "mundo": "topografia",
+    "huella": 5101.31411234116
+   },
+   {
+    "pr_auc": 0.12228074401958118,
+    "iou@vol": 0.043478260869565216,
+    "pearson_r": 0.025908448647444418,
+    "nitidez_contacto": 0.04324159079908445,
+    "abs_media_primera_banda": 0.08598770311782844,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 1,
+    "alpha": 1.0,
+    "modo": "orden1_dirichlet",
+    "mundo": "topografia",
+    "huella": 5105.358700061792
+   },
+   {
+    "pr_auc": 0.15423677090749557,
+    "iou@vol": 0.1092436974789916,
+    "pearson_r": 0.1498580363695489,
+    "nitidez_contacto": 0.050725523728699574,
+    "abs_media_primera_banda": 0.08527876559569118,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 2,
+    "alpha": 1.0,
+    "modo": "orden1_dirichlet",
+    "mundo": "topografia",
+    "huella": 5093.889597936401
+   }
+  ],
+  "topografia|orden1_neumann|1": [
+   {
+    "pr_auc": 0.1606720580492253,
+    "iou@vol": 0.1282051282051282,
+    "pearson_r": 0.1806948141010481,
+    "nitidez_contacto": 0.04822816294342365,
+    "abs_media_primera_banda": 0.06908738048013834,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 0,
+    "alpha": 1.0,
+    "modo": "orden1_neumann",
+    "mundo": "topografia",
+    "huella": 5101.326493577668
+   },
+   {
+    "pr_auc": 0.11254316321016225,
+    "iou@vol": 0.043478260869565216,
+    "pearson_r": 0.024642052579568134,
+    "nitidez_contacto": 0.043523717758441514,
+    "abs_media_primera_banda": 0.08660763815131459,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 1,
+    "alpha": 1.0,
+    "modo": "orden1_neumann",
+    "mundo": "topografia",
+    "huella": 5105.375227524823
+   },
+   {
+    "pr_auc": 0.15490530125234062,
+    "iou@vol": 0.10460251046025104,
+    "pearson_r": 0.14767089973518072,
+    "nitidez_contacto": 0.0506853975555636,
+    "abs_media_primera_banda": 0.08585343319860517,
+    "media_primera_banda_sobre_dique": NaN,
+    "seed": 2,
+    "alpha": 1.0,
+    "modo": "orden1_neumann",
+    "mundo": "topografia",
+    "huella": 5093.957725120972
+   }
+  ]
+ }
+}
