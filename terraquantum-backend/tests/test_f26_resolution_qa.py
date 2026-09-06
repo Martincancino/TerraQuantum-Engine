@@ -295,7 +295,11 @@ def _payload(res=None, **kw):
         "priority_class": "HIGH_RELATIVE_PRIORITY",
         "r06_padding_saturation_audit": {"phase_gate_recommendation": "APPROVE_USING_SAT_CORE"},
         "best_target": {"confidence_level": "HIGH", "is_null_space_artifact": False,
-                        "is_floor_smear": False},
+                        "is_floor_smear": False,
+                        # FASE 30 — el sello de HIGH lee este número. Se declara
+                        # EXPLÍCITAMENTE: su ausencia no sella, y un payload "sano" tiene
+                        # que serlo por lo que dice, no por lo que omite.
+                        "floor_mass_excess": 0.13},
         "checkerboard_qa": {"status": "FAIL", "pearson_r": 0.1162},
     }
     if res is not None:
@@ -313,7 +317,12 @@ def _res(resolves=True):
 
 
 def test_the_old_checkerboard_no_longer_caps():
-    """La afirmación central de la fase sobre el veredicto: el tablero pasó a control."""
+    """La afirmación central de la fase sobre el veredicto: el tablero pasó a control.
+
+    FASE 30 — ahora se comprueba en el sitio donde de verdad importa: con el techo
+    levantado, el caso sano llega a HIGH **con el tablero en FAIL**. Mientras existía la
+    retención, "el tablero no capa" era cierto pero inobservable, porque otra cosa capaba.
+    """
     from services.geophysics_service import build_reconciled_verdict
 
     fail = build_reconciled_verdict(_payload(_res(True)))
@@ -321,24 +330,33 @@ def test_the_old_checkerboard_no_longer_caps():
     p_ok["checkerboard_qa"] = {"status": "PASS", "pearson_r": 0.9}
     ok = build_reconciled_verdict(p_ok)
 
-    assert fail["level"] == ok["level"]
-    assert fail["limiting_factors"] == ok["limiting_factors"] == ["high_hold_pending_fase30"]
+    assert fail["level"] == ok["level"] == "HIGH"
+    assert fail["limiting_factors"] == ok["limiting_factors"] == []
     assert fail["components"]["checkerboard_role"] == "historical_control_since_fase26"
     # Pero se SIGUE publicando: es la evidencia de que el examen viejo era constante.
     assert fail["components"]["checkerboard_pearson_r"] == pytest.approx(0.1162)
 
 
-def test_high_is_held_on_purpose_with_an_exit_condition():
-    """El techo sigue puesto —la Fase 26 no desbloquea `HIGH`— pero ya no lo pone un
-    examen imposible: es una retención declarada, con condición de salida escrita."""
+def test_the_hold_that_this_phase_declared_was_lifted_by_the_next_one():
+    """La Fase 26 dejó `HIGH` retenido con una condición de salida ESCRITA. La Fase 30 la
+    cumplió y retiró la retención. Este test guarda las dos mitades del trato: que el
+    literal ya no exista, y que lo que ocupa su lugar sea una prueba MEDIDA y no otra
+    decisión de producto.
+    """
     from services.geophysics_service import build_reconciled_verdict
 
     c = build_reconciled_verdict(_payload(_res(True)))["ceiling"]
-    assert c["max_attainable_level"] == "MEDIUM"
-    assert c["capped_by"] == ["high_hold_pending_fase30"]
+    assert c["max_attainable_level"] == "HIGH"      # la retención se levantó
+    assert c["capped_by"] == []
     assert c["structural"] is False                 # ya no hay examen inaprobable
-    assert "Fase 30" in c["how_to_lift"]
-    assert "SOBRECONFIADO" in c["how_to_lift"]
+    assert "high_ho" + "ld_pending_fase30" not in repr(c)
+
+    # Y el caso que NO sella queda topado por una prueba con número, no por una fase.
+    grueso = dict(_res(True), shallowest_band_resolution_m=750.0)
+    c2 = build_reconciled_verdict(_payload(grueso))["ceiling"]
+    assert c2["max_attainable_level"] == "MEDIUM"
+    assert c2["capped_by"] == ["high_seal"]
+    assert "750" in c2["reason"]
 
 
 def test_a_survey_that_resolves_nothing_is_capped_low():

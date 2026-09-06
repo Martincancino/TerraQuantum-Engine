@@ -1181,11 +1181,35 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
     if rl:
         levels.append((rl, "model_reliability"))
 
+    # ── FASE 30 — `priority_class` DEJA DE TOPEAR (se sigue publicando) ───────
+    # Motivo SEMÁNTICO, no numérico: mide el ATRACTIVO relativo del blanco, no la
+    # CONFIABILIDAD del modelo, que es lo que este veredicto responde. Y además ya viene
+    # derivado de la calidad —`compute_favorability_score` multiplica por `quality_gate`
+    # (technicalSummary.overall_level) y por `uncertainty_gate`, y la Regla 1 le prohíbe
+    # HIGH si `overall_level == LOW`—, así que dentro del worst-of contaba la calidad DOS
+    # veces e inyectaba una dimensión ajena a la pregunta.
+    #
+    # MEDIDO sobre las 75 corridas de confirmación de la Fase 26
+    # (`validation/PREREGISTRO_2026-09-06_fase30.md`):
+    #   · capaba a MEDIUM las 44 de 44 corridas MEDIUM — indiscriminadamente, incluidas
+    #     las de PR-AUC 1,000 y 11 m de error;
+    #   · NUNCA decidió en solitario (0 de 75 con `limiting_factors == ["priority_class"]`),
+    #     así que retirarlo no deja ninguna corrida sin quien la cape;
+    #   · las 3 corridas que serían SOBRECONFIADAS si `HIGH` se soltara sin criterio
+    #     (978,4 · 636,8 · 542,1 m de error) las cazan `survey_confidence` y
+    #     `model_reliability` por su cuenta, ambas en MEDIUM. No era `priority_class`
+    #     quien protegía de la sobreconfianza: era quien impedía medirla.
+    # Mismo patrón que la Fase 26 aplicó al tablero: se degrada a señal PUBLICADA, con su
+    # papel declarado, en vez de borrarla del reporte.
     pc = str(report_payload.get("priority_class", "")).upper()
     components["priority_class"] = pc or "UNKNOWN"
-    pl_ = _priority_to_level(pc)
-    if pl_:
-        levels.append((pl_, "priority_class"))
+    components["priority_class_role"] = "targeting_attractiveness_not_quality_since_fase30"
+    # Se publica TAMBIÉN el nivel que habría aportado, para que la degradación sea
+    # auditable y no un silencio: quien lea el reporte puede ver qué habría pasado con
+    # ella dentro del worst-of. Mismo criterio que publicar `checkerboard_pearson_r`
+    # después de que el tablero dejara de topear — la constancia de ese número ES la
+    # evidencia. NO se añade a `levels`: publicar no es aplicar.
+    components["priority_class_level_not_applied"] = _priority_to_level(pc)
 
     r06 = report_payload.get("r06_padding_saturation_audit") or {}
     gate = str(r06.get("phase_gate_recommendation", "")).upper()
@@ -1273,16 +1297,14 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
     if res_level is not None:
         levels.append((res_level, "survey_resolution"))
 
-    # ── FASE 26 — el techo a `HIGH` sigue puesto, ahora POR DECISIÓN DECLARADA ─
-    # No lo pone ya un examen roto: lo pone el orden que el propio hallazgo exige
-    # («primero que la señal informe, después subir el techo»). La Fase 30 lo levanta
-    # cuando pueda demostrar 0 corridas SOBRECONFIADAS sobre ≥150 con HIGH alcanzable.
-    # Se conserva porque la mitad del hallazgo que sigue ABIERTA es justo la que haría
-    # peligroso soltarlo: dentro de un mismo régimen, 1 de cada 3 realizaciones de
-    # ruido desvía el blanco ~170 m y este diagnóstico NO las distingue (usa σ, no la
-    # muestra). Ver `_verdict_ceiling`.
-    levels.append(("MEDIUM", "high_hold_pending_fase30"))
-    cb_caps = True
+    # ── FASE 30 — el techo se LEVANTA, y `HIGH` pasa a exigir evidencia POSITIVA ─
+    # La retención declarada de la Fase 26 (`high_hold_pending_fase30`) se retira, y el
+    # nivel superior deja de concederse por AUSENCIA de defectos. Por qué, medido, en
+    # `_high_seal`.
+    seal_level, seal_meta = _high_seal(report_payload)
+    components["high_seal"] = seal_meta
+    if seal_level is not None:
+        levels.append((seal_level, "high_seal"))
 
     if not levels:
         overall = "UNKNOWN"
@@ -1292,17 +1314,28 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
         overall_ord = min(_VERDICT_ORD[lv] for lv, _ in levels)
         overall = _ORD_VERDICT[overall_ord]
         limiting = [name for lv, name in levels if _VERDICT_ORD[lv] == overall_ord]
+        # FASE 30 — la rama HIGH del worst-of nunca se había ejecutado: hasta la Fase 29
+        # el techo declarado garantizaba que el mínimo fuera MEDIUM o menos. Al abrirla se
+        # ve que la fórmula genérica lista como «limitantes» a TODAS las señales empatadas
+        # en el máximo, de modo que la corrida MEJOR calificada del sistema publicaría
+        # «limitado por: survey_confidence, model_reliability, …». No limita nadie: cuando
+        # el veredicto es HIGH la lista de limitantes está VACÍA, y `signals` sigue
+        # publicando el nivel de cada entrada para quien quiera auditarlo.
+        if overall == "HIGH":
+            limiting = []
 
     # FASE 21: el techo va en la PRIMERA línea que el usuario lee. «MEDIUM» a secas se lee
     # como "confianza media"; lo que el sistema quiere decir es que el nivel superior no
     # estaba disponible en esta corrida.
     # FASE 26: la frase cambia porque cambió el MOTIVO. Ya no lo topa un examen imposible;
     # lo topa una decisión de producto con fecha de caducidad declarada (Fase 30).
+    # FASE 30: la decisión de producto se retiró. Ahora la frase sólo aparece cuando el
+    # sello de `HIGH` es lo que mandó, y dice QUÉ prueba concreta no se superó — no ya
+    # «el nivel no está habilitado», que era cierto para todas las corridas por igual.
     techo_frase = (
-        " El nivel HIGH no está habilitado todavía: el veredicto está topado a MEDIUM "
-        "mientras la Fase 30 no demuestre que puede liberarse sin producir corridas "
-        "SOBRECONFIADAS — ver `ceiling` en este mismo bloque."
-        if cb_caps else ""
+        " El nivel HIGH sí está disponible, pero esta corrida no lo selló: "
+        + str(seal_meta.get("reason", "")) + " Ver `ceiling` en este mismo bloque."
+        if "high_seal" in limiting else ""
     )
 
     if overall == "HIGH":
@@ -1327,23 +1360,28 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
         "limiting_factors": limiting,
         "components": components,
         # ── FASE 21 — quién MANDÓ, señal por señal ────────────────────────────
-        "signals": _verdict_signal_ledger(levels, overall_ord),
+        "signals": _verdict_signal_ledger(levels, None if overall == "HIGH" else overall_ord),
         # Mismo conjunto que `limiting_factors`, bajo el nombre que responde la pregunta
         # («¿cuál mandó?»). Se conservan los dos: `limiting_factors` ya lo consumen el
         # copiloto y los scripts de validación, y renombrarlo rompería esa lectura.
         "decided_by": list(limiting),
-        # ── FASE 21 — el techo, declarado. FASE 26 — y con su motivo real ─────
-        "ceiling": _verdict_ceiling(cb_status, cb_caps, res_meta),
+        # ── FASE 21 — el techo, declarado. FASE 26 — y con su motivo real.
+        #    FASE 30 — y ahora el techo depende de la CORRIDA, no del producto.
+        "ceiling": _verdict_ceiling(cb_status, limiting, overall, res_meta, seal_meta),
         "headline": headline,
         "recommended_action": action,
         "method": "weakest_link_reconciliation",
         "note": (
             "Veredicto ÚNICO = el más conservador entre confianza de survey, confiabilidad "
-            "del modelo, prioridad de targeting, gate físico de padding/regional (r06), "
-            "validez del blanco (null-space) y resolución del survey (checkerboard). "
+            "del modelo, gate físico de padding/regional (r06), validez del blanco "
+            "(null-space y smear de piso), resolución del survey y el sello de HIGH. "
             "Reconcilia señales que antes se reportaban por separado y podían contradecirse "
             "(p.ej. GOOD/HIGH junto a UNCLASSIFIED/REMEDIATION). `signals` dice qué aportó "
-            "cada entrada y cuál fijó el resultado; `ceiling`, hasta dónde podía llegar."
+            "cada entrada y cuál fijó el resultado; `ceiling`, hasta dónde podía llegar. "
+            "FASE 30: `priority_class` y `checkerboard_qa` se PUBLICAN pero ya no topean — "
+            "la primera mide atractivo de targeting, no confiabilidad; el segundo es un "
+            "control histórico. Y `HIGH` no se concede por ausencia de defectos: lo sella "
+            "`high_seal` con dos pruebas medidas."
         ),
     }
 
@@ -1361,12 +1399,119 @@ def build_reconciled_verdict(report_payload: dict) -> dict:
 #
 # Hasta la Fase 21 el usuario veía «MEDIUM» sin saber que el nivel superior era inalcanzable
 # por construcción — leía "confianza media" donde el sistema quería decir "no tengo forma de
-# decírtelo". Esta fase NO levanta el techo (ver Fase 26 y Fase 30, en ese orden): el mismo
-# hallazgo advierte que liberarlo antes de que la señal discrimine sería PEOR que el estado
-# actual, porque 1 de cada 3 realizaciones de ruido desvía el blanco ~170 m con diagnósticos
-# idénticos y aparecerían `HIGH` en corridas de 285 m de error.
+# decírtelo". La Fase 21 lo DECLARÓ sin poder levantarlo; la 26 sustituyó el examen imposible
+# por uno respondible; la **30** levantó el techo — en ese orden, que era el que el hallazgo
+# exigía por escrito.
+#
+# El aviso de aquel hallazgo se cumplió al pie de la letra y por eso existe `_high_seal`:
+# soltar `HIGH` por simple ausencia de defectos declaraba HIGH a 3 corridas de 44 con
+# 978,4 · 636,8 · 542,1 m de error horizontal, que es exactamente el «aparecerían HIGH en
+# corridas de 285 m de error» que se había predicho. Lo que lo evita no es un techo: es que
+# el nivel superior ahora hay que GANARLO con evidencia positiva.
 _VERDICT_CEILING_EVIDENCE = "validation/HALLAZGO_2026-08-06_techo_medium.md"
 _RESOLUTION_EVIDENCE = "validation/HALLAZGO_2026-09-03_resolucion_informativa.md"
+_HIGH_SEAL_EVIDENCE = "validation/PREREGISTRO_2026-09-06_fase30.md"
+
+# ── FASE 30 — el umbral de exceso de piso PARA SELLAR, no para degradar ───────
+# La Fase 26 midió los dos usos del mismo número y son distintos:
+#   · como umbral para DEGRADAR a LOW (`is_floor_smear`) se dejó en 1,0: bajarlo a 0,5
+#     habría cazado 37 desplomes de 49 en vez de 27, pero dejaba el margen al PEOR caso
+#     sano en un 12 % — demasiado poco para llamar «no fiable» a una corrida sana.
+#   · como umbral para NEGAR el nivel superior, ese mismo 0,5 es el uso correcto: no
+#     acusa a nadie, sólo se niega a sellar. El coste de equivocarse es un MEDIUM de más,
+#     no un LOW injusto.
+# El plan de la Fase 30 pedía por escrito traerse este número al gate. Se trae aquí.
+_HIGH_SEAL_MAX_FLOOR_EXCESS = 0.5
+
+
+def _high_seal(report_payload: dict):
+    """FASE 30 — `HIGH` deja de concederse por AUSENCIA de defectos.
+
+    Hasta la Fase 29 el worst-of sólo sabía RESTAR: cada señal podía topear, y quien no
+    topeaba no aportaba nada. Con el techo declarado puesto eso daba igual, porque nadie
+    llegaba arriba. Al retirarlo se midió que no da igual: soltar `HIGH` sin criterio
+    positivo declaraba HIGH a 3 corridas de 44 con 978,4 · 636,8 · 542,1 m de error
+    horizontal — el cuadrante SOBRECONFIADO, el único inaceptable.
+
+    Así que el nivel superior pasa a exigir evidencia POSITIVA, y son dos pruebas:
+
+    1. **Resolución mejor que el suelo del examen.** El perfil de la Fase 26 prueba una
+       escalera de bloques laterales; aprobar sólo el peldaño MÁS GRUESO es aprobar el
+       suelo del examen, no demostrar resolución. Se exige
+       `shallowest_band_resolution_m < max_block_tested_m`. Es una condición ESTRUCTURAL
+       («no el último peldaño»), no un número elegido: no cambia si mañana la escalera
+       o el tamaño de celda cambian.
+
+    2. **Sin exceso de masa en el piso de la malla.** `floor_mass_excess <= 0,5`, el
+       número que la Fase 26 midió y el plan mandó traer. Ver `_HIGH_SEAL_MAX_FLOOR_EXCESS`.
+
+    La ausencia de cualquiera de los dos datos NO sella: un diagnóstico que no se pudo
+    calcular no puede conceder el nivel superior. Es la misma propiedad de monotonía que
+    la Fase 21 fijó — medir menos nunca puede mejorar el veredicto.
+
+    Devuelve `(nivel_o_None, meta)`: `None` = el sello no aporta tope; `"MEDIUM"` = no
+    sella y capa ahí. NUNCA devuelve `"HIGH"`: el sello no PROMUEVE, sólo deja de topear.
+    """
+    rq = report_payload.get("resolution_qa") or {}
+    bt = report_payload.get("best_target") or {}
+
+    res_m = rq.get("shallowest_band_resolution_m") if rq.get("computed") else None
+    max_block_m = rq.get("max_block_tested_m") if rq.get("computed") else None
+    excess = bt.get("floor_mass_excess")
+
+    meta = {
+        "shallowest_band_resolution_m": res_m,
+        "max_block_tested_m": max_block_m,
+        "floor_mass_excess": excess,
+        "max_floor_excess_allowed": _HIGH_SEAL_MAX_FLOOR_EXCESS,
+        "evidence": _HIGH_SEAL_EVIDENCE,
+    }
+
+    faltan = []
+    if not isinstance(res_m, (int, float)) or not isinstance(max_block_m, (int, float)):
+        faltan.append("el perfil de resolución")
+    if not isinstance(excess, (int, float)):
+        faltan.append("el exceso de masa de piso")
+    if faltan:
+        meta["sealed"] = False
+        meta["status"] = "NOT_MEASURABLE"
+        meta["reason"] = (
+            "No se pudo evaluar el sello de HIGH porque falta " + " y ".join(faltan) +
+            ". Un diagnóstico que no se calculó no concede el nivel superior: capa a MEDIUM."
+        )
+        return "MEDIUM", meta
+
+    resuelve_bajo_el_suelo = float(res_m) < float(max_block_m)
+    piso_limpio = float(excess) <= _HIGH_SEAL_MAX_FLOOR_EXCESS
+    meta["resolves_below_coarsest_block"] = resuelve_bajo_el_suelo
+    meta["floor_excess_within_limit"] = piso_limpio
+
+    if resuelve_bajo_el_suelo and piso_limpio:
+        meta["sealed"] = True
+        meta["status"] = "SEALED"
+        meta["reason"] = (
+            f"El survey resuelve bloques de {res_m:g} m en la banda más somera —por debajo "
+            f"del peldaño más grueso del examen ({max_block_m:g} m)— y el exceso de masa en "
+            f"el piso de la malla es {excess:g} ≤ {_HIGH_SEAL_MAX_FLOOR_EXCESS:g}. "
+            "HIGH queda disponible si ninguna otra señal topea."
+        )
+        return None, meta
+
+    motivos = []
+    if not resuelve_bajo_el_suelo:
+        motivos.append(
+            f"la resolución de la banda más somera ({res_m:g} m) es el peldaño MÁS GRUESO "
+            f"que el examen probó ({max_block_m:g} m), o sea el suelo del examen y no una "
+            "resolución demostrada")
+    if not piso_limpio:
+        motivos.append(
+            f"el exceso de masa en el piso de la malla es {excess:g} > "
+            f"{_HIGH_SEAL_MAX_FLOOR_EXCESS:g} (masa apilada donde la gravedad no la "
+            "constriñe)")
+    meta["sealed"] = False
+    meta["status"] = "NOT_SEALED"
+    meta["reason"] = "No se sella HIGH porque " + " y ".join(motivos) + "."
+    return "MEDIUM", meta
 
 
 def _resolution_signal(report_payload: dict):
@@ -1423,54 +1568,101 @@ def _resolution_signal(report_payload: dict):
     return None, meta
 
 
-def _verdict_ceiling(cb_status: str, cb_caps: bool, res_meta: dict = None) -> dict:
+def _verdict_ceiling(cb_status: str, limiting, overall: str = "UNKNOWN",
+                     res_meta: dict = None, seal_meta: dict = None) -> dict:
     """Hasta dónde PODÍA llegar este veredicto, y por qué no más arriba.
 
-    FASE 21 lo declaró. FASE 26 corrige el MOTIVO: el techo ya no lo pone un examen
-    imposible de aprobar, lo pone una decisión de producto con condición de salida.
+    FASE 21 lo declaró. FASE 26 corrigió el MOTIVO: dejó de ponerlo un examen imposible de
+    aprobar y pasó a ponerlo una decisión de producto con condición de salida.
+
+    FASE 30 lo cambia otra vez, y ahora en lo esencial: **el techo es de la CORRIDA, no del
+    producto.** Hasta aquí este bloque devolvía siempre lo mismo —MEDIUM, `capped_by:
+    ["high_hold_pending_fase30"]`, el mismo párrafo— para las 75 corridas del barrido, la
+    buena y la desastrosa por igual. Un campo constante no informa: era la misma patología
+    que el tablero, un peldaño más arriba. Hoy se calcula de las señales que efectivamente
+    topearon esta corrida, y cuando ninguna topea dice HIGH y lo dice de verdad.
     """
-    if not cb_caps:
+    rm = res_meta or {}
+    sm = seal_meta or {}
+    # Cuando el veredicto ES HIGH, `limiting` trae las señales empatadas ARRIBA: nadie
+    # capó nada. Confundir eso con un techo publicaría un `capped_by` no vacío en la
+    # corrida mejor calificada del sistema.
+    lim = list(limiting or []) if str(overall).upper() != "HIGH" else []
+
+    # `high_seal` no es una señal más: es la que responde "¿por qué no HIGH?". Se nombra
+    # primero para que `capped_by` se lea en el orden en que el usuario pregunta.
+    capped_by = ([n for n in lim if n == "high_seal"]
+                 + [n for n in lim if n != "high_seal"])
+
+    resolution_signal = {
+        "status": rm.get("status"),
+        "resolvability_index": rm.get("resolvability_index"),
+        "shallowest_band_resolution_m": rm.get("shallowest_band_resolution_m"),
+    }
+
+    if not capped_by:
         return {
             "max_attainable_level": "HIGH",
             "capped_by": [],
             "structural": False,
-            "reason": "Ninguna señal impone techo en esta corrida.",
+            "reason": ("Ninguna señal impone techo en esta corrida: el sello de HIGH se "
+                       "cumplió y ninguna otra entrada del worst-of quedó por debajo. "
+                       + str(sm.get("reason", ""))).strip(),
             "how_to_lift": None,
-            "evidence": _VERDICT_CEILING_EVIDENCE,
+            "high_seal": sm,
+            "resolution_signal": resolution_signal,
+            "evidence": [_VERDICT_CEILING_EVIDENCE, _RESOLUTION_EVIDENCE,
+                         _HIGH_SEAL_EVIDENCE],
         }
 
-    rm = res_meta or {}
+    if "high_seal" in capped_by:
+        reason = (
+            "HIGH está disponible desde la Fase 30 —ya no hay retención de producto— pero "
+            "esta corrida no lo selló. " + str(sm.get("reason", "")) + " "
+            "El sello existe porque soltar HIGH por simple AUSENCIA de defectos declaraba "
+            "HIGH a 3 corridas de 44 con 978,4, 636,8 y 542,1 m de error horizontal: el "
+            "cuadrante SOBRECONFIADO, el único inaceptable."
+        )
+        how = (
+            "Mejorar la resolución LATERAL del survey (más estaciones, menor espaciado o "
+            "mayor extensión) hasta que la banda más somera resuelva por debajo del peldaño "
+            "más grueso del examen, y/o reducir la masa que la inversión apila en el piso "
+            "de la malla (dominio más profundo, bounds o regularización)."
+        )
+    elif sm.get("sealed") is True:
+        reason = (
+            "El sello de HIGH se cumplió en esta corrida, pero otras señales del worst-of "
+            "quedaron por debajo: " + ", ".join(capped_by) + ". Ver `signals` para el nivel "
+            "que aportó cada una."
+        )
+        how = ("Atender las señales nombradas en `capped_by`; el sello de resolución y de "
+               "masa de piso ya está superado.")
+    else:
+        # Ni el sello se cumplió ni fue él quien mandó: pasa cuando algo BAJA el veredicto
+        # por debajo de MEDIUM, y entonces `capped_by` sólo trae las señales de ese nivel
+        # inferior. Decir aquí «el sello ya está superado» sería falso.
+        reason = (
+            "Esta corrida quedó por debajo de MEDIUM por: " + ", ".join(capped_by) + ". "
+            "El sello de HIGH tampoco se cumplió (" + str(sm.get("reason", "")).rstrip() +
+            "), pero no hizo falta: otra señal manda antes. Ver `signals`."
+        )
+        how = ("Atender primero las señales de `capped_by`; el sello de HIGH sigue "
+               "pendiente por detrás.")
+
     return {
-        "max_attainable_level": "MEDIUM",
-        "capped_by": ["high_hold_pending_fase30"],
-        # Ya NO es estructural: no hay ningún examen que sea imposible de aprobar por
-        # construcción. Es una retención declarada, con condición de salida escrita.
+        # El techo de una corrida capada ES su nivel: quien topea, topea. Antes este
+        # campo era el literal "MEDIUM" para todas; hoy dice LOW cuando el veredicto
+        # es LOW, que es la verdad y no lo era.
+        "max_attainable_level": overall,
+        "capped_by": capped_by,
+        # Nunca estructural desde la Fase 26: no queda ningún examen imposible de aprobar
+        # por construcción, y desde la Fase 30 tampoco ninguna retención de producto.
         "structural": False,
-        "reason": (
-            "HIGH está retenido a propósito, no por falta de dato ni por un diagnóstico "
-            "pegado. Hasta la Fase 25 el techo lo ponía el QA de tablero, que devolvía "
-            "FAIL SIEMPRE (pearson_r = 0,1162 idéntico a cuatro decimales) por tres "
-            "motivos medidos: alternaba el signo celda a celda, puntuaba profundidades que "
-            "ningún survey gravimétrico resuelve, y calificaba a un solver distinto del que "
-            "produce el modelo. La Fase 26 lo reemplazó por un perfil de resolución que sí "
-            "varía entre surveys y sí se puede aprobar. Lo que mantiene el techo ahora es "
-            "el orden que el hallazgo exige por escrito: primero que la señal informe, "
-            "después subir el techo — y la mitad del hallazgo que sigue ABIERTA es la que "
-            "haría peligroso soltarlo, porque dentro de un mismo régimen 1 de cada 3 "
-            "realizaciones de ruido desvía el blanco ~170 m y este diagnóstico no las "
-            "distingue: usa el σ declarado, no la muestra concreta."
-        ),
-        "how_to_lift": (
-            "Fase 30: liberar el tope y recalibrar la escala contra ≥150 corridas, con la "
-            "condición de que el cuadrante SOBRECONFIADO (error grande + confianza alta) "
-            "siga en 0 con HIGH ya alcanzable — para que ese 0 mida honestidad y no un techo."
-        ),
-        "resolution_signal": {
-            "status": rm.get("status"),
-            "resolvability_index": rm.get("resolvability_index"),
-            "shallowest_band_resolution_m": rm.get("shallowest_band_resolution_m"),
-        },
-        "evidence": [_VERDICT_CEILING_EVIDENCE, _RESOLUTION_EVIDENCE],
+        "reason": reason,
+        "how_to_lift": how,
+        "high_seal": sm,
+        "resolution_signal": resolution_signal,
+        "evidence": [_VERDICT_CEILING_EVIDENCE, _RESOLUTION_EVIDENCE, _HIGH_SEAL_EVIDENCE],
     }
 
 

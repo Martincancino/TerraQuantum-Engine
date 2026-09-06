@@ -161,10 +161,10 @@ def test_universal_vertical_null_space_alone_never_downgrades_b3():
     })
 
     verdict = build_reconciled_verdict(con_b2)
-    # FASE 26: el nivel concreto ya no es `HIGH` —lo retiene `high_hold_pending_fase30`
-    # hasta la Fase 30— y por eso NO se afirma aquí. El contrato de este test nunca fue
-    # el nivel: era que `depthResolution` no entra en el worst-of. Se afirma eso, que es
-    # más fuerte y sobrevive a cualquier tope futuro de otra señal.
+    # FASE 26/30: el nivel concreto NO se afirma aquí —lo movía primero la retención
+    # declarada y hoy lo mueve el sello de HIGH—. El contrato de este test nunca fue el
+    # nivel: era que `depthResolution` no entra en el worst-of. Se afirma eso, que es más
+    # fuerte y sobrevive a cualquier tope futuro de otra señal.
     assert "depthResolution" not in verdict["components"]
     assert not any("depth" in f for f in verdict["limiting_factors"])
     # La invariancia: quitar B2 no cambia NADA del veredicto.

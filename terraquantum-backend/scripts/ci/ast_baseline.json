@@ -1,7 +1,7 @@
 {
   "api": {
     "files": 22,
-    "loc": 6854,
+    "loc": 6862,
     "func_loc_max": 374,
     "func_loc_max_where": "api/gravity_import_api.py:1263 enrich_package_endpoint",
     "cc_max": 79,
@@ -21,13 +21,13 @@
   },
   "exploration": {
     "files": 16,
-    "loc": 11693,
+    "loc": 11754,
     "func_loc_max": 812,
-    "func_loc_max_where": "exploration/magnetometry.py:831 solve_magnetic_inversion_lsqr",
+    "func_loc_max_where": "exploration/magnetometry.py:838 solve_magnetic_inversion_lsqr",
     "cc_max": 116,
-    "cc_max_where": "exploration/magnetometry.py:831 solve_magnetic_inversion_lsqr",
+    "cc_max_where": "exploration/magnetometry.py:838 solve_magnetic_inversion_lsqr",
     "args_max": 39,
-    "args_max_where": "exploration/gravimetry.py:3066 solve_inversion_lsqr"
+    "args_max_where": "exploration/gravimetry.py:3077 solve_inversion_lsqr"
   },
   "middleware": {
     "files": 2,
@@ -41,11 +41,11 @@
   },
   "reporting": {
     "files": 2,
-    "loc": 1771,
-    "func_loc_max": 488,
+    "loc": 1848,
+    "func_loc_max": 492,
     "func_loc_max_where": "reporting/report_generator.py:155 generate_technical_report_html",
     "cc_max": 32,
-    "cc_max_where": "reporting/report_generator.py:1101 _georef_section_html",
+    "cc_max_where": "reporting/report_generator.py:1178 _georef_section_html",
     "args_max": 6,
     "args_max_where": "reporting/report_generator.py:155 generate_technical_report_html"
   },
@@ -60,10 +60,10 @@
     "args_max_where": "schemas/geophysics_schema.py:35 _validate_box"
   },
   "services": {
-    "files": 56,
-    "loc": 29632,
-    "func_loc_max": 777,
-    "func_loc_max_where": "services/gravity_import_service.py:942 _import_gravity_csv_v1_impl",
+    "files": 57,
+    "loc": 31168,
+    "func_loc_max": 812,
+    "func_loc_max_where": "services/joint_inversion.py:548 run_joint_inversion",
     "cc_max": 181,
     "cc_max_where": "services/gravity_import_service.py:942 _import_gravity_csv_v1_impl",
     "args_max": 36,
