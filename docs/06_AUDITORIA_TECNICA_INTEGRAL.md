@@ -66,51 +66,197 @@ No es descuido repetido: es que **los criterios de cierre miden que la pieza exi
 
 Y tiene una implicación incómoda que conviene decir: la honestidad epistémica es el diferenciador declarado del producto (§1.1). H-27 muestra que **esa honestidad está implementada en la frontera del backend y no cruza al usuario**, que es justo donde el diferenciador tendría que notarse.
 
-## 1.3 Los 8 hallazgos que importan
+## 1.3 Los 39 hallazgos, re-medidos uno a uno
 
-| # | Hallazgo | Sev. | Estado |
+> **Re-medición completa — FASE 29, 2026-09-06.** Esta tabla se escribió el
+> 2026-08-04 y durante trece meses de trabajo **nunca se volvió a contrastar con el
+> código**: era el hueco que el propio plan §1 de `docs/10_PLAN_FASES_15_26.md`
+> declaraba («las auditorías se escribieron *antes* que las fases y nunca se
+> re-midieron»). La Fase 29 la re-mide. Reglas de esta re-medición, para que se
+> pueda auditar a su vez:
+>
+> 1. **Cada fila lleva fecha y `ruta:línea`.** Una fila sin evidencia no cuenta como
+>    verificada y se marca **NO RE-MEDIDO** en vez de heredar su estado anterior.
+> 2. **`ruta:línea` es de hoy, no del 04-ago.** Varias referencias del expediente
+>    académico habían derivado: la que él cita como `gravimetry.py:2233-2235` es hoy
+>    `gravimetry.py:2246-2247`. Se citan las de hoy.
+> 3. **Donde el defecto sigue vivo se dice vivo**, aunque la fase que lo tocaba esté
+>    cerrada. Cerrar una fase y cerrar un hallazgo no son lo mismo.
+> 4. **El título antiguo decía «Los 8 hallazgos que importan» y la tabla tenía 39
+>    filas.** Se corrige el título en vez de recortar la tabla.
+>
+> **Marcadores:** ✅ CERRADO · 🟡 PARCIAL (mitigado, con un resto medido) ·
+> 🔴 VIVO · ⬜ NO RE-MEDIDO.
+>
+> **Cierre del gate de la Fase 29, medido sobre esta misma tabla.** De las **41** filas:
+> **36** llevan `ruta:línea`; **3** (H-6, H-7 y H-31) tienen por evidencia una **AUSENCIA**
+> —un fichero borrado no tiene número de línea, así que se declara como lo que es, y se dice
+> además que ningún guard la sostiene—; y **2** son autocorrecciones del propio auditor, cuya
+> evidencia correcta es la sección de este informe donde se argumentan, no una coordenada de
+> código. Ninguna fila hereda su estado de 2026-08-04 sin volver a mirarlo.
+
+| # | Hallazgo | Sev. original | Estado 2026-09-06 | Evidencia (`ruta:línea`) |
+|---|---|---|---|---|
+| **H-1** | `W_z` se cancela contra `Ws`; `depth_beta` inerte | 🔴 Crítico | ✅ **CERRADO** (Fase 4, 08-14). `depth_beta` fuera de la firma del solver de malla regular; **vivo y declarado** en el solver Octree, que es otro funcional. Mutación de la F29: re-añadirlo a la firma → gate **rojo** | `exploration/gravimetry.py:3157-3162` (lápida) · `exploration/gravimetry.py:3926` (Octree, vivo) · `tests/test_fase4_depth_weighting.py:204` |
+| **H-2** | `solve_sparse_normal_equations` se invoca y no existe | 🟠 Alto | ✅ **CERRADO** (Fase 6). **0** apariciones en código de producción. Mutación: reintroducir la llamada → gate **rojo** | `tests/test_fase6_limpieza_verificada.py:45` |
+| **H-3** | 21 funciones concentran el 26,4 % del código; `run_geophysics_inversion` 1.996 LOC / CC 201 | 🟠 Alto | 🔴 **VIVO, desplazado.** Las dos funciones que la ficha nombra sí se partieron (Fase 8). Pero el **criterio de aceptación de esa fase —LOC ≤ 300, CC ≤ 40, args ≤ 12— no se cumple hoy**: 8 funciones superan 300 LOC, la CC máxima es **181** y la firma más ancha, **39** argumentos. Y `ast_budgets.py` **no vigila el criterio**: vigila NO-REGRESIÓN contra un baseline que **codifica las violaciones como suelo aceptado**. Concentración re-medida: las 21 funciones más largas = **13,7 %** de 56.714 LOC de producción (122 ficheros, 1.121 funciones) | `scripts/ci/ast_baseline.json` · `services/gravity_import_service.py:942` (CC **181**, 777 LOC) · `exploration/magnetometry.py:838` (812 LOC, 37 args) · `services/joint_inversion.py:548` (812 LOC) · `exploration/gravimetry.py:3077` (**39** args) |
+| **H-4** | La regresión física F9 no corre en CI | 🟠 Alto | ✅ **CERRADO** (Fase 3). Canario en cada PR + job nocturno completo | `.github/workflows/ci.yml:96` (canario en cada PR) · `:210` (job nocturno completo) |
+| **H-5** | La CI compila dos directorios inexistentes y pasa igual | 🟡 Medio | ✅ **CERRADO**. Mutación: error de sintaxis en producción → gate **rojo** | `scripts/ci/compile_check.py:84-106` (contrasta declarados contra disco y sale ≠ 0) |
+| **H-6** | Código muerto en el frontend (~30 KB) | 🟡 Medio | ✅ **CERRADO** (Fase 6). `reactiveUpdateGraph.ts`, `engine-physics.ts` e `InstancedSegmentsLayer`: **0 ficheros, 0 referencias** | **ausencia**, medida 2026-09-06: 0 ficheros y 0 referencias a `InstancedSegmentsLayer` en `terraquantum-web/{lib,componentes}`. *Un fichero borrado no tiene número de línea: la coordenada es la ausencia — y no hay guard que la sostenga* |
+| **H-7** | Clave RSA revocada committeada | 🟡 Medio | 🟡 **PARCIAL.** **0** ficheros `credenciales_gee.json*` en el árbol de trabajo. **La historia de git NO se re-midió** en esta fase: sigue siendo cierto que la clave estuvo committeada y una purga de historia es una decisión con coste (reescribe 189+ commits) que no toma una auditoría | **ausencia** en el árbol, medida 2026-09-06 (`rglob('credenciales_gee.json*')` → 0). Historia de git: **⬜ NO RE-MEDIDA** |
+| **H-8** | Ausencia del dominio minero económico | 🟢 Info | ✅ **DECLARADO** anti-scope permanente | `docs/10_PLAN_FASES_15_26.md:2870` («No implementar la sección económica») |
+| **H-9** | 228 ventanas duplicadas entre los dos motores | 🟠 Alto | 🟡 **CERRADO EN SU PAR, CIEGO EN LOS DEMÁS.** El par gravimetría↔magnetometría está en **20** (criterio < 40) y la mutación lo caza. **Pero el gate vigila UN par y los tres peores de hoy son otros**: `gravimetry ↔ geophysics_service` **72**, `gravity_import_api ↔ gravimetry` **67**, `gravity_import_api ↔ geophysics_service` **64**; y la auto-duplicación de `api/gravity_import_api.py` consigo mismo (**102** ventanas) no la mira nadie —el baseline la guarda **vacía**—. Segundo límite, **medido por mutación**: el gate cuenta **huellas ÚNICAS**, así que re-duplicar un bloque *ya* compartido es invisible (la primera mutación de la F29 escapó exactamente por eso; la segunda, con código no compartido, lo puso rojo) | `scripts/ci/study_duplication.py:158-175` · `scripts/ci/duplication_baseline.json` (`"propio": {}`) |
+| **H-10** | La fase F7 completa no tiene UI: 5 endpoints sin consumidor | 🟠 Alto | ✅ **CERRADO** (Fase 9). Mutación: proxy de Next sin llamador → gate **rojo**. Deuda declarada: **9** rutas y **1** proxy tolerados | `tests/test_fase9_camino_de_usuario.py:42` (9 rutas) · `:94` (1 proxy) |
+| **H-11** | 29 de 44 variables de entorno nunca se ejercitan | 🟡 Medio | ✅ **CERRADO** (Fase 5). Mutación: variable nueva sin declarar → gate **rojo** | `tests/test_fase5_superficie_config.py:318` (el censo cubre todo el backend) · `:338` (ninguna variable sin ejercicio) |
+| **H-12** | `core/storage.py` huérfano | 🟡 Medio | ✅ **CERRADO**. No existe | **ausencia**: `core/storage.py` no existe, y lo sostiene `tests/test_fase6_limpieza_verificada.py:89`. `core/` = 11 ficheros, 1.881 LOC |
+| **H-13** | 16 símbolos públicos sin referencia | 🟡 Medio | ✅ **CERRADO** con guard vivo. `HUERFANOS_TOLERADOS` = **4**, cada uno con motivo escrito. El guard **se excluye a sí mismo del barrido**, con la justificación medida — es decir, la patología de auto-satisfacción que la F29 busca **aquí ya está resuelta** | `tests/test_fase6_limpieza_verificada.py:417-431` |
+| **H-14** | `distributed` y `shapely` declaradas y no importadas | 🟢 Bajo | ✅ **CERRADO** (Fase 6). Sólo quedan las lápidas en comentarios | `terraquantum-backend/requirements.txt:17,30,72` |
+| **H-15** | El backend escucha en `0.0.0.0` por defecto | 🟡 Medio | ✅ **CERRADO** (Fase 2). Default **loopback** + aviso ruidoso al arrancar si se expone sin auth | `core/config.py:152` · `main.py:126-134` |
+| **H-16** | El frontend concentra más complejidad que el backend; `PrepPanel` con 41 `useState` | 🟠 Alto | 🟡 **PARCIAL.** La mitad de `useState` está **cerrada**: el máximo hoy es **10** (`BoreholeUploadPanel.tsx`), bajo el techo de 12, y la mutación lo caza. La mitad de concentración **mejoró y no se cerró**: los 8 ficheros mayores son el **34,1 %** (era 40,2 %), pero el frontend creció de 28.327 a **37.366 LOC** y `PrepPanel.tsx` sigue en **2.222** y `Scene3D.tsx` en **2.099** | `tests/test_fase10_contratos.py:474` (techo 12) · `componentes/PrepPanel.tsx` · `componentes/Scene3D.tsx` |
+| **H-17** | Sidecar que no arranca ⇒ splash infinito | 🔴 Crítico | ✅ **CERRADO** (Fase 2) **y desde la Fase 28 su puerta EXISTE**: los tests de Rust los corre el job `desktop-shell` y `check.ps1` | `terraquantum-web/src-tauri/src/lib.rs:1262` (módulo de tests, **19** `#[test]`) · `:1360` (todo error de arranque habla español) · `.github/workflows/ci.yml:170` (job `desktop-shell`) · `check.ps1:43` (paso 1b) |
+| **H-18** | Sin Job Object: procesos huérfanos | 🔴 Crítico | ✅ **CERRADO** (Fase 2), misma puerta que H-17 | `terraquantum-web/src-tauri/src/lib.rs:1262` (misma puerta que H-17: `cargo test --lib`, **19/19 verde** el 2026-09-06) |
+| **H-19** | `wait_for_port` acepta cualquier listener | 🟠 Alto | ✅ **CERRADO** (Fase 2): identidad por token, misma puerta | `core/config.py:158` (`INSTANCE_TOKEN`) · `src-tauri/src/lib.rs` |
+| ~~**H-20**~~ | Updater firmado que nadie invoca | 🟠 Alto | ✅ **CERRADO** en dos tiempos (Fase 2 + Fase 28). Riesgo abierto **NUEVO-13**: mientras el repo sea privado el updater dará 404 aunque se publique | `src-tauri/tauri.conf.json:34` · `src-tauri/src/lib.rs:952-1010` · `docs/04` §6.1 |
+| **H-21** | El navegador llama directo al backend en 3 puntos | 🟠 Alto | ✅ **CERRADO** (Fase 2). Guard estático **verde hoy**: «ninguna llamada directa navegador→backend» | `terraquantum-web/scripts/check_client_backend_calls.mjs` · `.github/workflows/ci.yml:149` (el paso que lo corre). Ejecutado a mano el 2026-09-06: exit 0 |
+| **H-22** | 43 de 65 scripts de `validation/` no deciden nada | 🟠 Alto | ✅ **CERRADO** (Fase 3). Mutación: script nuevo sin clasificar → gate **rojo** | `scripts/ci/validation_inventory.py:220` (sale 1 si algo queda sin clasificar) · `scripts/validation/GATES.json` (73 scripts: 24 gates, 39 diagnósticos, 3 bibliotecas, 7 colecciones) |
+| **H-23** | Reproducibilidad parcial: sin lockfile ni versión de Python | 🟡 Medio | ✅ **CERRADO** (Fase 27): `requirements.lock` con hashes e instalación `--require-hashes` en los dos jobs. **Resto medido por la F29:** `check.ps1` invoca `python`, que en la máquina de desarrollo es **3.11.9 sin numpy ni pytest**, mientras la CI lee `.python-version` (**3.14.4**). La puerta local y la puerta remota **no validan con el mismo intérprete** | `terraquantum-backend/requirements.lock` · `.github/workflows/ci.yml` · `check.ps1:12,16,19,22,68` (`python`) vs `terraquantum-backend/.python-version` |
+| **H-24** | El ZIP de diagnóstico puede filtrar datos vía tracebacks | 🟡 Medio | 🔴 **VIVO tal como se describió.** La config **sí** se sanea, pero `recent_errors.json` guarda **la cola literal del traceback** (últimos 2.000 caracteres) y viaja al ZIP sin filtro. El docstring promete «JAMÁS guarda datos de survey» y lo que garantiza es que no guarda el **body**: el **mensaje** de una excepción sí puede llevar valores de celda | `core/diagnostics_buffer.py:24-34` · `services/diagnostics_service.py:106,109,152` |
+| **H-25** | Dos selectores de λ obsoletos siguen invocables | 🟡 Medio | 🟡 **MITIGADO Y DECLARADO.** `select_lambda_lcurve` sigue existiendo, con **0 llamadores de producción**, y hay un test que lo fija. Lo usan un arnés de byte-identidad y un script de `tests/` que **pytest no colecta** (0 tests) | `exploration/gravimetry.py:1416` · `api/geophysics_api.py:238,250` · `tests/test_fase1_literal_dispatch.py:225` |
+| **H-26** | Cuatro definiciones del término de modelo sin prueba que las compare | 🟠 Alto | ⬜ **NO RE-MEDIDO** por la Fase 29. Sigue sin dueño en el plan; lo más cercano es el arnés de byte-identidad de la Fase 7, que congela cada ruta contra sí misma pero **no las compara entre sí** | Las cuatro conviven en `exploration/gravimetry.py:1416` (L-curve), `:1674` (χ² objetivo), `:3077` (solver de producción) y `exploration/magnetometry.py:838` (motor magnético). `scripts/validation/fase7_byte_identity.py` congela cada una **contra sí misma**; ninguna prueba las compara **entre sí** |
+| **H-27** | La inversión puede caer a topografía PLANA sin avisar | 🟠 Alto | ✅ **CERRADO.** El aviso se emite (`topography_run_warnings`), viaja en `warnings[]` de la respuesta y el visor lo **lee y lo muestra** | `services/geophysics_service.py:330-338,2962-2964` · `componentes/views/Exploration3DView.tsx:139,451-453` · `lib/terraquantum/runWarnings` |
+| **H-28** | El modelo 3D del survey anterior sobrevive al cambio de CSV | 🟠 Alto | ✅ **CERRADO** (Fase 1). `resetExplorationState` desapareció y su trabajo vive en el store | `store/useAppStore.ts:555` · `componentes/views/Exploration3DView.tsx:357` |
+| **H-29** | El reconocimiento de riesgo espacial sobrevive al cambio de archivo | 🟠 Alto | 🟡 **CERRADO, CON LA PUERTA MUERTA.** El arreglo está y está comentado; su gate de aceptación es un recorrido de Playwright que **no ejecuta ninguna puerta** (ver §1.4) | `componentes/PrepPanel.tsx:690,1176` · gate: `terraquantum-web/e2e/fase1_confianza.spec.ts` (**no lo corre nadie**) |
+| **H-30** | El frontend deriva el contraste con roca país fija de 2,75 t/m³ | 🟠 Alto | 🔴 **VIVO, y en dos sitios.** La constante `DENSITY_COUNTRY_ROCK_FALLBACK_T_M3 = 2.75` sigue decidiendo qué vóxeles se ven cuando el backend no manda el campo | `componentes/Scene3D.tsx:93` · `lib/terraQuantumGeology.ts:143` |
+| **H-31** | `geophysicsModel.ts` fabrica coordenadas lat/lon | 🟡 Medio | ✅ **CERRADO**. El fichero no existe | **ausencia**: `terraquantum-web/lib/geophysicsModel.ts` no existe (medido 2026-09-06). Sin guard que lo sostenga |
+| **H-32** | Un `catch` con sólo `console.warn` deja al usuario sin señal | 🟡 Medio | ⬜ **NO RE-MEDIDO en su sitio original.** Lo que hay hoy en `Scene3D.tsx` son dos `console.warn` de **textura de terreno** (degradación cosmética con material de reserva), que no es el caso que la ficha describe (recarga de modo/LOD del modelo) | `componentes/Scene3D.tsx:1199,1204` |
+| **H-33** | En magnetometría `depth_beta` actúa o no según el padding | 🟠 Alto | 🟡 **VIVO Y DECLARADO.** El parámetro sigue en la firma del solver magnético, y desde la Fase 7 **la corrida declara en su salida** qué funcional usó — que era el criterio (d) de aquella fase, no la eliminación del parámetro | `exploration/magnetometry.py:887` (firma) · `:1590` (`solver_meta["depth_beta"]`) · `:1592` (nota de H-33) |
+| **H-34** | Colormap arcoíris (Turbo) vivo en susceptibilidad | 🟡 Medio | 🟡 **EL RENDER SE ARREGLÓ; LA ETIQUETA NO.** El visor pinta **Plasma** desde la Fase 1; el panel de control sigue diciéndole al usuario **«Turbo · log₁₀(χ + ε)»**. **No es un hallazgo nuevo de la F29**: ya está anotado en `docs/ARQUITECTURA.md` §10 *Frontend* con estas palabras — «Turbo en leyenda de `MultiPhysicsControls` describe colores que ya no se pintan». Lo que la F29 aporta es la coordenada exacta y que **sigue ahí** | `lib/terraQuantumGeology.ts:180-191` (Plasma) vs `componentes/viewport/MultiPhysicsControls.tsx:32` (dice «Turbo») |
+| **H-35** | El 41 % del `core/` es dominio, no infraestructura | 🟠 Alto | ✅ **CERRADO** (Fase 6). `block_model_store.py`, `geo_utils.py` y `gee_client.py` viven en `services/`; `core/` son **11 ficheros y 1.881 LOC** de infraestructura | `services/block_model_store.py` · `services/geo_utils.py` · `services/gee_client.py` · `tests/test_fase6_limpieza_verificada.py:280` |
+| **H-36** | No existe la noción de «dato evaluado» con procedencia y validez | 🟠 Alto | 🟡 **CERRADO EN SU MITAD ÚTIL** (Fase 25, 09-03). Existe el tipo exhaustivo que obliga a clasificar **cada** parámetro de preparación como invalidante o `NO_DESHACIBLE` —un campo sin clasificar **no compila**—, con **34** parámetros declarados. Lo que sigue sin existir es el recómputo **incremental**, y no tiene fase dueña | `terraquantum-web/componentes/prep/invalidaResultado.ts:28,48,77-127` (22 KB) |
+| **H-37** | La UI ofrece un modo (`amplitude`) que el motor nunca ejecuta | 🔴 Crítico | ✅ **CERRADO** (Fase 1). El modo se **rechaza antes de computar**, con causa y alternativa. Mutación: anular el rechazo → gate **rojo** | `services/geophysics_service.py:551-576` · `:2698-2704` · `tests/test_fase1_literal_dispatch.py` |
+| **H-38** | El padding es incondicional en producción ⇒ `depth_beta` inerte en los tres solvers | 🟠 Alto | 🔴 **VIVO por diseño, y ahora con una consecuencia medida.** La producción sigue pasando `padding_mask` siempre. La Fase 29 mide el efecto colateral que nadie había contado: **el padding crea celdas de aire**, y con ellas la frontera implícita de ACAD-4 — en una corrida real de `run_geophysics_inversion` son **2.000 de 7.200 celdas (27,8 %)** | `services/geophysics_service.py:2772,2800,3549` · medición: `tests/test_doi_calibration.py` corriendo con log INFO, 2026-09-06 |
+| **H-39** | Los kernels de MVI y tensor ignoran `near_field_mode='prism'` | 🟠 Alto | 🔴 **VIVO, sin cambios.** `build_mvi_kernels` y `build_gradient_tensor_kernels` contienen **cero** referencias a `near_field_mode` y **cero** menciones de `prism`: siempre dipolo | `exploration/magnetometry.py:519` · `:629` (verificado por AST, 2026-09-06) |
+| **(corrección 1)** | H-1 no afecta a magnetometría por el mecanismo de `Ws` | — | ✅ Se mantiene; ver H-33 | `docs/06` §9D.1, §9G.1 |
+| **(corrección 2)** | H-25 rebajado de Crítico a Medio | — | ✅ Se mantiene; ver H-25 | `docs/06` §9D.2 |
+
+## 1.4 Los gates: primero ¿corren?, después ¿defienden? (FASE 29, 2026-09-06)
+
+La 4ª pregunta del gate de este proyecto es *«¿falla el gate si se rompe lo que dice
+defender?»*. La Fase 28 añadió una pregunta **anterior** y más barata, y la añadió
+porque le costó 26 días descubrirla: **¿lo ejecuta alguien?** Nueve tests de Rust
+escritos como puerta no los corría ni la CI ni `check.ps1`. Esta sección responde las
+dos, para las 14 fases del plan §10, y la primera respuesta es peor que la de la
+Fase 28.
+
+### 1.4.1 Censo de puertas muertas — **152 pruebas escritas como gate que no ejecuta nadie**
+
+| Puerta | Pruebas | Quién la ejecuta | Evidencia |
+|---|---:|---|---|
+| `terraquantum-backend/scripts/validation/test_*.py` (20 ficheros) | **56** | **NADIE** | `pytest.ini:2` las declara en `testpaths`, pero **todos** los pasos de CI y de `check.ps1` invocan `pytest tests/…`, que nunca pasa por ese directorio |
+| `terraquantum-web/e2e/*.spec.ts` (8 specs) | **57** | **NADIE** | `.github/workflows/ci.yml` no menciona `playwright` ni `test:e2e` en ningún job; `check.ps1` tampoco. El runner existe (`scripts/e2e_ui.ps1`) y hay que lanzarlo a mano |
+| Tests `slow` sin paso propio (7 ficheros) | **39** | **NADIE** | el paso «Suite de tests» corre `pytest tests/ -m "not slow"`; ningún otro paso los nombra |
+| **TOTAL** | **152** | | |
+
+Los 39 `slow` huérfanos, uno a uno: `test_f8_e2e_matrix.py` (**21**),
+`test_fase11_api_scripting.py` (**11**), `test_f8_soak.py` (2),
+`test_fase14_geologia_implicita.py` (2), `test_async_load_package.py` (1),
+`test_f8_perf_budgets.py` (1), `test_projected_solver.py` (1).
+De los 55 tests `slow` del repositorio, los otros 16 **sí** corren, porque el paso
+«Guardas de arquitectura» los invoca **por fichero y sin `-m`**
+(`test_fase5_superficie_config.py` 6, `test_fase7_nucleo_compartido.py` 1,
+`test_f27_build_guards.py` 1) o porque el nocturno los nombra
+(`test_depth_prior_service.py` 2); y de los 6 de `test_f9_physics_regression.py` la CI
+corre **uno** por nodeid y declara por escrito que el gate nocturno cubre los otros
+cinco «en sustancia».
+
+**Consecuencia directa: los gates de aceptación de las Fases 1, 9, 10, 11, 13 y 14
+son, hoy, puertas muertas** — total o parcialmente. La Fase 11 y la Fase 14 no tienen
+**ninguna** puerta viva; las Fases 1, 9, 10 y 13 conservan su mitad de backend (que sí
+corre y que la Fase 29 verificó por mutación) y han perdido su mitad de recorrido de
+usuario.
+
+**Y hay un guard que existía para esto y no lo ve.**
+`tests/test_fase3_ci_guards.py:214` (`test_every_validation_test_runs_somewhere`)
+comprueba exactamente esta patología… **sólo para el marcador `validation`**, y sólo
+dentro de `tests/`. No mira el marcador `slow`, que es por donde se escapan los 39, ni
+`scripts/validation/`, que es por donde se escapan los 56, ni Playwright, que es por
+donde se escapan los 57. El guard hace lo que dice; lo que dice es más estrecho que el
+problema.
+
+### 1.4.2 La puerta pre-push local no puede pasar en la máquina de desarrollo
+
+Esto **ya estaba anotado a medias**: es `NUEVO-12` (Fase 27), que dice que
+`deps_closure.py` da falsa alarma con el `python` del PATH. Lo que la Fase 29 añade
+es que el problema **no se queda en un falso positivo**: el paso más caro de la
+puerta no puede ni arrancar.
+
+`check.ps1` invoca **`python`**. En esta máquina `python` es **3.11.9 sin numpy y sin
+pytest**, mientras `terraquantum-backend/.python-version` declara **3.14.4** y la CI lo
+lee de ahí. Medido el 2026-09-06:
+
+| Paso de `check.ps1` | con `python` (3.11.9) | con `py -3.14` |
+|---|---|---|
+| `compile_check.py` | exit 0 | exit 0 |
+| `ast_budgets.py` | exit 0 | exit 0 |
+| `validation_inventory.py` | exit 0 | exit 0 |
+| `deps_closure.py` | **exit 1** (falso positivo: sin metadatos locales no expande 34 distribuciones) | exit 0 (109 distribuciones) |
+| `pytest tests/ -q` (`-Tests`) | **imposible**: `No module named pytest` | corre |
+
+O sea: `check.ps1` da **ROJO** por una causa que no es un defecto del código, y su paso
+más caro **nunca se ha podido ejecutar aquí**. Es la mitad local de H-23.
+
+### 1.4.3 Verificación por mutación: **15 de 16**
+
+Todas se aplicaron sobre el árbol real, se restauraron y se comprobó la restauración
+por **SHA-256 byte a byte** (este repositorio vive en OneDrive y ya tiene documentada
+una reversión a media corrida). Arnés y registro completo en el bloque ✅ EJECUTADA de
+la Fase 29 en `docs/10_PLAN_FASES_15_26.md`.
+
+| Fase | Qué se rompió | Puerta | Resultado |
 |---|---|---|---|
-| **H-1** | El depth-weighting `W_z` se cancela **exactamente** contra la normalización de columnas `Ws`. `depth_beta` es algebraicamente inerte y el funcional de regularización real no es el documentado. **✅ CERRADO en la Fase 4 (08-14): se probó la reparación con 3.450 inversiones y NO mejora — el techo de profundidad es null-space, no bug. `depth_beta` eliminado del solver.** | 🔴 Crítico | **[MEDIDO]** a precisión de máquina |
-| **H-2** | `solve_sparse_normal_equations` se invoca pero **no existe en el repositorio**. `USE_SPARSE_DIRECT=true` ⇒ `NameError` en mitad de la inversión. | 🟠 Alto | **[MEDIDO]** por AST + import |
-| **H-3** | 21 funciones (2,1%) concentran el 26,4% del código. `run_geophysics_inversion` = 1.996 LOC, CC=201. Un handler HTTP con 927 LOC y 41 parámetros. | 🟠 Alto | **[MEDIDO]** por AST |
-| **H-4** | La regresión física F9 **no corre en CI** (skip por defecto, la CI no activa la variable). El "congelado para siempre" depende de que alguien lo recuerde. | 🟠 Alto | **[MEDIDO]** |
-| **H-5** | La CI compila dos directorios inexistentes (`Camiones`, `workers`) y **pasa igual** (`compileall` devuelve 0). Config muerta que nadie notó. | 🟡 Medio | **[MEDIDO]** exit 0 |
-| **H-6** | Cluster de código muerto en el frontend: `reactiveUpdateGraph.ts` (0 consumidores) + cadena `InstancedSegmentsLayer`→`segmentLOD`→`webgpuCull` sin importadores + `engine-physics.ts` (física sintética en TS). ~30 KB. | 🟡 Medio | **[MEDIDO]** |
-| **H-7** | Clave privada RSA real committeada en git (`credenciales_gee.json.REVOKED_2026-06-03`). Revocada, pero presente en el árbol y en la historia. | 🟡 Medio | **[HECHO]** |
-| **H-8** | Ausencia total del dominio minero (pit, scheduling, block model económico) que los informes 07 y 11 tratan como núcleo. **Esto es una decisión correcta, no un defecto** — pero debe declararse como anti-scope permanente. | 🟢 Info | **[MEDIDO]** |
-| **H-9** | 228 ventanas de 12 líneas duplicadas entre `gravimetry.py` y `magnetometry.py`. El módulo compartido correcto existe (`geophysics_weights.py`) pero se abandonó con 3 funciones. **H-1 hay que arreglarlo dos veces.** | 🟠 Alto | **[MEDIDO]** huella de tokens (§9B.1) |
-| **H-10** | La fase F7 completa (licencias, exportar diagnóstico, honestidad offline) **no tiene ninguna UI**: 5 endpoints sin consumidor. El gate midió el backend, no al usuario. | 🟠 Alto | **[MEDIDO]** cruce API↔frontend (§9B.2) |
-| **H-11** | 29 de 44 variables de entorno nunca se ejercitan, incluidas **todas** las que controlan el solver. Es la causa raíz sistémica de H-2. `TQ_AUTH_ENABLED` está documentado como roto. | 🟡 Medio | **[MEDIDO]** (§9B.3) |
-| **H-12** | `core/storage.py` (168 LOC, backends S3/GCS con `NotImplementedError`) huérfano total: abstracción para una nube que el producto rechazó por estrategia. | 🟡 Medio | **[MEDIDO]** (§9B.4) |
-| **H-13** | 16 símbolos públicos sin referencia alguna (incluye la compresión wavelet del Jacobiano); 8% del backend sin ningún test que lo importe. | 🟡 Medio | **[MEDIDO]** (§9B.5) |
-| **H-14** | `distributed` y `shapely` declaradas y no importadas — peso muerto en un instalador de 322 MB. | 🟢 Bajo | **[MEDIDO]** (§9B.6) |
-| **H-15** | El backend escucha en `0.0.0.0` por defecto. **El producto empaquetado está a salvo** (Tauri fija `127.0.0.1`), pero la seguridad depende de que 3 lanzadores lo recuerden, sin ningún test. Arreglo de coste cero. | 🟡 Medio | **[MEDIDO]** (§9B.7) |
-| **H-16** | El frontend concentra complejidad **más** que el backend: 8 archivos = 40,2% del código; `PrepPanel.tsx` con **41 `useState`**; 40 nombres de tipo duplicados replicando esquemas Pydantic a mano. | 🟠 Alto | **[MEDIDO]** (§9B.8) |
-| **H-17** | **Si un sidecar no arranca, el usuario ve un splash infinito sin mensaje, sin reintento y sin logs.** No hay health-check del backend. El peor modo de fallo posible en casa del cliente. | 🔴 **Crítico** | **[HECHO]** `lib.rs:100-197` (§9C.1) |
-| **H-18** | Sin Job Object en Windows: matar la app deja `backend.exe` y `node.exe` huérfanos ocupando los puertos, y el siguiente arranque también falla. | 🔴 Crítico | **[MEDIDO]** (§9C.2) |
-| **H-19** | `wait_for_port` acepta cualquier listener: la ventana navega hacia un proceso zombi o ajeno sin avisar. | 🟠 Alto | **[HECHO]** (§9C.3) |
-| **H-20** | El updater está firmado y configurado, pero **ningún código lo invoca** — el usuario nunca verá una actualización. | 🟠 Alto | **[MEDIDO]** (§9C.4) |
-| **H-21** | El navegador llama **directo** al backend en 3 puntos (`NEXT_PUBLIC_` expone la URL). Con auth desactivada por defecto, loopback y CORS pasan de defensa redundante a **única** defensa. | 🟠 Alto | **[MEDIDO]** (§9C.5) |
-| **H-22** | **43 de 65 scripts de `scripts/validation/` (66%) no tienen `assert` ni código de salida**: son diagnósticos, no puertas. Los oráculos que sí existen son excelentes y genuinos. | 🟠 Alto | **[MEDIDO]** (§9C.6) |
-| **H-23** | Reproducibilidad parcial: 7 dependencias sin techo, sin lockfile, sin versión de Python, y **PyInstaller sin pinear**. Doc dice 253 MB; el instalador real pesa 321,5 MB. | 🟡 Medio | **[HECHO]** (§9C.7) |
-| **H-24** | El ZIP de diagnóstico "sin datos de survey" puede arrastrar valores de celda dentro de mensajes de excepción. | 🟡 Medio | **[HECHO]** (§9C.8) |
-| **H-25** | Dos selectores de λ obsoletos (≈437 LOC) siguen invocables con un χ²(λ) que **no corresponde al operador actual** — y un benchmark del proyecto usa uno de ellos. *Rebajado de Crítico a Medio tras verificación: la ruta de producción no los usa.* | 🟡 Medio | **[MEDIDO]** (§9D.2) |
-| **H-26** | Conviven **cuatro** definiciones distintas del término de modelo entre solver, los dos selectores obsoletos y el motor magnético, sin que ninguna prueba las compare. | 🟠 Alto | **[HECHO]** (§9D.3) |
-| **H-27** | **La inversión puede caer a topografía PLANA y entregar un modelo con sello de bueno sin avisar.** Cambia la máscara de celdas activas y la profundidad de cada vóxel. El canal de avisos existe y no se usa. | 🟠 Alto | **[MEDIDO]** (§9D.2-bis) |
-| **H-28** | **El modelo 3D del survey anterior sobrevive al cambio de CSV**: se puede ver el modelo de A creyendo que es de B. La función que lo limpia existe y nunca se llama. | 🟠 Alto | **[MEDIDO]** 4 eslabones (§9E.1) |
-| **H-29** | **El reconocimiento de riesgo espacial persiste al cambiar el archivo magnético** — habilita el botón y viaja al backend como si el usuario hubiera aceptado el riesgo nuevo. Además el gate valida un solo archivo y el paquete incluye ambos. | 🟠 Alto | **[MEDIDO]** (§9E.2) |
-| **H-30** | El frontend **deriva el contraste de densidad** con una roca país fija de 2,75 t/m³ cuando el backend no manda el campo, y decide con ello qué vóxeles se ven — justo cuando el modelo es débil. | 🟠 Alto | **[HECHO]** (§9E.3) |
-| **H-31** | `geophysicsModel.ts` **fabrica coordenadas lat/lon** con un factor 0,02° en vez de una transformación geodésica. Código muerto hoy; borrar, no congelar. | 🟡 Medio | **[MEDIDO]** (§9E.4) |
-| **H-32** | Un `catch` con solo `console.warn` deja al usuario sin señal al fallar la recarga de modo/LOD del modelo 3D. | 🟡 Medio | **[HECHO]** (§9E.5) |
-| **H-37** | **La UI ofrece un modo de inversión (`amplitude`) que el motor nunca ejecuta**: cae en silencio a TMI inducida estándar y el reporte afirma `"inversion_mode": "amplitude"`. Alcanzable en 2 clics. Corrompe **la procedencia del resultado**, no el dato. | 🔴 **Crítico** | **[MEDIDO]** 5 eslabones (§9J.1) |
-| **H-38** | El padding es **incondicional en producción** (`geophysics_service.py:1899-1916`) ⇒ `depth_beta` es inerte en **los tres solvers**. Con 3 instancias independientes ya no es un bug: es una propiedad del diseño del bloque de padding. | 🟠 Alto | **[MEDIDO]** (§9J.2) |
-| **H-39** | Los kernels de MVI y tensor **ignoran `near_field_mode='prism'`** y usan siempre dipolo — justo en el régimen somero donde el esquema lo recomienda. | 🟠 Alto | **[HECHO]** (§9J.3) |
-| **H-35** | **El 41% del `core/` es dominio, no infraestructura** (`block_model_store` 840 LOC, `geo_utils` 412, `gee_client` 54) — viola el principio de exclusión que el informe 14 enuncia con el ejemplo literal de "modelos de bloques mineros". | 🟠 Alto | **[MEDIDO]** (§9I.2) |
-| **H-36** | **No existe la noción de "dato evaluado" con procedencia y validez.** H-28, el resultado stale de la UX y la ausencia de recómputo incremental son el mismo agujero visto desde tres ángulos. | 🟠 Alto | **[HECHO]** (§9I.4) |
-| **H-34** | El colormap **arcoíris (Turbo) sigue activo en la susceptibilidad magnética** mientras densidad usa Viridis: el mismo visor comunica dos capas con escalas de distinta calidad perceptual. Arreglo = una constante. | 🟡 Medio | **[MEDIDO]** (§9H.1) |
-| **H-33** | **En magnetometría `depth_beta` actúa o no según si el padding está activo**: dos funcionales de regularización distintos en el mismo solver. En producción (con padding) es inerte. La misma configuración nominal produce físicas distintas. | 🟠 Alto | **[MEDIDO]** numéricamente (§9G.1) |
-| **(corrección 1)** | H-1 no afecta a magnetometría **por el mecanismo de `Ws`** — pero H-33 muestra que ahí es inerte por otra vía. Anula mi afirmación de que "hay que arreglarlo dos veces" *y* la de §9D.1 de que "en magnetometría funciona". | — | **[MEDIDO]** (§9D.1, §9G.1) |
-| **(corrección 2)** | **H-25 rebajado de Crítico a Medio.** Afirmé que el λ de producción se calibraba sobre otro funcional; **es falso**: Morozov escanea con el solver real y adopta su solución. El equipo ya había detectado y rodeado el problema. | — | **[MEDIDO]** (§9D.2) |
+| 3 (H-5) | error de sintaxis en `core/utils.py` | `compile_check.py` | **CAZADA** |
+| 3 (H-22) | script nuevo en `validation/` sin ficha en `GATES.json` | `validation_inventory.py` | **CAZADA** |
+| 3 (escala) | `G` de 6,67430e-11 a 7,00000e-11 | `test_fase3_calibracion_absoluta.py` | **CAZADA** |
+| 4 (H-1) | re-añadir `depth_beta` a la firma del solver | `test_fase4_depth_weighting.py` | **CAZADA** |
+| 5 (H-11) | variable de entorno nueva sin declarar | `test_fase5_superficie_config.py` | **CAZADA** |
+| 6 (H-2) | reintroducir `solve_sparse_normal_equations` | `test_fase6_limpieza_verificada.py` | **CAZADA** |
+| 7 (H-9) | duplicar 155 líneas **ya compartidas** de gravimetría en magnetometría | `study_duplication.py --gate` | **ESCAPA** ← el gate cuenta huellas **únicas** |
+| 7 (H-9) | duplicar 155 líneas **no compartidas** | `study_duplication.py --gate` | **CAZADA** |
+| 8 | inflar un helper de la espina a CC > 40 | `test_fase8_espina_dorsal.py` | **CAZADA** |
+| 8 | función de 200 ramas en `core/` | `ast_budgets.py` | **CAZADA** |
+| 9 (H-10) | proxy de Next sin ningún llamador | `test_fase9_camino_de_usuario.py` | **CAZADA** |
+| 10 (H-16) | 15 `useState` en un componente | `test_fase10_contratos.py` | **CAZADA** |
+| 10 (H-16) | renombrar un campo de un esquema Pydantic | `generate_frontend_types.py --check` | **CAZADA** |
+| 12 | anular la permutación de ejes del OMF | `test_fase12_omf.py` | **CAZADA** |
+| 13 | campo del store sin clasificar | `test_fase13_undo_redo.py` | **CAZADA** |
+| 1 (H-37) | anular el rechazo del modo `amplitude` | `test_fase1_literal_dispatch.py` | **CAZADA** |
+
+**La que escapó es el hallazgo de esta parte**, y no es un fallo del arnés sino una
+propiedad del gate que nadie había escrito: `study_duplication.py` cuenta **huellas
+distintas** compartidas entre dos ficheros, no ocurrencias. Copiar *otra vez* un bloque
+que ya estaba duplicado **no mueve el número**. El criterio «< 40 ventanas» defiende
+contra duplicación **nueva**, no contra que la existente se multiplique.
+
+### 1.4.4 El patrón que la Fase 28 pidió buscar: el guard que se satisface con su propio literal
+
+Se censaron los **29** ficheros de `tests/` que leen código fuente (`read_text`,
+`ast.parse`, `glob`) y se aislaron los **11** que barren un árbol que los contiene o
+que leen su propio fichero. Resultado:
+
+- **Ninguno confirmado.** Los dos que más se acercan **ya se defienden a propósito y lo
+  dicen**: `test_fase6_limpieza_verificada.py:52` excluye su propio fichero del barrido
+  (`if p.name != Path(__file__).name`) y `:417-431` documenta, **con la medición**, que
+  sin esa exclusión los tres contratos de `HUERFANOS_TOLERADOS` desaparecían del
+  recuento. Es la patología de la Fase 6, cerrada y anotada.
+- **Un agujero latente, medido y hoy inofensivo.**
+  `tests/test_fase9_camino_de_usuario.py:36` incluye **`"e2e"`** en `_WEB_SCAN_DIRS`, y
+  ese conjunto es el que usan `test_todo_endpoint_tiene_consumidor_o_excusa_escrita`
+  (`:166`), `test_la_lista_de_rutas_toleradas_es_portante` (`:192`) y
+  `test_la_superficie_f7_tiene_camino_de_usuario` (`:290`). Es decir: **una ruta cuyo
+  único consumidor sea un recorrido de Playwright cuenta como “tiene camino de
+  usuario”, y esos recorridos no los ejecuta nadie** (§1.4.1). Medido: de las **64**
+  rutas del backend, **0** dependen hoy de eso, así que el agujero está abierto y vacío.
+  Arreglo de coste cero: sacar `"e2e"` de esa tupla, o volver a ejecutar los recorridos.
 
 ---
 
@@ -801,6 +947,23 @@ Si el puerto está ocupado (por un zombi propio de H-18, o por otra aplicación 
 `tauri.conf.json:29-40` configura clave pública, endpoints y `createUpdaterArtifacts`, y los `.sig` se producen de verdad. Pero `@tauri-apps/plugin-updater` **no es dependencia** del `package.json` (solo está el CLI de build), y `lib.rs:176` registra el builder del plugin **sin llamar nunca a `.check()`**.
 
 **Consecuencia:** el pipeline de firma funciona y el usuario **nunca verá un aviso de actualización**. `docs/04` describe cómo publicar una actualización sin aclarar que el lado del consumo no está cableado. Es el mismo patrón que H-10 (F7 sin UI): **backend/infraestructura lista, camino del usuario ausente, gate declarado en verde.** Que el patrón se repita dos veces en fases distintas sugiere que no es un descuido puntual sino la forma del criterio de cierre.
+
+> **Cierre en dos tiempos, y el segundo destapó que el primero no bastaba (Fase 28, 2026-09-06).**
+> La Fase 2 cableó `check()` y dio H-20 por cerrado. Medido un mes después: la
+> llamada existía, **pero el único desenlace alcanzable era un error**, porque el
+> endpoint apuntaba a `TerraQuantum/terraquantum`. Esta sección lo llamó
+> «repositorio inexistente»; es peor y más concreto: `api.github.com/users/TerraQuantum`
+> devuelve **200** — es la cuenta de un **tercero real** (id 90737998). Lo que
+> protegía al usuario de instalar algo ajeno no era la URL sino la **firma
+> minisign**, que es exactamente la defensa que se diseñó para eso.
+>
+> Y el aviso mentía sobre la causa: el 404 llegaba como `Error::ReleaseNotFound`
+> —distinguible de un fallo de red— y se presentaba como «si no tienes internet
+> es lo esperable», con el texto del crate **en inglés** incrustado. Es decir:
+> **el mismo patrón que esta sección denuncia, una capa más adentro.** El gate de
+> la Fase 2 dio verde porque comprobaba que la comprobación *ocurría*, no que
+> *dijera la verdad*. Detalle completo y las cinco categorías nuevas en
+> `docs/04` §6.1.
 
 ## 9C.5 [H-21] El navegador llama directo al backend: los 40 proxies no son la única puerta 🟠
 
@@ -1629,7 +1792,7 @@ FASE 6 (limpieza)  FASE 9 (UI de F7)  FASE 12 (OMF)  FASE 10 (contratos) ─► 
 | **H-17** | El splash recibe eventos (`tq://boot`) y muestra el paso en curso; si algo falla, **la barra se detiene** (seguir animando era la mentira) y aparece la causa en español + **[Reintentar]** + **[Ver registros]** + [Cerrar]. Siete errores catalogados, cada uno con acción: `BACKEND_MISSING`, `BACKEND_SPAWN_FAILED`, `BACKEND_DEAD`, `BACKEND_TIMEOUT`, `FRONTEND_*`, `PORT_HIJACKED`, `PORTS_EXHAUSTED`. |
 | **H-18** | Job Object de Windows con `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, por **FFI directa a kernel32 y sin dependencias nuevas**. Si matan la app desde el Administrador de Tareas, el SO mata a los sidecars. Si el SO no lo permite, se registra el aviso y queda `taskkill` — degradación declarada, no silenciosa. |
 | **H-19** | El shell genera un token por arranque, se lo pasa al backend y **compara contra `/health`**. El frontend se valida por `/api/backend-health`: esa respuesta demuestra a la vez que el sidecar Node es el nuestro **y** que está emparejado con nuestro backend. Sonda HTTP mínima escrita a mano (HTTP/1.0 sobre `TcpStream`) para no añadir dependencias por un GET a loopback. |
-| **H-20** | Menú **Ayuda → «Buscar actualizaciones…»**, conducido desde Rust. Manual a propósito: un producto local-first no debe llamar a la red al arrancar. |
+| **H-20** | Menú **Ayuda → «Buscar actualizaciones…»**, conducido desde Rust. Manual a propósito: un producto local-first no debe llamar a la red al arrancar. *(La **Fase 28** completó lo que faltaba: el endpoint apuntaba a un tercero y el aviso culpaba a la conexión del usuario. Ver `docs/04` §6.1.)* |
 | **H-21 (shell)** | Puertos elegidos **antes** de spawnear; si el preferido está ocupado se usa el siguiente libre del tramo y se explica quién lo ocupaba. El puerto elegido viaja al sidecar Node por entorno. |
 | Registros | Botón en el splash y menú **Ayuda → Ver registros / Abrir carpeta de datos**. |
 
@@ -1638,6 +1801,15 @@ FASE 6 (limpieza)  FASE 9 (UI de F7)  FASE 12 (OMF)  FASE 10 (contratos) ─► 
 **Higiene de permisos.** `withGlobalTauri` se activó para que el splash pueda escuchar eventos sin bundler. Es seguro porque la capability **no declara `remote`**: la aplicación servida en `http://localhost:3000` recibe el objeto pero la ACL rechaza cualquier llamada. Y se **retiró** `updater:default` de la capability: el updater ya no se invoca desde la interfaz, así que su superficie desde el webview sobra.
 
 **9/9 tests unitarios de Rust** sobre lo que decide: parseo HTTP, veredicto de identidad (incluido el caso «un zombi de TerraQuantum responde igual de bien: sin token no vale»), elección de puerto y forma del evento que lee el gate. `cargo check`: 0 errores, 0 avisos propios.
+
+> **Y a esos nueve tests no los corría nadie (medido por la Fase 28, 09-06).** Ni
+> `.github/workflows/ci.yml` —que no tenía **un solo paso de cargo**— ni
+> `check.ps1`, la puerta pre-push. Nueve tests escritos como gate y ejecutados
+> por ninguna puerta durante 26 días: la variante más silenciosa de H-22, porque
+> aquí ni siquiera hacía falta que alguien interpretara la salida — no había
+> salida. Corregido: job `desktop-shell` en la CI y paso `[1b/4]` en `check.ps1`.
+> Es la **cuarta** vez que aparece el patrón «una puerta que no corre» (Fases 3,
+> 15, 27).
 
 > **Un test flaky, cazado y corregido dentro de la fase.** La primera versión de los tests de puerto pedía un puerto efímero al sistema y afirmaba cosas sobre sus vecinos; pasó en la primera corrida y **falló en la segunda** — apareció justo porque el gate se corrió dos veces antes de declarar la fase cerrada. La decisión de qué puerto elegir se separó del sistema operativo (`choose_port_where` recibe el predicado de "libre"), y ahora hay dos tests: uno **determinista** sobre la lógica y otro con un socket real que sólo afirma lo que siempre es cierto — *nunca devuelve el puerto ocupado*. Un test que pasa «casi siempre» es peor que no tenerlo: enseña a ignorar la suite.
 

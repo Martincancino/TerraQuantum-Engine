@@ -921,8 +921,20 @@ leer el código, no algo que el proyecto hubiera notado.
 sin *wrap-around*, y que el código validó propiedades de M-matriz y convergencia al
 caso uniforme (`exploration/gravimetry.py:1321-1327`).
 
-**Qué NO sabemos.** No se ha medido nunca la diferencia de resultado entre penalizar
-$\|Lm\|^2$ y $\|\nabla m\|^2$ sobre el mismo dato. No existe ese experimento.
+**Qué NO sabíamos, y qué se midió después.** Cuando se escribió este informe no existía el
+experimento. **Existe desde el 2026-09-06** (Fase 29): `scripts/validation/f29_operador_suavidad.py`
+sustituye SOLO el operador de regularización dentro del motor de producción —los cuatro brazos se
+derivan de la misma `L_active`, y para el de primer orden con frontera Dirichlet se cumple
+la identidad exacta *Bᵀ·B = −L_active*— y compara
+$\|Lm\|^2$ contra $\|Bm\|^2$ sobre el mismo dato, con semillas pareadas y anti-inverse-crime ×3.
+**Resultado: ningún criterio favorece al primer orden en los dos mundos**, y la nitidez del contacto
+—la magnitud que esta pregunta señalaba— **cambia de signo entre ellos**: sin topografía el operador
+de CUARTO orden produce contactos más nítidos (3/3 semillas); con topografía, el de primer orden
+(3/3). La respuesta útil a esta pregunta es, por tanto, la segunda de las dos que ella misma
+enumeraba: **no hay que gastar esfuerzo ahí**. Lo que sí queda pendiente es **corregir la cita**: el
+código sigue citando a Li & Oldenburg 1998 para un operador que no es el suyo.
+*Límites declarados: 3 semillas (y este motor es bimodal frente al ruido), un solo `alpha_spatial`
+—el de producción—, una geometría. Mide qué obtiene hoy el usuario, no el techo de cada operador.*
 
 **Qué opinión sería útil.** Si el revisor considera que la penalización de cuarto orden
 sobre-suaviza de forma perjudicial para localizar cuerpos compactos, sería un cambio
@@ -951,9 +963,18 @@ malla completa) y `exploration/gravimetry.py:2233-2235` (el recorte posterior).
 "densidad de fondo", y que afecta a dos fronteras distintas: la topográfica y la del
 dominio observable podado por sensibilidad.
 
-**Qué NO sabemos.** La magnitud del sesgo. No se ha comparado nunca contra una
-alternativa (por ejemplo, recalcular la diagonal después del recorte, lo que daría una
-condición de tipo Neumann).
+**Qué NO sabíamos, y qué se midió después.** La magnitud del sesgo. **Medida el 2026-09-06**
+(Fase 29, mismo instrumento) contra la alternativa exacta que esta pregunta proponía —recalcular la
+diagonal tras el recorte, es decir Neumann natural—: la condición de Dirichlet **baja la amplitud
+media del modelo en la primera banda activa un 2,7 %**, consistente en **3 de 3** semillas y con el
+signo que aquí se predice. **Pero no empeora la recuperación**: el PR-AUC es indistinguible (+0,2 %)
+y la correlación con la verdad es *mejor* con Dirichlet en 3/3. El control que hace honesta la
+medición se exigió y se cumplió: sin celdas inactivas los dos operadores son el mismo y salen
+idénticos, Δ = 0,000e+00 exacto.
+
+**Y el alcance era mayor que el descrito aquí.** Este informe presenta la frontera como algo que
+aparece con topografía o con poda. Aparece **siempre**: el padding de producción es incondicional
+(H-38) y crea celdas de aire por sí solo — **2.000 de 7.200 (27,8 %)** en una corrida real medida.
 
 **Qué opinión sería útil.** Saber cuál de las dos condiciones (Dirichlet homogénea o
 Neumann natural) es la estándar defendible en inversión de campos potenciales, y si

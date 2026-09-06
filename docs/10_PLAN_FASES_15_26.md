@@ -60,7 +60,28 @@
 > —distinguir la corrida de 5,6 m de la de 285,5 m dentro del **mismo** régimen— con un
 > dato que el producto ya calculaba y no miraba.
 >
-> **SIGUIENTE: Fase 27.**
+> **PLAN COMPLETO: 15 a 30, las dieciséis cerradas.** *(27, 28, 29 y 30 el 03-sep y el
+> 06-sep.)*
+>
+> La **30** —la última— levantó el techo a `HIGH`, y lo primero que midió fue que **el
+> trabajo que pedía su propia ficha no cambiaba nada**: quitar `high_hold_pending_fase30`
+> dejaba **0 de 75** veredictos distintos, porque `priority_class` capaba a MEDIUM **las 44
+> de 44** corridas MEDIUM —incluidas las de PR-AUC 1,000 y 11 m de error—. El techo eran
+> **tres** cosas y la única declarada era la inerte. `HIGH` ya se alcanza
+> (**24 %** de 150 corridas) y ya no se concede por ausencia de defectos: hay
+> que **sellarlo**. Cuadrante SOBRECONFIADO: **0**, con el peor `HIGH` a
+> 164,9 m. Mutación **12/12**.
+>
+> La **29** cerró el margen sin cuantificar, y lo primero que midió fue a sí misma: sus 14
+> verificadores en paralelo **murieron por límite de sesión, los 14** — la tercera vez que
+> pasa en este repositorio, así que el trabajo se hizo a mano. Los gates **defienden**
+> (**15 de 16** mutaciones cazadas, y la que escapó destapó que el gate de duplicación
+> cuenta huellas únicas), pero **152 pruebas escritas como gate no las ejecuta nadie** —
+> incluidos los gates de aceptación **completos** de las Fases 11 y 14—. Y los dos
+> hallazgos numéricos que el expediente académico declaraba «nunca medidos» ya tienen
+> número: **ACAD-4 es real** (−2,7 % de amplitud bajo la topografía, 3/3 semillas) **y no
+> cuesta targeting**; **ACAD-3 no se sostiene** — el operador de cuarto orden no
+> sobre-suaviza, y lo que hay que corregir es la **cita**, no el operador.
 >
 > **Fases nuevas 20, 21, 26 y 30**, añadidas el 26-ago tras revisar una auditoría
 > delta externa. Ojo: **los dos «CRÍTICO» que esa delta proponía atacar primero no
@@ -132,12 +153,22 @@ ZIP industrial, roles de columna en la ingesta, unidades de exportación, empaqu
 y updater, bugs de confianza del camino dorado, código muerto, dependencias,
 constante de λ, CI de validación.
 
-**NO verificado (queda como Fase 29** — este párrafo decía «Fase 26» y era una
+~~**NO verificado (queda como Fase 29** — este párrafo decía «Fase 26» y era una
 errata: la renumeración del 26-ago movió ese trabajo a la 29, que es la que lo
 describe en el §5**):** los gates de las 14 fases uno a uno, la
 ejecución real de la suite, estructura y complejidad hoy, el operador de
 suavidad de 4º orden y la frontera de Dirichlet, seguridad y red, listas de
-tolerancia, higiene del repositorio, código muerto nuevo en el frontend.
+tolerancia, higiene del repositorio, código muerto nuevo en el frontend.~~
+
+**✅ VERIFICADO por la Fase 29 (2026-09-06).** Los once frentes de arriba están
+medidos y la tabla §1.3 de `docs/06` re-escrita fila a fila con fecha y
+`ruta:línea`. Y la Fase 29 volvió a tropezar con lo mismo que la dejó pendiente:
+**sus 14 verificadores en paralelo murieron por límite de sesión, los 14** — tercera
+vez en este repositorio (26 de 32 el 04-ago, 21 de 24 el 23-ago, 14 de 14 el 06-sep).
+Aquí ya no es mala suerte: **la delegación masiva es un modo de fallo conocido de este
+proyecto**, y lo que funciona es el trabajo secuencial. Queda **⬜ NO RE-MEDIDO** y se
+dice: H-26 (las cuatro formulaciones de regularización, sin fase dueña) y la historia
+de git de H-7 (el árbol sí está limpio).
 
 ---
 
@@ -267,12 +298,12 @@ los índices internos). El origen es `0 0 0`: sin georreferencia.
 | ✅ **ACAD-12** *(cerrado por la Fase 22, 08-27)* | `bulk_rock_mass_kg` **contenía toneladas** — factor 1.000. **Y era peor:** la llamada de producción no pasaba `block_size`, así que el volumen quedaba fijo en el de una celda de 10 m (**1.034 de 2.089** corridas usan otro dx) y un tope silencioso recortaba las grandes. Renombrada a `bulk_rock_mass_tonnes` — 0 consumidores medidos — con el dx y los índices reales | `exploration/gravimetry.py:4233,4248` |
 | ✅ **ACAD-13** *(cerrado por la Fase 22, 08-27)* | La exportación calculaba el contraste contra el **literal 2.6**. Eran **TRES** escritores, no uno: el `.vtr`, el TargetingEngine y el **ASEG-GDF2** (entrega regulatoria AU/NZ), más la nota del reporte. Dos viajan al cliente en el ZIP | `export_service.py:31,212` **y `:947,973`** · `gravimetry.py:4213` · `geophysics_service.py:5128` |
 | **NUEVO-9** *(abierto por la Fase 22, 08-27)* | El `config_hash` del manifiesto del ZIP (`_AUDIT_KEYS`) ignora `base_density`, `density_min` y `density_max`: dos corridas con roca caja distinta salen con el **mismo hash de auditoría**. Hay dos listas paralelas que sincronizar | `export_service.py:612`, `reporting/report_generator.py` |
-| **H-20** | El updater apunta a `github.com/TerraQuantum/terraquantum`; el remoto real es `Martincancino/TerraQuantum-Engine`. No hay workflow de releases ni llamada a `download_and_install`. El fallo se le presenta al usuario como si fuera falta de internet | `src-tauri/tauri.conf.json:34`, `lib.rs:975` |
-| **NUEVO-4** | El `.spec` **traga la excepción**: `_safe_submodules` devuelve `[]` ante cualquier fallo y `build_desktop.ps1` nunca instala ni verifica `requirements.txt` ⇒ el instalador puede salir sin OMF y sin avisar | `terraquantum_backend.spec:21-25,54-55` |
+| ✅ **H-20** *(cerrado por la Fase 28, 09-06)* | El endpoint apunta al remoto real y el aviso distingue **cinco** desenlaces con causa y acción propias, no el único alcanzable de antes. **Y la ficha se quedaba corta en dos sitios:** `TerraQuantum/terraquantum` no es un repositorio «inexistente» — `api.github.com/users/TerraQuantum` da **200** y es la cuenta de un **tercero real** (id 90737998); y el 404 llegaba al código como `ReleaseNotFound`, **perfectamente distinguible** de un fallo de red (`updater.rs:483-530`: un status no exitoso no guarda error), así que la información para no mentir ya estaba ahí y se tiraba. De propina, `check()` **no tenía tope de tiempo**: una red que acepta y calla dejaba la ventana en «Consultando…» para siempre, que es H-17 en otra ventana | `src-tauri/tauri.conf.json:34`, `lib.rs:952-1010` |
+| ✅ **NUEVO-4** *(cerrado por la Fase 27, 09-03)* | El `.spec` recolectaba `[]` y seguía ⇒ el instalador salía sin OMF sin avisar. **Y la ficha señalaba el mecanismo equivocado:** `collect_submodules` **no lanza** cuando el paquete falta (`return []` con log DEBUG que `--log-level WARN` no imprime), así que propagar la excepción —lo que pedía el plan— no habría cambiado nada. Se comprueba el RESULTADO, y en **dos** formas: `[]` y `[pkg]` a secas. Medido con `omf` ausente: HEAD **no aborta** y empaqueta `['omf']` con **0 submódulos** (sanos son 10); ahora **exit 1 en 10 s** con el comando real. De propina: `email_validator` llevaba años recolectando `[]` sin estar instalado ni usarse, y los **121 submódulos de la app** dependían del *cwd* | `terraquantum_backend.spec` |
 | **H-39** | Los kernels de **MVI y tensor siguen ignorando `near_field_mode='prism'`** y usan siempre dipolo. La auditoría lo marca `[HECHO]`: ahí significaba «leído», no «arreglado» | `exploration/magnetometry.py` |
 | **H-34** | **Turbo sobrevive en la leyenda** de `MultiPhysicsControls`, describiendo colores que ya nadie pinta. Peor que antes: ahora la leyenda miente sobre lo que se ve | `componentes/.../MultiPhysicsControls.tsx:32,335` |
-| **H-23** | Sin lockfile con hashes, y `build_desktop.ps1` nunca compara el intérprete con `.python-version`. (Lo bueno: **0 dependencias sin techo**, eran 7; PyInstaller pineado; `.python-version` declarado y consumido por la CI) | `requirements.txt`, `scripts/build_desktop.ps1` |
-| **NUEVO-5** | `six`, transitiva de `omf`, quedó **sin pin** — el propio comentario nombra cuatro y pinea tres | `requirements.txt:111-113` |
+| ✅ **H-23** *(cerrado por la Fase 27, 09-03)* | Ya hay lockfile: `requirements.lock`, **105 paquetes** con el sha256 de **todos** los ficheros de cada versión, instalado con `--require-hashes` en la CI y comprobado en el build. Generado **sin dependencias nuevas** (`scripts/ci/gen_lockfile.py`, sólo stdlib) porque `pip-compile` habría exigido permiso. Verificado en Windows **y** Linux —conjunto idéntico, cero marcadores— y con control negativo (hashes corrompidos ⇒ pip rechaza). El intérprete ya se **resuelve** desde `.python-version` en vez de tomar el `python` del PATH, que aquí es 3.11.9 **sin los 105 paquetes** | `requirements.lock`, `scripts/build_desktop.ps1` |
+| ✅ **NUEVO-5** *(cerrado por la Fase 27, 09-03)* | `six==1.17.0` pineada. La declaran `omf` (**sin especificador ninguno**) y `properties` (`>=1.7.3`). Además se añadió el invariante que faltaba: un test lee las dependencias de `omf` de sus metadatos y exige que **las cuatro** estén pineadas, para que la lista del comentario no vuelva a desincronizarse del código | `requirements.txt` |
 | **NUEVO-6** | Tauri sirve en el **primer puerto libre 3000..3011** ⇒ `localStorage` se pierde solo, incluidas las preferencias y la clave del copiloto | `src-tauri/src/lib.rs` |
 | **NUEVO-7** *(medido por la Fase 16, 08-24)* | El plan de mapeo publica `suggestions` —qué columna va en cada rol, deducido del RANGO de los valores— y **ningún `.tsx` la lee**: 0 consumidores. La UI abre el paso de mapeo (`PrepEnrichPanel.tsx:324` sí reacciona a `needsMapping`) pero muestra una lista de columnas desnuda mientras el backend ya sabe cuál es cuál. Desde Python sí se ve. Familia **H-10**; el guard de la Fase 9 no lo caza porque mide **rutas y componentes**, no **campos de una respuesta** | `types/backend-contracts.generated.ts:210` |
 
@@ -2145,7 +2176,7 @@ proyecto prohíbe backend y frontend en la misma fase.
 
 ---
 
-### FASE 27 — El instalador falla en voz alta cuando falta una dependencia · **M** · 🟡 P2 · *empaque* · NUEVO-4, NUEVO-5, H-23
+### FASE 27 (CERRADA) — El instalador falla en voz alta cuando falta una dependencia · **M** · 🟡 P2 · *empaque* · NUEVO-4, NUEVO-5, H-23
 
 **Por qué va aquí.** La Fase 2 hizo que el **arranque** fallara en voz alta. El
 **build** todavía falla en silencio. No es hipotético: en esta máquina el
@@ -2164,9 +2195,150 @@ proyecto prohíbe backend y frontend en la misma fase.
 **Gate.** Construir con una dependencia deliberadamente ausente y exigir que el
 build **falle**. Hoy pasa y produce un instalador roto.
 
+#### ✅ EJECUTADA — 2026-09-03
+
+Empaque puro. **NUEVO-4, NUEVO-5 y H-23 cerrados.** El frontend no se tocó y el
+código de la aplicación tampoco: los cambios son el `.spec`, el script de build,
+`requirements.txt`, un lockfile nuevo, dos scripts de CI y la CI.
+
+**El punto 1 del plan, tal como está escrito, no habría arreglado nada.** La
+ficha de NUEVO-4 culpa al `except Exception` del `.spec` («traga la excepción»).
+Medido contra el código: **no hay excepción que tragar**. `collect_submodules`
+devuelve `[]` por su cuenta cuando el paquete falta —está en su propio fuente,
+`if not is_package(pkg): … return []`— y sólo deja un log de nivel **DEBUG**, que
+el `--log-level WARN` del build ni siquiera imprime. Los tres modos de fallo,
+medidos uno a uno:
+
+| situación del paquete | qué hace `collect_submodules` |
+|---|---|
+| ausente del entorno | **devuelve `[]`** — no lanza |
+| presente pero roto | **devuelve `[]`** — no lanza |
+| presente y no escaneable | **devuelve `[pkg]`** — no lanza |
+
+Hacer que `_safe_submodules` propagara la excepción habría dejado el defecto
+exactamente donde estaba. Lo que defiende es comprobar el **resultado**, y hay
+que cubrir **dos** formas de fallo, no una: `[]` y `[pkg]` a secas.
+
+**La medida ANTES/DESPUÉS, mismo entorno (`omf` bloqueado en `sys.meta_path`):**
+
+| | aborta | `hiddenimports` | de `omf` |
+|---|---|---:|---:|
+| spec de HEAD | **NO** | 1.481 | **1** (`['omf']`, cero submódulos) |
+| spec de la Fase 27 | **SÍ** | — | — |
+
+Con `omf` sano son **10** submódulos (`omf.base`, `omf.data`, `omf.fileio`…).
+El instalador salía con el nombre del paquete y sin nada dentro.
+
+**GATE PASADO, con el comando real.** No con un arnés:
+`py -3.14 -m PyInstaller terraquantum_backend.spec --noconfirm --log-level WARN`
+con `omf` ausente ⇒ **exit 1 en 10 s**, con el paquete, el intérprete y el comando
+de arreglo en el mensaje. Antes ese mismo comando seguía hasta producir el exe.
+
+**El intérprete (H-23).** `build_desktop.ps1` llamaba a `python` a secas y nunca
+lo comparaba con `.python-version`. Confirmado en esta máquina: el `python` del
+PATH es **3.11.9 y no tiene numpy, ni scipy, ni omf — le faltan los 105
+paquetes**; `py -3.14` los tiene. Ahora el script **resuelve** el intérprete que
+declara `.python-version` (medido: elige `py -3.14`, y si el fichero dijera
+`3.11.9` elegiría `py -3.11`), aborta si el mayor.menor no coincide y avisa si
+sólo difiere el parche.
+
+**El lockfile (H-23).** `requirements.lock`: **105 paquetes** pineados exactos con
+el sha256 de **todos** los ficheros publicados de cada versión, instalable con
+`--require-hashes` en la CI y en el build. Se generó **sin instalar nada nuevo**:
+el plan pedía `pip-compile` (pip-tools), que es una dependencia y la regla del
+proyecto exige permiso; `scripts/ci/gen_lockfile.py` hace lo mismo con la
+biblioteca estándar (pip resuelve en `--dry-run`, PyPI aporta los hashes).
+
+Verificado, no supuesto:
+- instala en **Windows/cp314** y en **Linux/manylinux/cp314** — el conjunto
+  resuelto es **idéntico en las dos** (105 paquetes, mismas versiones, cero
+  diferencias), así que el lock no necesita marcadores de entorno;
+- **control negativo**: con los hashes de `six` corrompidos, pip **rechaza** con
+  *«THESE PACKAGES DO NOT MATCH THE HASHES»* y exit 1. Ojo con el primer intento
+  —corrompí **uno** de los dos hashes y pip usó legítimamente el otro fichero y
+  salió en verde: el control sólo vale corrompiendo **todos** los de un paquete.
+
+**NUEVO-5.** `six==1.17.0` pineada. Lo declaran `omf` (**sin ningún
+especificador**) y `properties` (`>=1.7.3`). Y se añade el invariante que faltaba:
+un test lee las dependencias de `omf` desde sus metadatos y exige que **las
+cuatro** estén pineadas, para que la lista del comentario no vuelva a
+desincronizarse del código.
+
+**Un hallazgo de propina que prueba que el mecanismo ya escondía algo.**
+`email_validator` llevaba en la lista de recolección del `.spec` **sin estar
+instalado, sin estar en `requirements.txt` y sin un solo `EmailStr` en el
+backend**. Aportaba `[]` en cada build desde la Fase 7 y nadie se enteró — que es
+literalmente el defecto que esta fase cierra. Retirado.
+
+**Y un defecto de la misma familia que nadie había mirado:** los siete paquetes
+**de la propia aplicación** (`api`, `services`, `core`…) sólo se recolectan si su
+carpeta está en `sys.path`, cosa que dependía del *cwd* del build. Lanzado desde
+otro directorio, el exe salía sin los **121 submódulos de la app** — en silencio,
+igual que todo lo demás. El spec ahora ancla `SPECPATH`.
+
+**Verificado por mutación (la pregunta 4). 17/17.** 17 mutaciones sobre los cinco
+artefactos —reponer el `return []`, quitar la guarda de `[pkg]`, no mirar los
+data files, no mirar el IGRF, no comprobar la instalación, reponer
+`email_validator`, quitar el pin de `six`, mover el núcleo numérico, dejar un
+paquete sin hash, perder un requisito del lock, volver a `python -m PyInstaller`,
+dejar de comprobar el entorno, detectar el intérprete y no abortar, y cuatro
+sobre las decisiones del comprobador— todas **rojas**, restauración verificada
+por hash.
+
+**Y el gate se cazó a sí mismo un agujero, que es el motivo de tener el gate.**
+La mutación «que una dependencia ausente deje de ser fatal» salió **VERDE** en la
+primera pasada: los tests probaban la función que **clasifica** y ninguno probaba
+la **decisión** —el código de salida, que es lo único que el build mira—, porque
+en esta máquina no falta nada y esa rama no se ejecutaba nunca. Se añadieron
+`--lock`/`--requirements` al comprobador para poder ejercitarla contra un lock
+preparado. Una segunda mutación («que un lock inexistente pase por bueno»)
+también escapó: seguía abortando, pero con un *traceback* en vez del aviso con el
+comando de arreglo. Las dos están cazadas ahora.
+
+**Errata del expediente, medida de paso.** La ficha de NUEVO-4 dice que
+`build_desktop.ps1` «nunca instala ni verifica `requirements.txt`». Cierto, pero
+lo relevante es lo otro: aunque lo verificara, el `.spec` habría seguido
+recolectando en silencio. El defecto vivía en el `.spec`, no en el script.
+
+**Una puerta de CI que llevaba en rojo desde la Fase 26.** Al medir el gate salió
+que `tests/test_fase5_superficie_config.py` fallaba en `main`: la Fase 26 añadió
+`TQ_BENCH_SEEDS` (`tests/seed_sweep.py`) y no la declaró en el inventario de
+superficie de configuración. Declarada aquí. Es la tercera vez que aparece este
+patrón (Fase 3, Fase 15).
+
+**Lo que NO se hizo, y por qué.** (1) El script **no instala** dependencias por su
+cuenta: comprueba y aborta con el comando exacto, y sólo instala con
+`-InstallDeps`. Un script de build que modifica en silencio el Python del usuario
+es justo lo que la regla del proyecto prohíbe. (2) No se corrió un build completo
+del instalador: el gate es el caso de FALLO y ése sí se corrió con el comando
+real; del camino sano se verificó que el spec evalúa entero con los recolectores
+de verdad (1.481 *hiddenimports*) y que PyInstaller resuelve los **1.343** data
+files sin ninguna fuente inexistente, con el IGRF en el mismo destino que antes.
+
+**Riesgo abierto — NUEVO-11.** El lock es **reproducible**, pero no es el entorno
+donde se validó la física. Medido: **37 de los 105** paquetes están instalados
+aquí en otra versión —entre ellos `protobuf 5.29.6` frente a `6.33.6` (un major),
+`cryptography 46.0.7` frente a `50.0.1` (cuatro) y `zarr 3.2.1` frente a `3.3.0`—
+y `pip check` señala una incoherencia ya existente (`google-cloud-storage 3.10.1`
+pide `google-api-core>=2.27.0`, hay 2.25.2). Ninguno es del núcleo numérico
+(`numpy`/`scipy`/`pyproj`/`polars` coinciden exactos, y un test lo vigila), así
+que la física no se mueve. Esto **no empeora** nada —la CI ya resolvía fresco en
+cada corrida, que es como `zarr` derivó— pero cuantifica por primera vez el
+«riesgo residual medido» que `docs/06` declaraba sin número. Reconciliarlo exige
+instalar dependencias, que necesita permiso expreso; por eso el comprobador trata
+la ausencia como **fatal** y la deriva dentro de rango como **aviso**.
+
+**Riesgo abierto — NUEVO-12.** El mismo defecto que esta fase cierra en el build
+sigue vivo en `check.ps1`, la puerta que se corre **antes del push**: llama a
+`python` a secas. Medido con el `python` del PATH (3.11.9), `deps_closure.py`
+sale **exit 1** por falta de metadatos — una **falsa alarma**, que es la forma más
+rápida de que un gate acabe desactivado. No se toca aquí porque el plan acota la
+Fase 27 al `.spec`, a `build_desktop.ps1`, al lock y a `six`; el arreglo es el
+mismo patrón de resolución de intérprete y cabe en la Fase 29.
+
 ---
 
-### FASE 28 — El updater: o apunta bien, o se retira · **M** · 🟡 P2 · *empaque* · H-20
+### FASE 28 (CERRADA) — El updater: o apunta bien, o se retira · **M** · 🟡 P2 · *empaque* · H-20
 
 **Por qué va aquí.** Hoy es un mecanismo de papel con un agravante: el mensaje de
 error le sugiere al usuario que quizá no tiene internet, cuando la causa real es
@@ -2185,9 +2357,152 @@ falla es peor que no ofrecerla.
 —al día / hay versión nueva / no se pudo comprobar— y no confunde el tercero con
 los otros dos.
 
+#### ✅ EJECUTADA — 2026-09-06
+
+Empaque puro. **H-20 cerrado.** El backend no se tocó; los cambios son el shell
+de Tauri (`lib.rs`, `tauri.conf.json`, `splash/index.html`), un gate nuevo, un
+generador de manifiestos, el workflow de release, la CI y `check.ps1`.
+
+**El gate del plan ya pasaba antes de tocar nada, y el defecto era real.** Pedía
+que el aviso «distinga tres estados y no confunda el tercero con los otros dos».
+Medido contra HEAD: el payload de error llevaba `state:"error"`, distinto de
+`"current"` y `"available"`. Literalmente, verde. Lo que fallaba era otra cosa:
+**dos de los tres estados eran INALCANZABLES y el único alcanzable mentía sobre
+su causa.** Es la cuarta fase seguida en la que el listón del plan mide algo más
+pequeño que el defecto.
+
+**Las dos erratas de la ficha, medidas.** (1) H-20 dice «repositorio
+inexistente». `api.github.com/users/TerraQuantum` devuelve **200**: es la cuenta
+de un **tercero real** (id 90737998). Lo que impedía que un release ajeno se
+instalara no era la URL sino la **firma minisign** — la defensa funcionando como
+se diseñó. (2) La ficha da a entender que el fallo es indistinguible de la falta
+de red. No lo es: `updater.rs:483-530` muestra que un status no exitoso **no
+guarda error** y termina en `Error::ReleaseNotFound`, mientras la falta de red da
+`Error::Reqwest`. **La información para no mentir ya estaba ahí y se tiraba.**
+
+**Lo que veía el usuario, reconstruido literalmente** (internet sano, HTTP 404):
+
+> «No se pudo comprobar si hay actualizaciones.» / «*Could not fetch a valid
+> release JSON from the remote*. Si no tienes internet es lo esperable…»
+
+El `Display` del crate **en inglés**, incrustado en una frase en español, con una
+atribución de causa falsa. `docs/02` §4.1 exige «error en español del catálogo
+con acción sugerida»: fallaban las tres cosas.
+
+**Lo medido el 2026-09-05**, que es lo que decide la fase:
+
+| consulta | resultado |
+|---|---|
+| endpoint que había (`TerraQuantum/terraquantum`) | **HTTP 404** |
+| endpoint del remoto real | **HTTP 404** |
+| `api.github.com/repos/Martincancino/TerraQuantum-Engine` | **404** sin autenticar… |
+| `git ls-remote --heads origin` | …pero **sí** lista `main` ⇒ el repo **existe y es PRIVADO** |
+| `git ls-remote --tags origin` | **vacío** ⇒ cero releases |
+| `api.github.com/users/Martincancino/repos` | **`[]`** ⇒ cero repos públicos |
+
+**Por eso la opción 1 del plan, tal como está escrita, no se puede ejecutar.**
+«Corregir el endpoint al remoto real y publicar `latest.json`» no habría cambiado
+NADA observable: los *assets* de un repositorio privado no son descargables sin
+autenticación y el updater consulta sin credenciales, así que el 404 seguiría
+igual para todos los usuarios **después** de publicar. Y la opción 2 —retirarlo—
+habría destruido el trabajo de la Fase 2 y dejado el gate sin sujeto.
+
+**Lo que se hizo, que es la opción 3 llevada hasta el final:** el endpoint deja
+de apuntar a un tercero, y el aviso pasa de tres estados (uno alcanzable) a
+**cinco desenlaces** con causa, código y acción propios —
+`UPDATE_DISPONIBLE`, `UPDATE_AL_DIA`, `UPDATE_SIN_PUBLICAR`, `UPDATE_SIN_RED`,
+`UPDATE_MAL_CONFIGURADO`. El estado honesto de hoy es `UPDATE_SIN_PUBLICAR`:
+«todavía no se ha publicado ninguna versión», y **tiene prohibido mencionar
+internet** porque el servidor acaba de contestar. Hay un test que lo exige.
+Los avisos llevan ahora `hint` y `code`, como los errores de arranque desde H-17.
+
+**Un defecto de la misma familia, encontrado al medir: `check()` no tenía tope de
+tiempo.** La ruta Rust nunca llama a `.timeout()` y reqwest no pone ninguno por
+defecto, así que una red que acepta la conexión y luego calla dejaba la ventana
+en «Consultando…» **para siempre**. Es H-17 —el splash infinito— en otra ventana,
+un año después y en otro fichero. Tope de 15 s.
+
+**Y una puerta que no corría, la cuarta vez que aparece el patrón.** Los **9
+tests de Rust** que defienden H-17/H-19/H-21 desde la Fase 2 **no los ejecutaba
+nadie**: `ci.yml` no tenía un solo paso de `cargo` y `check.ps1` tampoco. Nueve
+tests escritos como gate y corridos por ninguna puerta durante 26 días — la
+variante más silenciosa de H-22, porque aquí ni siquiera había una salida que
+alguien pudiera malinterpretar. Añadidos el job `desktop-shell` a la CI y el paso
+`[1b/4]` a `check.ps1`. (Fases 3, 15 y 27 encontraron lo mismo en otras puertas.)
+
+**GATE PASADO.** `scripts/f28_gate_updater.ps1` — **13 comprobaciones + 1
+medición, exit 0**: el endpoint es nuestro, https y termina en `latest.json`; la
+sonda de red mide el estado real de hoy (**HTTP 404 ⇒ `UPDATE_SIN_PUBLICAR`**,
+que es la verdad); los **19** tests del shell (9 heredados + 10 de esta fase); y
+el generador de manifiestos real contra el contrato del plugin, **con tres
+controles negativos** (sin `windows-x86_64`, versión que no es semver completo, y
+firma vacía).
+
+**Verificado por mutación (la pregunta 4). 12/12** sobre los tres artefactos que
+deciden: reponer el endpoint del tercero, pasarlo a `http`, volver a colapsar el
+404 en falta de red, borrar la rama de transporte, hacer que la mala
+configuración se disfrace de red, volver a culpar a internet cuando el servidor
+sí contestó, dejar un desenlace sin acción, dar el mismo código a dos
+desenlaces, prometer que se instala solo, quitar el tope de tiempo, y dos sobre
+el validador del manifiesto. Todas **rojas**, restauración verificada por hash.
+
+**Y el gate se cazó TRES agujeros a sí mismo, que es el motivo de tenerlo.**
+En la primera pasada escapaban **2 de 12**, y la corrección destapó la tercera:
+
+1. y 2. **Los dos guards que leen la FUENTE con `include_str!` se satisfacían
+   con el literal de su propia aserción.** Buscaban `"E::Reqwest(_) | …"` y
+   `".timeout(UPDATE_CHECK_TIMEOUT)"` en el fichero **entero** — y esos textos
+   aparecen también dentro del `assert!`, así que **borrar el código real los
+   dejaba VERDES**. Es la patología que ya destapó la Fase 14 («mi propio guard
+   era inerte»). Arreglado recortando la fuente al trozo anterior a
+   `#[cfg(test)]`. Con eso las dos mutaciones pasan a rojo.
+3. **Los controles negativos del generador aceptaban un *traceback* como
+   rechazo.** Exigían sólo `exit != 0`, y al anular la comprobación de
+   plataforma el validador seguía saliendo distinto de cero… con un `KeyError`.
+   Peor: al endurecerlos salió que **los tres llevaban pasando por un traceback
+   desde el principio**, porque `Set-Content -Encoding utf8` de PowerShell 5.1
+   escribe **BOM** y `json.loads` reventaba en la primera columna. Es decir: los
+   controles negativos **nunca habían ejercitado la validación**. Ahora se exige
+   el **diagnóstico** y la ausencia de traceback, el gate escribe sin BOM y el
+   generador lee con `utf-8-sig`. Mismo escape que se cazó en la Fase 27.
+
+**Lo que el gate NO observa, y por qué.** No pilota la ventana recorriendo los
+cinco desenlaces. `Updater::check()` exige un `AppHandle`, y construirlo en un
+test obliga a activar la feature `test` del crate `tauri` — una dependencia que
+la regla del proyecto no permite tomar sin permiso. Lo no cubierto es el tramo
+«el crate devuelve X» → «nuestra función recibe X»; está medido **por lectura**
+(`updater.rs:483-530`, citado dentro de `outcome_of_error`) y la comprobación
+manual equivalente está escrita en `docs/04` §6.1. Se dice en vez de disimularlo.
+
+**Dos detalles del crate que decidieron el diseño del manifiesto.** (1) La clave
+de plataforma tiene que ser **`windows-x86_64` a secas**: `get_urls` sólo prueba
+la variante `-nsis` cuando el binario lleva marcador de bundle, y el `app.exe` de
+`cargo` no lo lleva (medido: `__TAURI_BUNDLE_TYPE_VAR_UNK`), así que un manifiesto
+sólo con `-nsis` funcionaría en el instalador y fallaría en desarrollo. (2)
+`get_urls` corre **ANTES** de comparar versiones, así que un manifiesto sin
+nuestra plataforma no da «ya estás al día» sino `TargetsNotFound`.
+
+**Riesgo abierto — NUEVO-13.** El repositorio es **privado**. Mientras lo sea, el
+updater dará 404 a todos los usuarios aunque el workflow publique correctamente.
+Las salidas son hacer público el repo, crear un repo público sólo de releases, o
+alojar el manifiesto en un servidor propio. **Ninguna es técnica: es una decisión
+de negocio** y no se toma sin el usuario. `release.yml` lo dice en su cabecera.
+
+**Riesgo abierto — NUEVO-14.** Deriva de versión: hay tags **locales** `v0.2.0` y
+`v0.4.0`, `tauri.conf.json` declara `0.2.0`, y el remoto no tiene **ningún** tag.
+El workflow aborta si el tag y la config no coinciden, pero la deriva es de hoy.
+
+**Lo que NO se hizo, y por qué.** (1) No se cableó `download_and_install`: sigue
+sin haber ningún release contra el que probarlo, y prometer un camino que no se
+puede ejercitar es exactamente lo que H-20 denunció. El texto de
+`UPDATE_DISPONIBLE` dice explícitamente que la instalación es manual, y hay un
+test que lo exige. (2) No se re-añadió `updater:default` a la capability: desde
+la Fase 2 lo conduce Rust, y la superficie desde el webview sobra. (3) No se
+corrió el workflow de release: exige secretos que sólo puede crear el usuario.
+
 ---
 
-### FASE 29 — Terminar la revisión que el límite de sesión cortó · **M** · 🟡 P2 · *auditoría*
+### FASE 29 (CERRADA) — Terminar la revisión que el límite de sesión cortó · **M** · 🟡 P2 · *auditoría*
 
 **Por qué va al final.** Ninguna fase anterior depende de ello. Pero hasta
 cerrarla, la respuesta a «¿está todo listo?» tiene un margen sin cuantificar.
@@ -2197,6 +2512,13 @@ cerrarla, la respuesta a «¿está todo listo?» tiene un margen sin cuantificar
    si se rompe lo que dice defender?* Esta patología ya apareció **dos veces** en
    este repositorio (Fase 3: un gate de física que pasaba con el bug dentro;
    Fase 6: un guard que se anulaba a sí mismo).
+   **Añadir un patrón concreto a buscar, aportado por las Fases 14 y 28: el
+   guard que lee la FUENTE y se satisface con el literal de su propia
+   aserción.** En la Fase 28 escapaban así **dos de doce** mutaciones hasta que
+   se recortó la fuente al trozo anterior a `#[cfg(test)]`. Cualquier guard que
+   use `include_str!`, AST o `grep` sobre su propio fichero es sospechoso.
+   **Y antes que nada, comprobar que la puerta CORRE:** los 9 tests de Rust del
+   shell no los ejecutaba ni la CI ni `check.ps1` (Fase 28).
 2. Correr la suite completa **con `py -3.14`** y publicar números reales:
    cuántos pasan, cuántos se saltan, y qué defiende lo que se salta.
 3. Los dos hallazgos numéricos nunca medidos: el **operador de suavidad de 4º
@@ -2208,40 +2530,387 @@ cerrarla, la respuesta a «¿está todo listo?» tiene un margen sin cuantificar
 **Gate.** Cada fila de §1.3 con fecha de re-medición y `ruta:línea`. Una fila sin
 evidencia no cuenta como verificada.
 
----
 
-### FASE 30 — Subir el techo a `HIGH` · **M** · 🟡 P2 · *backend* · ⚠️ **CONDICIONADA A LA FASE 26**
+### ✅ EJECUTADA — 2026-09-06
 
-**Por qué va la última, y por qué está condicionada.** La auditoría delta pone «recalibrar el
-checkerboard para desbloquear HIGH» como prioridad **2**. Tu propio hallazgo advierte por escrito que
-hacerlo en ese orden es un error:
-
-> «Subir el techo a `HIGH` sin arreglar antes lo del §1 **sería peor que el estado actual**. Hoy el
-> sistema no distingue bien de mal pero **tampoco afirma de más**. Si se libera el techo sin que la
-> señal discrimine, aparecerían `HIGH` en corridas de 285 m de error — el cuadrante **SOBRECONFIADO**,
-> que es el único inaceptable. **El orden correcto es: primero que la señal informe, después subir el
-> techo.**»
-
-Hoy el techo **te está protegiendo**. Quitarlo antes de la Fase 26 convierte un suelo conservador en
-una mentira con sello de calidad.
-
-**Esta fase no se abre si la Fase 26 no cerró con una señal que discrimine.**
-**DESBLOQUEADA — 2026-09-03:** la Fase 26 cerró con **ρ = +0,8081** sobre las 75 corridas
-de confirmación (contra +0,073 de `chi2_red` —que en ese conjunto sale **−0,0675**— y
-+0,275 del tablero viejo) y con un discriminador DENTRO de régimen (ρ mediano **+0,7071**)
-donde `chi2_red` da −0,100. Lo que la Fase 30 tiene que quitar es una sola entrada:
-`high_hold_pending_fase30` en `build_reconciled_verdict`. Dos cosas medidas que hay que
-llevarse al gate de las ≥150 corridas: (a) `floor_mass_excess` caza **27 de 49** desplomes,
-no los 49 — subir el umbral de 1,0 a 0,5 cazaría 37 con 0 falsos positivos *en la muestra
-de 67*, pero deja el margen al peor caso sano en un 12 %; (b) 13 de 55 corridas cuyo examen
-«resuelve algo» tienen PR-AUC ≤ 0,186 y no se topan a LOW, casi todas en régimen profundo.
-
-**Trabajo.** Liberar el tope y recalibrar la escala completa contra el barrido de la Fase 26.
-
-**Gate.** Sobre **≥150 corridas**, el cuadrante SOBRECONFIADO (error grande + confianza alta) sigue
-en **0** — pero esta vez con `HIGH` alcanzable, así que ese 0 mide **honestidad** y no un techo.
+**Lo primero que midió esta fase fue a sí misma, y salió mal.** Se lanzaron **14
+verificadores en paralelo**, uno por fase, para levantar la anatomía de cada gate.
+**Los 14 murieron por límite de sesión** (`You've hit your session limit`), 1,15 M de
+tokens gastados y **cero** resultados aprovechables. Es exactamente lo que originó esta
+fase —«terminar la revisión que el límite de sesión cortó»— y ya había pasado dos veces
+en este repositorio: 26 de 32 agentes en la auditoría del 04-ago, 21 de 24 en la
+revisión de cierre del 23-ago. **Tres de tres.** El trabajo de abajo está hecho a mano,
+secuencial, que es como se cerraron las catorce fases anteriores. La lección, que
+conviene escribir para no volver a pagarla: *en este repositorio la delegación masiva no
+es una optimización, es un modo de fallo conocido.*
 
 ---
+
+#### 1. ¿Corre la puerta? — **152 pruebas escritas como gate que no ejecuta nadie**
+
+La Fase 28 pidió preguntar esto **antes** que la 4ª pregunta del gate. La respuesta es
+peor que la suya (9 tests de Rust), y está en `docs/06` §1.4.1 con su tabla. En corto:
+**56** tests bajo `scripts/validation/` (que `pytest.ini:2` declara en `testpaths` y por
+los que **ningún** paso de CI ni de `check.ps1` pasa), **57** recorridos de Playwright
+(`ci.yml` no menciona `playwright` en ningún job) y **39** tests marcados `slow` sin
+paso propio. Entre ellos, los gates de aceptación de las **Fases 11 y 14 al completo**
+(11 y 2 tests) y la mitad de recorrido de usuario de las Fases **1, 9, 10 y 13**.
+
+Hay un guard que existe justo para esto —`tests/test_fase3_ci_guards.py:214`— y **no lo
+ve**: sólo mira el marcador `validation`, y sólo dentro de `tests/`. Hace lo que dice;
+lo que dice es más estrecho que el problema.
+
+**Dos puertas más que no corren, y una que sí.**
+· `scripts/validation/f14_implicit_geology_experiment.py:333` —el instrumento que MIDE
+el criterio de aceptación de la Fase 14— **muere con `KeyError: 'CONTROL_geologia_falsa'`**:
+pide una clave que no existe (los brazos se llaman `CONTROL_falsa_suavidad` y
+`CONTROL_falsa_smallness`, `:264-265`). Medido corriéndolo con `--seeds 1`: hace **las
+nueve inversiones**, imprime la tabla pareada entera y revienta en la sección
+«VEREDICTO», **antes de escribir su JSON**. Hoy la medición de la Fase 14 no se puede
+reproducir.
+· `check.ps1` no puede pasar en la máquina de desarrollo: invoca `python`, que aquí es
+**3.11.9 sin numpy y sin pytest**. Es `NUEVO-12`, ya anotado por la Fase 27 — pero la
+ficha se quedaba corta: no es sólo que `deps_closure.py` dé falsa alarma, es que el paso
+`-Tests` **no puede ni arrancar** (`No module named pytest`).
+· La puerta de la Fase 2 **sí corre y está verde**: `cargo test --lib` → **19 tests,
+19 ok**, 2 min 21 s. Era el arreglo de la Fase 28 y aguanta.
+
+---
+
+#### 2. ¿Defiende la puerta? — **15 de 16 mutaciones cazadas**, y la que escapó es el hallazgo
+
+Arnés: `mutar.py` (en el scratchpad de la sesión, no se commitea). Para cada mutación:
+snapshot del fichero → línea base **verde exigida** → sustitución exacta y única →
+corrida del gate → restauración → **verificación SHA-256 byte a byte**, con aborto
+ruidoso si la restauración no es idéntica. Esa última comprobación no es paranoia: este
+repositorio vive en OneDrive y ya tiene documentada una reversión a media corrida
+(Fase 22). Las 16 restauraciones salieron byte-idénticas.
+
+La tabla completa está en `docs/06` §1.4.3. **La que escapó**: duplicar 155 líneas de
+`gravimetry.py` dentro de `magnetometry.py` **no puso rojo** el gate de la Fase 7. No es
+un fallo del arnés: `study_duplication.py:158-175` cuenta **huellas distintas**
+compartidas entre dos ficheros, no ocurrencias, y el bloque que copié **ya estaba
+compartido**. Repetida con un bloque no compartido, el gate se puso rojo. Es decir:
+**el criterio «< 40 ventanas» defiende contra duplicación nueva, no contra que la
+existente se multiplique.** Y el gate vigila **un** par: los tres peores de hoy son
+otros —`gravimetry↔geophysics_service` **72**, `gravity_import_api↔gravimetry` **67**,
+`gravity_import_api↔geophysics_service` **64**— y la duplicación de
+`api/gravity_import_api.py` **consigo mismo** (**102** ventanas) no la mira nadie: el
+baseline la guarda **vacía** (`"propio": {}`).
+
+**El patrón que la Fase 28 pidió buscar —el guard que se satisface con el literal de su
+propia aserción— no aparece confirmado en ninguno de los 29 ficheros de `tests/` que
+leen código fuente.** Los dos que más se acercan ya se defienden a propósito y lo
+explican con la medición (`test_fase6_limpieza_verificada.py:52` y `:417-431`). Sí hay
+**un agujero latente y hoy vacío**: `test_fase9_camino_de_usuario.py:36` mete `"e2e"` en
+`_WEB_SCAN_DIRS`, de modo que una ruta cuyo único consumidor sea un recorrido de
+Playwright contaría como «tiene camino de usuario» —y esos recorridos no los ejecuta
+nadie—. Medido: de las **64** rutas del backend, **0** dependen hoy de eso. Arreglo de
+coste cero: sacar `"e2e"` de la tupla, o volver a correr los recorridos.
+
+---
+
+#### 3. La suite completa con `py -3.14`: los números, y el que impide dar uno
+
+**Lo colectado, que ya es un hallazgo.** `pytest` con los `testpaths` que declara
+`pytest.ini:2` colecta **2.912** pruebas: **2.856** en `tests/` y **56** en
+`scripts/validation/`. La selección del job de PR (`pytest tests/ -m "not slow"`) toma
+**2.801** y deselecciona **55**. O sea: entre lo que el `pytest.ini` declara y lo que la
+CI ejecuta hay **111** pruebas de diferencia, y de ellas 95 no las recoge ningún otro
+paso (§1.4.1 de `docs/06`).
+
+**Lo que la suite completa NO permite decir, y por qué.** No se puede publicar «pasan N,
+se saltan M» de la suite entera, porque **la suite entera no termina**: se lanzó y a la
+1 h 45 min seguía dentro de **un solo test**, `tests/test_doi_calibration.py::test_doi_within_physical_range`,
+al **9 %** de progreso. Lanzado en solitario y con `--log-cli-level=INFO` para ver dónde
+estaba, a los 45 min seguía en su **primera** inversión. El log dice por qué: el caso
+declara un núcleo de 10×8×10 (800 celdas) que **con el padding de producción** se
+convierte en `20×18×20 = 7.200`, de las que 5.142 entran al solver, y despacha a
+**TRF/bounded** sobre un sistema de 10.365×5.142 — tres veces, porque
+`compute_uncertainty=True` obliga al par de inversiones del índice DOI.
+**Ese test no lleva marca `slow`**, así que está dentro de la selección del job de PR,
+cuyo comentario en `ci.yml` afirma que el paso «cuesta del orden de la hora» para 2.256
+tests. Un solo test puede costar más que eso. Es `NUEVO-20`.
+
+**Lo que sí se midió — la corrida completa, con su número.** Deseleccionando **ese** test
+—y diciéndolo, que es la diferencia entre una medición y un truco— se corrió la selección
+equivalente a la del job de PR con `py -3.14`. Colecta **2.856**, desselecciona **56** (los
+55 `slow` más ése) y selecciona **2.800**. Resultado:
+
+> **2.796 pasados · 5 saltados · 0 fallos · 0 errores · 8.158 s = 2 h 15 min 58 s.**
+
+**Y el reparto de ese tiempo es el hallazgo, no el total.** Con `--durations=20`:
+**20 tests de 2.796 (el 0,7 %) consumen 5.646 s, el 69 % de la corrida**, y **ninguno de
+los veinte lleva marca `slow`**. Los cinco peores:
+
+| test | s |
+|---|---:|
+| `test_fase3_joint_coupling.py::test_joint_padding_with_pgi_coupling` | **636,9** |
+| `test_fase8_3_wiring.py::test_uses_posterior_std_when_available` | **509,9** |
+| `test_project_run_flow.py::test_block_model_response_con_project_run` | **473,7** |
+| `test_project_run_flow.py::test_geophysics_flow_crea_archivos` | **434,3** |
+| `test_fase3_joint_coupling.py::test_joint_padding_runs_and_reduces_to_core` | **399,4** |
+
+Es decir: el paso «Suite de tests», cuyo comentario en `ci.yml` declara «del orden de la
+hora», **aquí cuesta 2 h 16 min y dos tercios de eso son veinte tests que ninguna marca
+separa**. En un runner de GitHub puede ir más rápido; lo que se afirma es lo medido aquí.
+El hallazgo no es la lentitud: es que **el marcador `slow` dejó de separar lo caro de lo
+barato**. El propio comentario de `ci.yml` ya lo sospechaba en agosto —«la marca `slow`
+dejó de separar nada hace tiempo»— y hoy tiene nombres propios y segundos.
+
+**Qué defiende lo que se salta — y la corrección que hay que hacerle a la pregunta.** Los
+saltos son **cinco, y ninguno es la física**:
+
+| skip | motivo declarado | qué defendería |
+|---|---|---|
+| `test_simpeg_comparison.py:27` | SimPEG no instalado | contraste del motor contra una implementación de referencia |
+| `test_field_data_complete_flow.py:325` | `discretize`/SimPEG no instalado | el mismo contraste sobre dato de campo |
+| `test_field_data_complete_flow.py:372` (×2) | exige `TQ_RUN_LARGE_FLOW=1` | el flujo completo en configuraciones medianas y grandes |
+| `test_f8_perf_budgets.py:83` | requiere navegador (Playwright) | presupuesto de render de 100k celdas a >30 fps |
+
+Los cuatro primeros dependen de una dependencia opcional o de una perilla; el quinto
+depende de **la puerta de Playwright, que §1.4.1 declara muerta**. Ninguno defiende física
+de producción.
+
+**Y aquí está la corrección.** La pregunta del plan —«qué defiende lo que se salta»— supone
+que lo excluido aparece como *skip*. **No aparece.** La regresión física F9 no está entre
+esos cinco: sus 8 tests `validation` llevan **también** `slow`, así que `-m "not slow"` los
+**deselecciona antes** de que el `skip` de `tests/conftest.py:11-21` llegue a actuar. Los
+cubre el nocturno y el gate `f9_gate_regression.py`, así que la exclusión es legítima —
+pero **es invisible**. Y lo mismo vale, sin cobertura ninguna, para los 39 `slow` huérfanos
+del §1.4.1. Ésa es la diferencia que importa: **un skip se cuenta, se imprime y se puede
+auditar; una deselección no aparece en ningún informe.** Esta corrida informa «5 saltados»
+y la verdad es que hay **56 deseleccionados**, de los cuales 39 no los ejecuta nadie en
+ninguna parte.
+
+---
+
+#### 3. ACAD-3 y ACAD-4: los dos hallazgos numéricos que el expediente declaró «nunca medidos»
+
+`docs/academic/00_INDICE.md` los lista con esa etiqueta literal, y
+`docs/academic/01_matematica.md` §9 escribe, para el primero: *«No se ha medido nunca la
+diferencia de resultado entre penalizar ‖Lm‖² y ‖∇m‖² sobre el mismo dato. **No existe
+ese experimento**»*. Ahora existe:
+`scripts/validation/f29_operador_suavidad.py` (declarado **diagnóstico** en `GATES.json`,
+no puerta: su respuesta puede ser legítimamente «no cambia nada» — y para ACAD-3 lo es).
+
+**El diseño, y por qué es un 2×2 y no dos experimentos.** Las dos preguntas son
+ortogonales, así que se cruzan: *orden* {4 = ‖L m‖², el de producción · 1 = ‖B m‖², el de
+Li & Oldenburg} × *frontera* {Dirichlet, la que emerge del recorte · Neumann, la diagonal
+recalculada}. Los cuatro operadores se derivan de **la misma `L_active` que arma el
+motor**, con álgebra exacta —`cortadas_i = −Σ_j L_active[i,j]` es el peso de las aristas
+hacia celdas muertas, y `B_dirichlet ᵀ B_dirichlet = −L_active` exactamente—, de modo que
+comparten kernel, σ, pesos, bounds y solver: lo único que cambia es el operador. Mundo: el
+dique inclinado a 60° de `tests/test_benchmark_dipping_dike.py`, anti-inverse-crime ×3
+(discrepancia fina-vs-gruesa **4,08 %** del pico frente a 2 % de ruido), semillas pareadas,
+`alpha_spatial = 1.0` (**el punto de producción**).
+
+**El control, que es lo que hace honesta la medición.** Si no hay celdas inactivas,
+`L_active == L_full`, sus filas suman cero y Dirichlet **es** Neumann. El experimento lo
+exige: en el mundo plano (2.016 celdas, `n_dead=0`, `max|Σfila| = 0.0`) los dos brazos
+salen **idénticos en las 5 métricas y en las 3 semillas, Δ = 0,000e+00 exacto**. Un arnés
+que «encontrara» diferencia ahí estaría midiendo ruido del solver.
+
+**ACAD-4 — la frontera de Dirichlet que nadie eligió: EL SESGO ES REAL, Y NO CUESTA
+TARGETING.** Mundo con topografía: 1.936 celdas activas, **48 en la frontera cortada**
+(2,5 %), `max|Σfila| = 1.0` (las filas dejan de sumar cero, como el expediente describe).
+Pareado, Dirichlet (producción) vs Neumann:
+
+| métrica | Dirichlet (hoy) | Neumann | Δ | semillas |
+|---|---:|---:|---:|---|
+| `abs_media_primera_banda` (amplitud media en la primera capa activa) | 0,0812 | **0,0838** | **+2,7 %** | Neumann mayor **3/3** |
+| `nitidez_contacto` | 0,0442 | **0,0444** | +3,2 % | Neumann mayor **3/3** |
+| `pearson_r` | **0,1729** | 0,1622 | −4,3 % | **Dirichlet mayor 3/3** |
+| `pr_auc` | 0,1629 | 0,1633 | +0,2 % | Neumann mayor 2/3 |
+| `iou@vol` | 0,1186 | 0,1186 | 0 | idénticas 2/3 |
+
+Leído en una frase: **la condición implícita SÍ aplana el modelo justo bajo la topografía,
+que es exactamente lo que el expediente temía, y el número es −2,7 % de amplitud en la
+banda superficial, consistente en 3 de 3 semillas. Pero no empeora la recuperación**: el
+PR-AUC es indistinguible y la correlación con la verdad es **mejor** con Dirichlet (3/3).
+O sea: es un sesgo medible con signo predicho, y en este mundo su precio es cero.
+
+**ACAD-3 — el operador de cuarto orden: NO se sostiene que sobre-suavice.** Pareado,
+orden 4 (producción) vs orden 1 (Li & Oldenburg), misma frontera:
+
+| métrica | mundo plano | mundo con topografía |
+|---|---|---|
+| `pr_auc` | orden 1 gana **2/3** (+2,1 %) | orden 1 gana **1/3** (orden 4 mejor) |
+| `iou@vol` | idéntico | orden 1 gana **2/3** |
+| `pearson_r` | orden 1 gana **1/3** | orden 1 gana **1/3** |
+| `nitidez_contacto` | orden 1 gana **0/3** ← el de **cuarto** orden es más nítido | orden 1 gana **3/3** |
+
+**Ningún criterio favorece al primer orden en los dos mundos, y el que la hipótesis
+señalaba —la nitidez del contacto— cambia de signo entre ellos: 0/3 en el plano, 3/3 con
+topografía.** La preocupación del expediente («penalizar la curvatura al cuadrado
+sobre-suaviza de forma perjudicial para localizar cuerpos compactos») **no se sostiene en
+el mundo plano**, donde el operador bi-armónico produce contactos *más* nítidos en las
+tres semillas. La respuesta a la Pregunta 1 del expediente es, por tanto, la útil de las
+dos que él mismo enumeraba: **no hay que gastar esfuerzo ahí.**
+
+**Límites de esta medición, dichos antes de que los pregunten.**
+(a) **3 semillas**, y en este repositorio está medido que el motor es **bimodal** frente al
+ruido (1 de cada 3 realizaciones se desvía 170 m con diagnósticos idénticos): tres
+semillas eligen una dirección, no fijan una cifra.
+(b) **Un solo α**, el de producción. El diseño pedía barrer λ por brazo —porque los cuatro
+operadores tienen normas distintas y a α fijo se compara la FUERZA del regularizador, no
+su FORMA—, y el barrido **no se corrió**: cada inversión cuesta ~65 s y el barrido
+completo son horas. Lo que aquí se responde es *«qué obtiene hoy el usuario»*, no *«cuál
+es el techo de cada operador»*. Se dice en vez de disimularlo.
+(c) **Una geometría** (dique a 60°) con dos topografías.
+(d) `media_primera_banda_sobre_dique` sale **NaN por construcción** en este mundo: el techo
+del dique está a 100 m y la primera capa activa a 15 m, así que ninguna celda de esa banda
+es dique. Se reporta NaN en vez de un cero que parecería un resultado.
+
+**Y un defecto del propio arnés, cazado antes de publicar.** La primera corrida midió
+sobre el vector completo, y **el motor devuelve `NaN` en las celdas de aire**: `np.sort`
+manda los NaN al final y corre el umbral de volumen, y `corrcoef` devuelve NaN entero — el
+mundo con topografía salía con `pearson_r = nan` y un IoU de 0,0636 que no significaba
+nada. Las métricas se recalcularon **sólo sobre el dominio activo**. Es el error que este
+repositorio tiene documentado cinco veces (medir una configuración y hablar de otra), esta
+vez detenido en el borde.
+
+**Un dato de propina que cambia el alcance de ACAD-4 y que no estaba escrito en ninguna
+parte.** El expediente presenta la frontera implícita como algo que aparece «con
+topografía o con poda». **Aparece siempre**: el padding de producción es incondicional
+(H-38) y **crea celdas de aire por encima de la superficie**. Medido sobre una corrida
+real de `run_geophysics_inversion` (`tests/test_doi_calibration.py`, núcleo 10×8×10 →
+malla con padding 20×18×20): **2.000 de 7.200 celdas (27,8 %) son aire** y 58 más mueren
+por sensibilidad. Es decir, la condición de Dirichlet que nadie eligió **está activa en
+todas las corridas del producto**, no sólo en las que declaran topografía — con un 27,8 %
+de frontera en vez del 2,5 % de este experimento.
+
+---
+
+#### 5. Estructura, complejidad, seguridad y listas de tolerancia (re-medidas)
+
+Todo con fecha y `ruta:línea` en la tabla §1.3 de `docs/06`. Los titulares:
+
+| Hallazgo | 2026-08-04 | 2026-09-06 |
+|---|---|---|
+| **H-3** estructura | 21 funciones = 26,4 % del código; `run_geophysics_inversion` 1.996 LOC / CC 201 | Esa función se partió, **pero el criterio de la Fase 8 no se cumple**: **8** funciones > 300 LOC, CC máx **181**, firma máx **39** args. Las 21 más largas = **13,7 %** de 56.714 LOC (122 ficheros, 1.121 funciones) |
+| **H-9** duplicación | 228 ventanas entre los dos motores | **20** (criterio < 40) — y el gate es ciego a los tres peores pares de hoy |
+| **H-15** escucha | `0.0.0.0` por defecto | **`127.0.0.1`** + aviso ruidoso si se expone sin auth (`core/config.py:152`, `main.py:126-134`) |
+| **H-16** frontend | 8 ficheros = 40,2 % de 28.327 LOC; `PrepPanel` con 41 `useState` | **34,1 %** de **37.366** LOC (creció 32 %); `useState` máximo **10**, bajo el techo de 12 |
+| **H-21** red | 3 llamadas directas navegador→backend | **0** (guard verde hoy) |
+| **H-35** capas | 41 % de `core/` es dominio | **0** — los tres ficheros viven en `services/`; `core/` = 11 ficheros, 1.881 LOC |
+
+**Listas de tolerancia** (ninguna ha crecido sin motivo escrito; se publican para que se
+pueda vigilar): `HUERFANOS_TOLERADOS` **4** · `SIMBOLOS_BORRADOS` **19** ·
+`CUBIERTOS_POR_EL_GATE_F9` **1** · `RUTAS_SIN_UI_TOLERADAS` **9** ·
+`PROXIES_SIN_LLAMADOR_TOLERADOS` **1** · `INYECCION_TOLERADA` **3** ·
+`CONTRATOS_AUN_A_MANO` **4** · `PERILLAS_ENTERRADAS` **5** ·
+`SOLO_SITIO_PERMITIDO` **1**.
+
+**Y un baseline que hay que mirar con la lista de tolerancia puesta:**
+`scripts/ci/ast_baseline.json` no vigila el criterio de la Fase 8 —vigila
+NO-REGRESIÓN—, así que **codifica como suelo aceptado** una CC de 181 y una firma de 39
+argumentos. Un gate que no puede empeorar tampoco obliga a mejorar; conviene decirlo en
+vez de leer su verde como «criterio cumplido». Y `duplication_baseline.json` va
+**desactualizado en tamaño** (115 ficheros / 18.518 ventanas frente a 121 / 20.718 de
+hoy) aunque el número que decide, el par de la Fase 7, sigue en 20.
+
+---
+
+#### 6. La tabla §1.3, re-escrita
+
+`docs/06_AUDITORIA_TECNICA_INTEGRAL.md` §1.3 se re-escribió entera: **39 filas** con **estado de hoy, fecha y `ruta:línea`**, y con el título corregido —decía «Los 8 hallazgos que importan» sobre una tabla de 39—. Recuento medido sobre las **41 filas** (39 hallazgos + 2 autocorrecciones): **26 ✅ CERRADO** · **8 🟡 PARCIAL** (mitigados, con el resto medido) · **5 🔴 VIVO** — H-3 (estructura), H-24 (traceback en el ZIP), H-30 (roca país fija en el frontend), H-38 (padding incondicional) y H-39 (MVI y tensor siempre dipolo) — · **2 ⬜ NO RE-MEDIDO** — H-26 (las cuatro formulaciones de regularización, sin fase dueña) y H-32 (su sitio original ya no existe; lo que hay hoy en `Scene3D.tsx` es otra cosa) —, declarados como tales en vez de heredar su estado anterior. Se añadió una sección nueva, **§1.4**, con el censo de puertas, la tabla de mutaciones y el rastreo del patrón de auto-satisfacción.
+
+**El gate de esta fase, medido sobre su propio entregable.** «Cada fila con fecha de re-medición y `ruta:línea`; una fila sin evidencia no cuenta como verificada.» De las 41: **36 con `ruta:línea`**, **3 cuya evidencia es una AUSENCIA** (H-6, H-7, H-31 — un fichero borrado no tiene línea; se declara así, y se dice además que ningún guard la sostiene) y **2 autocorrecciones del auditor**, cuya evidencia legítima es la sección de `docs/06` donde se argumentan. **0 filas heredadas** sin volver a mirarlas.
+
+---
+
+#### Lo que esta fase NO hizo, y por qué
+
+1. **No se corrieron los recorridos de Playwright.** Exigen `next build` + `next start` +
+   el backend en :8010 y un navegador instalado; es la puerta que §1.4.1 declara muerta,
+   y resucitarla es trabajo de una fase con dueño, no de una auditoría. Lo que sí se
+   hizo es **medir** que no corren y cuántas pruebas son.
+2. **No se tocó ningún gate para arreglarlo.** Los cinco agujeros que esta fase mide
+   —el `"e2e"` de `_WEB_SCAN_DIRS`, el marcador `slow` sin vigilante, `scripts/validation/`
+   fuera de toda puerta, el `KeyError` de la F14 y el conteo por huellas únicas de la
+   duplicación— quedan **anotados con su coordenada**, no parcheados. Una auditoría que
+   arregla lo que mide deja de poder decir qué encontró.
+3. **La historia de git de H-7 no se re-midió.** El árbol está limpio; purgar la historia
+   reescribe 189+ commits y es una decisión del usuario, no de una auditoría.
+4. **H-26 (cuatro funcionales de regularización) queda ⬜ NO RE-MEDIDO** y se dice: sigue
+   sin fase dueña.
+
+---
+
+### FASE 30 — Subir el techo a `HIGH` · **M** · 🟡 P2 · *backend* · ✅ **CERRADA 2026-09-06**
+
+**Lo que la ficha pedía, y por qué era decorativo.** La ficha decía: «lo que la Fase 30 tiene
+que quitar es una sola entrada: `high_hold_pending_fase30` en `build_reconciled_verdict`».
+Se midió eso **antes de tocar nada**, sobre las 75 corridas de confirmación de la Fase 26:
+
+| pregunta | respuesta medida |
+|---|---|
+| corridas cuyo **único** limitante es `high_hold_pending_fase30` | **0 de 75** |
+| corridas MEDIUM también capadas por `priority_class` | **44 de 44** |
+| ⇒ **veredictos que cambia quitar sólo el hold** | **0 de 75** |
+
+Ejecutar la ficha al pie de la letra habría dado el gate en verde —«0 corridas
+SOBRECONFIADAS»— con **0 corridas en `HIGH`**: un 0 que mide un techo, no honestidad. Es la
+**quinta** vez en este plan que el trabajo que pedía la ficha no era el defecto.
+
+**El techo eran TRES, y el declarado no era el que mandaba.**
+
+1. `high_hold_pending_fase30` — la retención honesta de la Fase 26. Inerte, como se ve arriba.
+2. **`priority_class`** — capaba a MEDIUM **las 44 de 44** corridas MEDIUM, sin distinguir
+   entre ellas: incluidas las de PR-AUC 1,000 y 11 m de error horizontal.
+3. **`favorability.score ≥ 65`**, el requisito de `priority_class` para llegar a HIGH. En la
+   MEJOR corrida del barrido (`depth_250m`, PR-AUC 1,000, error 11,3 m, con
+   `technicalSummary.overall_level = GOOD` y `uncertainty_score = 0,0`) el score sale **44,9
+   con los dos multiplicadores de calidad en 1,00**. El techo estaba en la aritmética de los
+   factores, y uno de ellos —`anomaly_intensity`, peso 0,25— está **invertido**: da 0,000 a
+   esa corrida y 1,000 a `worst_ldm_like` (PR-AUC 0,002, error 1.186 m).
+
+**Trabajo hecho.** Se retira la retención; `priority_class` **deja de topear** y pasa a
+publicarse con su papel y con el nivel que habría aportado (motivo semántico: mide atractivo
+de *targeting*, no confiabilidad, y ya venía multiplicado por la calidad ⇒ la contaba dos
+veces); y `HIGH` **deja de concederse por ausencia de defectos**: lo sella `_high_seal` con dos
+pruebas medidas — resolución por debajo del peldaño más grueso del examen, y
+`floor_mass_excess ≤ 0,5` (el número que el plan mandó traer, usado para **negar** el nivel
+superior y no para degradar a LOW, que es donde dejaba sólo 12 % de margen).
+
+Que retirar `priority_class` es seguro está **medido**: las 3 corridas que serían
+SOBRECONFIADAS si `HIGH` se soltara sin criterio (978,4 · 636,8 · 542,1 m) las cazan
+`survey_confidence` y `model_reliability` por su cuenta. No era quien protegía de la
+sobreconfianza: era quien impedía medirla.
+
+**Gate — PASADO sobre 150 corridas** (semillas frescas 310007 + 1009·i), con los tres
+criterios declarados antes de correr:
+
+* **G1 honestidad:** cuadrante SOBRECONFIADO = **0**.
+* **G2 alcanzabilidad:** `HIGH` en **36 de 150** = **24,0 %**. Sin este
+  criterio el gate se cumple sin que el cambio haga nada.
+* **G3 no regresión:** nada con `resolves_anywhere = False` ni con `is_floor_smear = True`
+  supera LOW.
+
+El peor `HIGH` de las 150 corridas se equivoca en **164,9 m**. **21**
+corridas habrían salido `HIGH` sin el sello, **9** de ellas con error > 200 m.
+
+**Mutación: 12 de 12 cazadas**, fichero restaurado con hash idéntico. Dos no son hipotéticas: **M11** es un defecto que esta fase **escribió y corrigió** (el techo afirmaba «el sello ya está superado» en corridas LOW donde el sello había fallado y no aparecía en `capped_by`), y **M7** es una rama del worst-of que llevaba desde la Fase 21 **sin ejecutarse nunca** —con el techo puesto el mínimo era siempre MEDIUM o menos— y que al abrirse publicaba «limitado por: …» en la corrida mejor calificada del sistema.
+
+Registro: `validation/PREREGISTRO_2026-09-06_fase30.md` (escrito antes de medir) y
+`validation/HALLAZGO_2026-09-06_techo_high.md`. Gate: `py -3.14 -m validation.exp_high_ceiling`.
+
+**Lo que NO hace, declarado:** no arregla `favorability` (**NUEVO-15**: `anomaly_intensity`
+invertido, `structural_gradient` y `msx_support` casi constantes; **NUEVO-16**: la Regla 3 de
+`compute_priority_class_from_report` lee `quality_label`, una clave que
+`compute_favorability_score` **no devuelve** — nunca se ha ejecutado). No toca el frontend
+(NUEVO-10 sigue abierto). Re-invirtió además las dos corridas de **dato real** del
+repositorio: LdM y San Nicolás salen **LOW las dos**, y ya salían LOW antes — las capa
+`is_floor_smear` (Fase 26), no nada de esta fase. Lo revelador es que `survey_confidence` y
+`model_reliability` dicen **HIGH** en ambas: sin el trabajo de la Fase 26 y con el techo
+levantado, las dos habrían salido `HIGH`. Pero San Nicolás es un benchmark **aprobado** y
+sale LOW (**NUEVO-17**, sin dueño). Y anota una **errata del barrido**: `baseline` y `depth_400m` son el
+mismo mundo con distinto id, así que los «15 regímenes» son **14 casos distintos** — afecta al
+conteo de la Fase 26, no a su ρ.
+
+---
+
 
 ## 6. LO QUE **NO** HAY QUE HACER
 
@@ -2253,8 +2922,10 @@ Tan importante como el plan: dónde no gastar las semanas.
 - **No implementar la sección económica.** NPV, LOM, pit y scheduling son
   **anti-scope permanente declarado** (H-8). Las tarjetas ya se borraron: que
   sigan borradas.
-- **No desbloquear `HIGH` antes de que la señal discrimine.** Esto cambió de
-  matiz el 26-ago: el techo **sí** se puede levantar algún día, pero no primero.
+- **No desbloquear `HIGH` antes de que la señal discrimine.** ✅ **RESUELTO por la
+  Fase 30 (06-sep), en el orden correcto.** Se conserva el razonamiento porque
+  la regla que deja es permanente: *el nivel superior no se concede por ausencia
+  de defectos, se sella con evidencia positiva*. Lo que sigue vigente:
   Hoy el checkerboard devuelve el mismo número siempre —por diseño, no por
   avería— y el worst-of lo usa de tope duro; eso **te está protegiendo**, porque
   1 de cada 3 corridas se desvía 170 m sin que ningún diagnóstico lo delate

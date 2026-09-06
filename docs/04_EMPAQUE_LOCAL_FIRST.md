@@ -38,6 +38,14 @@ El frontend **no se tocó** (respeta "iteraciones separadas"): el `next.config.t
 - Las 6 dependencias que usaban `>=` sin techo (`pyarrow`, `zarr`, `dask`, `PyWavelets`, `scikit-learn`, `scikit-image`) llevan **techo de major**, con la versión medida anotada al lado. *(`PyWavelets` ya no está: se eliminó el 2026-08-14 al cerrar la Fase 6 junto con `exploration/jacobian_wavelet.py`, su único importador. Quedan 5.)*
 - `tests/test_fase2_arranque.py::test_no_requirement_is_unbounded` convierte eso en invariante: una dependencia nueva sin techo rompe la suite.
 
+**El build falla en voz alta (Fase 27, NUEVO-4/NUEVO-5/H-23 — cierre de H-23).** Lo anterior fijaba *qué* se instala; faltaba comprobar que está. El `.spec` recolectaba `[]` ante cualquier fallo y seguía: el instalador podía salir **sin OMF** y el build terminaba en verde. Medido con `omf` ausente, el `.spec` de entonces empaquetaba `['omf']` —el nombre y **cero submódulos**, donde sanos son 10— sin decir nada. Y el mecanismo no era el que decía la ficha: `collect_submodules` **no lanza** cuando el paquete falta, devuelve `[]` con un log de nivel DEBUG que el `--log-level WARN` del build no imprime. Ahora:
+- `terraquantum_backend.spec` **aborta** si un paquete requerido no está instalado, si su recolección sale vacía o si sale sólo con el nombre del paquete, y si falta el fichero de coeficientes IGRF-14. Ancla `SPECPATH` en `sys.path`: los **121 submódulos de la aplicación** dependían del *cwd* del build.
+- `terraquantum-backend/requirements.lock` — **105 paquetes** pineados exactos con el sha256 de **todos** los ficheros publicados de cada versión. La CI instala con `--require-hashes`. Se genera con `py -3.14 scripts/ci/gen_lockfile.py` (sólo biblioteca estándar: `pip-compile` habría sido una dependencia nueva). Verificado en Windows y en Linux —el cierre resuelto es idéntico en ambos, así que no hacen falta marcadores de entorno— y con control negativo: hashes corrompidos ⇒ pip rechaza.
+- `scripts/build_desktop.ps1` **resuelve** el intérprete que declara `.python-version` en vez de usar el `python` del PATH (que en la máquina de desarrollo es 3.11.9 y no tiene ninguno de los 105 paquetes), aborta si el mayor.menor no coincide, y comprueba el entorno contra el lock con `scripts/ci/check_env_against_lock.py` antes de empaquetar. Con `-InstallDeps` instala el cierre verificado; por defecto **no instala nada**, sólo dice el comando exacto.
+- `tests/test_f27_build_guards.py` (41 tests) es el gate. Verificado por mutación 17/17.
+
+*Límite declarado:* el lock es reproducible, pero **37 de los 105** paquetes están instalados en la máquina de desarrollo en otra versión (`protobuf`, `cryptography`, `zarr`…). El núcleo numérico (`numpy`/`scipy`/`pyproj`/`polars`) sí coincide exacto y un test lo vigila, así que la física no se mueve; reconciliar el resto exige instalar dependencias. Por eso el comprobador trata la **ausencia** como fatal y la **deriva dentro de rango** como aviso.
+
 ---
 
 ## 2. Ubicación de datos (portabilidad)
@@ -102,9 +110,68 @@ Ninguna llamada de red está en la ruta crítica de inversión.
 
 - **Updater Tauri 2 configurado y firmado:** `tauri-plugin-updater` registrado; `bundle.createUpdaterArtifacts: true`; clave pública minisign en `plugins.updater.pubkey`; la **clave privada vive fuera del repo** (`~/.tauri/terraquantum_updater.key`) y firma los artefactos en el build (`TAURI_SIGNING_PRIVATE_KEY`). El manifiesto `latest.json` se publica en GitHub Releases = cero servidores que operar.
 - **Camino de consumo, cableado en la Fase 2 (H-20).** Hasta entonces el plugin estaba registrado pero **nadie llamaba a `check()`**: la firma funcionaba y el usuario no veía jamás un aviso. Ahora el menú **Ayuda → «Buscar actualizaciones…»** lo invoca desde Rust y muestra el resultado en una ventana de estado. Es **manual a propósito**: un producto cuya promesa es que los datos no salen de la máquina no debe hacer llamadas de red silenciosas al arrancar; la ventana lo dice explícitamente ("es la única función que usa internet").
-  - **Lo que está verificado:** que la comprobación se ejecuta y que un endpoint inalcanzable produce un mensaje honesto en español ("si no tienes internet es lo esperable"), no un silencio.
   - **Lo que NO está verificado (y por qué):** la instalación de una actualización real, porque **todavía no existe ningún release publicado** en el endpoint. El botón de descarga no se cableó: prometer un camino que no se puede probar sería repetir el patrón que H-20 denunció. Queda como trabajo del primer release público.
-- **Para publicar una versión:** subir la versión en `tauri.conf.json` + `Cargo.toml`, correr `scripts/build_desktop.ps1` con la clave privada en el entorno, y publicar el instalador + su `.sig` + `latest.json` en el endpoint. Reemplazar el placeholder `endpoints` (`github.com/TerraQuantum/terraquantum/...`) por el repo real.
+
+### 6.1 Corrección de la Fase 28 — el aviso culpaba a tu internet de un error nuestro
+
+> Este documento afirmaba: *«**Lo que está verificado:** que la comprobación se
+> ejecuta y que un endpoint inalcanzable produce un mensaje honesto en español
+> ("si no tienes internet es lo esperable")»*. **Las dos mitades eran falsas.**
+> El endpoint no era «inalcanzable»: era **alcanzable y ajeno**. Y el mensaje no
+> era honesto: culpaba a la conexión del usuario de un error que estaba en
+> nuestro fichero de configuración.
+
+**Lo medido el 2026-09-05**, con internet sano:
+
+| lo que se consultaba | resultado |
+|---|---|
+| `github.com/TerraQuantum/terraquantum/.../latest.json` (el que había) | **HTTP 404** |
+| `api.github.com/users/TerraQuantum` | **HTTP 200** — es la cuenta de un **tercero real** (id 90737998), no una organización nuestra |
+| `github.com/Martincancino/TerraQuantum-Engine/.../latest.json` (el remoto real) | **HTTP 404** |
+| `api.github.com/repos/Martincancino/TerraQuantum-Engine` | **404** sin autenticar, mientras `git ls-remote origin` sí lista `main` ⇒ el repo **existe y es privado** |
+| `git ls-remote --tags origin` | **vacío** ⇒ cero releases |
+
+Y la cadena, leída en `tauri-plugin-updater` 2.10.1 (`src/updater.rs:483-530`):
+cuando el servidor responde con un status no exitoso, el bucle de `check()`
+**no guarda el error** —sólo deja un `log::error!`— y termina en
+`remote_release.ok_or(Error::ReleaseNotFound)`. Es decir: **el 404 llegaba como
+`ReleaseNotFound`, que es un caso perfectamente distinguible de «no hay red»**, y
+el código lo aplastaba junto a todo lo demás en un único mensaje que además
+incrustaba el `Display` del crate **en inglés** dentro de una frase en español:
+
+> «No se pudo comprobar si hay actualizaciones.» / «*Could not fetch a valid
+> release JSON from the remote*. Si no tienes internet es lo esperable…»
+
+**Lo que la Fase 28 cambió.** El endpoint apunta al remoto real, y el aviso
+distingue **cinco** desenlaces con causa y acción propias — no los tres que pedía
+el plan:
+
+| código | cuándo | qué dice |
+|---|---|---|
+| `UPDATE_DISPONIBLE` | hay versión mayor | la anuncia **y aclara que NO se instala sola** |
+| `UPDATE_AL_DIA` | el manifiesto dice que ya es la última | nada que hacer |
+| `UPDATE_SIN_PUBLICAR` | el servidor contestó y no hay manifiesto (404) | «todavía no se ha publicado ninguna versión»; **prohibido mencionar internet**, y hay un test que lo exige |
+| `UPDATE_SIN_RED` | no hubo respuesta | aquí —y sólo aquí— la falta de conexión es una explicación honesta, ofrecida como **posibilidad**: el crate no distingue DNS de TLS ni de un proxy que intercepta, así que nosotros tampoco lo afirmamos |
+| `UPDATE_MAL_CONFIGURADO` | endpoint ausente/no https, manifiesto ilegible, sin binario para esta plataforma | dice que **el defecto es nuestro, no de su equipo** |
+
+Los avisos ahora llevan `hint` y `code`, como los errores de arranque desde H-17;
+antes eran un diagnóstico sin acción.
+
+**Un defecto de la misma familia, encontrado al medir:** `check()` **no tenía
+ningún tope de tiempo**. La ruta Rust nunca llama a `.timeout()` y reqwest no pone
+ninguno por defecto, así que una red que acepta la conexión y luego calla dejaba
+la ventana en «Consultando…» **para siempre** — el splash infinito de H-17, en
+otra ventana. Ahora hay un tope de 15 s.
+
+**El bloqueo real, y no es técnico.** Con el repositorio **privado**, los *assets*
+de una release no son descargables sin autenticación y el updater consulta sin
+credenciales: **seguirá dando 404 a todos los usuarios aunque se publique**. Por
+eso la Fase 28 no puede entregar un instalador que se actualice solo. Lo que
+entrega es que el aviso **diga la verdad** mientras eso no exista, más el
+workflow de publicación listo para el día en que se resuelva. Ver **NUEVO-13**.
+
+- **Para publicar una versión:** subir la versión en `tauri.conf.json` + `Cargo.toml`, empujar el tag `vX.Y.Z` y dejar que `.github/workflows/release.yml` construya, firme y publique el instalador + su `.sig` + el `latest.json` (que genera `scripts/release/make_latest_json.py`). Requiere crear a mano los secretos `TAURI_SIGNING_PRIVATE_KEY` y `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; el CLI de Tauri aborta solo si faltan («A public key has been found, but no private key») o si la clave no casa con el `pubkey`.
+- **Comprobación manual de los estados que el gate no pilota.** `Updater::check()` exige un `AppHandle`, y construirlo en un test obliga a activar la feature `test` del crate `tauri` — una dependencia nueva. Para verlos a mano: `cargo tauri dev`, servir un `latest.json` en `http://127.0.0.1:8000` (el plugin **permite `http://` en debug**, `config.rs:145-161`), apuntar ahí `endpoints` y usar Ayuda → «Buscar actualizaciones…» con `version` mayor, igual y con el fichero ausente.
 - **Datos preservados:** actualizar reemplaza la instalación; los datos viven en `%APPDATA%\TerraQuantum` y sobreviven intactos (portabilidad testeada).
 - **Versionado:** SemVer. Checklist de release: suites F8 + F9 verdes → firmar → publicar manifiesto.
 
